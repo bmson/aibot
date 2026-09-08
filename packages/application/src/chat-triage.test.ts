@@ -158,14 +158,13 @@ describe('looksLikeActionRequest', () => {
     }
   });
 
-  it('leaves right-here-right-now weather to the ambient block', () => {
-    for (const t of [
-      "what's the weather?",
-      'how is the weather right now',
-      'is it raining?',
-      'ugh, rain all weekend',
-      'I love the rain on a Sunday',
-    ]) {
+  it('checks current weather even when ambient weather is missing or stale', () => {
+    for (const t of ["what's the weather?", 'how is the weather right now', 'is it raining?'])
+      expect(looksLikeActionRequest(t)).toBe(true);
+  });
+
+  it('leaves casual weather comments on the conversation path', () => {
+    for (const t of ['ugh, rain all weekend', 'I love the rain on a Sunday']) {
       expect(looksLikeActionRequest(t), `should be conversation: ${t}`).toBe(false);
     }
   });

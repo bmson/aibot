@@ -55,6 +55,14 @@ function fakeForecastFetch() {
 }
 
 describe('ambient — weather fetch (pure)', () => {
+  it('requests supported daily variables; time is a returned coordinate, not a variable', async () => {
+    await fetchWeather(64, -22, async (url) => {
+      const daily = new URL(String(url)).searchParams.get('daily')?.split(',');
+      expect(daily).not.toContain('time');
+      expect(daily).toContain('temperature_2m_max');
+      return fakeForecastFetch()(String(url));
+    });
+  });
   it('parses current + daily and rounds', async () => {
     const w = await fetchWeather(64, -22, fakeWeatherFetch(3, 40));
     expect(w).toMatchObject({

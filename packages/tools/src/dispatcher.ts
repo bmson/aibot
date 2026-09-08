@@ -11,6 +11,7 @@ import {
   reserveCost,
   withSpan,
 } from '@assistant/core';
+import { detectLiveLookup } from '@assistant/core/workflow/live-lookup';
 import type { Db, TaskRow } from '@assistant/db';
 import {
   approvals,
@@ -44,6 +45,44 @@ export interface DispatchInput {
   ctx: ToolContext;
   /** Provenance for tool_calls.decision. */
   provenance: { plannerVersion: number; promptVersion: number; model: string };
+}
+
+/** The read may only reuse an exact URL already disclosed by a search the owner requested. */
+async function authorizedPublicSourceRead(
+  db: Db,
+  input: DispatchInput,
+  args: Record<string, unknown>,
+): Promise<boolean> {
+  const trigger = input.task.trigger as { source?: string; payload?: { text?: string } } | null;
+  if (
+    input.toolName !== 'web.fetch' ||
+    input.task.type !== 'chat_turn' ||
+    input.task.trust !== 'owner' ||
+    input.ctx.trust !== 'owner' ||
+    trigger?.source !== 'chat' ||
+    typeof trigger.payload?.text !== 'string' ||
+    typeof args.url !== 'string' ||
+    detectLiveLookup([{ role: 'user', content: trigger.payload.text }])?.kind !== 'web'
+  )
+    return false;
+  const searches = await db
+    .select({ result: toolCalls.result })
+    .from(toolCalls)
+    .where(
+      and(
+        eq(toolCalls.taskId, input.task.id),
+        eq(toolCalls.toolName, 'web.search'),
+        eq(toolCalls.status, 'succeeded'),
+      ),
+    );
+  return searches.some(({ result }) => {
+    const value = result as { results?: Array<{ url?: unknown }>; error?: unknown } | null;
+    return (
+      !value?.error &&
+      Array.isArray(value?.results) &&
+      value.results.some((row) => row.url === args.url)
+    );
+  });
 }
 
 export type DispatchOutcome =
@@ -571,8 +610,14 @@ export class ToolDispatcher {
     // conventional).
     const privilegedTaint =
       input.ctx.tainted && (input.ctx.trust === 'owner' || input.ctx.trust === 'assistant');
+    // Public research does not need another approval for an unchanged search
+    // result URL. This never permits a model-built query, a new destination,
+    // a private-data lookup, or an outward mutation. URL/redirect SSRF checks
+    // and explicit policy denies still apply in their existing layers.
+    const sourceRead = privilegedTaint && (await authorizedPublicSourceRead(this.db, input, args));
     const taintNeedsApproval =
       privilegedTaint &&
+      !sourceRead &&
       // A tool whose only sink is the owner's own dashboard cannot exfiltrate or
       // reach a third party, so it stays autonomous under taint (D6). Every
       // other capability that could disclose data or act outward is gated.
@@ -634,7 +679,9 @@ export class ToolDispatcher {
             ? `allowed by policy ${policyMatch?.policy.templateKey}`
             : recipientUnverified
               ? `owner approval required: unverified recipient (${unverifiedRecipients.join(', ')}) — not in this conversation or your contacts`
-              : `tool default (${baseTier})`,
+              : sourceRead
+                ? 'read of an unchanged URL returned by this owner-requested public search'
+                : `tool default (${baseTier})`,
       policyId: policyMatch?.policy.id,
       policyVersion: policyMatch?.policy.version,
       plannerVersion: input.provenance.plannerVersion,

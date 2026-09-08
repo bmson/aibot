@@ -39,9 +39,11 @@ import {
 } from 'ai';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { budgetReplyTarget, isApprovalReply } from './chat-budget-reply.js';
 import { pumpWithCues, type StreamChunk } from './chat-cue-stream.js';
 import { guardDraft } from './chat-guard.js';
 import { looksLikeActionRequest } from './chat-triage.js';
+import { raiseTaskBudget } from './tasks/commands.js';
 
 const MAX_REQUEST_BYTES = 32 * 1024;
 const MAX_USER_MESSAGE_BYTES = 16 * 1024;
@@ -319,6 +321,34 @@ export async function handleChatTurn(
   });
   const noticeRows = await backgroundNoticeIds(db, historyRows);
   const modelHistory = boundedModelHistory(historyRows, noticeRows);
+  if (isApprovalReply(userText)) {
+    const replyTask = await createChatTask(db, {
+      agentId: agent.id,
+      conversationId: conversation.id,
+      title: userText,
+    });
+
+    const previous = historyRows.slice(0, -1).at(-1);
+    const target =
+      previous?.role === 'assistant' ? budgetReplyTarget(userText, previous) : undefined;
+    let responseText =
+      'I could not match this approval to one pending budget request. Open the specific approval card to apply the decision; no change has been made by this reply.';
+    if (target) {
+      try {
+        await raiseTaskBudget(db, target.taskId, target.amount);
+        responseText = `Approved the spending limit of $${target.amount.toFixed(2)} and queued that task to resume.`;
+      } catch {
+        responseText =
+          'That budget request could not be applied. It may already be resolved or the task may no longer be waiting. Check its current state in Activity.';
+      }
+    }
+    await finishTask(db, replyTask, { status: 'done', responseText });
+    return acceptedStreamResponse(replyTask.id, {
+      'x-conversation-id': conversation.id,
+      'x-async-task': replyTask.id,
+      'x-message-cursor': messageCursor,
+    });
+  }
 
   // Triage: conversation streams below; action requests go to the executor.
   // On triage failure default to the executor — a slow honest answer beats a

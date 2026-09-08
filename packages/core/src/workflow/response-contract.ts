@@ -1,3 +1,4 @@
+import { stripBackgroundNoticeEcho } from '../chat-card.js';
 import { gmailThreadIdsToRead, type PersonalReadRequest } from './read-intent.js';
 import { isDurableSave, isMemoryWriteRequest, savedWorkSummary } from './saved-work.js';
 
@@ -1931,6 +1932,46 @@ export function enforceResponseContract(
   evidence: ActionEvidence[],
   opts?: ResponseContractOptions,
 ): ResponseContractResult {
+  text = stripBackgroundNoticeEcho(text);
+  if (
+    /\b(?:i(?:['’]ve| have)?\s+marked|marking)\b[^.!?\n]{0,120}\b(?:complete|completed|resolved)\b/i.test(
+      text,
+    ) &&
+    !evidence.some(
+      (row) =>
+        row.fromCurrentTask !== false &&
+        row.status === 'succeeded' &&
+        /\.(?:update|complete|resolve)(?:_|$)/.test(row.toolName) &&
+        record(row.result)?.ok !== false,
+    )
+  ) {
+    return {
+      text: "I understand the update, but I haven't changed the saved completion status. No status update was verified for this request.",
+      blocked: true,
+      unsupported: ['background'],
+    };
+  }
+  // A saved place preference is not a scheduled arrival reminder. Require a
+  // current durable schedule before promising a future alert.
+  if (
+    /\b(?:i|we)(?:['’]ll| will)\s+(?:remind|alert|notify|ping)\s+you\b/i.test(text) &&
+    !evidence.some(
+      (row) =>
+        row.fromCurrentTask !== false &&
+        row.status === 'succeeded' &&
+        ((row.toolName === 'reminder.create' && Boolean(record(row.result)?.reminderId)) ||
+          (row.toolName === 'task.schedule' &&
+            record(row.result)?.scheduled === true &&
+            Boolean(record(row.result)?.taskId))),
+    )
+  ) {
+    const saved = savedWorkSummary(evidence);
+    return {
+      text: `${saved ? `${saved}\n\n` : ''}No reminder has been scheduled for this request, so I cannot promise an automatic alert.`,
+      blocked: true,
+      unsupported: ['background'],
+    };
+  }
   const readGrounding = enforcePersonalReadGrounding(text, evidence, opts);
   if (readGrounding) return readGrounding;
   const claimed = claimedKinds(text);

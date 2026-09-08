@@ -98,6 +98,10 @@ export function compactNoticePresentation(kind: string, text: string): ChatCardP
     headline = full.startsWith('Completed:') ? 'Partially completed' : 'Result not confirmed';
     summary = firstUsefulSentence(full);
     detailLabel = 'Verification details';
+  } else if (kind === 'provider-failed') {
+    headline = 'Response interrupted';
+    summary = 'The model service was unavailable. Try the request again.';
+    detailLabel = 'Failure details';
   } else if (kind === 'turn-failed') {
     headline = 'Message didn’t go through';
     summary = 'Nothing was changed. You can try the request again.';
@@ -126,6 +130,14 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/** A model-only context boundary and its echoed notice must never become reply copy. */
+export function stripBackgroundNoticeEcho(text: string): string {
+  const marker =
+    '[Background notice already delivered to the owner — context only, never restate it:]';
+  const at = text.indexOf(marker);
+  return at < 0 ? text : text.slice(0, at).trimEnd();
+}
+
 function legacyNoticeKind(text: string): string | undefined {
   const value = text.trim();
   if (
@@ -137,6 +149,12 @@ function legacyNoticeKind(text: string): string | undefined {
   ) {
     return 'needs-attention';
   }
+  if (
+    /^(?:The model provider failed after \d+ retries\b|I couldn't complete this after repeated attempts and stopped\.)/.test(
+      value,
+    )
+  )
+    return 'provider-failed';
   if (value.startsWith("I'm pausing here —") && /resumes? automatically/i.test(value)) {
     return 'parked';
   }

@@ -348,6 +348,7 @@ const NOTICE_PRESENTATION = {
   'response-contract': { tone: 'system', icon: ShieldCheck, label: 'System check' },
   parked: { tone: 'system', icon: PauseCircle, label: 'Paused — resumes on its own' },
   'needs-attention': { tone: 'waiting', icon: TriangleAlert, label: 'Needs you' },
+  'provider-failed': { tone: 'system', icon: CircleX, label: 'Response interrupted' },
   'turn-failed': { tone: 'system', icon: CircleX, label: 'Didn’t go through' },
   retracted: { tone: 'system', icon: RotateCcw, label: 'Retracted response' },
 } as const satisfies Record<NoticeKind, { tone: DecisionTone; icon: LucideIcon; label: string }>;

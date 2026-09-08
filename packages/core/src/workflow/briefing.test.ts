@@ -13,7 +13,13 @@ import { eq, inArray, like } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import type { ModelRouter } from '../model-router/router.js';
-import { briefingHasNews, briefingHeadline, findConflicts, runBriefing } from './briefing.js';
+import {
+  briefingBody,
+  briefingHasNews,
+  briefingHeadline,
+  findConflicts,
+  runBriefing,
+} from './briefing.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -579,5 +585,19 @@ describe('runBriefing — richer inputs', () => {
     if (result.delivered) {
       expect(prompts[0] ?? '').not.toContain('On the calendar');
     }
+  });
+});
+
+describe('briefing substance', () => {
+  it.each(['', 'Here is your daily briefing in Assistant’s voice based on the provided notes:'])(
+    'falls back to gathered facts for meta-only output',
+    (draft) => {
+      expect(briefingBody(draft, ['Today:', '- Practice at 5 PM'])).toBe(
+        'Today:\n- Practice at 5 PM',
+      );
+    },
+  );
+  it('preserves a substantive digest', () => {
+    expect(briefingBody('Practice starts at 5 PM.', ['notes'])).toBe('Practice starts at 5 PM.');
   });
 });

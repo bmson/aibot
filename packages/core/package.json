@@ -47,6 +47,7 @@
     "./workflow/autonomy": "./src/workflow/autonomy.ts",
     "./workflow/improve": "./src/workflow/improve.ts",
     "./workflow/machine": "./src/workflow/machine.ts",
+    "./workflow/live-lookup": "./src/workflow/live-lookup.ts",
     "./workflow/read-intent": "./src/workflow/read-intent.ts",
     "./workflow/request-checklist-schema": "./src/workflow/request-checklist-schema.ts",
     "./workflow/response-contract": "./src/workflow/response-contract.ts",

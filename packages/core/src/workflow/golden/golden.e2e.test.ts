@@ -1121,6 +1121,119 @@ describe('golden tasks', () => {
     expect(result.finalText).not.toContain('Everything has been saved');
   });
 
+  it('looks up and reads a current score before accepting a model answer', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const result = await runGoldenTask(db, agentId, {
+      name: 'home-live-score',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'What is the current Giants score?' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [{ text: 'The game is tied 1–1 in the fifth inning.' }],
+      tools: {
+        'web.search': {
+          schema: z.object({ query: z.string() }),
+          execute: async () => ({ results: [{ url: 'https://example.com/game' }] }),
+        },
+        'web.fetch': {
+          schema: z.object({ url: z.string() }),
+          execute: async () => ({ status: 200, text: 'Giants 1 Dodgers 1. Fifth inning.' }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.toolNames).toEqual(['web.search', 'web.fetch']);
+    expect(result.finalText).toContain('1–1');
+  });
+
+  it('blocks invented temperatures after the weather provider fails', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const result = await runGoldenTask(db, agentId, {
+      name: 'home-failed-weather',
+      event: { source: 'chat', trust: 'owner', payload: { text: 'How is the weather currently?' } },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [
+        { toolCalls: [{ toolName: 'weather.lookup', input: { place: 'San Francisco' } }] },
+        { text: 'It is sunny and 14°C right now.' },
+      ],
+      tools: {
+        'weather.lookup': {
+          schema: z.object({ place: z.string() }),
+          execute: async () => {
+            throw new Error('HTTP 400');
+          },
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.toolNames).toEqual(['weather.lookup']);
+    expect(result.status).toBe('needs_attention');
+    expect(result.finalText).toContain("can't confirm temperatures");
+    expect(result.finalText).not.toContain('14°C');
+  });
+
+  it('saves a multi-person birthday list in bounded batches with an exact receipt', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const names = Array.from({ length: 17 }, (_, i) => `Person ${i + 1}`);
+    const result = await runGoldenTask(db, agentId, {
+      name: 'home-birthday-batch',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: {
+          text: `Remember these birthdays:\n${names.map((name) => `${name} April 20, 1980`).join('\n')}`,
+        },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      maxSteps: 5,
+      script: [{ text: 'Everything is saved and linked in your graph.' }],
+      tools: {
+        'memory.save': {
+          schema: z.object({ subject: z.string(), content: z.string() }),
+          execute: async () => ({ saved: true, quarantined: false }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.toolNames).toHaveLength(17);
+    expect(result.toolNames.every((name) => name === 'memory.save')).toBe(true);
+    expect(result.status).toBe('done');
+    expect(result.finalText).toContain('Saved 17 of 17');
+    expect(result.finalText).not.toContain('Everything is saved and linked');
+  });
+
+  it('does not mark graph attachment complete after memory saves alone', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const result = await runGoldenTask(db, agentId, {
+      name: 'home-birthday-graph-coverage',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: {
+          text: 'Attach these birthdays to my graph and memory:\nAda April 20, 1980\nGrace May 2, 1985',
+        },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [{ text: 'Everything is linked.' }],
+      tools: {
+        'memory.save': {
+          schema: z.object({ subject: z.string(), content: z.string() }),
+          execute: async () => ({ saved: true }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.finalText).toContain('Saved 2 of 2');
+    expect(result.finalText).toContain('Graph attachments are not yet verified');
+    expect(result.status).toBe('needs_attention');
+  });
+
   it('reports saved birthdays when a batch reaches the step cap', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const fixture: GoldenFixture = {

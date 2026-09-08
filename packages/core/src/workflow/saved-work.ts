@@ -79,8 +79,13 @@ export function isSaveStatusQuestion(text: string): boolean {
 
 export function isMemoryWriteRequest(text: string): boolean {
   if (isSaveStatusQuestion(text)) return false;
-  if (/\b(?:do not|don't|never)\s+(?:save|remember|store)\b/i.test(text)) return false;
-  return /\b(?:remember (?:this|that|it|our|my|the)|for you to remember|(?:save|store|add|update|correct)[\s\S]{0,100}(?:memory|profile)|birthdays?[\s\S]{0,80}update)\b/i.test(
+  if (
+    /\b(?:do not|don't|never)\s+(?:save|remember|store|add|update|correct|attach|link)\b/i.test(
+      text,
+    )
+  )
+    return false;
+  return /\b(?:remember (?:this|these|those|that|it|our|my|the)|for you to remember|(?:save|store|add|update|correct|attach|link)[\s\S]{0,100}(?:memory|profile)|birthdays?[\s\S]{0,80}update)\b/i.test(
     text,
   );
 }

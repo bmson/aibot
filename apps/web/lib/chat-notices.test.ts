@@ -176,6 +176,7 @@ describe('noticeKindOf', () => {
     expect(noticeKindOf([{ type: 'notice', notice: 'parked' }])).toBe('parked');
     expect(noticeKindOf([{ type: 'notice', notice: 'needs-attention' }])).toBe('needs-attention');
     expect(noticeKindOf([{ type: 'notice', notice: 'retracted' }])).toBe('retracted');
+    expect(noticeKindOf([{ type: 'notice', notice: 'provider-failed' }])).toBe('provider-failed');
     expect(noticeKindOf([{ type: 'text', text: 'x' }, { type: 'recall' }])).toBeNull();
   });
 

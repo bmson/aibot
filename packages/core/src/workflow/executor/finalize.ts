@@ -20,9 +20,11 @@ import {
 import type { RecallSource } from '../../memory/recall.js';
 import { recordSkillOutcome } from '../../memory/skills.js';
 import { type ArtifactIntent, artifactExecutionFailure } from '../artifact-intent.js';
+import { remainingBirthdaySaves, requestedBirthdaySaves } from '../birthday-import.js';
 import { CARD_NOT_BUILT, requestedCardIntent } from '../card-intent.js';
 import { responseCardSteps } from '../card-steps.js';
 import { isGoalWorkEvidence } from '../goal-evidence.js';
+import { detectLiveLookup, liveLookupFailure } from '../live-lookup.js';
 import {
   checkpointTask,
   completeTask,
@@ -340,6 +342,58 @@ export async function stageModelFinalResponse(
     ...priorRows.map((row) => ({ ...row, fromCurrentTask: false })),
     ...rows,
   ];
+  // owner.notify already persisted this scheduled reminder. Reuse its exact
+  // delivered text so a paraphrase or "Done" cannot create a second message.
+  if (task.type === 'scheduled' && rows.length === 1) {
+    const notification = rows[0];
+    const result = notification?.result as { notified?: boolean } | null;
+    const args = notification?.args as { message?: string } | null;
+    if (
+      notification?.toolName === 'owner.notify' &&
+      notification.status === 'succeeded' &&
+      result?.notified === true &&
+      args?.message
+    ) {
+      return stageFinalResponse(deps, task, state, window, { ...pending, text: args.message });
+    }
+  }
+  const currentRequest = window.slice(
+    0,
+    window.findLastIndex((message) => message.role === 'user') + 1,
+  );
+  const liveLookup =
+    task.trust === 'owner' && !isForwardedIngest(task)
+      ? detectLiveLookup(currentRequest)
+      : undefined;
+  const liveFailure = liveLookup ? liveLookupFailure(liveLookup, rows) : undefined;
+  const birthdays =
+    task.trust === 'owner' && !isForwardedIngest(task)
+      ? requestedBirthdaySaves(currentRequest)
+      : [];
+  if (birthdays.length > 0) {
+    const remaining = remainingBirthdaySaves(birthdays, rows);
+    const saved = birthdays.length - remaining.length;
+    const graphUnverified = /\bgraph\b/i.test(latestUserText(window) ?? '');
+    const incomplete = remaining.length > 0 || graphUnverified;
+    const text = `Saved ${saved} of ${birthdays.length} supplied dated birthday entries to long-term memory. Names, dates, and supplied notes were preserved. Entries without a date were left unchanged.${remaining.length ? ` Still unsaved: ${remaining.map((entry) => entry.subject).join(', ')}.` : ''}${graphUnverified ? ' Graph attachments are not yet verified.' : ''}`;
+    return stageFinalResponse(deps, task, state, window, {
+      ...pending,
+      text,
+      progress: text.slice(0, 200),
+      terminalStatus: incomplete ? 'needs_attention' : 'done',
+      outcome: incomplete ? 'needs_attention' : 'done',
+    });
+  }
+  if (liveFailure) {
+    return stageFinalResponse(deps, task, state, window, {
+      ...pending,
+      text: liveFailure,
+      progress: liveFailure,
+      terminalStatus: 'needs_attention',
+      outcome: 'needs_attention',
+      contractNotice: true,
+    });
+  }
   const explicitFailure = expectedArtifact
     ? artifactExecutionFailure(expectedArtifact, rows)
     : undefined;

@@ -60,6 +60,14 @@ const COMPOSE_TIMEOUT_MS = 30_000;
  * calendar section. Event content comes from Google's API and is data, never
  * instructions.
  */
+/** Reject empty/meta-only composition while preserving the already gathered facts. */
+export function briefingBody(composed: string | undefined, notes: string[]): string {
+  const text = composed?.trim() ?? '';
+  if (!text || /^(?:here (?:is|[’']s)|below is) your daily briefing[^\n]*[:.]?$/i.test(text))
+    return notes.join('\n');
+  return text;
+}
+
 export interface BriefingCalendarEvent {
   summary: string;
   start: string;
@@ -692,7 +700,7 @@ export async function runBriefing(
 
     // A model failure must not lose the briefing: the assembled notes are
     // already the substance, so fall back to delivering them as they are.
-    const body = composed?.ok ? composed.object.text.trim() : lines.join('\n');
+    const body = briefingBody(composed?.ok ? composed.object.text : undefined, lines);
     if (!body) return result;
 
     // Propose the obvious next step for each upcoming date, as an inert row the

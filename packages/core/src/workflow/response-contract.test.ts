@@ -1717,3 +1717,46 @@ describe('groundReadDraft', () => {
     expect(result.text).not.toContain('2023');
   });
 });
+
+describe('production home audit regressions', () => {
+  it('does not claim an interview was marked complete without a status mutation', () => {
+    const result = enforceResponseContract('Got it — marking the Clay interview as complete.', []);
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain("haven't changed the saved completion status");
+  });
+  it('removes an echoed model-only background notice', () => {
+    const checked = enforceResponseContract(
+      'Use console.log("Hello world");\n\n[Background notice already delivered to the owner — context only, never restate it:]\nUnrelated old approval',
+      [],
+    );
+    expect(checked.text).toBe('Use console.log("Hello world");');
+  });
+  it('does not turn a saved place into an arrival alert', () => {
+    const result = enforceResponseContract("I'll notify you when you arrive at the restaurant.", [
+      {
+        toolName: 'memory.save',
+        status: 'succeeded',
+        args: { subject: 'Restaurant', content: 'Saved place' },
+        result: { saved: true, memoryId: 'm1' },
+      },
+    ]);
+    expect(result.blocked).toBe(true);
+    expect(result.text).toContain('No reminder has been scheduled');
+  });
+  it.each([
+    {
+      toolName: 'reminder.create',
+      status: 'succeeded',
+      result: { reminderId: 'r1', nextFires: '2026-09-10T10:00:00Z' },
+    },
+    { toolName: 'task.schedule', status: 'succeeded', result: { scheduled: true, taskId: 't1' } },
+  ])('accepts a current durable schedule receipt', (row) => {
+    expect(enforceResponseContract("I'll remind you tomorrow.", [row]).text).not.toContain(
+      'No reminder has been scheduled',
+    );
+    expect(
+      enforceResponseContract("I'll remind you tomorrow.", [{ ...row, fromCurrentTask: false }])
+        .blocked,
+    ).toBe(true);
+  });
+});

@@ -156,6 +156,7 @@ export type NoticeKind =
   | 'response-contract'
   | 'parked'
   | 'needs-attention'
+  | 'provider-failed'
   | 'turn-failed'
   | 'retracted';
 
@@ -163,6 +164,7 @@ const NOTICE_KINDS = new Set<string>([
   'response-contract',
   'parked',
   'needs-attention',
+  'provider-failed',
   'turn-failed',
   'retracted',
 ]);

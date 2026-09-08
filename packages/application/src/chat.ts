@@ -8,7 +8,7 @@ import {
   listMessagesByIds,
   setConversationModel,
 } from '@assistant/core/chat';
-import { compactChatMessageParts } from '@assistant/core/chat-card';
+import { compactChatMessageParts, stripBackgroundNoticeEcho } from '@assistant/core/chat-card';
 import {
   approvals,
   conversations,
@@ -363,8 +363,12 @@ function toUiMessages(rows: PersistedMessage[]): UIMessage[] {
       id: row.id,
       role: row.role as 'user' | 'assistant',
       parts: compactChatMessageParts(
-        row.text,
-        Array.isArray(row.parts) ? row.parts : [],
+        row.role === 'assistant' ? stripBackgroundNoticeEcho(row.text) : row.text,
+        (Array.isArray(row.parts) ? row.parts : []).map((part) =>
+          row.role === 'assistant' && part?.type === 'text' && typeof part.text === 'string'
+            ? { ...part, text: stripBackgroundNoticeEcho(part.text) }
+            : part,
+        ),
         row.taskId ?? undefined,
       ) as UIMessage['parts'],
       // `taskId` rides along so hydration can resolve an approval summary

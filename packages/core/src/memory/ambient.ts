@@ -183,7 +183,7 @@ export async function fetchWeather(
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}` +
     '&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m' +
-    '&daily=time,weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max' +
+    '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max' +
     (opts.hourly
       ? '&hourly=temperature_2m,apparent_temperature,weather_code,precipitation_probability,wind_speed_10m'
       : '') +

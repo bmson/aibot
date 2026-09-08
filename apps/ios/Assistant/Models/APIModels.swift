@@ -297,6 +297,15 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         decisionParts.isEmpty && approvalSummary == nil ? textBubbles : []
     }
 
+    /// Runtime notices and proactive cards do not answer the nearest owner question.
+    var isConversationAnswer: Bool {
+        role == .assistant && !visibleTextBubbles.isEmpty && !parts.contains { part in
+            if part.type == "notice" { return true }
+            guard part.type == "data-card", case let .object(data) = part.data else { return false }
+            return data["kind"]?.string == "proactive-alert"
+        }
+    }
+
     /// Raw lookup results are evidence for the prose answer. Locally inferred
     /// cards and authored/generated answer cards still own their presentation.
     var hasSupportingResultCards: Bool {
@@ -508,6 +517,7 @@ enum ChatNoticeKind: String, Codable, Sendable {
     case parked
     case needsAttention = "needs-attention"
     case turnFailed = "turn-failed"
+    case providerFailed = "provider-failed"
     case retracted
 }
 

@@ -40,6 +40,24 @@ describe('self-reflective output verification', () => {
     expect(bounded.length).toBeLessThan(4_500);
   });
 
+  it('keeps current source evidence ahead of unrelated old tool results under the cap', () => {
+    const prompt = buildOutputVerificationPrompt({
+      request: 'Check the score',
+      draft: 'The game is tied.',
+      evidence: [
+        ...Array.from({ length: 30 }, () => ({
+          toolName: 'memory.recall',
+          status: 'succeeded',
+          result: { text: 'x'.repeat(3000) },
+          fromCurrentTask: false,
+        })),
+        { toolName: 'web.fetch', status: 'succeeded', result: { text: 'CURRENT_GAME_SCORE' } },
+      ],
+    });
+    expect(prompt).toContain('CURRENT_GAME_SCORE');
+    expect(prompt.length).toBeLessThan(13000);
+  });
+
   it('treats unrequested emoji as a final-response defect', () => {
     expect(OUTPUT_VERIFICATION_SYSTEM).toMatch(/emoji are not decoration/i);
     expect(OUTPUT_VERIFICATION_SYSTEM).toMatch(/explicitly request an emoji/i);

@@ -1265,6 +1265,28 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(details[5].value, "13°C")
     }
 
+    func testRuntimeCorrectionDoesNotAnswerAnUnrelatedLatestQuestion() {
+        var message = ChatMessage.optimistic(role: .assistant, text: "Corrections to earlier replies")
+        XCTAssertTrue(message.isConversationAnswer)
+        message.parts.append(MessagePart(type: "notice", notice: "audit-correction"))
+        XCTAssertFalse(message.isConversationAnswer)
+    }
+
+    func testProviderFailureNoticeIsRecognized() {
+        var message = ChatMessage.optimistic(role: .assistant, text: "Provider failed")
+        message.parts.append(MessagePart(type: "notice", notice: "provider-failed"))
+        XCTAssertEqual(message.noticeKind, .providerFailed)
+        XCTAssertFalse(message.isConversationAnswer)
+    }
+
+    func testWeatherLocationOmitsConversationalPronoun() {
+        let cards = MessageResponseCard.inferred(from: "Here's the current weather for you in San Francisco:\nTemperature: 14°C\nConditions: Clear skies")
+        guard case let .weather(location, _, _, _)? = cards.first else {
+            return XCTFail("Expected a weather card")
+        }
+        XCTAssertEqual(location, "San Francisco")
+    }
+
     func testWeatherUnitsCollapsePairsAndConvertToThePreferredUnit() {
         XCTAssertEqual(WeatherUnits.localized("17°C (63°F)", preferFahrenheit: true), "63°F")
         XCTAssertEqual(WeatherUnits.localized("17°C (63°F)", preferFahrenheit: false), "17°C")

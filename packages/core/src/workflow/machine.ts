@@ -478,11 +478,23 @@ export async function recordFailedAttempt(
 }
 
 /** Resume a parked task: back to pending for the queue. */
-export async function wakeTask(db: Db, taskId: string): Promise<boolean> {
+export async function wakeTask(
+  db: Db,
+  taskId: string,
+  budgetIncrease?: { agentId: string; limit: number },
+): Promise<boolean> {
+  if (
+    budgetIncrease &&
+    (!Number.isFinite(budgetIncrease.limit) ||
+      budgetIncrease.limit < 0.01 ||
+      budgetIncrease.limit > 10_000)
+  )
+    return false;
   const [woken] = await db
     .update(tasks)
     .set({
       status: 'pending',
+      ...(budgetIncrease ? { budgetUsdLimit: budgetIncrease.limit.toFixed(4) } : {}),
       // A needs-attention final has already been delivered. Retrying it must
       // continue from the saved work checkpoint, not finalize the same message
       // and immediately return to needs_attention. Approval/budget/event wakes
@@ -497,7 +509,20 @@ export async function wakeTask(db: Db, taskId: string): Promise<boolean> {
       attentionNotifiedAt: null,
       updatedAt: sql`now()`,
     })
-    .where(and(eq(tasks.id, taskId), inArray(tasks.status, [...WAKEABLE])))
+    .where(
+      and(
+        eq(tasks.id, taskId),
+        inArray(tasks.status, [...WAKEABLE]),
+        ...(budgetIncrease
+          ? [
+              eq(tasks.agentId, budgetIncrease.agentId),
+              eq(tasks.status, 'needs_attention'),
+              sql`${tasks.budgetUsdLimit} < ${budgetIncrease.limit}`,
+              lte(tasks.spentUsd, budgetIncrease.limit.toFixed(4)),
+            ]
+          : []),
+      ),
+    )
     .returning({ id: tasks.id, queueGeneration: tasks.queueGeneration });
   if (!woken) return false;
   getQueueNotifier().notify(taskId, woken.queueGeneration);

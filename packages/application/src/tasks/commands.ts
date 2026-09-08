@@ -28,7 +28,7 @@ export async function revokeTaskAutonomy(db: Db, taskId: string): Promise<void> 
 }
 
 export async function raiseTaskBudget(db: Db, taskId: string, requested: number): Promise<void> {
-  if (!Number.isFinite(requested) || requested <= 0 || requested > 10_000) {
+  if (!Number.isFinite(requested) || requested < 0.01 || requested > 10_000) {
     throw new Error('task budget must be between $0.01 and $10,000');
   }
   const agent = await getAgent(db);
@@ -46,11 +46,10 @@ export async function raiseTaskBudget(db: Db, taskId: string, requested: number)
   if (requested <= Number(task.budgetUsdLimit) || requested < Number(task.spentUsd)) {
     throw new Error('new task budget must be above its current cap and spend');
   }
-  await db
-    .update(tasks)
-    .set({ budgetUsdLimit: requested.toFixed(4), updatedAt: new Date() })
-    .where(and(eq(tasks.id, task.id), eq(tasks.agentId, agent.id)));
-  if (!(await wakeTask(db, task.id))) throw new Error('task could not be retried');
+  // The cap and runnable state change together. A cancelled/concurrently
+  // resumed task must never receive a higher cap after the retry fails.
+  if (!(await wakeTask(db, task.id, { agentId: agent.id, limit: requested })))
+    throw new Error('task changed before the budget increase could be applied');
 }
 
 export function cancelActivity(db: Db, taskId: string): Promise<boolean> {

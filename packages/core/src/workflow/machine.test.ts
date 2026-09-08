@@ -187,6 +187,27 @@ describe('task state machine (integration)', () => {
     expect(resumed.completedToolCallIds).toContain('verified-work');
   });
 
+  it('raises an approved budget and wakes atomically, without changing cancelled or stale requests', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));
+    await db
+      .update(tasks)
+      .set({ status: 'needs_attention', budgetUsdLimit: '0.1000', spentUsd: '0.0500' })
+      .where(eq(tasks.id, task.id));
+    const outcomes = await Promise.all([
+      wakeTask(db, task.id, { agentId, limit: 0.25 }),
+      wakeTask(db, task.id, { agentId, limit: 0.25 }),
+    ]);
+    expect(outcomes.filter(Boolean)).toHaveLength(1);
+    const [raised] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(raised?.status).toBe('pending');
+    expect(Number(raised?.budgetUsdLimit)).toBe(0.25);
+    await db.update(tasks).set({ status: 'cancelled' }).where(eq(tasks.id, task.id));
+    expect(await wakeTask(db, task.id, { agentId, limit: 0.5 })).toBe(false);
+    const [unchanged] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+    expect(Number(unchanged?.budgetUsdLimit)).toBe(0.25);
+  });
+
   it('sleeping tasks are not due until runAfter, then wake via findDueTasks', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const { task } = await track(enqueueTask(db, { event: event(), type: 'adhoc' }));

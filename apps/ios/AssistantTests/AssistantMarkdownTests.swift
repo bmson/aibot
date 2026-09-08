@@ -889,6 +889,13 @@ final class AssistantMarkdownTests: XCTestCase {
         XCTAssertTrue(plain.contains("receipts:\nAmazon"))
     }
 
+    func testTableHTMLBreaksRenderAsLinesAndPreserveCodeExamples() {
+        let text = AssistantMarkdown.tableCellText("Press high<br>Switch play<BR />Keep width; code: `<br>`")
+        XCTAssertEqual(text, "Press high\nSwitch play\nKeep width; code: `<br>`")
+        let rendered = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        XCTAssertEqual(rendered.map { String($0.characters) }, "Press high\nSwitch play\nKeep width; code: <br>")
+    }
+
     func testInlineMarkdownForCardDetailsDoesNotExposeDelimiters() {
         let rendered = AssistantMarkdown.inlineAttributed("- 💨 **Wind:** 15 km/h")
         XCTAssertEqual(String(rendered.characters), "- 💨 Wind: 15 km/h")

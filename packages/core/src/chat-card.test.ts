@@ -98,3 +98,18 @@ describe('compactChatMessageParts', () => {
     expect(compactChatMessageParts('A task stopped and needs you', result)).toBe(result);
   });
 });
+
+it('folds historical provider diagnostics without claiming that no tools ran', () => {
+  const text =
+    'The model provider failed after 3 retries. Upstream 429 rate limit with diagnostic detail';
+  const parts = compactChatMessageParts(text, [{ type: 'text', text }]);
+  expect(parts).toContainEqual(
+    expect.objectContaining({
+      notice: 'provider-failed',
+      presentation: expect.objectContaining({
+        headline: 'Response interrupted',
+        summary: 'The model service was unavailable. Try the request again.',
+      }),
+    }),
+  );
+});

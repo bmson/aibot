@@ -22,11 +22,13 @@ import {
   artifactToolUnavailable,
   needsArtifactToolRetry,
 } from '../artifact-intent.js';
+import { remainingBirthdaySaves, requestedBirthdaySaves } from '../birthday-import.js';
 import {
   buildGoalProgressCheckpoint,
   isGoalWorkEvidence,
   needsGoalProgressUpdate,
 } from '../goal-evidence.js';
+import { detectLiveLookup, nextLiveLookup } from '../live-lookup.js';
 import {
   checkpointTask,
   markTaskNeedsAttention,
@@ -222,6 +224,8 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   const ownerText = latestUserText(rc.window) ?? '';
   const directOwner = task.trust === 'owner' && !isForwardedIngest(task) && !state.untrustedContext;
   const memoryWrite = directOwner && isMemoryWriteRequest(ownerText);
+  const liveLookup = directOwner ? detectLiveLookup(rc.window) : undefined;
+  const birthdaySaves = directOwner ? requestedBirthdaySaves(rc.window) : [];
   const situationRequest =
     task.trust === 'owner' && !isForwardedIngest(task) && isSituationRequest(ownerText);
   // Private calendar/mail forcing belongs only to direct owner requests. Never
@@ -250,7 +254,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // routed to real work all drive tools on the strong model. The draft model
   // answers these with plausible prose and no tool calls — how a request can
   // look handled while nothing happened.
-  const role = readRequest || memoryWrite ? 'reason' : roleForTask(task, plan);
+  const role = readRequest || memoryWrite || liveLookup ? 'reason' : roleForTask(task, plan);
   // Forced artifact retries drop to the role's fallback because the DRAFT
   // primary (deepseek) intermittently times out when a tool is mandatory. The
   // reasoning primary (Claude) has no such issue, and its fallback is the
@@ -455,7 +459,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       : [];
     const mustRecordGoalProgress = needsGoalProgressUpdate(goalToolEvidence);
     const readToolEvidence: ReadToolEvidence[] =
-      readRequest || situationRequest
+      readRequest || situationRequest || liveLookup || birthdaySaves.length > 0
         ? await db
             .select({
               toolName: toolCalls.toolName,
@@ -467,6 +471,17 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             .from(toolCalls)
             .where(eq(toolCalls.taskId, task.id))
         : [];
+    const forcedLiveLookup =
+      liveLookup && !readRequest
+        ? nextLiveLookup(
+            liveLookup,
+            readToolEvidence.map((row) => ({ ...row, result: row.result })),
+          )
+        : undefined;
+    const pendingBirthdays = remainingBirthdaySaves(
+      birthdaySaves,
+      readToolEvidence.map((row) => ({ ...row, result: row.result })),
+    );
     const forceSituationRead =
       situationRequest &&
       !readToolEvidence.some(
@@ -532,6 +547,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         : '',
       readRequest ? readLookupDirective(readRequest) : '',
       readAnswerTurn && readRequest ? readAnswerDirective(readRequest) : '',
+      liveLookup
+        ? `This request needs fresh ${liveLookup.kind} evidence: ${liveLookup.request}\nUse a successful lookup from this task. Earlier assistant answers and recalled conversations are not current evidence. If a provider fails, report the gap; never invent measurements, scores, office holders, opening hours, player traits, or verified job openings. Search snippets locate sources; read the source before concluding. Resolve relative dates using the owner's request time ${task.createdAt.toISOString()} and timezone ${agent.timezone}.`
+        : '',
       plan?.action === 'schedule' ? SCHEDULE_DIRECTIVE : '',
       requestChecklistDirective(state.requestChecklist),
       state.checklistRecoveryAttempts > 0
@@ -562,6 +580,15 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       ]),
     );
     const forcedArtifact = !mustRecordGoalProgress && state.step === 0 ? artifactIntent : undefined;
+    if (forcedLiveLookup && !toolDefs.some((tool) => tool.name === forcedLiveLookup.toolName)) {
+      const text = `I couldn't run the live lookup because ${forcedLiveLookup.toolName} is unavailable.`;
+      return stageFinalResponse(deps, lease, state, rc.window, {
+        text,
+        progress: text,
+        terminalStatus: 'needs_attention',
+        outcome: 'needs_attention',
+      });
+    }
     if (forcedArtifact && !toolDefs.some((tool) => tool.name === forcedArtifact.toolName)) {
       const text = artifactToolUnavailable(forcedArtifact);
       rc.window.push({ role: 'assistant', content: text } as ModelMessage);
@@ -635,6 +662,44 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         ],
         finishReason: 'tool-calls',
       };
+    } else if (
+      pendingBirthdays.length > 0 &&
+      toolDefs.some((tool) => tool.name === 'memory.save')
+    ) {
+      stepResult = {
+        ok: true,
+        modelId: 'runtime/birthday-import',
+        degraded: false,
+        text: '',
+        toolCalls: pendingBirthdays.slice(0, 8).map((entry, index) => ({
+          toolCallId: `runtime-birthday-${task.id}-${state.step + 1}-${index}`,
+          toolName: 'memory.save',
+          input: {
+            ...entry,
+            kind: 'person',
+            domain: 'relationships',
+            category: 'knowledge',
+            confidence: 1,
+            importance: 3,
+          },
+        })),
+        finishReason: 'tool-calls',
+      };
+    } else if (forcedLiveLookup?.input && !forcedArtifact) {
+      stepResult = {
+        ok: true,
+        modelId: 'runtime/live-lookup',
+        degraded: false,
+        text: '',
+        toolCalls: [
+          {
+            toolCallId: `runtime-live-lookup-${task.id}-${state.step + 1}`,
+            toolName: forcedLiveLookup.toolName,
+            input: forcedLiveLookup.input,
+          },
+        ],
+        finishReason: 'tool-calls',
+      };
     } else if (forcedReadTool && readRequest) {
       const input = buildReadToolInput(readRequest, forcedReadTool, readToolEvidence);
       if (!input) {
@@ -673,11 +738,13 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             ? 'none'
             : forcedArtifact
               ? { type: 'tool', toolName: forcedArtifact.toolName }
-              : forceSituationRead && toolDefs.some((tool) => tool.name === 'situations.read')
-                ? { type: 'tool', toolName: 'situations.read' }
-                : mustAct
-                  ? 'required'
-                  : undefined,
+              : forcedLiveLookup
+                ? { type: 'tool', toolName: forcedLiveLookup.toolName }
+                : forceSituationRead && toolDefs.some((tool) => tool.name === 'situations.read')
+                  ? { type: 'tool', toolName: 'situations.read' }
+                  : mustAct
+                    ? 'required'
+                    : undefined,
         // The primary chat model has intermittently timed out when a named
         // artifact tool is mandatory. Use the role's configured
         // tool-capable fallback where appropriate.
@@ -775,7 +842,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     // dedicated retry; private reads and goal progress bypass the model.)
     if (
       stepResult.ok &&
-      mustAct &&
+      (mustAct || Boolean(forcedLiveLookup)) &&
       !forcedReadTool &&
       !mustRecordGoalProgress &&
       stepResult.toolCalls.length === 0 &&
@@ -1150,7 +1217,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     // not completed work just because the owner is watching. Unattended
     // goal sessions are handled just below by stageModelFinalResponse, which
     // already converts a no-verified-evidence final to needs_attention.
-    if (mustAct && !isUnattendedGoalSession(task)) {
+    if ((mustAct || forcedLiveLookup) && !isUnattendedGoalSession(task)) {
       const honest =
         "I planned to act on this but couldn't produce a concrete action, so I've stopped rather than pretend it's done. Retry it from Activity, or tell me exactly what to do.";
       rc.window.push({ role: 'assistant', content: honest } as ModelMessage);

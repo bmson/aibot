@@ -669,6 +669,14 @@ struct MessageBubble: View {
                 "exclamationmark.triangle.fill",
                 AssistantTheme.warning(for: colorScheme)
             )
+        case .providerFailed:
+            (
+                "Response interrupted",
+                "Response interrupted",
+                compact?.summary ?? "The model service was unavailable. Try the request again.",
+                "xmark.circle.fill",
+                AssistantTheme.inkMuted(for: colorScheme)
+            )
         case .turnFailed:
             (
                 "Didn’t go through",
@@ -1988,7 +1996,11 @@ enum MessageResponseCard: Identifiable {
     private static func weatherLocation(in text: String) -> String? {
         let pattern = #"(?i)\b(?:weather|forecast)(?:\s+(?:forecast|report|outlook|conditions|update))?"#
             + #"\s+(?:for|in|at|near|around)\s+(.+?)(?:\s+as\s+of\b|[\r\n:(]|$)"#
-        let named = firstCapture(of: pattern, in: text).map { cleanedLocation($0) }
+        let named = firstCapture(of: pattern, in: text).map {
+            cleanedLocation($0.replacingOccurrences(
+                of: #"(?i)^you\s+in\s+"#, with: "", options: .regularExpression
+            ))
+        }
         // "San Francisco weather for Thu Aug 27, 2026" answers "for what day",
         // not "for where". A date in the headline slot would name neither.
         if let named, !isDateLike(named) { return locationWithoutTimeframe(named) }
@@ -4805,6 +4817,18 @@ enum AssistantMarkdown {
             ?? AttributedString(source)
     }
 
+    /// GFM table cells commonly use HTML line breaks. Preserve inline code
+    /// examples while displaying actual break tags as line breaks.
+    static func tableCellText(_ source: String) -> String {
+        guard let pattern = try? NSRegularExpression(pattern: #"`+[^`]*`+|<br\s*/?>"#, options: .caseInsensitive) else { return source }
+        let output = NSMutableString(string: source)
+        let matches = pattern.matches(in: source, range: NSRange(source.startIndex..., in: source))
+        for match in matches.reversed() where output.substring(with: match.range).hasPrefix("<") {
+            output.replaceCharacters(in: match.range, with: "\n")
+        }
+        return output as String
+    }
+
     enum Block: Hashable {
         case heading(level: Int, text: String)
         case paragraph(String)
@@ -5427,7 +5451,7 @@ private struct AssistantMarkdownView: View {
         // inside a cell (a heading marker, a hard break) would otherwise tear
         // the row layout apart.
         let readable = AssistantMarkdown.readableInlineVariables(source)
-        let withBreaks = inline ? readable : AssistantMarkdown.preservingSoftBreaks(readable)
+        let withBreaks = inline ? AssistantMarkdown.tableCellText(readable) : AssistantMarkdown.preservingSoftBreaks(readable)
         let attributed = (try? AttributedString(
             markdown: withBreaks,
             options: .init(

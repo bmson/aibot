@@ -15,6 +15,7 @@
  * only the genuinely ambiguous rest.
  */
 
+import { detectLiveLookup } from '@assistant/core/workflow/live-lookup';
 import {
   detectPersonalReadRequest,
   type ReadIntentMessage,
@@ -111,6 +112,15 @@ export function looksLikeActionRequest(
 ): boolean {
   let t = text.trim().toLowerCase();
   if (!t) return false;
+  if (
+    detectLiveLookup([
+      ...recentHistory.slice(-8),
+      ...(priorAssistantText ? [{ role: 'assistant', content: priorAssistantText }] : []),
+      { role: 'user', content: text },
+    ])
+  )
+    return true;
+  if (/^(?:approved?|i approve(?: the budget increase)?)[.!]*$/i.test(t)) return true;
   if (isMemoryWriteRequest(text) || isSaveStatusQuestion(text)) return true;
   // Routing is not approval: the executor still enforces exact tool arguments
   // and the normal policy gate. A bare yes with no concrete offer stays with
