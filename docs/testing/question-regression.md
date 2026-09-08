@@ -10,7 +10,7 @@ pnpm test:questions
 
 This uses the repository's isolated `_test` database. It fails when the database is unavailable; it never silently skips. The question cases also run as part of `pnpm test` in the existing CI workflow. No model credential or paid API call is needed.
 
-The corpus maps all **34 owner turns** (33 in the original home snapshot, plus the later score question) to **26 executor scenarios** and the existing application budget-approval tests. Repeated questions share scenarios; terse corrections have their own cases. Private names, orders, booking identifiers and family dates are replaced with synthetic equivalents. The birthday fixture preserves the actual shape: 56 dated people, a shared date, a deceased marker and one undated person. These are regression examples, not the original production database.
+The corpus maps all **34 owner turns** (33 in the original home snapshot, plus the later score question) to **27 executor scenarios** and the existing application budget-approval tests. Repeated questions share scenarios; terse corrections have their own cases. Private names, orders, booking identifiers and family dates are replaced with synthetic equivalents. The birthday fixture preserves the actual shape: 56 dated people, a shared date, a deceased marker and one undated person. These are regression examples, not the original production database.
 
 ## Run the configured models
 

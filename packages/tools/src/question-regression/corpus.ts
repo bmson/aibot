@@ -24,6 +24,7 @@ export interface QuestionCase {
     statuses?: string[];
     maxApprovals?: number;
     card?: boolean;
+    cardValues?: string[];
   };
 }
 
@@ -210,9 +211,9 @@ export const QUESTION_CASES: QuestionCase[] = [
     script: [{ text: 'Please share the dishes and quantities so I can remember your order.' }],
     expect: {
       matches: [
-        '(?:share|send|what|which|provide|need).*(?:order|dish|item|detail|quantit|get)|(?:don.t see|missing).*(?:order|detail)',
+        '(?:share|send|what|which|provide|need|tell).*(?:order|dish|item|detail|quantit|get|remember)|(?:don.t (?:see|have)|missing).*(?:order|detail)',
       ],
-      excludes: ['saved|remembered|shrimp'],
+      excludes: ['(?:I(?:.ve| have)? saved|saved your|I(?:.ve| have)? remembered)|shrimp'],
       savedCount: 0,
     },
   },
@@ -283,7 +284,28 @@ export const QUESTION_CASES: QuestionCase[] = [
       { toolCalls: [{ toolName: 'gmail.read_thread', input: { threadId: 'hotel-1' } }] },
       { text: hotelAnswer },
     ],
-    expect: { matches: ['Harbor Hotel'], tools: ['gmail.search', 'gmail.read_thread'], card: true },
+    expect: {
+      matches: ['Saved'],
+      excludes: ['couldn.t.*card|nothing was saved'],
+      tools: ['gmail.search', 'gmail.read_thread'],
+      card: true,
+      cardValues: ['Harbor Hotel', '105.85'],
+    },
+  },
+  {
+    id: 'hotel-card-unavailable',
+    records: [658],
+    request: 'Create a card for my hotel reservation in my mailbox under QA-MISSING.',
+    mailbox: 'empty',
+    script: [
+      { toolCalls: [{ toolName: 'gmail.search', input: { query: 'QA-MISSING' } }] },
+      { text: 'The card has been created.' },
+    ],
+    expect: {
+      matches: ['couldn.t create.*card|not fully completed'],
+      excludes: ['card has been created'],
+      statuses: ['needs_attention'],
+    },
   },
   {
     id: 'hotel-short-followup',
@@ -291,10 +313,10 @@ export const QUESTION_CASES: QuestionCase[] = [
     request: 'Where are we staying',
     mailbox: 'hotel',
     history: hotelHistory,
-    script: [{ text: hotelAnswer }],
+    script: [{ text: 'Harbor Hotel in Sunnyvale. You check in Friday September 5, 2026.' }],
     expect: {
       matches: ['Harbor Hotel', 'Sunnyvale'],
-      excludes: ['Morgan Hill'],
+      excludes: ['Morgan Hill', 'Friday', 'checked in'],
       tools: ['gmail.search', 'gmail.read_thread'],
     },
   },

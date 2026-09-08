@@ -148,3 +148,45 @@ describe('an explicitly requested card', () => {
     expect(ambient.calls[0]).not.toContain('73535835545212');
   });
 });
+
+it('creates a short hotel confirmation card directly from literal email evidence', async () => {
+  const details = 'Harbor Hotel. Check-in September 5, 2026 at 4 PM. Total $105.85.';
+  const router = {
+    object: async () => {
+      throw new Error('A model must not rewrite this short confirmation');
+    },
+  } as unknown as ModelRouter;
+  const card = await generateEvidenceCard({
+    router,
+    taskId: 'test',
+    sourceText: 'Create a card for my hotel reservation',
+    explicitRequest: true,
+    evidence: [
+      {
+        toolName: 'gmail.read_thread',
+        status: 'succeeded',
+        result: { messages: [{ text: details }] },
+      },
+    ],
+  });
+  expect(card?.kind).toBe('generated-card');
+  expect(card?.spec.facts[0]?.value).toBe(details);
+  expect(card?.spec.actions).toEqual([]);
+});
+
+it('does not create a hotel card from a booking reference when the mailbox lookup found nothing', async () => {
+  const router = {
+    object: async () => {
+      throw new Error('No source exists to compose');
+    },
+  } as unknown as ModelRouter;
+  expect(
+    await generateEvidenceCard({
+      router,
+      taskId: 'empty',
+      sourceText: 'Create a hotel reservation card from my mailbox under QA-MISSING',
+      explicitRequest: true,
+      evidence: [{ toolName: 'gmail.search', status: 'succeeded', result: { results: [] } }],
+    }),
+  ).toBeNull();
+});

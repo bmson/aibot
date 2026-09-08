@@ -1360,6 +1360,19 @@ export function groundReadDraft(
 
   const reasons: string[] = [];
 
+  // Mail confirmations often give a date but no weekday. Do not let a
+  // paraphrase add an unverified weekday (for example calling Sep 5 Friday).
+  // Calendar-only answers retain their timestamp-derived weekday rendering.
+  if (request.answerFocus === 'lodging' && events.length === 0) {
+    const source = JSON.stringify(messages).toLowerCase();
+    for (const day of draft.match(
+      /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi,
+    ) ?? []) {
+      if (!source.includes(day.toLowerCase()))
+        reasons.push(`${day} is not supplied by the booking evidence`);
+    }
+  }
+
   // No returned records means no basis for a personal booking/application
   // answer, even when a fluent guess contains no capitalized names or dates.
   // Render the explicit empty ledger instead of relying on lexical checks.

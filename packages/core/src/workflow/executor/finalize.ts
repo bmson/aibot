@@ -539,9 +539,15 @@ export async function stageModelFinalResponse(
   // A requested card that could not be grounded must say so. Staying quiet let
   // the prose claim a card the Cards page never received.
   const text =
-    cardRequested && !generatedCard && !checked.blocked
-      ? `${checked.text.trimEnd()}\n\n${CARD_NOT_BUILT}`
+    cardRequested && !checked.blocked
+      ? generatedCard
+        ? `Saved “${generatedCard.spec.title}” to your Cards page.`
+        : CARD_NOT_BUILT
       : checked.text;
+  if (cardRequested && !generatedCard) {
+    pending.terminalStatus = 'needs_attention';
+    pending.outcome = 'needs_attention';
+  }
   // Stamp the contract verdict on pending; recordQualitySignals reads it from
   // the single funnel in finalizePendingResponse, so every terminal path — not
   // just this prose-model one — persists its verdict and loop-health counters.
