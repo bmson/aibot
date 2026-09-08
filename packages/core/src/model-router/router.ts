@@ -1,4 +1,4 @@
-import { type Db, modelCalls, modelRoles, models, tasks } from '@assistant/db';
+import { conversations, type Db, modelCalls, modelRoles, models, tasks } from '@assistant/db';
 import { createOpenRouter, type OpenRouterProvider } from '@openrouter/ai-sdk-provider';
 import {
   embedMany,
@@ -354,12 +354,25 @@ export class ModelRouter {
     if (!roleRow) throw new Error(`no model_roles row for role: ${role}`);
 
     let primaryId = roleRow.primaryModel;
-    if (opts.modelOverride) {
+    let modelOverride = opts.modelOverride;
+    // The conversation picker applies to tool-driven work as well as streamed
+    // replies. Background planning/extraction keep their inexpensive role routes.
+    if (!modelOverride && opts.taskId && (role === 'reason' || role === 'draft')) {
+      const [conversation] = await this.db
+        .select({ modelOverride: conversations.modelOverride })
+        .from(tasks)
+        .innerJoin(conversations, eq(tasks.conversationId, conversations.id))
+        .where(and(eq(tasks.id, opts.taskId), eq(tasks.type, 'chat_turn')));
+      modelOverride = conversation?.modelOverride ?? undefined;
+    }
+    if (modelOverride) {
       const [override] = await this.db
         .select()
         .from(models)
-        .where(and(eq(models.id, opts.modelOverride), eq(models.enabled, true)));
-      if (override) primaryId = override.id;
+        .where(and(eq(models.id, modelOverride), eq(models.enabled, true)));
+      if (override && !(override.capabilities as { embedding?: boolean }).embedding) {
+        primaryId = override.id;
+      }
     }
 
     const degraded = opts.forceFallback || decision.mode === 'fallback';
@@ -367,6 +380,7 @@ export class ModelRouter {
     const params = (roleRow.params ?? {}) as Record<string, unknown>;
     const [modelRow] = await this.db.select().from(models).where(eq(models.id, modelId));
     if (!modelRow) throw new Error(`model row missing for routed model: ${modelId}`);
+    if (!modelRow.enabled) throw new Error(`routed model is disabled: ${modelId}`);
     const promptCostPerMTok = Number(modelRow.promptCostPerMTok);
     const completionCostPerMTok = Number(modelRow.completionCostPerMTok);
     if (
@@ -427,15 +441,8 @@ export class ModelRouter {
   ): { maxOutputTokens: number; providerOptions?: ProviderOptions } {
     const visibleLimit = this.outputLimit(role, route, opts);
     if (!route.thinking) return { maxOutputTokens: visibleLimit };
-    // Extended thinking is incompatible with forced tool use (Anthropic). When
-    // the step loop forces a specific tool (`required` / `{type:'tool'}`) —
-    // every mustAct step and every goal-bookkeeping turn — omit the reasoning
-    // option so a provider that enforces the incompatibility cannot error the
-    // call into the retry-until-dead-letter loop. Costless when unfounded.
-    const toolChoice = (opts as { toolChoice?: StepToolChoice }).toolChoice;
-    const forcedTool =
-      toolChoice === 'required' || (typeof toolChoice === 'object' && toolChoice?.type === 'tool');
-    if (forcedTool) return { maxOutputTokens: visibleLimit };
+    // Reasoning models still need headroom when a tool is mandatory. Removing
+    // it can exhaust the completion budget before the tool call is emitted.
     return {
       maxOutputTokens: visibleLimit + REASONING_HEADROOM_TOKENS,
       providerOptions: {

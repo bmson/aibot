@@ -17,7 +17,7 @@ const ROLE_FOR_TYPE: Record<string, ModelRole> = {
 const ACTION_ROUTED_TYPES = new Set(['chat_turn', 'sms_turn', 'scheduled']);
 
 /**
- * Which model tier runs a task's tool loop. The reasoning model (Claude) is not
+ * Which model tier runs a task's tool loop. The main agent model is not
  * reserved for background missions: any request that intends to DO something —
  * an unattended goal session, a mission, an email to triage, a mission work
  * session (adhoc), or a chat/SMS/scheduled turn the planner routed to real work

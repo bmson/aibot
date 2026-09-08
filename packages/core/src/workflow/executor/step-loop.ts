@@ -255,12 +255,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // answers these with plausible prose and no tool calls — how a request can
   // look handled while nothing happened.
   const role = readRequest || memoryWrite || liveLookup ? 'reason' : roleForTask(task, plan);
-  // Forced artifact retries drop to the role's fallback because the DRAFT
-  // primary (deepseek) intermittently times out when a tool is mandatory. The
-  // reasoning primary (Claude) has no such issue, and its fallback is the
-  // WEAKER draft model — so on a reason task, forcing the fallback is a pure
-  // downgrade. Keep the fallback only for draft; a hard task on reason stays on
-  // the strong model through its retries (the missing escalation path, E2).
+  // Artifact retries can use the draft role's tool-capable fallback. Agent
+  // work keeps its selected model through those retries; provider failures
+  // and budget pressure still use the router's bounded fallback path.
   const useForcedToolFallback = role !== 'reason';
   const privilegedTask = task.trust === 'owner' || task.trust === 'assistant';
   const ownerCard =
