@@ -249,11 +249,11 @@ final class APIClientRetryTests: XCTestCase {
     func testForceGraphCanvasDragCancelAndSelectionPreserveViewport() throws {
         let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
         let graph = RelationshipGraphFixture.snapshot()
-        view.configure(snapshot: graph, selectedID: nil, focusOnly: false, dark: false, reduceMotion: true)
+        view.configure(snapshot: graph, selectedID: nil, focusOnly: false, dark: false, reduceMotion: true, allowsNodeDragging: true)
         let point = view.layout.positions[0]
         let screen = view.viewport.screen(point, size: view.bounds.size)
         let viewport = view.viewport
-        view.configure(snapshot: graph, selectedID: view.layout.ids[0], focusOnly: false, dark: false, reduceMotion: true)
+        view.configure(snapshot: graph, selectedID: view.layout.ids[0], focusOnly: false, dark: false, reduceMotion: true, allowsNodeDragging: true)
         XCTAssertEqual(view.viewport, viewport)
         view.beginDrag(at: screen)
         view.drag(to: CGPoint(x: screen.x + 60, y: screen.y + 30))
@@ -270,7 +270,36 @@ final class APIClientRetryTests: XCTestCase {
         let zoomed = view.viewport
         view.endDrag(cancelled: true)
         XCTAssertEqual(view.viewport, zoomed, "Starting a pinch without a pan must preserve the current viewport")
-        view.stop()
+    }
+
+    @MainActor
+    func testFocusedGraphPanSelectionRefreshAndResizeStayStable() throws {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 393, height: 420))
+        var graph = RelationshipGraphFixture.snapshot(count: 200).focused(on: "node-4")
+        view.configure(snapshot: graph, selectedID: "node-4", focusOnly: false, dark: false, reduceMotion: false, centeredID: "node-4")
+        view.layoutIfNeeded()
+        let positions = view.layout.positions
+        let point = view.viewport.screen(positions[0], size: view.bounds.size)
+        let original = view.viewport
+        view.beginDrag(at: point)
+        view.drag(to: CGPoint(x: point.x + 45, y: point.y + 20))
+        view.endDrag(cancelled: false)
+        XCTAssertEqual(view.layout.positions, positions, "Default dragging over a node pans instead of rearranging nodes")
+        XCTAssertEqual(view.viewport.offset.x, original.offset.x + 45, accuracy: 0.001)
+        let panned = view.viewport
+        view.configure(snapshot: graph, selectedID: graph.nodes.last?.id, focusOnly: false, dark: false, reduceMotion: false, centeredID: "node-4")
+        XCTAssertEqual(view.layout.positions, positions)
+        XCTAssertEqual(view.viewport, panned)
+        graph.edges.removeLast()
+        view.configure(snapshot: graph, selectedID: graph.nodes.last?.id, focusOnly: false, dark: true, reduceMotion: false, centeredID: "node-4")
+        XCTAssertEqual(view.layout.positions, positions, "Evidence refresh cannot rearrange existing items")
+        XCTAssertEqual(view.viewport, panned)
+        let screenBefore = view.viewport.screen(positions[0], size: view.bounds.size)
+        view.frame.size.height -= 65
+        view.layoutIfNeeded()
+        XCTAssertEqual(view.viewport.screen(positions[0], size: view.bounds.size), screenBefore, "Wrapping controls must not shift map targets")
+        view.beginDrag(at: .zero); view.drag(to: CGPoint(x: 20, y: 30)); view.endDrag(cancelled: true)
+        XCTAssertEqual(view.viewport.screen(positions[0], size: view.bounds.size), screenBefore)
     }
 
     @MainActor
@@ -282,12 +311,13 @@ final class APIClientRetryTests: XCTestCase {
             ("selected", ColorScheme.light, 18, DynamicTypeSize.large),
             ("islands", ColorScheme.light, 18, DynamicTypeSize.large),
             ("dense", ColorScheme.dark, 200, DynamicTypeSize.large),
+            ("dense-selected", ColorScheme.dark, 200, DynamicTypeSize.large),
             ("accessible", ColorScheme.light, 18, DynamicTypeSize.accessibility3),
             ("accessible-selected", ColorScheme.light, 18, DynamicTypeSize.accessibility3),
             ("empty", ColorScheme.light, 0, DynamicTypeSize.large)
         ] {
             let fixture = RelationshipGraphFixture.snapshot(count: count)
-            let snapshot = RelationshipGraphSnapshot(nodes: fixture.nodes, edges: name == "islands" ? Array(fixture.edges.prefix(4)) : fixture.edges, totalEdges: fixture.totalEdges, truncated: name == "islands", focusId: name.contains("selected") ? "node-0" : nil)
+            let snapshot = RelationshipGraphSnapshot(nodes: fixture.nodes, edges: name == "islands" ? Array(fixture.edges.prefix(4)) : fixture.edges, totalEdges: fixture.totalEdges, truncated: name == "islands", focusId: name == "dense-selected" ? "node-4" : name.contains("selected") ? "node-0" : nil)
             StubURLProtocol.prime([.success(status: 200, body: try JSONEncoder().encode(snapshot))])
             let model = AppModel(apiClient: makeClient())
             let window = UIWindow(windowScene: scene)

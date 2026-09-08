@@ -2402,7 +2402,14 @@ enum RelationshipGraphFixture {
         let nodes = (0..<count).map { i in RelationshipGraphNode(id: "node-\(i)", label: i < names.count ? names[i] : "Person \(i)", kind: i == 6 ? "organization" : [7, 17].contains(i) ? "place" : [8, 9, 16].contains(i) ? "project" : "person") }
         let edges = (1..<max(1, count)).map { i in edge("edge-\(i)", from: "node-\(i < 6 ? 0 : i < 12 ? 2 : 4)", to: "node-\(i)") }
             + (count > 8 ? [edge("cross", from: "node-1", to: "node-6"), edge("cross2", from: "node-4", to: "node-6"), edge("cross3", from: "node-2", to: "node-4")] : [])
-        return .init(nodes: nodes, edges: edges, totalEdges: edges.count, truncated: false, focusId: nil)
+        let labels = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0.label) })
+        let namedEdges = edges.map { edge in
+            let sentence = "\(labels[edge.subjectId] ?? edge.subjectId) knows \(labels[edge.objectId] ?? edge.objectId)."
+            return RelationshipGraphEdge(id: edge.id, subjectId: edge.subjectId, objectId: edge.objectId, predicate: edge.predicate,
+                reviewStatus: edge.reviewStatus, sourceContent: sentence,
+                presentation: .init(sentence: sentence, label: "Knows", accessibleLabel: sentence), validFrom: nil, validUntil: nil)
+        }
+        return .init(nodes: nodes, edges: namedEdges, totalEdges: edges.count, truncated: false, focusId: nil)
     }
     static func edge(_ id: String, from: String, to: String) -> RelationshipGraphEdge {
         .init(id: id, subjectId: from, objectId: to, predicate: "knows", reviewStatus: "confirmed", sourceContent: "A synthetic source note.", presentation: .init(sentence: "Alex knows Robin.", label: "Knows", accessibleLabel: "Alex knows Robin."), validFrom: nil, validUntil: nil)
@@ -2535,5 +2542,35 @@ final class AssistantConfirmationStateTests: XCTestCase {
         XCTAssertFalse(second.tap())
         XCTAssertTrue(first.tap())
         XCTAssertNotNil(second.expiresAt)
+    }
+}
+
+
+extension APIModelsTests {
+    func testFocusedGraphPagesAreBoundedStableAndKeepDirectedEvidence() {
+        var graph = RelationshipGraphFixture.snapshot(count: 200)
+        let neighbors = graph.directNeighbors(of: "node-4")
+        XCTAssertGreaterThan(neighbors.count, 180)
+        var seen = Set<String>()
+        for page in 0..<((neighbors.count + 3) / 4) {
+            let focused = graph.focused(on: "node-4", page: page)
+            XCTAssertLessThanOrEqual(focused.nodes.count, 5)
+            XCTAssertEqual(focused.nodes.first?.id, "node-4")
+            for node in focused.nodes.dropFirst() { XCTAssertTrue(seen.insert(node.id).inserted) }
+            for edge in focused.edges {
+                XCTAssertTrue(edge.subjectId == "node-4" || edge.objectId == "node-4")
+                XCTAssertEqual(edge, graph.edges.first { $0.id == edge.id })
+            }
+        }
+        XCTAssertEqual(seen, Set(neighbors.map(\.id)))
+        let firstPage = graph.focused(on: "node-4").nodes.map(\.id)
+        graph.nodes.reverse(); graph.edges.reverse()
+        XCTAssertEqual(graph.focused(on: "node-4").nodes.map(\.id), firstPage)
+        XCTAssertLessThanOrEqual(graph.focused(on: "node-4", page: 999).nodes.count, 5)
+        XCTAssertTrue(graph.focused(on: "missing").nodes.isEmpty)
+        XCTAssertTrue(graph.focused(on: "node-4", peopleOnly: true).nodes.allSatisfy { $0.kind == "person" })
+        let isolated = RelationshipGraphSnapshot(nodes: [graph.nodes[0]], edges: [], totalEdges: 0, truncated: true, focusId: nil)
+        XCTAssertEqual(isolated.focused(on: graph.nodes[0].id).nodes.count, 1)
+        XCTAssertTrue(isolated.focused(on: graph.nodes[0].id).truncated)
     }
 }

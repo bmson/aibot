@@ -97,6 +97,29 @@ extension RelationshipGraphSnapshot {
         .init(nodes: nodes.filter { ids.contains($0.id) }, edges: edges.filter { ids.contains($0.subjectId) && ids.contains($0.objectId) }, totalEdges: totalEdges, truncated: truncated, focusId: focusId)
     }
 
+    /// Stable pages keep a busy person's map readable without hiding access to other connections.
+    func directNeighbors(of id: String, peopleOnly: Bool = false) -> [RelationshipGraphNode] {
+        let ids = neighborhood(of: id).subtracting([id])
+        return nodes.filter { ids.contains($0.id) && (!peopleOnly || $0.kind == "person") }.sorted {
+            let order = $0.label.localizedStandardCompare($1.label)
+            return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+        }
+    }
+
+    func focused(on id: String, page: Int = 0, pageSize: Int = 4, peopleOnly: Bool = false) -> Self {
+        guard let center = nodes.first(where: { $0.id == id }) else { return .empty }
+        let neighbors = directNeighbors(of: id, peopleOnly: peopleOnly)
+        let size = max(1, pageSize)
+        let lastPage = max(0, (neighbors.count - 1) / size)
+        let start = min(max(0, page), lastPage) * size
+        let shown = [center] + Array(neighbors.dropFirst(start).prefix(size))
+        let ids = Set(shown.map(\.id))
+        return .init(nodes: shown, edges: edges.filter {
+            $0.reviewStatus != "rejected" && ($0.subjectId == id || $0.objectId == id)
+                && ids.contains($0.subjectId) && ids.contains($0.objectId)
+        }, totalEdges: totalEdges, truncated: truncated, focusId: id)
+    }
+
     /// Suggestions are navigation prompts based on topology, never asserted new facts.
     func connectionCandidates(for id: String) -> [(node: RelationshipGraphNode, reason: String)] {
         let direct = neighborhood(of: id)

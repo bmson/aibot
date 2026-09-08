@@ -6,6 +6,8 @@ struct RelationshipGraphCanvas: UIViewRepresentable {
     let selectedID: String?
     let focusOnly: Bool
     let command: GraphCanvasCommand
+    var centeredID: String? = nil
+    var allowsNodeDragging = false
     let select: (String?) -> Void
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -13,21 +15,15 @@ struct RelationshipGraphCanvas: UIViewRepresentable {
     func makeUIView(context: Context) -> RelationshipGraphCanvasView { RelationshipGraphCanvasView() }
     func updateUIView(_ view: RelationshipGraphCanvasView, context: Context) {
         view.onSelect = select
-        view.configure(snapshot: snapshot, selectedID: selectedID, focusOnly: focusOnly, dark: colorScheme == .dark, reduceMotion: reduceMotion)
+        view.configure(snapshot: snapshot, selectedID: selectedID, focusOnly: focusOnly, dark: colorScheme == .dark, reduceMotion: reduceMotion, centeredID: centeredID, allowsNodeDragging: allowsNodeDragging)
         view.perform(command)
     }
-    static func dismantleUIView(_ view: RelationshipGraphCanvasView, coordinator: ()) { view.stop() }
 }
 
 struct GraphCanvasCommand: Equatable {
     enum Action { case fit, zoomIn, zoomOut, tidy }
     var id = 0
     var action: Action = .fit
-}
-
-private final class GraphFrameTarget: NSObject {
-    weak var canvas: RelationshipGraphCanvasView?
-    @objc func tick() { canvas?.tick() }
 }
 
 /// UIKit owns gestures and drawing so dragging does not rebuild SwiftUI's view tree.
@@ -42,10 +38,11 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     private var neighbors = Set<String>()
     private var focusOnly = false
     private var dark = false
-    private var reduceMotion = false
-    private var frameLink: CADisplayLink?
-    private let frameTarget = GraphFrameTarget()
-    private var ticksLeft = 0
+    private var centeredID: String?
+    private var allowsNodeDragging = false
+    private var previousSize = CGSize.zero
+    private var edgeLabels: [GraphLink: String] = [:]
+    private var edgeDirections: [GraphLink: String] = [:]
     private var lastCommand = -1
     private var needsInitialFit = true
     private var dragID: String?
@@ -68,68 +65,70 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         tap.require(toFail: pan)
         pan.delegate = self; pinch.delegate = self
         addGestureRecognizer(pan); addGestureRecognizer(pinch); addGestureRecognizer(tap)
-        frameTarget.canvas = self
-        NotificationCenter.default.addObserver(self, selector: #selector(pause), name: UIApplication.willResignActiveNotification, object: nil)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    deinit { NotificationCenter.default.removeObserver(self) }
 
-    func configure(snapshot: RelationshipGraphSnapshot, selectedID: String?, focusOnly: Bool, dark: Bool, reduceMotion: Bool) {
+    func configure(snapshot: RelationshipGraphSnapshot, selectedID: String?, focusOnly: Bool, dark: Bool, reduceMotion: Bool, centeredID: String? = nil, allowsNodeDragging: Bool = false) {
         let newLinks = snapshot.links
-        let changed = nodes != snapshot.nodes || links != newLinks
-        self.dark = dark; self.reduceMotion = reduceMotion
+        let changed = nodes != snapshot.nodes || links != newLinks || self.centeredID != centeredID
+        let newFocus = self.centeredID != centeredID
+        self.centeredID = centeredID; self.allowsNodeDragging = allowsNodeDragging
+        edgeLabels = [:]; edgeDirections = [:]
+        let claims = Dictionary(grouping: snapshot.edges.filter { $0.reviewStatus != "rejected" }, by: { GraphLink($0.subjectId, $0.objectId) })
+        for (link, edges) in claims {
+            let statements = Set(edges.map { "\($0.subjectId)|\($0.predicate)|\($0.objectId)|\($0.validFrom ?? "")|\($0.validUntil ?? "")" })
+            if statements.count == 1, let edge = edges.first {
+                edgeLabels[link] = edge.presentation.label; edgeDirections[link] = edge.objectId
+            } else { edgeLabels[link] = "\(statements.count) relationships" }
+        }
+        self.dark = dark
         self.selectedID = selectedID; self.focusOnly = focusOnly
         neighbors = selectedID.map { snapshot.neighborhood(of: $0) } ?? []
         unreviewed = Set(snapshot.edges.filter { $0.reviewStatus != "confirmed" }.map { GraphLink($0.subjectId, $0.objectId) })
         if changed {
             nodes = snapshot.nodes; links = newLinks; groups = snapshot.groups
+            let existing = !layout.ids.isEmpty
+            let changedItems = Set(layout.ids) != Set(nodes.map(\.id))
             layout.update(nodes: nodes, links: links)
-            // A settled first frame makes the map immediately legible, even in Reduce Motion.
-            for _ in 0..<(needsInitialFit ? 120 : 35) { layout.step() }
-            if needsInitialFit { layout.arrangeGroups() }
-            if needsInitialFit && !bounds.isEmpty { fit(); needsInitialFit = false }
-            wake()
-        } else if reduceMotion { stop() }
+            if let centeredID, newFocus || changedItems {
+                layout.move(id: centeredID, to: .zero)
+                let others = nodes.filter { $0.id != centeredID }
+                let slots = [CGPoint(x: -115, y: -130), CGPoint(x: 115, y: -130), CGPoint(x: -115, y: 130), CGPoint(x: 115, y: 130)]
+                for (index, node) in others.enumerated() {
+                    layout.move(id: node.id, to: slots[index % slots.count])
+                }
+                if !bounds.isEmpty { fit(); needsInitialFit = false }
+            } else if centeredID == nil && (!existing || newFocus) {
+                for _ in 0..<160 { layout.step() }
+                layout.arrangeGroups()
+                if !bounds.isEmpty { fit(); needsInitialFit = false }
+            }
+        }
         refreshAccessibility()
         setNeedsDisplay()
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // Insets may change when controls wrap. Keep existing nodes at their screen positions.
+        if !previousSize.equalTo(.zero), previousSize != bounds.size {
+            viewport.offset.x += (previousSize.width - bounds.width) / 2
+            viewport.offset.y += (previousSize.height - bounds.height) / 2
+        }
+        previousSize = bounds.size
         if needsInitialFit, !bounds.isEmpty, !nodes.isEmpty { fit(); needsInitialFit = false }
         refreshAccessibility()
-    }
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if window == nil { stop() }
-    }
-    @objc private func pause() { stop() }
-    func stop() { frameLink?.invalidate(); frameLink = nil; ticksLeft = 0 }
-    private func wake() {
-        guard !reduceMotion, window != nil else { return }
-        ticksLeft = 100
-        if frameLink == nil {
-            let link = CADisplayLink(target: frameTarget, selector: #selector(GraphFrameTarget.tick))
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
-            link.add(to: .main, forMode: .common)
-            frameLink = link
-        }
-    }
-    func tick() {
-        guard window != nil, ticksLeft > 0 else { stop(); return }
-        let energy = layout.step(pinned: dragID)
-        ticksLeft -= 1
-        setNeedsDisplay()
-        if (energy < 0.025 && dragID == nil) || ticksLeft == 0 { stop(); refreshAccessibility() }
     }
     func perform(_ command: GraphCanvasCommand) {
         guard lastCommand != command.id else { return }
         lastCommand = command.id
         switch command.action {
         case .tidy:
-            stop()
-            for _ in 0..<120 { layout.step() }
-            layout.arrangeGroups(); fit()
+            if centeredID == nil {
+                for _ in 0..<120 { layout.step() }
+                layout.arrangeGroups()
+            }
+            fit()
         case .fit: fit()
         case .zoomIn: zoom(to: viewport.scale * 1.35, anchor: CGPoint(x: bounds.midX, y: bounds.midY))
         case .zoomOut: zoom(to: viewport.scale / 1.35, anchor: CGPoint(x: bounds.midX, y: bounds.midY))
@@ -160,15 +159,13 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
 
     func beginDrag(at point: CGPoint) {
         dragStart = point; originalViewport = viewport
-        dragID = hitNode(at: point)
+        dragID = allowsNodeDragging ? hitNode(at: point) : nil
         originalNodePosition = dragID.flatMap { points()[$0] }
-        stop()
     }
     func drag(to point: CGPoint) {
         guard let start = dragStart else { return }
         if let id = dragID, let origin = originalNodePosition {
             layout.move(id: id, to: CGPoint(x: origin.x + (point.x - start.x) / viewport.scale, y: origin.y + (point.y - start.y) / viewport.scale))
-            wake()
         } else {
             viewport.offset = CGPoint(x: originalViewport.offset.x + point.x - start.x, y: originalViewport.offset.y + point.y - start.y)
         }
@@ -176,15 +173,12 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     }
     func endDrag(cancelled: Bool) {
         guard dragStart != nil else { return }
-        if cancelled { stop() }
-        let movedNode = dragID != nil
         if cancelled {
             if let id = dragID, let point = originalNodePosition { layout.move(id: id, to: point) }
             else { viewport = originalViewport }
         }
         dragID = nil; dragStart = nil; originalNodePosition = nil
         refreshAccessibility(); setNeedsDisplay()
-        if !cancelled && movedNode { wake() }
     }
     @objc private func pan(_ gesture: UIPanGestureRecognizer) {
         let point = gesture.location(in: self)
@@ -202,7 +196,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         let point = gesture.location(in: self)
         if gesture.state == .began {
             endDrag(cancelled: true)
-            stop(); originalViewport = viewport
+            originalViewport = viewport
             pinchStartScale = viewport.scale
             pinchWorldAnchor = viewport.world(point, size: bounds.size)
         }
@@ -238,10 +232,30 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             let highlighted = selectedID == link.a || selectedID == link.b
             if focusOnly && selectedID != nil && !(neighbors.contains(link.a) && neighbors.contains(link.b)) { continue }
             let start = viewport.screen(a, size: bounds.size), end = viewport.screen(b, size: bounds.size)
-            context.setStrokeColor((highlighted ? accent.withAlphaComponent(0.65) : ink.withAlphaComponent(selectedID == nil ? 0.24 : 0.07)).cgColor)
+            context.setStrokeColor((highlighted ? accent.withAlphaComponent(0.65) : ink.withAlphaComponent(centeredID != nil ? 0.3 : selectedID == nil ? 0.24 : 0.07)).cgColor)
             context.setLineWidth(highlighted ? 1.4 : 0.7)
             context.setLineDash(phase: 0, lengths: unreviewed.contains(link) ? [3, 4] : [])
             context.move(to: start); context.addLine(to: end); context.strokePath()
+            if centeredID != nil, let target = edgeDirections[link] {
+                let tip = target == link.b ? end : start, tail = target == link.b ? start : end
+                let angle = atan2(tip.y - tail.y, tip.x - tail.x)
+                let inset: CGFloat = target == selectedID ? 16 : 12
+                let arrow = CGPoint(x: tip.x - cos(angle) * inset, y: tip.y - sin(angle) * inset)
+                context.setLineDash(phase: 0, lengths: [])
+                context.move(to: CGPoint(x: arrow.x - cos(angle - 0.5) * 7, y: arrow.y - sin(angle - 0.5) * 7))
+                context.addLine(to: arrow)
+                context.addLine(to: CGPoint(x: arrow.x - cos(angle + 0.5) * 7, y: arrow.y - sin(angle + 0.5) * 7))
+                context.strokePath()
+            }
+            if centeredID != nil, let label = edgeLabels[link] {
+                let text = label as NSString
+                let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11), .foregroundColor: ink.withAlphaComponent(0.75)]
+                let size = text.size(withAttributes: attributes)
+                let box = CGRect(x: (start.x + end.x - min(105, size.width)) / 2, y: (start.y + end.y - size.height) / 2,
+                                 width: min(105, size.width), height: size.height)
+                canvas.setFill(); context.fill(box.insetBy(dx: -4, dy: -3))
+                text.draw(with: box, options: [.truncatesLastVisibleLine], attributes: attributes, context: nil)
+            }
         }
         context.setLineDash(phase: 0, lengths: [])
         let nodeBounds = nodes.compactMap { node -> CGRect? in
@@ -257,7 +271,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             let point = viewport.screen(position, size: bounds.size)
             guard bounds.insetBy(dx: -100, dy: -50).contains(point) else { continue }
             let selected = node.id == selectedID
-            let relevant = selectedID == nil || neighbors.contains(node.id)
+            let relevant = centeredID != nil || selectedID == nil || neighbors.contains(node.id)
             let radius: CGFloat = selected ? 11 : min(9, 4 + sqrt(CGFloat(degrees[node.id] ?? 0)))
             let tint = node.kind == "person" ? accent : Self.tint(for: node.kind)
             if selected {
@@ -266,16 +280,17 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             }
             context.setFillColor(tint.withAlphaComponent(relevant ? 1 : 0.22).cgColor)
             context.fillEllipse(in: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
-            guard selected || neighbors.contains(node.id) || (selectedID == nil && (viewport.scale > 0.5 || nodes.count < 35)) else { continue }
+            guard centeredID != nil || selected || neighbors.contains(node.id) || (selectedID == nil && (viewport.scale > 0.5 || nodes.count < 35)) else { continue }
             let text = node.label as NSString
-            let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: selected ? 14 : 11, weight: selected ? .semibold : .regular), .foregroundColor: ink.withAlphaComponent(relevant ? 1 : 0.4)]
+            let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: selected || centeredID != nil ? 14 : 11, weight: selected ? .semibold : .regular), .foregroundColor: ink.withAlphaComponent(relevant ? 1 : 0.4)]
             let measured = text.size(withAttributes: attributes)
-            let width = min(150, measured.width)
+            let width = max(1, min(centeredID == nil ? 150 : 125, measured.width))
+            let labelHeight = centeredID == nil ? measured.height : min(2, ceil(measured.width / width)) * measured.height
             let labelRadius = max(10, radius)
             let candidates = [
-                CGRect(x: point.x - width / 2, y: point.y + labelRadius + 7, width: width, height: measured.height),
-                CGRect(x: point.x - width / 2, y: point.y - labelRadius - 7 - measured.height, width: width, height: measured.height),
-                CGRect(x: point.x + labelRadius + 8, y: point.y - measured.height / 2, width: width, height: measured.height),
+                CGRect(x: point.x - width / 2, y: point.y + labelRadius + 7, width: width, height: labelHeight),
+                CGRect(x: point.x - width / 2, y: point.y - labelRadius - 7 - labelHeight, width: width, height: labelHeight),
+                CGRect(x: point.x + labelRadius + 8, y: point.y - labelHeight / 2, width: width, height: labelHeight),
             ]
             let clearLabel = candidates.first { candidate in
                 !(nodeBounds + occupiedLabels).contains { $0.intersects(candidate.insetBy(dx: -3, dy: -2)) }

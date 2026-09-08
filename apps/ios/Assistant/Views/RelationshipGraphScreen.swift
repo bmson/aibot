@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The graph is a full-screen destination, so its pan never competes with a transcript or list.
+/// Begin with a named item; the full graph is an explicit overview.
 struct RelationshipGraphScreen: View {
     var personID: String? = nil
     var entityID: String? = nil
@@ -10,6 +10,10 @@ struct RelationshipGraphScreen: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var graph = RelationshipGraphSnapshot.empty
     @State private var selectedID: String?
+    @State private var centerID: String?
+    @State private var history: [(id: String, page: Int)] = []
+    @State private var page = 0
+    @State private var overview = false
     @State private var loading = false
     @State private var hasLoaded = false
     @State private var failure: String?
@@ -17,10 +21,9 @@ struct RelationshipGraphScreen: View {
     @State private var command = GraphCanvasCommand()
     @State private var listView = false
     @State private var peopleOnly = false
-    @State private var focusOnly = false
+    @State private var moveNodes = false
     @State private var showGroups = false
     @State private var connecting: RelationshipGraphNode?
-    @State private var focusedGroupID: String?
     @State private var notice: String?
     @State private var showBrowser = false
     @State private var showConnections = false
@@ -29,30 +32,37 @@ struct RelationshipGraphScreen: View {
     @State private var searching = false
     @State private var searchFailed = false
 
+    private var usesList: Bool { listView || dynamicTypeSize.isAccessibilitySize }
     private var selected: RelationshipGraphNode? { graph.nodes.first { $0.id == selectedID } }
+    private var center: RelationshipGraphNode? { graph.nodes.first { $0.id == centerID } }
+    private var neighbors: [RelationshipGraphNode] { centerID.map { graph.directNeighbors(of: $0, peopleOnly: peopleOnly) } ?? [] }
+    private var pageCount: Int { max(1, (neighbors.count + 3) / 4) }
     private var visible: RelationshipGraphSnapshot {
-        var result = graph
-        if let id = focusedGroupID, let group = graph.groups.first(where: { $0.ids.contains(id) }) { result = graph.showing(group.ids) }
-        if peopleOnly { result = result.showing(Set(result.nodes.filter { $0.kind == "person" }.map(\.id))) }
-        return result
-    }
-    private var listedNodes: [RelationshipGraphNode] {
-        let neighborhood = selectedID.map { graph.neighborhood(of: $0) }
-        return visible.nodes.filter { !focusOnly || neighborhood?.contains($0.id) != false }
-            .sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+        if let centerID { return graph.focused(on: centerID, page: page, peopleOnly: peopleOnly) }
+        return peopleOnly ? graph.showing(Set(graph.nodes.filter { $0.kind == "person" }.map(\.id))) : graph
     }
     private var currentEdges: [RelationshipGraphEdge] {
         guard let selectedID else { return [] }
-        return graph.edges.filter { $0.subjectId == selectedID || $0.objectId == selectedID }
+        return graph.edges.filter { $0.reviewStatus != "rejected" && ($0.subjectId == selectedID || $0.objectId == selectedID) }
+    }
+    private var selectionDescription: String {
+        if let centerID, let selectedID, selectedID != centerID,
+           let edge = currentEdges.first(where: { $0.subjectId == centerID || $0.objectId == centerID }) {
+            return edge.presentation.sentence
+        }
+        return selected.map { "\($0.kind.sentenceCaseIdentifier) · \(graph.directNeighbors(of: $0.id).count) connected items" } ?? "Tap an item to read its connections."
     }
 
     var body: some View {
         Group {
-            if listView { readableList }
-            else { canvas.safeAreaInset(edge: .top, spacing: 0) { graphSummary }.safeAreaInset(edge: .bottom, spacing: 0) { bottomControls } }
+            if centerID == nil && !overview { startingPoints }
+            else if listView || dynamicTypeSize.isAccessibilitySize { readableList }
+            else {
+                canvas
+                    .safeAreaInset(edge: .top, spacing: 0) { graphSummary }
+                    .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
+            }
         }
-        .onAppear { listView = dynamicTypeSize.isAccessibilitySize }
-        .onChange(of: dynamicTypeSize) { _, size in listView = size.isAccessibilitySize }
         .navigationTitle("Relationship graph")
         .navigationBarTitleDisplayMode(.inline)
         .tint(AssistantTheme.accent(for: colorScheme))
@@ -64,45 +74,42 @@ struct RelationshipGraphScreen: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button("Connect loose groups", systemImage: "point.3.connected.trianglepath.dotted") { showGroups = true }
-                    Button("Tidy layout", systemImage: "square.grid.2x2") { send(.tidy) }
-                    if focusedGroupID != nil { Button("Show all groups") { focusedGroupID = nil; send(.fit) } }
+                    Button("Choose a starting item", systemImage: "list.bullet") { returnToStart() }
+                    Button("Full map overview", systemImage: "circle.hexagongrid") { centerID = nil; overview = true; selectedID = nil; send(.fit) }
                     Toggle("List view", isOn: $listView)
                     Toggle("People only", isOn: $peopleOnly)
-                    Toggle("Selected neighborhood", isOn: $focusOnly).disabled(selected == nil)
+                    Toggle("Reposition nodes", isOn: $moveNodes)
+                    Button("Fit map", systemImage: "arrow.up.left.and.arrow.down.right") { send(.fit) }
+                    Button("Tidy overview", systemImage: "square.grid.2x2") { send(.tidy) }.disabled(centerID != nil)
+                    Button("Connect loose groups", systemImage: "point.3.connected.trianglepath.dotted") { showGroups = true }
                     Button("Reload graph", systemImage: "arrow.clockwise") { Task { await load() } }
                     Button("All knowledge", systemImage: "circle.hexagongrid") { Task { await load(all: true) } }
                 } label: { Label("Graph options", systemImage: "slider.horizontal.3") }
             }
         }
-        .onChange(of: peopleOnly) { _, value in
-            if value, selected?.kind != "person" { selectedID = nil; focusOnly = false }
-            send(.fit)
-        }
-        .onChange(of: focusOnly) { _, _ in send(.fit) }
+        .onChange(of: peopleOnly) { _, _ in page = 0; selectedID = centerID; send(.fit) }
         .task { if !hasLoaded { await load() } }
         .sheet(isPresented: $showBrowser) { itemBrowser }
         .sheet(item: $connecting) { node in
             NavigationStack {
-                GraphConnectSheet(source: node, graph: graph) { await connectionSaved(around: node.id); connecting = nil }
+                GraphConnectSheet(source: node, graph: graph) { await expand(node.id); notice = "Connection saved"; connecting = nil }
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { connecting = nil } } }
             }
         }
         .sheet(isPresented: $showGroups) {
             NavigationStack {
                 GraphGroupsSheet(graph: graph, focus: { node in
-                    focusedGroupID = node.id; selectedID = node.id; focusOnly = false; peopleOnly = false
-                    showGroups = false; send(.fit)
-                }, saved: { id in await connectionSaved(around: id); showGroups = false })
+                    open(node.id); showGroups = false
+                }, saved: { id in await expand(id); open(id); showGroups = false })
             }
         }
         .sheet(isPresented: $showConnections) {
             if let selected {
                 NavigationStack {
-                    GraphConnectionsSheet(node: selected, edges: currentEdges, explore: { nodeID in
-                        selectedID = nodeID; showConnections = false
+                    GraphConnectionsSheet(node: selected, edges: currentEdges, explore: { id in
+                        showConnections = false; open(id); Task { await expand(id) }
                     }, removed: { id in
-                        graph.edges.removeAll { $0.id == id }
+                        graph.edges.removeAll { $0.id == id }; page = min(page, pageCount - 1)
                         if let personID { Task { await model.refreshPersonEvidence(id: personID) } }
                     }, refresh: { await expand(selected.id) })
                 }
@@ -110,149 +117,152 @@ struct RelationshipGraphScreen: View {
         }
     }
 
-    private var canvas: some View {
-        ZStack(alignment: .topLeading) {
-            AssistantTheme.canvas(for: colorScheme).ignoresSafeArea()
-            RelationshipGraphCanvas(snapshot: visible, selectedID: selectedID, focusOnly: focusOnly, command: command) { id in
-                selectedID = id
-                if id == nil { focusOnly = false }
+    private var startingPoints: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Start with someone you know").font(.title2.weight(.semibold))
+                    Text("Choose a person, place, or project. Explore a few connections at a time, with names and relationships you can read.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Button("Find a person or item", systemImage: "magnifyingglass") { showBrowser = true }
+                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary)).padding(.top, 6)
+                }.padding(.vertical, 8)
             }
-            .accessibilityIdentifier("assistant.relationship.graph")
-            if hasLoaded && visible.nodes.isEmpty {
-                ContentUnavailableView("No connections to show", systemImage: "point.3.connected.trianglepath.dotted", description: Text(peopleOnly ? "Try showing all items. People may connect through shared places or projects." : "Relationships appear here when they’re recorded in your knowledge graph."))
+            if loading { ProgressView("Loading connections…") }
+            if let failure { Section { Text(failure); Button("Retry") { Task { await load() } } } }
+            Section("Starting points") {
+                ForEach(Array(graph.groups.flatMap { Array($0.nodes.prefix(3)) }.prefix(12))) { node in
+                    itemRow(node)
+                }
+                if hasLoaded && graph.nodes.isEmpty { Text("No recorded connections yet.").foregroundStyle(.secondary) }
+                if !graph.nodes.isEmpty { Button("Browse all \(graph.nodes.count) loaded items") { showBrowser = true } }
             }
-            if loading {
-                ProgressView(hasLoaded ? "Loading connections…" : "Opening graph…")
-                    .padding(14).background(.regularMaterial, in: Capsule())
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                    .allowsHitTesting(false)
+            if !graph.nodes.isEmpty {
+                Section {
+                    Button("Full map overview", systemImage: "circle.hexagongrid") { overview = true; send(.fit) }
+                    Text("\(graph.nodes.count) loaded items. The overview shows how groups connect; start with an item for a readable map.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if graph.truncated { Text("Partial view. Search for items beyond this map.").font(.caption).foregroundStyle(.secondary) }
+                }
             }
+        }.scrollContentBackground(.hidden).background(AssistantTheme.canvas(for: colorScheme))
+    }
+
+    private func itemRow(_ node: RelationshipGraphNode) -> some View {
+        Button { open(node.id); Task { await expand(node.id) } } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(node.label).foregroundStyle(.primary)
+                    Text("\(node.kind.sentenceCaseIdentifier) · \(graph.directNeighbors(of: node.id).count) connected items")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+            }.padding(.vertical, 4)
         }
+    }
+
+    private var canvas: some View {
+        ZStack {
+            RelationshipGraphCanvas(snapshot: visible, selectedID: selectedID, focusOnly: false, command: command,
+                                    centeredID: centerID, allowsNodeDragging: moveNodes) { id in
+                // Blank taps leave the selection and control height stable.
+                if let id { selectedID = id }
+            }.accessibilityIdentifier("assistant.relationship.graph")
+            if hasLoaded && visible.nodes.isEmpty { ContentUnavailableView("No items to show", systemImage: "point.3.connected.trianglepath.dotted", description: Text("Try showing all items.")) }
+            if loading { ProgressView("Loading connections…").padding(12).background(.regularMaterial, in: Capsule()).allowsHitTesting(false) }
+        }.background(AssistantTheme.canvas(for: colorScheme))
     }
 
     private var graphSummary: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Button { showGroups = true } label: {
-                    HStack(spacing: 5) {
-                        Text("\(visible.groups.count) \(visible.groups.count == 1 ? "group" : "groups")").fontWeight(.semibold)
-                        Image(systemName: "chevron.right").font(.caption2)
-                    }
-                }.accessibilityLabel("Browse groups and connect loose items")
-                Spacer()
-                Text("\(visible.nodes.count) items · \(visible.links.count) connections").foregroundStyle(.secondary)
+            (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout())) {
+                Button { goBack() } label: { Label(history.last.flatMap { visit in graph.nodes.first { $0.id == visit.id }?.label } ?? "Starting points", systemImage: "chevron.left") }
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1).accessibilityIdentifier("assistant.relationship.back")
+                if !dynamicTypeSize.isAccessibilitySize {
+                    Spacer()
+                    Button(listView ? "Map" : "List", systemImage: listView ? "point.3.connected.trianglepath.dotted" : "list.bullet") { listView.toggle() }
+                }
             }.font(.caption)
-            if graph.truncated { Text("Partial view · expand or search to see more").font(.caption2).foregroundStyle(.secondary) }
-        }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(AssistantTheme.canvas(for: colorScheme))
+            if let center {
+                Text("Connections to \(center.label)").font(.headline).lineLimit(2)
+                if usesList { Text("\(neighbors.count) connected items").font(.caption).foregroundStyle(.secondary) }
+                else { HStack {
+                    Text(neighbors.isEmpty ? "No connections loaded" : "\(min(page, pageCount - 1) * 4 + 1)–\(min((min(page, pageCount - 1) + 1) * 4, neighbors.count)) of \(neighbors.count) connected items")
+                    Spacer()
+                    if pageCount > 1 {
+                        Button("Previous connections", systemImage: "chevron.left") { changePage(-1) }.disabled(page == 0)
+                        Button("Next connections", systemImage: "chevron.right") { changePage(1) }.disabled(page >= pageCount - 1)
+                    }
+                }.font(.caption).labelStyle(.iconOnly).buttonStyle(.bordered) }
+            } else {
+                Text("Full map overview").font(.headline)
+                Text("\(visible.nodes.count) items. Select one, then open its map.").font(.caption).foregroundStyle(.secondary)
+            }
+            if peopleOnly { Text("Places and projects are hidden.").font(.caption2).foregroundStyle(.secondary) }
+            if graph.truncated { Text("Partial view · search or reload connections for more").font(.caption2).foregroundStyle(.secondary) }
+        }.padding(.horizontal, 16).padding(.vertical, 10).background(AssistantTheme.canvas(for: colorScheme))
     }
 
     private var readableList: some View {
-        ScrollViewReader { proxy in
         List {
-            Section {
-                Button("Browse groups and connect loose items") { showGroups = true }.id("graph-summary")
-                Text("\(visible.nodes.count) items · \(visible.links.count) connections")
-                if loading { ProgressView("Loading connections…") }
-                if graph.truncated { Text("Partial graph. Search or expand an item to see more.").foregroundStyle(.secondary) }
+            Section { graphSummary }
+            Section { bottomControls }
+            Section(center == nil ? "Loaded items" : "Connected items") {
+                ForEach(center == nil ? visible.nodes : neighbors) { node in itemRow(node) }
             }
-            if selected != nil || failure != nil { Section { bottomControls } }
-            Section("Select an item") {
-                ForEach(listedNodes) { node in
-                    Button { selectedID = node.id } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(node.label).foregroundStyle(.primary)
-                            Text("\(node.kind.sentenceCaseIdentifier) · \(graph.neighborhood(of: node.id).count - 1) connections").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    .accessibilityAddTraits(node.id == selectedID ? .isSelected : [])
-                }
-                if hasLoaded && visible.nodes.isEmpty { Text("No connections to show.").foregroundStyle(.secondary) }
-            }
-        }
-        .onChange(of: selectedID) { _, _ in proxy.scrollTo("graph-summary", anchor: .top) }
-        }
+        }.scrollContentBackground(.hidden).background(AssistantTheme.canvas(for: colorScheme))
     }
 
     private var bottomControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let notice { Text(notice).font(.caption).foregroundStyle(.secondary).accessibilityAddTraits(.updatesFrequently) }
-            if focusedGroupID != nil {
-                Button("Show all groups", systemImage: "arrow.uturn.backward") { focusedGroupID = nil; send(.fit) }.font(.caption)
-            }
-            if peopleOnly { Text("Places and projects are hidden. Show all items to see connections through them.").font(.caption).foregroundStyle(.secondary) }
-            if let failure {
+        VStack(alignment: .leading, spacing: 8) {
+            if let failure { Text(failure).font(.caption); Button("Retry") { Task { if let centerID { await expand(centerID) } else { await load() } } } }
+            if let notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(selected?.label ?? "Explore the map").font(.headline).lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                Text(selectionDescription).font(.subheadline).foregroundStyle(.secondary).lineLimit(listView || dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }.frame(height: listView || dynamicTypeSize.isAccessibilitySize ? nil : 70, alignment: .topLeading)
+            (dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 8))) {
+                Button("Connections") { showConnections = true }.disabled(selected == nil)
+                Button("Open map") { if let selected { open(selected.id); Task { await expand(selected.id) } } }
+                    .disabled(selected == nil || selectedID == centerID)
+                Menu {
+                    if let selected {
+                        Button("Add connection", systemImage: "plus") { connecting = selected }
+                        Button("Reload connections", systemImage: "arrow.clockwise") { Task { await expand(selected.id) } }
+                        if let contactID = selected.contactId {
+                            NavigationLink("Open profile") { PersonCardScreen(personId: contactID) }
+                        }
+                    }
+                } label: { Image(systemName: "ellipsis").accessibilityLabel("Item actions") }.disabled(selected == nil)
+            }.font(.subheadline).buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            if !listView && !dynamicTypeSize.isAccessibilitySize {
                 HStack {
-                    Text(failure).font(.caption).foregroundStyle(.secondary)
-                    Spacer(minLength: 4)
-                    Button("Retry") { Task { if let selectedID, hasLoaded { await expand(selectedID) } else { await load() } } }
-                }
-            }
-            if let selected {
-                HStack(alignment: .center, spacing: 12) {
-                    Circle().fill(AssistantTheme.accent(for: colorScheme)).frame(width: 9, height: 9)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(selected.label).font(.headline).lineLimit(2)
-                        Text(graph.neighborhood(of: selected.id).count == 1 ? "No connections loaded · add one or expand" : "\(selected.kind.sentenceCaseIdentifier) · \(graph.neighborhood(of: selected.id).count - 1) connected items")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    Text(moveNodes ? "Drag a node to reposition it" : "Drag to pan · pinch to zoom").font(.caption2).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
-                    Button("Deselect", systemImage: "xmark") { selectedID = nil; focusOnly = false }
-                        .labelStyle(.iconOnly).frame(width: 44, height: 44)
+                    Button("Zoom out", systemImage: "minus") { send(.zoomOut) }.labelStyle(.iconOnly).frame(width: 40, height: 40)
+                    Button("Fit graph", systemImage: "arrow.up.left.and.arrow.down.right") { send(.fit) }.labelStyle(.iconOnly).frame(width: 40, height: 40)
+                    Button("Zoom in", systemImage: "plus") { send(.zoomIn) }.labelStyle(.iconOnly).frame(width: 40, height: 40)
                 }
-                Group {
-                    if dynamicTypeSize.isAccessibilitySize {
-                        VStack(alignment: .leading, spacing: 12) { selectedActions(selected) }
-                    } else {
-                        HStack(spacing: 8) { selectedActions(selected) }
-                    }
-                }
-                .font(.subheadline).buttonStyle(AssistantActionButtonStyle(kind: .secondary)).fixedSize(horizontal: false, vertical: true)
+                Text("Lines are recorded relationships; dashed lines need review.").font(.caption2).foregroundStyle(.secondary)
             }
-            if !listView {
-                HStack(spacing: 8) {
-                    Label("People", systemImage: "circle.fill").foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                    Label("Other items", systemImage: "circle.fill").foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                    Button("Zoom out", systemImage: "minus") { send(.zoomOut) }.labelStyle(.iconOnly).frame(width: 44, height: 44)
-                    Button("Fit graph", systemImage: "arrow.up.left.and.arrow.down.right") { send(.fit) }.labelStyle(.iconOnly).frame(width: 44, height: 44)
-                    Button("Zoom in", systemImage: "plus") { send(.zoomIn) }.labelStyle(.iconOnly).frame(width: 44, height: 44)
-                }
-                .font(.caption).lineLimit(1).dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                Text("Drag to move · pinch to zoom. Dashed lines need review.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, listView ? 0 : 16).padding(.vertical, 12)
-        .background(.regularMaterial)
-    }
-
-    @ViewBuilder private func selectedActions(_ selected: RelationshipGraphNode) -> some View {
-        Button("Connect", systemImage: "plus") { connecting = selected }
-            .accessibilityIdentifier("assistant.relationship.connect")
-        Button("Expand", systemImage: "arrow.up.left.and.arrow.down.right") { Task { await expand(selected.id) } }
-            .disabled(loading)
-        Button("Details") { showConnections = true }
-        if let contactID = selected.contactId {
-            NavigationLink { PersonCardScreen(personId: contactID) } label: { Image(systemName: "person.text.rectangle") }
-                .accessibilityLabel("Open \(selected.label)'s profile")
-        }
+        }.padding(.horizontal, 16).padding(.vertical, 12).background(.regularMaterial)
     }
 
     private var itemBrowser: some View {
         NavigationStack {
             List {
-                Section(search.isEmpty ? "On this graph" : "Matching items") {
+                Section(search.isEmpty ? "Loaded items" : "Matching items") {
                     if searching { ProgressView("Searching…") }
                     if searchFailed { Text("Search couldn’t load. Try again.").foregroundStyle(.secondary) }
                     if search.isEmpty {
                         ForEach(graph.nodes.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }) { node in
-                            Button(node.label) { selectedID = node.id; peopleOnly = false; focusedGroupID = nil; showBrowser = false; send(.fit) }
+                            Button(node.label) { showBrowser = false; open(node.id); Task { await expand(node.id) } }
                         }
                     } else {
                         ForEach(searchResults) { item in
-                            Button { showBrowser = false; peopleOnly = false; focusedGroupID = nil; Task { await expand(item.id, selectAfter: true) } } label: {
+                            Button { showBrowser = false; Task { await expand(item.id, openAfter: true) } } label: {
                                 VStack(alignment: .leading) { Text(item.displayLabel); Text(item.kind.sentenceCaseIdentifier).font(.caption).foregroundStyle(.secondary) }
                             }
                         }
@@ -276,13 +286,20 @@ struct RelationshipGraphScreen: View {
         }
     }
 
-    private func connectionSaved(around id: String) async {
-        focusedGroupID = nil; peopleOnly = false; focusOnly = false
-        await expand(id, selectAfter: true)
-        notice = "Connection saved"
-        if let personID { await model.refreshPersonEvidence(id: personID) }
+    private func open(_ id: String) {
+        if let centerID, centerID != id { history.append((centerID, page)) }
+        centerID = id; selectedID = id; overview = false; page = 0; peopleOnly = false; notice = nil
+        send(.fit)
     }
-
+    private func returnToStart() { centerID = nil; selectedID = nil; overview = false; history = []; page = 0 }
+    private func goBack() {
+        if let visit = history.popLast() {
+            centerID = visit.id; selectedID = visit.id; page = visit.page; send(.fit)
+            if !graph.nodes.contains(where: { $0.id == visit.id }) { Task { await expand(visit.id) } }
+        }
+        else { returnToStart() }
+    }
+    private func changePage(_ delta: Int) { page = min(max(0, page + delta), pageCount - 1); selectedID = centerID; send(.fit) }
     private func send(_ action: GraphCanvasCommand.Action) { command = .init(id: command.id + 1, action: action) }
     private func load(all: Bool = false) async {
         let token = UUID(); requestID = token; loading = true; failure = nil
@@ -290,19 +307,21 @@ struct RelationshipGraphScreen: View {
         guard requestID == token, !Task.isCancelled else { return }
         loading = false
         guard let result else { failure = "Couldn’t load the graph. Check your connection and server version."; return }
-        graph = result; hasLoaded = true; selectedID = result.focusId; focusOnly = false; focusedGroupID = nil; notice = nil
-        send(.fit)
+        graph = result; hasLoaded = true
+        if all { returnToStart() }
+        else if let id = centerID ?? result.focusId, graph.nodes.contains(where: { $0.id == id }) { centerID = id; selectedID = id }
+        page = min(page, pageCount - 1); notice = nil
     }
-    private func expand(_ id: String, selectAfter: Bool = false) async {
+    private func expand(_ id: String, openAfter: Bool = false) async {
         let token = UUID(); requestID = token; loading = true; failure = nil
         let result = await model.relationshipGraph(entityID: id)
         guard requestID == token, !Task.isCancelled else { return }
         loading = false
         guard let result else { failure = "Couldn’t load those connections."; return }
-        let newCount = Set((graph.nodes + result.nodes).map(\.id)).count
-        if selectAfter && newCount > 200 { graph = result }
+        if Set((graph.nodes + result.nodes).map(\.id)).count > 200 { graph = result }
         else { graph = graph.merging(result, around: id) }
-        if selectAfter { selectedID = id; send(.fit) }
+        if openAfter { open(id) }
+        page = min(page, pageCount - 1)
     }
 }
 
