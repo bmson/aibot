@@ -12,7 +12,7 @@ function newLeaseExpiry() {
 function hasLease(task: TaskRow): task is TaskLease {
   return task.status === 'running' && task.lockedUntil instanceof Date;
 }
-function activeLease(task: TaskLease) {
+export function activeLease(task: TaskLease) {
   return and(
     eq(tasks.id, task.id),
     eq(tasks.status, 'running'),

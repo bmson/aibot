@@ -7,3 +7,5 @@ export * from './model-config.js';
 export { createPostgresReminderRepository } from './reminder-repository.js';
 export * from './schema.js';
 export { createPostgresTaskLeaseRepository } from './task-lease-repository.js';
+
+export { createPostgresTaskRepository } from './task-lifecycle-repository.js';

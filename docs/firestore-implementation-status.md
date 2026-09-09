@@ -1,6 +1,6 @@
 # Firestore migration implementation status
 
-Updated 2026-09-08. This is the first implementation batch of the [migration and consumer-install plan](firestore-consumer-install-plan.md). **The complete migration and single-click installer are not finished.** The current application and deployments continue to require PostgreSQL and the existing model/authentication configuration. No live cloud resources or production data were changed.
+Updated 2026-09-08. This tracks the implementation batches of the [migration and consumer-install plan](firestore-consumer-install-plan.md). **The complete migration and single-click installer are not finished.** The current application and deployments continue to require PostgreSQL and the existing model/authentication configuration. Production release of the adapter foundation applies the additive PostgreSQL lease-token migration; it does not move production data into Firestore.
 
 ## Implemented
 
@@ -12,13 +12,19 @@ Updated 2026-09-08. This is the first implementation batch of the [migration and
 - A shared PostgreSQL/Firestore behavioral suite and Firestore-specific contention, cancellation/delivery, vector, approval, and dispatch-recovery tests.
 - `pnpm test:firestore`, a dedicated emulator-only CI job, initial index definitions, deny-all client rules, Docker dependency manifests, and an enumerated database-import migration baseline. New business files cannot add database SDK imports outside that baseline.
 
+## Task lifecycle follow-up
+
+The second implementation batch moves sleep, budget/approval/event parking, completion/cancellation, attention notices, bounded failure retries, manual wake-up, and expired-lease recovery behind `TaskRepository`. Core wrappers retain their existing API and PostgreSQL runtime. Firestore commits newly runnable generations with their outbox intent and rejects stale executor leases on every transition. PostgreSQL recovery now rechecks expiry when updating a task, so a renewal after the initial expired-task query is not overwritten.
+
+Task enqueue/event deduplication, external task rate limits, queue consumer integration, and the remaining repository migrations are still pending. The new cross-adapter lifecycle tests cover checkpoint preservation, retry caps, owner-scoped budget increases, terminal cancellation, and concurrent expired-lease recovery. This follow-up has not changed the deployed database driver.
+
 ## Remaining delivery gates
 
 | Plan phase | Current state | Next required result |
 |---|---|---|
 | P0 | Partial | Real Firestore/index/IAM/cost checks; actual Cloud Shell authorization flow; Google-model and passkey feasibility |
 | P1 | Partial | Complete command contracts and remove remaining SDK imports from business logic; select adapters at composition roots |
-| P2 | Partial | Complete task state machine, enqueue/schedule commands, chat reads/cursors, approval sweeps, external-delivery fences, and outbox consumer integration |
+| P2 | Partial | Enqueue/schedule commands, chat reads/cursors, approval sweeps, external-delivery fences, and outbox consumer integration |
 | P3 | Pending | All remaining domain/module queries, graph/recall, imports, erasure/export, and operational parity across all 63 table families |
 | P4–P6 | Pending | Google models and metering, embedding migration, bounded scheduling, passkeys/recovery and per-device pairing |
 | P7–P8 | Pending | Customer-owned Terraform/build pipeline, resumable install manifest/bootstrap, owner onboarding, optional Workspace wizard |
@@ -28,7 +34,9 @@ Do not advertise an install button or enable `DATABASE_DRIVER=firestore` until t
 
 ## Validation
 
-Final local checks: 225 test files / 2,040 tests passed in the combined PostgreSQL and emulator suite; the dedicated emulator suite passed 30 tests. Typecheck, production build, lint/architecture checks, dependency audit, and whitespace checks passed. Lint retains nine pre-existing warnings and one configuration-version notice. The build retains the existing unpdf bundler warning. CI was updated but has not been run remotely. The emulator tests prove local transaction behavior, not production IAM/index readiness or cost. No live models, native-device UI checks, cloud installation, or production migration were exercised.
+Foundation checks: 225 test files / 2,040 tests passed in the combined PostgreSQL and emulator suite; the dedicated emulator suite passed 30 tests. Typecheck, production build, lint/architecture checks, dependency audit, and whitespace checks passed. PR #125 and main CI passed all four jobs, including the dedicated Firestore emulator job; the manually dispatched iOS build/test workflow passed. Lint retains nine pre-existing warnings and one configuration-version notice. The build retains the existing unpdf bundler warning. The emulator tests prove local transaction behavior, not production IAM/index readiness or cost. No live model calls, native-device UI checks, or customer cloud installation were exercised.
+
+Task-lifecycle follow-up: all 227 test files / 2,050 tests passed with PostgreSQL and the Firestore emulator, including deterministic renewal-versus-recovery races against both adapters. Typecheck, lint/architecture checks, production build, and whitespace checks passed. This batch was built in an isolated worktree without a web `.env.local`; it has no additional SQL schema migration.
 
 ```sh
 pnpm lint
