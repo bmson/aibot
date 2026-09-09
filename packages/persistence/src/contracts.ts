@@ -97,7 +97,7 @@ export interface TaskCheckpoint {
 }
 export interface TaskLeaseRepository {
   readonly kind: 'task-lease-repository';
-  claim(taskId: string): Promise<TaskLease | null>;
+  claim(taskId: string, generation?: number): Promise<TaskLease | null>;
   /** On success updates the supplied lease, matching existing executor semantics. */
   renew(task: TaskLease): Promise<boolean>;
   checkpoint(task: TaskLease, state: unknown, extra?: TaskCheckpoint): Promise<boolean>;

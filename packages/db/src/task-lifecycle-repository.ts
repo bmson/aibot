@@ -2,6 +2,7 @@ import type { TaskLease, TaskRepository, TaskWake } from '@assistant/persistence
 import { and, eq, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { type TaskRow, tasks } from './schema.js';
+import { createTask } from './task-creation-repository.js';
 import { activeLease, createPostgresTaskLeaseRepository } from './task-lease-repository.js';
 
 const WAKEABLE = [
@@ -305,6 +306,7 @@ export async function findDueTasks(db: Db, limit = 10): Promise<TaskRow[]> {
 export function createPostgresTaskRepository(db: Db): TaskRepository {
   return {
     ...createPostgresTaskLeaseRepository(db),
+    createTask: (input) => createTask(db, input),
     parkForApproval: (...args) => parkForApproval(db, ...args),
     parkForBudget: (...args) => parkForBudget(db, ...args),
     sleepTask: (...args) => sleepTask(db, ...args),

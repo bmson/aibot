@@ -1,6 +1,7 @@
 import type {
   Records,
   TaskBudgetIncrease,
+  TaskCreateInput,
   TaskLease,
   TaskOutcome,
   TaskRepository,
@@ -8,6 +9,7 @@ import type {
 import { Filter } from '@google-cloud/firestore';
 import { createWakeIntent } from './outbox.js';
 import { decodeRecord, encodeRecord } from './store.js';
+import { createTask } from './task-creation.js';
 import { FirestoreTaskLeaseRepository } from './tasks.js';
 
 const TERMINAL = new Set(['done', 'failed', 'cancelled']);
@@ -24,6 +26,9 @@ export class FirestoreTaskRepository
   extends FirestoreTaskLeaseRepository
   implements TaskRepository
 {
+  createTask(input: TaskCreateInput) {
+    return createTask(this.store, input);
+  }
   private async change(
     id: string,
     update: (task: Task, now: Date) => Partial<Task> | null,
@@ -269,23 +274,31 @@ export class FirestoreTaskRepository
         };
       });
     }
-    const due = await this.store
-      .collection('tasks')
-      .where(
-        Filter.or(
-          Filter.and(
-            Filter.where('status', '==', 'pending'),
-            Filter.or(Filter.where('runAfter', '==', null), Filter.where('runAfter', '<=', now)),
-          ),
-          Filter.and(
-            Filter.where('status', 'in', ['sleeping', 'waiting_budget']),
-            Filter.where('runAfter', '<=', now),
-          ),
-        ),
-      )
-      .orderBy('updatedAt')
-      .limit(limit)
-      .get();
+    const due = await dueTasksQuery(this.store, now, limit).get();
     return due.docs.map((doc) => decodeRecord<Task>(doc.data()));
   }
+}
+
+/** Shared with live Query Explain validation so diagnostics use the runtime query. */
+export function dueTasksQuery(
+  store: import('./store.js').InstallationStore,
+  now: Date,
+  limit: number,
+) {
+  return store
+    .collection('tasks')
+    .where(
+      Filter.or(
+        Filter.and(
+          Filter.where('status', '==', 'pending'),
+          Filter.or(Filter.where('runAfter', '==', null), Filter.where('runAfter', '<=', now)),
+        ),
+        Filter.and(
+          Filter.where('status', 'in', ['sleeping', 'waiting_budget']),
+          Filter.where('runAfter', '<=', now),
+        ),
+      ),
+    )
+    .orderBy('updatedAt')
+    .limit(limit);
 }

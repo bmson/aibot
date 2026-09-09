@@ -27,6 +27,9 @@ importers:
       '@assistant/db':
         specifier: workspace:^
         version: link:packages/db
+      '@assistant/firestore':
+        specifier: workspace:*
+        version: link:packages/firestore
       '@assistant/modules':
         specifier: workspace:*
         version: link:packages/modules
@@ -118,6 +121,9 @@ importers:
         specifier: ^4.5.4
         version: 4.5.4
     devDependencies:
+      '@assistant/firestore':
+        specifier: workspace:*
+        version: link:../../packages/firestore
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2

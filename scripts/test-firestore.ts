@@ -11,7 +11,15 @@ const response = await fetch(`http://${host}`, { signal: AbortSignal.timeout(500
 if (!response.ok) throw new Error('The Firestore emulator is not ready');
 const child = spawn(
   'pnpm',
-  ['exec', 'vitest', 'run', 'packages/firestore', 'packages/persistence', ...process.argv.slice(2)],
+  [
+    'exec',
+    'vitest',
+    'run',
+    'packages/firestore',
+    'packages/persistence',
+    'apps/agent/src/firestore-dispatch.test.ts',
+    ...process.argv.slice(2),
+  ],
   {
     stdio: 'inherit',
     env: { ...process.env, GCLOUD_PROJECT: 'demo-assistant-test' },

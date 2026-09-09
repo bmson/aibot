@@ -24,7 +24,9 @@ export class FirestoreTaskLeaseRepository implements TaskLeaseRepository {
   readonly kind = 'task-lease-repository' as const;
   constructor(readonly store: InstallationStore) {}
 
-  async claim(taskId: string): Promise<TaskLease | null> {
+  async claim(taskId: string, generation?: number): Promise<TaskLease | null> {
+    if (generation !== undefined && (!Number.isSafeInteger(generation) || generation < 0))
+      return null;
     const ref = this.store.doc('tasks', taskId);
     return this.store.db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
@@ -32,6 +34,7 @@ export class FirestoreTaskLeaseRepository implements TaskLeaseRepository {
       const row = decodeRecord<Records['tasks']>(snap.data());
       const now = this.store.now();
       if (
+        (generation !== undefined && row.queueGeneration !== generation) ||
         !CLAIMABLE.has(row.status) ||
         (row.lockedUntil && row.lockedUntil > now) ||
         (row.runAfter && row.runAfter > now)

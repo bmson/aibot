@@ -153,7 +153,8 @@ export type ModuleTaskResult = { outcome: 'done' | 'needs_attention' | 'not_clai
 /** A deterministic executor for internal tasks matched on trigger.payload.kind. */
 export interface ModuleTaskHandler {
   kind: string;
-  run(services: ModuleServices, taskId: string): Promise<ModuleTaskResult>;
+  /** Pass a supplied generation into the atomic task claim; a pre-read alone is not a fence. */
+  run(services: ModuleServices, taskId: string, generation?: number): Promise<ModuleTaskResult>;
 }
 
 /** An owner-facing delivery channel (email, SMS) composed into the executor. */

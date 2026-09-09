@@ -93,9 +93,13 @@ export { replaceToolResultMessage, toolResultMessage } from './executor/util.js'
  * (model proposes tools → risk gate dispatches) → checkpoint each step →
  * park / sleep / complete. Resume is *load state, continue* — never replay.
  */
-export async function executeTask(deps: ExecutorDeps, taskId: string): Promise<ExecuteResult> {
+export async function executeTask(
+  deps: ExecutorDeps,
+  taskId: string,
+  generation?: number,
+): Promise<ExecuteResult> {
   const { db } = deps;
-  const task = await claimTask(db, taskId);
+  const task = await claimTask(db, taskId, generation);
   if (!task) return { outcome: 'not_claimable' };
 
   // The owner stopping or archiving a goal must also stop work already sitting

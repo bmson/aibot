@@ -47,11 +47,19 @@ internal.use('*', async (c, next) => {
 });
 
 internal.post('/tasks/execute', async (c) => {
-  const { taskId } = await c.req.json<{ taskId?: string }>().catch(() => ({ taskId: undefined }));
-  if (!taskId) return c.json({ error: 'taskId required' }, 400);
+  const body = await c.req.json<unknown>().catch(() => null);
+  if (!body || typeof body !== 'object' || Array.isArray(body))
+    return c.json({ error: 'invalid task delivery' }, 400);
+  const { taskId, generation } = body as { taskId?: unknown; generation?: unknown };
+  if (typeof taskId !== 'string' || !taskId) return c.json({ error: 'taskId required' }, 400);
+  if (
+    generation !== undefined &&
+    (typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation < 0)
+  )
+    return c.json({ error: 'invalid task generation' }, 400);
   const deps = buildDeps();
   const { executeAgentTask } = await import('../task-runner.js');
-  const result = await executeAgentTask(deps, taskId);
+  const result = await executeAgentTask(deps, taskId, generation as number | undefined);
   return c.json(result);
 });
 

@@ -1,114 +1,145 @@
 import { createHash } from 'node:crypto';
+import type { TaskQueue } from '@assistant/persistence';
 import { loadConfig } from './config.js';
 
-/**
- * Queue notifier: pokes the executor about a runnable task.
- * local  → no-op (the in-process poller claims due tasks within ~2s)
- * cloudtasks → creates a Cloud Tasks HTTP task → POST /internal/tasks/execute
- * Fire-and-forget semantics everywhere: the 1-minute sweeper is the backstop,
- * so a lost notification delays work, never loses it.
- */
+/** Best-effort legacy notification; the PostgreSQL sweeper remains its backstop. */
 export interface QueueNotifier {
-  /**
-   * `generation` changes whenever a task becomes runnable again. Cloud Tasks
-   * deduplicates the stable (taskId, generation) name while still permitting a
-   * later approval, retry, sleep wake-up, or reclaimed lease to enqueue anew.
-   */
   notify(taskId: string, generation: number): void;
 }
-
 let cached: QueueNotifier | undefined;
+let cachedQueue: TaskQueue | undefined;
 
 export function queueTaskId(taskId: string, generation: number): string {
-  if (!Number.isInteger(generation) || generation < 0) {
-    throw new Error('queue generation must be a non-negative integer');
+  if (!taskId || !Number.isSafeInteger(generation) || generation < 0) {
+    throw new Error('queue generation must be a non-negative integer and task ID must be present');
   }
   const digest = createHash('sha256').update(`${taskId}:${generation}`).digest('hex').slice(0, 32);
   return `task-${digest}`;
 }
 
-export function getQueueNotifier(): QueueNotifier {
-  if (cached) return cached;
-  const config = loadConfig();
+export interface CloudTasksOptions {
+  projectId: string;
+  location: string;
+  queue: string;
+  agentUrl: string;
+  oidcAudience: string;
+  serviceAccountEmail: string;
+}
 
-  if (config.QUEUE_DRIVER !== 'cloudtasks') {
-    cached = { notify: () => {} };
-    return cached;
-  }
-
-  const {
-    GCP_PROJECT,
-    GCP_LOCATION,
-    CLOUD_TASKS_QUEUE,
-    AGENT_URL,
-    INTERNAL_OIDC_AUDIENCE,
-    INTERNAL_OIDC_SERVICE_ACCOUNT,
-  } = config;
-  if (!INTERNAL_OIDC_AUDIENCE || !INTERNAL_OIDC_SERVICE_ACCOUNT) {
+/** Awaited transport used by durable dispatch and the legacy notification wrapper. */
+export function createCloudTasksQueue(
+  options: CloudTasksOptions,
+  accessToken: () => Promise<string>,
+): TaskQueue {
+  if (!options.serviceAccountEmail || !options.oidcAudience)
     throw new Error('cloudtasks queue requires INTERNAL_OIDC_AUDIENCE and service account');
-  }
-  const callbackUrl = new URL('/internal/tasks/execute', AGENT_URL).toString();
-  const callbackAudience = new URL('/internal/tasks/execute', INTERNAL_OIDC_AUDIENCE).toString();
-  const queuePath = `projects/${GCP_PROJECT}/locations/${GCP_LOCATION}/queues/${CLOUD_TASKS_QUEUE}`;
+  if (
+    !options.projectId ||
+    !options.location ||
+    !options.queue ||
+    !options.serviceAccountEmail ||
+    !options.oidcAudience
+  )
+    throw new Error('cloudtasks queue requires project, location, and queue');
+  const callbackUrl = new URL('/internal/tasks/execute', options.agentUrl).toString();
+  const callbackAudience = new URL('/internal/tasks/execute', options.oidcAudience).toString();
+  const queuePath = `projects/${options.projectId}/locations/${options.location}/queues/${options.queue}`;
+  return {
+    async enqueue(taskId, generation, signal) {
+      const name = `${queuePath}/tasks/${queueTaskId(taskId, generation)}`;
+      signal?.throwIfAborted();
+      const token = await accessToken();
+      signal?.throwIfAborted();
+      const timeout = AbortSignal.timeout(15_000);
+      const res = await fetch(`https://cloudtasks.googleapis.com/v2/${queuePath}/tasks`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          task: {
+            name,
+            httpRequest: {
+              httpMethod: 'POST',
+              url: callbackUrl,
+              headers: { 'content-type': 'application/json' },
+              oidcToken: {
+                serviceAccountEmail: options.serviceAccountEmail,
+                audience: callbackAudience,
+              },
+              body: Buffer.from(JSON.stringify({ taskId, generation })).toString('base64'),
+            },
+          },
+        }),
+        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      });
+      if (res.ok) return;
+      if (res.status === 409) {
+        const error = (await res.json().catch(() => null)) as {
+          error?: { status?: string };
+        } | null;
+        if (error?.error?.status === 'ALREADY_EXISTS') return;
+      }
+      throw new Error(`Cloud Tasks enqueue failed (${res.status})`);
+    },
+  };
+}
 
-  // Metadata tokens live ~an hour; refetching per enqueue added a round trip
-  // to every notify. Reuse until five minutes before expiry.
-  let tokenCache: { value: string; expiresAtMs: number } | undefined;
-  async function accessToken(): Promise<string> {
-    if (tokenCache && Date.now() < tokenCache.expiresAtMs) return tokenCache.value;
+/** Cloud Run service identity; never requires a downloaded service-account key. */
+export function createMetadataTokenProvider(): () => Promise<string> {
+  let cache: { value: string; expiresAtMs: number } | undefined;
+  return async () => {
+    if (cache && Date.now() < cache.expiresAtMs) return cache.value;
     const res = await fetch(
       'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
       { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(5_000) },
     );
     if (!res.ok) throw new Error(`metadata token fetch failed: ${res.status}`);
     const data = (await res.json()) as { access_token: string; expires_in?: number };
-    tokenCache = {
+    if (!data.access_token) throw new Error('Metadata response has no access token');
+    cache = {
       value: data.access_token,
       expiresAtMs: Date.now() + (Math.max(0, data.expires_in ?? 0) - 300) * 1000,
     };
-    return data.access_token;
-  }
+    return cache.value;
+  };
+}
 
+/** A local no-op must never acknowledge a durable intent as delivered. */
+export function getTaskQueue(): TaskQueue {
+  if (cachedQueue) return cachedQueue;
+  const config = loadConfig();
+  if (config.QUEUE_DRIVER !== 'cloudtasks') throw new Error('Durable dispatch requires cloudtasks');
+  cachedQueue = createCloudTasksQueue(
+    {
+      projectId: config.GCP_PROJECT,
+      location: config.GCP_LOCATION,
+      queue: config.CLOUD_TASKS_QUEUE,
+      agentUrl: config.AGENT_URL,
+      oidcAudience: config.INTERNAL_OIDC_AUDIENCE,
+      serviceAccountEmail: config.INTERNAL_OIDC_SERVICE_ACCOUNT,
+    },
+    createMetadataTokenProvider(),
+  );
+  return cachedQueue;
+}
+
+export function getQueueNotifier(): QueueNotifier {
+  if (cached) return cached;
+  if (loadConfig().QUEUE_DRIVER !== 'cloudtasks') {
+    cached = { notify: () => {} };
+    return cached;
+  }
+  const queue = getTaskQueue();
   cached = {
-    notify(taskId: string, generation: number) {
-      const name = `${queuePath}/tasks/${queueTaskId(taskId, generation)}`;
-      void (async () => {
-        const token = await accessToken();
-        const res = await fetch(`https://cloudtasks.googleapis.com/v2/${queuePath}/tasks`, {
-          method: 'POST',
-          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-          body: JSON.stringify({
-            task: {
-              name,
-              httpRequest: {
-                httpMethod: 'POST',
-                url: callbackUrl,
-                headers: {
-                  'content-type': 'application/json',
-                },
-                oidcToken: {
-                  serviceAccountEmail: INTERNAL_OIDC_SERVICE_ACCOUNT,
-                  audience: callbackAudience,
-                },
-                body: Buffer.from(JSON.stringify({ taskId })).toString('base64'),
-              },
-            },
-          }),
-          signal: AbortSignal.timeout(15_000),
-        });
-        // An existing name means this runnable generation is already queued.
-        // Treat it as success: the whole point of the explicit name is for
-        // enqueue + sweeper races to converge here without duplicate work.
-        if (!res.ok && res.status !== 409) {
-          console.error(`cloud tasks notify failed (${res.status}) — sweeper will pick it up`);
-        }
-      })().catch((err) => console.error('queue notify error', err));
+    notify(taskId, generation) {
+      void queue
+        .enqueue(taskId, generation)
+        .catch((err) => console.error('queue notify error', err));
     },
   };
   return cached;
 }
 
-/** Test seam. */
 export function resetQueueNotifierForTest(): void {
   cached = undefined;
+  cachedQueue = undefined;
 }

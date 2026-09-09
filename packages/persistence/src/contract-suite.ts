@@ -17,6 +17,8 @@ export interface CommandFixture {
   patchTask(patch: Partial<Records['tasks']>): Promise<void>;
   readTask(): Promise<Records['tasks']>;
   messageCount(): Promise<number>;
+  externalCounts(): Promise<{ hour: number; day: number }>;
+  setTaskRatePolicy(hour: number | null, day: number | null): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -32,6 +34,87 @@ export function commandContract(
     });
     afterEach(async () => {
       await f?.dispose();
+    });
+    const input = () => ({
+      agentId: f.agentId,
+      conversationId: f.conversationId,
+      trust: 'owner',
+      type: 'adhoc',
+      trigger: { source: 'internal', payload: { text: 'contract' } },
+    });
+    it('creates one task for concurrent delivery and preserves its initial defaults', async () => {
+      const request = { ...input(), externalEventId: `event:${randomUUID()}`, title: 'One task' };
+      const results = await Promise.all([
+        f.leases.createTask(request),
+        f.leases.createTask(request),
+      ]);
+      expect(results.filter((r) => r.created)).toHaveLength(1);
+      expect(results[0]?.task.id).toBe(results[1]?.task.id);
+      expect(results[0]?.task).toMatchObject({
+        status: 'pending',
+        queueGeneration: 0,
+        title: 'One task',
+        maxSteps: 12,
+        budgetUsdLimit: '0.5000',
+        state: {},
+        leaseToken: null,
+      });
+      await expect(f.leases.createTask({ ...request, agentId: randomUUID() })).rejects.toThrow(
+        'another agent',
+      );
+    });
+    it('scheduled creation cannot run early and a stale queue generation cannot claim it', async () => {
+      const { task } = await f.leases.createTask({
+        ...input(),
+        runAfter: new Date(Date.now() + 60_000),
+        maxSteps: 7,
+        budgetUsdLimit: '0.25',
+        plan: { steps: [] },
+      });
+      expect(task).toMatchObject({
+        status: 'sleeping',
+        maxSteps: 7,
+        budgetUsdLimit: '0.2500',
+        plan: { steps: [] },
+      });
+      expect(await f.leases.claim(task.id, 0)).toBeNull();
+      expect(await f.leases.wakeTask(task.id)).toMatchObject({ queueGeneration: 1 });
+      expect(await f.leases.claim(task.id, 0)).toBeNull();
+      expect(await f.leases.claim(task.id, -1)).toBeNull();
+      expect(await f.leases.claim(task.id, 1)).not.toBeNull();
+    });
+    it('enforces the external rate cap under concurrent creation and permits idempotent retries', async () => {
+      const before = await f.externalCounts();
+      await f.setTaskRatePolicy(before.hour + 1, before.day + 10);
+      const requests = Array.from({ length: 4 }, () => ({
+        ...input(),
+        trust: 'unknown',
+        externalEventId: randomUUID(),
+      }));
+      const results = await Promise.allSettled(
+        requests.map((request) => f.leases.createTask(request)),
+      );
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      for (const result of results) {
+        if (result.status === 'rejected') expect(result.reason.name).toBe('TaskRateLimitError');
+      }
+      const winner = results.findIndex((r) => r.status === 'fulfilled');
+      const request = requests[winner];
+      if (!request) throw new Error('No successful creation');
+      expect((await f.leases.createTask(request)).created).toBe(false);
+      expect((await f.leases.createTask(input())).created).toBe(true);
+      expect(
+        (await f.leases.createTask({ ...input(), trust: 'unknown', parentTaskId: f.taskId }))
+          .created,
+      ).toBe(true);
+    });
+    it('enforces a daily cap independently and permits explicitly unlimited policy', async () => {
+      await f.setTaskRatePolicy(null, 0);
+      await expect(f.leases.createTask({ ...input(), trust: 'known' })).rejects.toMatchObject({
+        name: 'TaskRateLimitError',
+      });
+      await f.setTaskRatePolicy(null, null);
+      expect((await f.leases.createTask({ ...input(), trust: 'known' })).created).toBe(true);
     });
     it('one worker wins a concurrent claim; future and terminal work cannot be claimed', async () => {
       const claims = await Promise.all([f.leases.claim(f.taskId), f.leases.claim(f.taskId)]);
