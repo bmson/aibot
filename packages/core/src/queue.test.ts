@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig, resetConfigForTest } from './config.js';
-import { getQueueNotifier, queueTaskId, resetQueueNotifierForTest } from './queue.js';
+import {
+  createCloudTasksQueue,
+  getQueueNotifier,
+  getTaskQueue,
+  queueTaskId,
+  resetQueueNotifierForTest,
+} from './queue.js';
 
 describe('Cloud Tasks queue notifier', () => {
   afterEach(() => {
@@ -61,6 +67,59 @@ describe('Cloud Tasks queue notifier', () => {
     expect(queueTaskId('other-task', 4)).not.toBe(queueTaskId('task-123', 4));
     expect(() => queueTaskId('task-123', -1)).toThrow('non-negative integer');
   });
+  const options = {
+    projectId: 'test-project',
+    location: 'us-west1',
+    queue: 'agent-steps',
+    agentUrl: 'https://agent.example.test',
+    oidcAudience: 'https://agent.example.test',
+    serviceAccountEmail: 'invoker@test-project.iam.gserviceaccount.com',
+  };
+  it('awaits provider acceptance and includes the generation in the authenticated callback', async () => {
+    let accept: (response: Response) => void = () => {};
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const queue = createCloudTasksQueue(options, async () => 'test-token');
+    let delivered = false;
+    const pending = queue.enqueue('task-123', 4).then(() => {
+      delivered = true;
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(delivered).toBe(false);
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(JSON.parse(Buffer.from(body.task.httpRequest.body, 'base64').toString())).toEqual({
+      taskId: 'task-123',
+      generation: 4,
+    });
+    accept(new Response(null, { status: 200 }));
+    await pending;
+    expect(delivered).toBe(true);
+  });
+  it('rejects transient failures and unrelated conflicts rather than acknowledging delivery', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ error: { status: 'ABORTED' } }, { status: 409 }))
+      .mockResolvedValueOnce(
+        Response.json({ error: { status: 'ALREADY_EXISTS' } }, { status: 409 }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const queue = createCloudTasksQueue(options, async () => 'test-token');
+    await expect(queue.enqueue('task', 0)).rejects.toThrow('(503)');
+    await expect(queue.enqueue('task', 0)).rejects.toThrow('(409)');
+    await expect(queue.enqueue('task', 0)).resolves.toBeUndefined();
+    const names = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).task.name);
+    expect(new Set(names).size).toBe(1);
+  });
+  it('refuses to acknowledge durable dispatch through the local no-op driver', () => {
+    loadConfig({ QUEUE_DRIVER: 'local' });
+    expect(() => getTaskQueue()).toThrow('requires cloudtasks');
+  });
 
   it('treats Cloud Tasks ALREADY_EXISTS as successful deduplication', async () => {
     loadConfig({
@@ -75,7 +134,9 @@ describe('Cloud Tasks queue notifier', () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(Response.json({ access_token: 'metadata-access-token' }))
-      .mockResolvedValueOnce(new Response(null, { status: 409 }));
+      .mockResolvedValueOnce(
+        Response.json({ error: { status: 'ALREADY_EXISTS' } }, { status: 409 }),
+      );
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.stubGlobal('fetch', fetchMock);
 

@@ -3,6 +3,35 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 
 describe('agent app', () => {
+  it('rejects malformed queue generations before building executor dependencies', async () => {
+    resetConfigForTest();
+    loadConfig({
+      ...process.env,
+      INTERNAL_AUTH_MODE: 'shared-secret',
+      INTERNAL_API_SECRET: 'test-secret',
+    });
+    try {
+      const app = createApp();
+      for (const body of [
+        null,
+        [],
+        { taskId: 2 },
+        { taskId: 'task', generation: -1 },
+        { taskId: 'task', generation: '1' },
+        { taskId: 'task', generation: 0.1 },
+      ]) {
+        const result = await app.request('/internal/tasks/execute', {
+          method: 'POST',
+          headers: { authorization: 'Bearer test-secret', 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        expect(result.status).toBe(400);
+      }
+    } finally {
+      resetConfigForTest();
+      loadConfig(process.env);
+    }
+  });
   it('responds to /health', async () => {
     const app = createApp();
     const res = await app.request('/health');

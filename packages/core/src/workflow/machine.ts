@@ -2,9 +2,7 @@ import {
   createPostgresTaskLeaseRepository,
   createPostgresTaskRepository,
   type Db,
-  rateLimits,
   type TaskRow,
-  tasks,
 } from '@assistant/db';
 import type {
   TaskCheckpoint,
@@ -12,7 +10,6 @@ import type {
   TaskLeaseRepository,
   TaskRepository,
 } from '@assistant/persistence';
-import { and, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import type { InboundEvent, Plan } from '../events.js';
 import { type TaskState, TaskStateSchema } from '../events.js';
 import { getQueueNotifier } from '../queue.js';
@@ -54,51 +51,11 @@ export function deriveTaskTitle(event: InboundEvent): string | undefined {
  */
 export type { TaskLease } from '@assistant/persistence';
 
-/**
- * Create a workflow from a normalized event. Idempotent on externalEventId —
- * re-delivered events (Pub/Sub, Cloud Tasks are at-least-once) return the
- * existing task instead of creating a duplicate.
- */
-/** Thrown when the externally-triggered task backstop is exhausted. */
-export class TaskRateLimitError extends Error {
-  constructor() {
-    super('externally-triggered task rate limit exceeded');
-    this.name = 'TaskRateLimitError';
-  }
-}
+export { TaskRateLimitError } from '@assistant/persistence';
 
-/**
- * The `task`-scope rate limit is a flood backstop for externally-triggered
- * work: root tasks whose trust is `known` or `unknown`, i.e. anything a third
- * party can create by sending mail. Owner/assistant tasks and internal
- * children are never throttled — schedules and reply children must not stall
- * behind a stranger's burst.
- */
-async function underExternalTaskLimit(db: Db): Promise<boolean> {
-  const [limit] = await db.select().from(rateLimits).where(eq(rateLimits.scope, 'task'));
-  if (!limit) return true;
-
-  const countSince = async (interval: string) => {
-    const [row] = await db
-      .select({ n: sql<number>`count(*)` })
-      .from(tasks)
-      .where(
-        and(
-          inArray(tasks.trust, ['known', 'unknown']),
-          isNull(tasks.parentTaskId),
-          gte(tasks.createdAt, sql`now() - ${interval}::interval`),
-        ),
-      );
-    return Number(row?.n ?? 0);
-  };
-
-  if (limit.maxPerHour !== null && (await countSince('1 hour')) >= limit.maxPerHour) return false;
-  if (limit.maxPerDay !== null && (await countSince('1 day')) >= limit.maxPerDay) return false;
-  return true;
-}
-
+/** Create a task atomically; transport notification happens after persistence. */
 export async function enqueueTask(
-  db: Db,
+  db: Db | TaskRepository,
   input: {
     event: InboundEvent;
     type: TaskType;
@@ -124,69 +81,39 @@ export async function enqueueTask(
     deferNotification?: boolean;
   },
 ): Promise<{ task: TaskRow; created: boolean }> {
-  const externalRoot =
-    (input.event.trust === 'known' || input.event.trust === 'unknown') && !input.parentTaskId;
-  if (externalRoot && !(await underExternalTaskLimit(db))) {
-    throw new TaskRateLimitError();
-  }
-
-  const values = {
+  const result = await lifecycle(db).createTask({
     agentId: input.event.agentId,
     conversationId: input.event.conversationId,
     type: input.type,
     title: deriveTaskTitle(input.event),
-    status: input.runAfter ? ('sleeping' as const) : ('pending' as const),
     trust: input.event.trust,
-    trigger: input.event as unknown as Record<string, unknown>,
+    trigger: input.event,
     externalEventId: input.event.externalEventId,
     goalId: input.goalId,
     parentTaskId: input.parentTaskId,
     runAfter: input.runAfter,
     deadline: input.deadline,
-    ...(input.budgetUsdLimit ? { budgetUsdLimit: input.budgetUsdLimit } : {}),
-    ...(input.maxSteps ? { maxSteps: input.maxSteps } : {}),
-    ...(input.plan ? { plan: input.plan } : {}),
-    ...(input.autonomyGrant ? { autonomyGrant: input.autonomyGrant } : {}),
-  };
-
-  if (input.event.externalEventId) {
-    const [task] = await db
-      .insert(tasks)
-      .values(values)
-      .onConflictDoNothing({
-        target: tasks.externalEventId,
-        // partial unique index — match its predicate
-        where: sql`${tasks.externalEventId} IS NOT NULL`,
-      })
-      .returning();
-    if (task) {
-      if (task.status === 'pending' && !input.deferNotification) {
-        getQueueNotifier().notify(task.id, task.queueGeneration);
-      }
-      return { task, created: true };
-    }
-    const [existing] = await db
-      .select()
-      .from(tasks)
-      .where(eq(tasks.externalEventId, input.event.externalEventId));
-    if (!existing) throw new Error('enqueueTask: conflict but no existing task');
-    return { task: existing, created: false };
+    budgetUsdLimit: input.budgetUsdLimit,
+    maxSteps: input.maxSteps,
+    plan: input.plan,
+    autonomyGrant: input.autonomyGrant,
+  });
+  if (result.created && result.task.status === 'pending' && !input.deferNotification) {
+    getQueueNotifier().notify(result.task.id, result.task.queueGeneration);
   }
-
-  const [task] = await db.insert(tasks).values(values).returning();
-  if (!task) throw new Error('enqueueTask: insert failed');
-  if (task.status === 'pending' && !input.deferNotification) {
-    getQueueNotifier().notify(task.id, task.queueGeneration);
-  }
-  return { task, created: true };
+  return result;
 }
 
 /**
  * Optimistic-lock claim. At-least-once delivery means concurrent executors
  * may race — exactly one wins; the rest get null and must treat it as done.
  */
-export function claimTask(db: Db | TaskLeaseRepository, taskId: string): Promise<TaskLease | null> {
-  return leases(db).claim(taskId);
+export function claimTask(
+  db: Db | TaskLeaseRepository,
+  taskId: string,
+  generation?: number,
+): Promise<TaskLease | null> {
+  return leases(db).claim(taskId, generation);
 }
 /**
  * Extend a live lease before another potentially expensive/side-effecting

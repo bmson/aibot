@@ -193,6 +193,7 @@ export type ApplicationConfirmationTaskResult = {
 async function executeAmbiguousApplicationConfirmationTask(
   deps: ApplicationConfirmationDeps,
   taskId: string,
+  generation?: number,
 ): Promise<ApplicationConfirmationTaskResult> {
   const [queued] = await deps.db.select().from(tasks).where(eq(tasks.id, taskId));
   const trigger = queued?.trigger as
@@ -206,7 +207,7 @@ async function executeAmbiguousApplicationConfirmationTask(
     return { outcome: 'not_claimable' };
   }
   if (queued.status === 'needs_attention') return { outcome: 'needs_attention' };
-  const claimed = await claimTask(deps.db, queued.id);
+  const claimed = await claimTask(deps.db, queued.id, generation);
   if (!claimed) return { outcome: 'not_claimable' };
   const count = Number(trigger.payload.matchCount);
   const from = typeof trigger.payload.from === 'string' ? trigger.payload.from : 'the sender';
@@ -390,6 +391,7 @@ async function reconcileSucceededLedger(
 export async function executeApplicationConfirmationTask(
   deps: ApplicationConfirmationTaskDeps,
   taskId: string,
+  generation?: number,
 ): Promise<ApplicationConfirmationTaskResult> {
   const [queued] = await deps.db.select().from(tasks).where(eq(tasks.id, taskId));
   const trigger = queued?.trigger as
@@ -410,7 +412,7 @@ export async function executeApplicationConfirmationTask(
   if (queued.status === 'needs_attention' || queued.status === 'failed') {
     return { outcome: 'needs_attention', applicationId };
   }
-  const claimed = await claimTask(deps.db, queued.id);
+  const claimed = await claimTask(deps.db, queued.id, generation);
   if (!claimed) return { outcome: 'not_claimable', applicationId };
 
   if (plannedActions(record).length === 0) {
@@ -676,7 +678,7 @@ export async function processApplicationConfirmation(
 export const applicationConfirmationTaskHandlers: readonly ModuleTaskHandler[] = [
   {
     kind: 'application_confirmation',
-    run: (services, taskId) =>
+    run: (services, taskId, generation) =>
       executeApplicationConfirmationTask(
         {
           db: services.db,
@@ -684,14 +686,16 @@ export const applicationConfirmationTaskHandlers: readonly ModuleTaskHandler[] =
           dispatcher: services.dispatcher,
         },
         taskId,
+        generation,
       ),
   },
   {
     kind: 'application_confirmation_ambiguous',
-    run: (services, taskId) =>
+    run: (services, taskId, generation) =>
       executeAmbiguousApplicationConfirmationTask(
         { db: services.db, notifyOwner: services.ownerNotifier.notifyOwner },
         taskId,
+        generation,
       ),
   },
 ];

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { commandContract, taskFixture } from '@assistant/persistence/testing';
-import { eq } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { createDb } from './client.js';
 import { createPostgresCostRepository } from './cost-repository.js';
 import { createPostgresMessageRepository } from './message-repository.js';
@@ -11,6 +11,7 @@ import {
   costEvents,
   costReservations,
   messages,
+  rateLimits,
   schedules,
   tasks,
 } from './schema.js';
@@ -39,7 +40,35 @@ commandContract('PostgreSQL persistence contract', async () => {
   await db
     .insert(tasks)
     .values(taskFixture({ id: taskId, agentId: agent.id, conversationId, reminderId }));
+  const [originalPolicy] = await db.select().from(rateLimits).where(eq(rateLimits.scope, 'task'));
+  let policyChanged = false;
   return {
+    externalCounts: async () => {
+      const count = async (hours: number) => {
+        const [row] = await db
+          .select({ n: sql<number>`count(*)` })
+          .from(tasks)
+          .where(
+            and(
+              inArray(tasks.trust, ['known', 'unknown']),
+              isNull(tasks.parentTaskId),
+              gte(tasks.createdAt, sql`clock_timestamp() - ${hours} * interval '1 hour'`),
+            ),
+          );
+        return Number(row?.n ?? 0);
+      };
+      return { hour: await count(1), day: await count(24) };
+    },
+    setTaskRatePolicy: async (hour, day) => {
+      policyChanged = true;
+      await db
+        .insert(rateLimits)
+        .values({ scope: 'task', maxPerHour: hour, maxPerDay: day })
+        .onConflictDoUpdate({
+          target: rateLimits.scope,
+          set: { maxPerHour: hour, maxPerDay: day },
+        });
+    },
     agentId: agent.id,
     taskId,
     conversationId,
@@ -63,10 +92,15 @@ commandContract('PostgreSQL persistence contract', async () => {
         await db.delete(costEvents).where(eq(costEvents.taskId, taskId));
         await db.delete(costReservations).where(eq(costReservations.taskId, taskId));
         await db.delete(messages).where(eq(messages.conversationId, conversationId));
-        await db.delete(tasks).where(eq(tasks.id, taskId));
+        await db.delete(tasks).where(eq(tasks.conversationId, conversationId));
         await db.delete(schedules).where(eq(schedules.id, reminderId));
         await db.delete(conversations).where(eq(conversations.id, conversationId));
       } finally {
+        if (policyChanged) {
+          if (originalPolicy)
+            await db.update(rateLimits).set(originalPolicy).where(eq(rateLimits.scope, 'task'));
+          else await db.delete(rateLimits).where(eq(rateLimits.scope, 'task'));
+        }
         await db.$client.end();
       }
     },

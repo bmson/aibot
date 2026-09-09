@@ -28,6 +28,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@assistant/firestore": "workspace:*",
     "esbuild": "^0.28.2",
     "tsx": "^4.23.13"
   }

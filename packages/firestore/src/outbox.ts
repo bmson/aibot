@@ -1,18 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
+import type { DispatchOutbox, OutboxLease, WakeIntent } from '@assistant/persistence';
 import type { Transaction } from '@google-cloud/firestore';
 import { decodeRecord, type InstallationStore } from './store.js';
 
-export interface WakeIntent {
-  id: string;
-  taskId: string;
-  generation: number;
-  availableAt: Date;
-  status: 'pending' | 'leased' | 'delivered';
-  attempts: number;
-  leaseToken: string | null;
-  lockedUntil: Date | null;
-}
-export type OutboxLease = WakeIntent & { status: 'leased'; leaseToken: string; lockedUntil: Date };
+export type { OutboxLease, WakeIntent } from '@assistant/persistence';
 
 export function wakeIntentId(taskId: string, generation: number): string {
   if (!taskId || !Number.isSafeInteger(generation) || generation < 0)
@@ -46,10 +37,10 @@ export function createWakeIntent(
 }
 
 /**
- * Cloud Tasks dispatch is at-least-once. The intent ID is the provider task name;
+ * Cloud Tasks dispatch is at-least-once. The task ID and generation determine the provider task name;
  * AlreadyExists counts as dispatch success. Executor generation/lease checks remain mandatory.
  */
-export class FirestoreOutbox {
+export class FirestoreOutbox implements DispatchOutbox {
   constructor(readonly store: InstallationStore) {}
 
   async due(batch = 50): Promise<string[]> {

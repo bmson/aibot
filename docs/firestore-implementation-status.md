@@ -16,7 +16,17 @@ Updated 2026-09-08. This tracks the implementation batches of the [migration and
 
 The second implementation batch moves sleep, budget/approval/event parking, completion/cancellation, attention notices, bounded failure retries, manual wake-up, and expired-lease recovery behind `TaskRepository`. Core wrappers retain their existing API and PostgreSQL runtime. Firestore commits newly runnable generations with their outbox intent and rejects stale executor leases on every transition. PostgreSQL recovery now rechecks expiry when updating a task, so a renewal after the initial expired-task query is not overwritten.
 
-Task enqueue/event deduplication, external task rate limits, queue consumer integration, and the remaining repository migrations are still pending. The new cross-adapter lifecycle tests cover checkpoint preservation, retry caps, owner-scoped budget increases, terminal cancellation, and concurrent expired-lease recovery. This follow-up has not changed the deployed database driver.
+The cross-adapter lifecycle tests cover checkpoint preservation, retry caps, owner-scoped budget increases, terminal cancellation, and concurrent expired-lease recovery. This follow-up has not changed the deployed database driver.
+
+## Task creation and dispatch follow-up
+
+Task creation now uses the shared repository too. PostgreSQL serializes the external-task count and insertion; Firestore serializes it on an installation coordination record and commits the task, event uniqueness record, and first outbox intent together. Duplicate events return their existing task before checking the rate cap, and an event collision cannot return another agent's task. Owner work and internal children keep their existing exemption. Firestore requires an explicit `rateLimits/task` policy at bootstrap, with null values for intentionally unlimited caps.
+
+The durable dispatcher awaits Cloud Tasks acceptance before acknowledging an outbox lease. Failed or ambiguous dispatches remain retryable with the same provider task name. Batch size, concurrency, and dispatch time are bounded. New queue deliveries include a generation checked atomically at claim time by both repositories, the general executor, and the current deterministic module handlers. Legacy deliveries without a generation remain accepted during the transition.
+
+The Firestore outbox and Cloud Tasks transport are integrated and exercised together in an emulator test. **The scheduled Firestore dispatcher and application composition are not enabled in production**: the rest of the executor and application still require PostgreSQL. No additional SQL migration is required for this batch.
+
+`pnpm firestore:validate --project PROJECT` previews an isolated real-cloud validation run; `--run` creates a fresh `assistant-validation-*` database, waits for task/outbox indexes, executes synthetic task/concurrency/recovery checks, records Query Explain metrics, and deletes that database in cleanup. It never adopts `(default)` or a caller-supplied database. This is validation tooling, not the consumer installer. Google Cloud login/ADC must be available before a live run. The run does not prove production runtime-service-account IAM, live Cloud Tasks OIDC delivery, full-workload pricing, or the remaining Firestore domains.
 
 ## Remaining delivery gates
 
@@ -24,7 +34,7 @@ Task enqueue/event deduplication, external task rate limits, queue consumer inte
 |---|---|---|
 | P0 | Partial | Real Firestore/index/IAM/cost checks; actual Cloud Shell authorization flow; Google-model and passkey feasibility |
 | P1 | Partial | Complete command contracts and remove remaining SDK imports from business logic; select adapters at composition roots |
-| P2 | Partial | Enqueue/schedule commands, chat reads/cursors, approval sweeps, external-delivery fences, and outbox consumer integration |
+| P2 | Partial | Schedule commands, chat reads/cursors, approval sweeps, external-delivery fences, and Firestore application/dispatcher composition |
 | P3 | Pending | All remaining domain/module queries, graph/recall, imports, erasure/export, and operational parity across all 63 table families |
 | P4–P6 | Pending | Google models and metering, embedding migration, bounded scheduling, passkeys/recovery and per-device pairing |
 | P7–P8 | Pending | Customer-owned Terraform/build pipeline, resumable install manifest/bootstrap, owner onboarding, optional Workspace wizard |
@@ -37,6 +47,8 @@ Do not advertise an install button or enable `DATABASE_DRIVER=firestore` until t
 Foundation checks: 225 test files / 2,040 tests passed in the combined PostgreSQL and emulator suite; the dedicated emulator suite passed 30 tests. Typecheck, production build, lint/architecture checks, dependency audit, and whitespace checks passed. PR #125 and main CI passed all four jobs, including the dedicated Firestore emulator job; the manually dispatched iOS build/test workflow passed. Lint retains nine pre-existing warnings and one configuration-version notice. The build retains the existing unpdf bundler warning. The emulator tests prove local transaction behavior, not production IAM/index readiness or cost. No live model calls, native-device UI checks, or customer cloud installation were exercised.
 
 Task-lifecycle follow-up: all 227 test files / 2,050 tests passed with PostgreSQL and the Firestore emulator, including deterministic renewal-versus-recovery races against both adapters. Typecheck, lint/architecture checks, production build, and whitespace checks passed. This batch was built in an isolated worktree without a web `.env.local`; it has no additional SQL schema migration.
+
+Task-creation/dispatch follow-up: all 231 test files / 2,073 tests passed with PostgreSQL and the Firestore emulator; the dedicated emulator command passed 46 tests, including dispatch transport composition and the same synthetic task checks used by the live validation harness. Typecheck, lint/architecture checks, production build, dependency audit, and whitespace checks passed. The validation preview ran successfully; real Firestore validation remains unexecuted because local Google Cloud authentication needs refreshing and Application Default Credentials are absent.
 
 ```sh
 pnpm lint

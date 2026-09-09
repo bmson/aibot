@@ -29,6 +29,10 @@ commandContract(
       .doc('tasks', taskId)
       .set(taskFixture({ id: taskId, agentId, conversationId, reminderId }));
     return {
+      externalCounts: async () => ({ hour: 0, day: 0 }),
+      setTaskRatePolicy: async (hour, day) => {
+        await store.doc('rateLimits', 'task').set({ maxPerHour: hour, maxPerDay: day });
+      },
       agentId,
       taskId,
       conversationId,

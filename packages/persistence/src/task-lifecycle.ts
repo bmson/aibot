@@ -1,5 +1,6 @@
 import type { TaskLease, TaskLeaseRepository } from './contracts.js';
 import type { Records } from './records.js';
+import type { TaskCreateInput, TaskCreateResult } from './task-creation.js';
 export interface TaskOutcome {
   status: 'done' | 'failed' | 'cancelled';
   progress?: string;
@@ -13,6 +14,7 @@ export interface TaskWake {
   queueGeneration: number;
 }
 export interface TaskRepository extends TaskLeaseRepository {
+  createTask(input: TaskCreateInput): Promise<TaskCreateResult>;
   parkForApproval(
     task: TaskLease,
     state: Record<string, unknown>,

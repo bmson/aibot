@@ -47,12 +47,14 @@
     "test:questions": "pnpm test packages/tools/src/question-regression packages/application/src/chat-budget-reply.test.ts",
     "eval:questions": "tsx scripts/question-regression.ts",
     "eval:questions:config": "tsx scripts/question-regression-config.ts",
-    "test:firestore": "tsx scripts/test-firestore.ts"
+    "test:firestore": "tsx scripts/test-firestore.ts",
+    "firestore:validate": "tsx scripts/validate-firestore.ts"
   },
   "devDependencies": {
     "@assistant/config": "workspace:^",
     "@assistant/core": "workspace:^",
     "@assistant/db": "workspace:^",
+    "@assistant/firestore": "workspace:*",
     "@assistant/modules": "workspace:*",
     "@assistant/setup": "workspace:*",
     "@assistant/tools": "workspace:*",

@@ -21,7 +21,13 @@ export function activeLease(task: TaskLease) {
     gt(tasks.lockedUntil, sql`now()`),
   );
 }
-export async function claimTask(db: Db, taskId: string): Promise<TaskLease | null> {
+export async function claimTask(
+  db: Db,
+  taskId: string,
+  generation?: number,
+): Promise<TaskLease | null> {
+  if (generation !== undefined && (!Number.isSafeInteger(generation) || generation < 0))
+    return null;
   const lockedUntil = newLeaseExpiry();
   const [claimed] = await db
     .update(tasks)
@@ -34,6 +40,7 @@ export async function claimTask(db: Db, taskId: string): Promise<TaskLease | nul
     .where(
       and(
         eq(tasks.id, taskId),
+        ...(generation === undefined ? [] : [eq(tasks.queueGeneration, generation)]),
         or(
           and(
             or(...CLAIMABLE.map((s) => eq(tasks.status, s))),
@@ -95,7 +102,7 @@ export async function checkpointTask(
 export function createPostgresTaskLeaseRepository(db: Db): TaskLeaseRepository {
   return {
     kind: 'task-lease-repository',
-    claim: (id) => claimTask(db, id),
+    claim: (id, generation) => claimTask(db, id, generation),
     renew: (task) => renewTaskLease(db, task),
     checkpoint: (task, state, extra) => checkpointTask(db, task, state, extra),
   };
