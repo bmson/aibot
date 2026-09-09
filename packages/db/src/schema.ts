@@ -461,6 +461,8 @@ export const tasks = pgTable(
     trust: text('trust').notNull().default('unknown'),
     runAfter: timestamp('run_after', { withTimezone: true }),
     lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    /** Opaque fencing token independent of timestamp precision; null for legacy leases. */
+    leaseToken: uuid('lease_token'),
     /** Monotonic delivery generation used to deduplicate queue pokes per runnable transition. */
     queueGeneration: integer('queue_generation').notNull().default(0),
     attempt: integer('attempt').notNull().default(0),

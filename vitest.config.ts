@@ -50,6 +50,17 @@ export default defineConfig({
       'packages/modules',
       'packages/tools',
       'apps/agent',
+      parallel('packages/persistence'),
+      {
+        ...parallel('packages/firestore'),
+        test: {
+          root: 'packages/firestore',
+          env: { METADATA_SERVER_DETECTION: 'none' },
+          fileParallelism: true,
+          testTimeout: 30_000,
+          hookTimeout: 30_000,
+        },
+      },
       parallel('packages/config'),
       parallel('packages/setup'),
       {

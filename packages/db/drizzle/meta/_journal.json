@@ -484,6 +484,13 @@
       "when": 1788710438827,
       "tag": "0068_new_masque",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1788911209204,
+      "tag": "0069_task_lease_fencing",
+      "breakpoints": true
     }
   ]
 }

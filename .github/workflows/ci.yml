@@ -8,10 +8,10 @@ on:
     branches: [main]
   pull_request:
 
-# Three jobs instead of one serial chain: static checks need neither Postgres
+# Separate jobs instead of one serial chain: static checks need neither Postgres
 # nor a build, so they run alongside the database-backed verification, and the
 # build+smoke job reuses caches instead of starting cold. Deploy keys off the
-# workflow conclusion, which is the AND of all three.
+# workflow conclusion, which requires every job to pass.
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -90,6 +90,52 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+
+  firestore:
+    runs-on: ubuntu-latest
+    env:
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8789
+      GCLOUD_PROJECT: demo-assistant-test
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        with:
+          version: '576.0.0'
+          install_components: cloud-firestore-emulator
+      - run: pnpm install --frozen-lockfile
+      # No cloud authentication, project creation, or billable API calls.
+      - name: Verify Firestore transactions and vector retrieval
+        shell: bash
+        run: |
+          gcloud emulators firestore start --host-port="$FIRESTORE_EMULATOR_HOST" --quiet > "$RUNNER_TEMP/firestore.log" 2>&1 &
+          assistant_emulator_pid=$!
+          trap 'kill "$assistant_emulator_pid" 2>/dev/null || true' EXIT
+          assistant_emulator_ready=false
+          for assistant_attempt in {1..60}; do
+            if curl --fail --silent --output /dev/null "http://$FIRESTORE_EMULATOR_HOST"; then
+              assistant_emulator_ready=true
+              break
+            fi
+            if ! kill -0 "$assistant_emulator_pid" 2>/dev/null; then
+              cat "$RUNNER_TEMP/firestore.log"
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$assistant_emulator_ready" != true ]; then
+            cat "$RUNNER_TEMP/firestore.log"
+            exit 1
+          fi
+          pnpm test:firestore
 
   build-smoke:
     runs-on: ubuntu-latest

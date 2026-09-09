@@ -1,9 +1,22 @@
-import { type Db, rateLimits, type TaskRow, tasks } from '@assistant/db';
+import {
+  createPostgresTaskLeaseRepository,
+  type Db,
+  rateLimits,
+  type TaskRow,
+  tasks,
+} from '@assistant/db';
+import type { TaskCheckpoint, TaskLease, TaskLeaseRepository } from '@assistant/persistence';
 import { and, eq, gt, gte, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { InboundEvent, Plan } from '../events.js';
 import { type TaskState, TaskStateSchema } from '../events.js';
 import { getQueueNotifier } from '../queue.js';
 import type { AutonomyGrant } from './autonomy.js';
+
+function leases(store: Db | TaskLeaseRepository): TaskLeaseRepository {
+  return 'kind' in store && store.kind === 'task-lease-repository'
+    ? (store as TaskLeaseRepository)
+    : createPostgresTaskLeaseRepository(store as Db);
+}
 
 export type TaskType = TaskRow['type'];
 
@@ -22,7 +35,6 @@ export function deriveTaskTitle(event: InboundEvent): string | undefined {
   return raw.length > 80 ? `${raw.slice(0, 79)}…` : raw;
 }
 
-const CLAIMABLE = ['pending', 'sleeping', 'waiting_budget'] as const;
 const WAKEABLE = [
   'waiting_approval',
   'waiting_event',
@@ -31,7 +43,6 @@ const WAKEABLE = [
   'needs_attention',
 ] as const;
 const TERMINAL = ['done', 'failed', 'cancelled'] as const;
-const LEASE_MINUTES = 10;
 const MAX_ATTEMPTS = 8;
 // A worker that hangs or is killed (rather than throwing) never records a
 // failed attempt, so it can't reach MAX_ATTEMPTS. Its lease simply expires and
@@ -39,29 +50,19 @@ const MAX_ATTEMPTS = 8;
 // times without ever checkpointing progress is a poison pill and dead-letters.
 const MAX_RECLAIMS = 8;
 
-function newLeaseExpiry() {
-  // Truncate in PostgreSQL before decoding to JS Date. Raw now() can contain
-  // microseconds that Date loses, making a later equality fence fail. Keeping
-  // the clock database-side also avoids cross-container clock skew.
-  return sql`date_trunc('milliseconds', clock_timestamp()) + interval '${sql.raw(String(LEASE_MINUTES))} minutes'`;
-}
-
 /**
- * A claimed row is also its lease: lockedUntil is a monotonically replaced
- * fencing token. Every executor-owned mutation compares it with the value
+ * A claimed row is also its lease: lockedUntil enforces expiry and leaseToken
+ * is an opaque fencing token. Every executor-owned mutation compares it with the value
  * returned by claim/renew, so a reclaimed task makes the old worker harmless.
  */
-export type TaskLease = TaskRow & { lockedUntil: Date };
-
-function hasLease(task: TaskRow): task is TaskLease {
-  return task.status === 'running' && task.lockedUntil instanceof Date;
-}
+export type { TaskLease } from '@assistant/persistence';
 
 function activeLease(task: TaskLease) {
   return and(
     eq(tasks.id, task.id),
     eq(tasks.status, 'running'),
     eq(tasks.lockedUntil, task.lockedUntil),
+    task.leaseToken ? eq(tasks.leaseToken, task.leaseToken) : isNull(tasks.leaseToken),
     gt(tasks.lockedUntil, sql`now()`),
   );
 }
@@ -197,85 +198,31 @@ export async function enqueueTask(
  * Optimistic-lock claim. At-least-once delivery means concurrent executors
  * may race — exactly one wins; the rest get null and must treat it as done.
  */
-export async function claimTask(db: Db, taskId: string): Promise<TaskLease | null> {
-  const lockedUntil = newLeaseExpiry();
-  const [claimed] = await db
-    .update(tasks)
-    .set({
-      status: 'running',
-      lockedUntil,
-      updatedAt: sql`now()`,
-    })
-    .where(
-      and(
-        eq(tasks.id, taskId),
-        or(
-          and(
-            or(...CLAIMABLE.map((s) => eq(tasks.status, s))),
-            or(isNull(tasks.lockedUntil), lte(tasks.lockedUntil, sql`now()`)),
-          ),
-          // A crashed worker's expired running lease is atomically reclaimed.
-          and(
-            eq(tasks.status, 'running'),
-            or(isNull(tasks.lockedUntil), lte(tasks.lockedUntil, sql`now()`)),
-          ),
-        ),
-        or(isNull(tasks.runAfter), lte(tasks.runAfter, sql`now()`)),
-      ),
-    )
-    .returning();
-  if (!claimed || !hasLease(claimed)) return null;
-  return claimed;
+export function claimTask(db: Db | TaskLeaseRepository, taskId: string): Promise<TaskLease | null> {
+  return leases(db).claim(taskId);
 }
-
 /**
  * Extend a live lease before another potentially expensive/side-effecting
  * step. Mutates the local row's fencing token so subsequent CAS writes use
  * the renewed value. A false result means cancellation or another worker won.
  */
-export async function renewTaskLease(db: Db, task: TaskLease): Promise<boolean> {
-  const lockedUntil = newLeaseExpiry();
-  const [renewed] = await db
-    .update(tasks)
-    .set({
-      lockedUntil,
-      updatedAt: sql`now()`,
-    })
-    .where(activeLease(task))
-    .returning({ lockedUntil: tasks.lockedUntil });
-  if (!renewed?.lockedUntil) return false;
-  task.lockedUntil = renewed.lockedUntil;
-  return true;
+export function renewTaskLease(db: Db | TaskLeaseRepository, task: TaskLease): Promise<boolean> {
+  return leases(db).renew(task);
 }
-
 /** Parse the checkpoint out of a task row (defaults for a fresh task). */
 export function taskState(task: TaskRow): TaskState {
   return TaskStateSchema.parse(task.state ?? {});
 }
 
 /** Persist the checkpoint. Called once per step, in the same transaction as tool_calls updates. */
-export async function checkpointTask(
-  db: Db,
+export function checkpointTask(
+  db: Db | TaskLeaseRepository,
   task: TaskLease,
   state: TaskState,
-  extra: Partial<{
-    progress: string;
-    progressPercent: number | null;
-    nextAction: string;
-    lastReflectedAt: Date;
-  }> = {},
+  extra: TaskCheckpoint = {},
 ): Promise<boolean> {
-  const [updated] = await db
-    .update(tasks)
-    // A checkpoint is proof of forward progress, so clear both failure counters:
-    // the retry attempt count AND the lease-reclaim count (this task is not a
-    // poison pill — it advanced past a step boundary).
-    .set({ state, ...extra, attempt: 0, reclaimCount: 0, updatedAt: sql`now()` })
-    .where(activeLease(task))
-    .returning({ id: tasks.id });
-  return Boolean(updated);
+  return leases(db).checkpoint(task, state, extra);
 }
-
 /** Park for approval — the queue task ends; resume is a fresh enqueue on resolution. */
 export async function parkForApproval(
   db: Db,

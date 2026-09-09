@@ -4,12 +4,14 @@ import {
   budgets,
   type ConversationRow,
   conversations,
+  createPostgresMessageRepository,
   type Db,
   goals,
   messages,
   tasks,
   toolCalls,
 } from '@assistant/db';
+import type { AppendMessageInput, MessageRepository } from '@assistant/persistence';
 import {
   and,
   asc,
@@ -695,36 +697,12 @@ export async function listMessagesByIds(db: Db, conversationId: string, ids: str
     .orderBy(asc(messages.createdAt), asc(messages.id));
 }
 
-export async function persistMessage(
-  db: Db,
-  input: {
-    conversationId: string;
-    taskId?: string;
-    role: 'user' | 'assistant' | 'system' | 'tool';
-    origin: 'owner' | 'known_contact' | 'unknown' | 'web' | 'assistant' | 'system';
-    parts: unknown[];
-    text: string;
-    channelMessageId?: string;
-  },
-) {
-  // channel_message_id's unique index is partial (WHERE NOT NULL) — the
-  // ON CONFLICT arbiter must match its predicate, and only applies when a
-  // channel id is present at all (chat messages have none).
-  const [row] = input.channelMessageId
-    ? await db
-        .insert(messages)
-        .values(input)
-        .onConflictDoNothing({
-          target: messages.channelMessageId,
-          where: sql`${messages.channelMessageId} IS NOT NULL`,
-        })
-        .returning()
-    : await db.insert(messages).values(input).returning();
-  await db
-    .update(conversations)
-    .set({ updatedAt: sql`now()` })
-    .where(eq(conversations.id, input.conversationId));
-  return row;
+export function persistMessage(store: Db | MessageRepository, input: AppendMessageInput) {
+  const repository =
+    'kind' in store && store.kind === 'message-repository'
+      ? (store as MessageRepository)
+      : createPostgresMessageRepository(store as Db);
+  return repository.append(input);
 }
 
 /**
