@@ -1,13 +1,9 @@
 /** Test-only adapter contract. Imported by both suites; excluded from the runtime barrel. */
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type {
-  CostRepository,
-  MessageRepository,
-  ReminderRepository,
-  TaskLeaseRepository,
-} from './contracts.js';
+import type { CostRepository, MessageRepository, ReminderRepository } from './contracts.js';
 import type { Records } from './records.js';
+import type { TaskRepository } from './task-lifecycle.js';
 
 export interface CommandFixture {
   agentId: string;
@@ -15,7 +11,7 @@ export interface CommandFixture {
   taskId: string;
   reminderId: string;
   costs: CostRepository;
-  leases: TaskLeaseRepository;
+  leases: TaskRepository;
   messages: MessageRepository;
   reminders: ReminderRepository;
   patchTask(patch: Partial<Records['tasks']>): Promise<void>;
@@ -100,6 +96,67 @@ export function commandContract(
       });
       expect((await f.readTask()).status).toBe('cancelled');
       expect((await f.reminders.cancel(f.agentId, f.reminderId)).cancelled).toBe(false);
+    });
+    it('sleep and approval parking fence the executor and preserve the resumed checkpoint', async () => {
+      const lease = await f.leases.claim(f.taskId);
+      if (!lease) throw new Error('Missing fixture lease');
+      await f.patchTask({ reclaimCount: 7, attempt: 2 });
+      expect(
+        await f.leases.sleepTask(lease, { phase: 'paused' }, new Date(Date.now() + 60_000)),
+      ).toBe(true);
+      expect(await f.readTask()).toMatchObject({
+        status: 'sleeping',
+        attempt: 0,
+        reclaimCount: 0,
+        queueGeneration: 1,
+      });
+      expect(await f.leases.completeTask(lease, { status: 'done' })).toBe(false);
+      expect(await f.leases.wakeTask(f.taskId)).toMatchObject({ id: f.taskId, queueGeneration: 2 });
+      const resumed = await f.leases.claim(f.taskId);
+      if (!resumed) throw new Error('Missing resumed lease');
+      expect(await f.leases.parkForApproval(resumed, { phase: 'approval' }, ['a'])).toBe(true);
+      expect(await f.readTask()).toMatchObject({
+        status: 'waiting_approval',
+        state: { phase: 'approval', pendingApprovals: ['a'] },
+      });
+    });
+    it('bounded retries dead-letter and an owner-scoped budget increase clears a delivered final', async () => {
+      const lease = await f.leases.claim(f.taskId);
+      if (!lease) throw new Error('Missing fixture lease');
+      expect(await f.leases.recordFailedAttempt(lease, 'transient')).toBe('retry');
+      expect(await f.readTask()).toMatchObject({ status: 'sleeping', attempt: 1 });
+      await f.patchTask({
+        runAfter: new Date(0),
+        attempt: 7,
+        state: { phase: 'answer', pendingFinal: { text: 'old final' } },
+      });
+      const last = await f.leases.claim(f.taskId);
+      if (!last) throw new Error('Missing retry lease');
+      expect(await f.leases.recordFailedAttempt(last, 'persistent')).toBe('dead_letter');
+      expect(await f.leases.markAttentionNotified(f.taskId)).toBe(true);
+      expect(await f.leases.wakeTask(f.taskId, { agentId: randomUUID(), limit: 2 })).toBeNull();
+      expect(await f.leases.wakeTask(f.taskId, { agentId: f.agentId, limit: 2 })).not.toBeNull();
+      expect(await f.readTask()).toMatchObject({
+        status: 'pending',
+        state: { phase: 'answer' },
+        budgetUsdLimit: '2.0000',
+        attentionNotifiedAt: null,
+      });
+      expect(await f.leases.markAttentionNotified(f.taskId)).toBe(false);
+    });
+    it('concurrent recovery gives an expired task one new queue generation', async () => {
+      const lease = await f.leases.claim(f.taskId);
+      if (!lease) throw new Error('Missing fixture lease');
+      await f.patchTask({ lockedUntil: new Date(0) });
+      await Promise.all([f.leases.findDueTasks(100), f.leases.findDueTasks(100)]);
+      expect(await f.readTask()).toMatchObject({
+        status: 'pending',
+        reclaimCount: 1,
+        queueGeneration: 1,
+      });
+      expect(await f.leases.completeTask(lease, { status: 'done' })).toBe(false);
+      expect(await f.leases.completeTask(f.taskId, { status: 'cancelled' })).toBe(true);
+      expect(await f.leases.wakeTask(f.taskId)).toBeNull();
     });
     it('retries one reservation and settles its task and ledger exactly once', async () => {
       const input = {

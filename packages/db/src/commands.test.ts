@@ -14,7 +14,7 @@ import {
   schedules,
   tasks,
 } from './schema.js';
-import { createPostgresTaskLeaseRepository } from './task-lease-repository.js';
+import { createPostgresTaskRepository } from './task-lifecycle-repository.js';
 
 commandContract('PostgreSQL persistence contract', async () => {
   const url = process.env.DATABASE_URL;
@@ -45,7 +45,7 @@ commandContract('PostgreSQL persistence contract', async () => {
     conversationId,
     reminderId,
     costs: createPostgresCostRepository(db),
-    leases: createPostgresTaskLeaseRepository(db),
+    leases: createPostgresTaskRepository(db),
     messages: createPostgresMessageRepository(db),
     reminders: createPostgresReminderRepository(db),
     patchTask: async (patch) => {

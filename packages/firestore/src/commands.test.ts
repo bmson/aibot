@@ -5,7 +5,7 @@ import { FirestoreCostRepository } from './costs.js';
 import { FirestoreMessageRepository } from './messages.js';
 import { FirestoreReminderRepository } from './reminders.js';
 import { decodeRecord } from './store.js';
-import { FirestoreTaskLeaseRepository } from './tasks.js';
+import { FirestoreTaskRepository } from './task-lifecycle.js';
 import { disposeStore, emulatorStore, seedBudget } from './test-store.js';
 
 commandContract(
@@ -34,7 +34,7 @@ commandContract(
       conversationId,
       reminderId,
       costs: new FirestoreCostRepository(store),
-      leases: new FirestoreTaskLeaseRepository(store),
+      leases: new FirestoreTaskRepository(store),
       messages: new FirestoreMessageRepository(store),
       reminders: new FirestoreReminderRepository(store),
       patchTask: async (patch) => {
