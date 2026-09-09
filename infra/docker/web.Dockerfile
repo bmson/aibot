@@ -5,6 +5,7 @@ RUN corepack enable
 # Manifests first: dependency layers survive source edits.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
 COPY packages/config/package.json ./packages/config/
+COPY packages/persistence/package.json ./packages/persistence/
 COPY packages/db/package.json ./packages/db/
 COPY packages/core/package.json ./packages/core/
 COPY packages/application/package.json ./packages/application/

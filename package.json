@@ -46,7 +46,8 @@
     "setup:wizard": "tsx scripts/wizard.ts",
     "test:questions": "pnpm test packages/tools/src/question-regression packages/application/src/chat-budget-reply.test.ts",
     "eval:questions": "tsx scripts/question-regression.ts",
-    "eval:questions:config": "tsx scripts/question-regression-config.ts"
+    "eval:questions:config": "tsx scripts/question-regression-config.ts",
+    "test:firestore": "tsx scripts/test-firestore.ts"
   },
   "devDependencies": {
     "@assistant/config": "workspace:^",

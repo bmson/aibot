@@ -63,8 +63,10 @@ for (const file of sourceFiles(path.join(repoRoot, 'apps/web'))) {
 
 const allowedWorkspaceDependencies: Record<string, readonly string[]> = {
   '@assistant/config': [],
-  '@assistant/db': ['@assistant/config'],
-  '@assistant/core': ['@assistant/config', '@assistant/db'],
+  '@assistant/persistence': [],
+  '@assistant/firestore': ['@assistant/persistence'],
+  '@assistant/db': ['@assistant/config', '@assistant/persistence'],
+  '@assistant/core': ['@assistant/config', '@assistant/db', '@assistant/persistence'],
   '@assistant/application': ['@assistant/config', '@assistant/core', '@assistant/db'],
   '@assistant/tools': ['@assistant/core', '@assistant/db'],
   // Modules compose the layers below them; nothing may depend on modules except
@@ -162,6 +164,34 @@ for (const moduleDir of moduleDirs) {
       );
     }
   }
+}
+
+/** Temporary, enumerated SQL migration debt. Remove entries as use cases move. */
+const persistenceImports =
+  /(?:from\s*|import\s*\(|require\s*\()\s*['"](?:@assistant\/(?:db|firestore)(?:\/|['"])|drizzle-orm(?:\/|['"])|@google-cloud\/firestore(?:\/|['"]))/;
+const legacyPersistenceFiles = new Set<string>(
+  JSON.parse(
+    readFileSync(path.join(repoRoot, 'scripts/persistence-migration-baseline.json'), 'utf8'),
+  ),
+);
+const remainingPersistenceFiles = new Set<string>();
+for (const name of ['core', 'application', 'tools', 'modules']) {
+  for (const file of sourceFiles(path.join(repoRoot, 'packages', name, 'src'))) {
+    if (/\.test\.tsx?$/.test(file)) continue;
+    const relative = path.relative(repoRoot, file);
+    if (!persistenceImports.test(readFileSync(file, 'utf8'))) continue;
+    remainingPersistenceFiles.add(relative);
+    if (!legacyPersistenceFiles.has(relative))
+      failures.push(`${relative} introduces a database SDK dependency; use @assistant/persistence`);
+  }
+}
+for (const file of legacyPersistenceFiles) {
+  if (!remainingPersistenceFiles.has(file))
+    failures.push(`${file} no longer needs its persistence exception; remove it from the baseline`);
+}
+for (const file of sourceFiles(path.join(repoRoot, 'packages/persistence/src'))) {
+  if (persistenceImports.test(readFileSync(file, 'utf8')))
+    failures.push(`${path.relative(repoRoot, file)} leaks a database SDK into portable contracts`);
 }
 
 if (failures.length > 0) {
