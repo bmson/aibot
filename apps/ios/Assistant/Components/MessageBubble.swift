@@ -5580,9 +5580,19 @@ struct ApprovedReceiptGroup: View {
 
     var body: some View {
         let tint = AssistantTheme.success(for: colorScheme)
+        let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
         VStack(alignment: .leading, spacing: 12) {
             Button {
-                withAnimation(reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0.02)) {
+                // Keep the motion — this is the one transcript disclosure that
+                // animates — but take the scroll anchor out of it. Growing the
+                // card re-applies the transcript's bottom anchor on later
+                // frames, outside this transaction, which walked the tapped
+                // header out from under the finger mid-animation.
+                var transaction = Transaction(
+                    animation: reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0.02)
+                )
+                transaction.scrollContentOffsetAdjustmentBehavior = .disabled
+                withTransaction(transaction) {
                     isExpanded.toggle()
                 }
             } label: {
@@ -5603,6 +5613,13 @@ struct ApprovedReceiptGroup: View {
                         Text(isExpanded ? "Hide approved requests" : "Approved in sequence · Tap to view")
                             .font(.caption)
                             .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            // Swap the caption rather than cross-fading it.
+                            // Inside the expand animation the default
+                            // dissolve held both strings on screen at once,
+                            // at two different widths, so the header read as
+                            // "Hide approved requests Tap to view" for a
+                            // quarter of a second.
+                            .contentTransition(.identity)
                     }
 
                     Spacer(minLength: 6)
@@ -5633,13 +5650,16 @@ struct ApprovedReceiptGroup: View {
         }
         .padding(13)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            AssistantTheme.bubblePaper(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
-        )
+        .background(AssistantTheme.bubblePaper(for: colorScheme), in: shape)
+        // The rows slide in from the card's top edge, so for the length of the
+        // animation they exist above a frame that has not finished growing.
+        // Without a clip they were drawn straight over the neighbouring
+        // transcript cards — the receipts appeared on top of the message above
+        // before the card opened underneath them. Clipping after the fill and
+        // before the border keeps the stroke crisp on the final edge.
+        .clipShape(shape)
         .overlay {
-            RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
-                .strokeBorder(tint.opacity(0.22), lineWidth: 0.8)
+            shape.strokeBorder(tint.opacity(0.22), lineWidth: 0.8)
         }
     }
 

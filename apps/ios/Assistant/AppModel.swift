@@ -1462,6 +1462,12 @@ final class AppModel: ObservableObject {
     ) async -> Bool {
         errorMessage = nil
         let previousOverview = optimisticallyResolveApproval(id: id)
+        // The optimistic resolve already emptied the local inbox, but the
+        // Island and the badge were only told once the authoritative re-read
+        // came back. For the whole round-trip the decision was made, the card
+        // was gone from the app, and the system surface was still asking for
+        // it. Take them down on the same frame as the card.
+        await syncApprovalSurfaces()
         do {
             let result = try await operation()
             guard result.ok else { throw APIError.server(status: 409, message: "The approval decision was not accepted.") }
@@ -1475,9 +1481,32 @@ final class AppModel: ObservableObject {
             return true
         } catch {
             if let previousOverview { overview = previousOverview }
+            await syncApprovalSurfaces()
             reportError(error)
             return false
         }
+    }
+
+    /// Point the system approval surfaces at the local inbox as it stands now.
+    ///
+    /// Deliberately not `reconcileBaselineActivity`: that one is a full
+    /// baseline pass and bails out while a turn is in flight, so an approval
+    /// answered from a chat decision card — the common case, since the turn is
+    /// still polling while it waits — would have left the Island up until the
+    /// poll loop next looked. The only system Live Activity is a live
+    /// approval, so an empty inbox means there is nothing for it to show,
+    /// whether or not a turn is running.
+    private func syncApprovalSurfaces() async {
+        if let next = overview?.approvals.pending.first {
+            await LiveActivityManager.shared.needsAttention(
+                agentName: agentName,
+                detail: next.approval.summary,
+                pendingCount: pendingApprovalCount
+            )
+        } else {
+            await LiveActivityManager.shared.dismiss()
+        }
+        await syncNotificationBadge()
     }
 
     /// Inline approve/decline from a chat decision card, keyed by the message
