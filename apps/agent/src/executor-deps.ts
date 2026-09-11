@@ -58,6 +58,7 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
           calendarId: event.calendarId,
           iCalUID: event.iCalUID,
           recurringEventId: event.recurringEventId,
+          status: event.status,
           location: event.location,
           organizer: event.organizer,
           attendees: event.attendees,

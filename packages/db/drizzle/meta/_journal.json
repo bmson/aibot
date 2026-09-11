@@ -498,6 +498,13 @@
       "when": 1789109215273,
       "tag": "0070_fantastic_norman_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1789149389272,
+      "tag": "0071_fair_excalibur",
+      "breakpoints": true
     }
   ]
 }
