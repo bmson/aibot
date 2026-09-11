@@ -328,13 +328,25 @@ async function classifySender(
   if (/no-?reply|notifications?@|newsletter|mailer|donotreply/i.test(fromEmail)) {
     return { trust: 'unknown', drop: 'automated' };
   }
-  const triage = await deps.router.object<z.infer<typeof AutomatedSchema>>('classify', {
-    schema: AutomatedSchema,
-    system:
-      'Classify whether this email is automated (newsletter/notification/receipt/marketing) or written by a human.',
-    prompt: `From: ${fromEmail}\nSubject: ${subject}\nSnippet: ${snippet}`,
-    abortSignal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS),
-  });
+  // Fail open to "not automated". This call sits inside the per-message loop,
+  // and a throw here propagates past the 404-only catch in syncMailboxOnce
+  // before the cursor advances — so one transient model failure would stall
+  // this message and every later one in the page, on every retry, until it
+  // succeeded. Guessing "human" costs at most one unnecessary triage task;
+  // guessing wrong in the other direction costs the mailbox.
+  let triage: Awaited<ReturnType<typeof deps.router.object<z.infer<typeof AutomatedSchema>>>>;
+  try {
+    triage = await deps.router.object<z.infer<typeof AutomatedSchema>>('classify', {
+      schema: AutomatedSchema,
+      system:
+        'Classify whether this email is automated (newsletter/notification/receipt/marketing) or written by a human.',
+      prompt: `From: ${fromEmail}\nSubject: ${subject}\nSnippet: ${snippet}`,
+      abortSignal: AbortSignal.timeout(CLASSIFY_TIMEOUT_MS),
+    });
+  } catch (err) {
+    console.error(`email-sync: automated check failed for ${fromEmail}; treating as human`, err);
+    return { trust: 'unknown' };
+  }
   if (triage.ok && triage.object.automated) return { trust: 'unknown', drop: 'automated' };
   return { trust: 'unknown' };
 }
@@ -694,6 +706,71 @@ export async function processForwardedIngest(
 }
 
 /**
+ * Record the verdict on one message in `direct` mode.
+ *
+ * `email_ingest` was built for `forwarded` mode and only that path ever wrote
+ * it — but the table is what the whole proactive mail layer reads: the pulse's
+ * "still unanswered" second look, the briefing's highlights, and the
+ * `email.extract` memory job all walk it. Since `direct` is the default mode,
+ * that left the shipped configuration with those three surfaces permanently
+ * inert, and the assistant's only reaction to mail was to drop it or spend a
+ * sixteen-step triage task on it.
+ *
+ * Recording here changes nothing about direction or trust: in `direct` mode the
+ * SENDER still directs the resulting task, and this writes a ledger row beside
+ * that decision rather than altering it. Automated mail still earns no triage
+ * task — it just stops vanishing, which matters most for the travel and billing
+ * confirmations the automated-sender heuristic turns away wholesale.
+ *
+ * Best-effort by construction: a scoring or insert failure must not stall the
+ * history cursor, because that would make Pub/Sub redeliver the same burst.
+ */
+async function recordDirectIngest(
+  deps: EmailSyncDeps,
+  input: {
+    agentId: string;
+    conversationId: string | null;
+    channelMessageId: string;
+    from: string;
+    subject: string;
+    body: string;
+    payload?: GmailPayload;
+    contentTrust: Trust;
+    authenticated: boolean;
+  },
+): Promise<void> {
+  try {
+    const score = await scoreEmailImportance(deps.router, {
+      from: input.from,
+      subject: input.subject,
+      body: input.body,
+      ...(input.payload ? { payload: input.payload } : {}),
+      contentTrust: input.contentTrust,
+      authenticated: input.authenticated,
+    });
+    await deps.db
+      .insert(emailIngest)
+      .values({
+        agentId: input.agentId,
+        conversationId: input.conversationId,
+        channelMessageId: input.channelMessageId,
+        fromEmail: input.from,
+        subject: input.subject.slice(0, 500),
+        contentTrust: input.contentTrust,
+        authenticated: input.authenticated,
+        category: score.category,
+        importance: score.importance,
+        actionable: score.actionable,
+        reason: score.reason.slice(0, 300),
+        dates: score.dates,
+      })
+      .onConflictDoNothing({ target: emailIngest.channelMessageId });
+  } catch (err) {
+    console.error('email-sync: could not record direct-mode ingest', err);
+  }
+}
+
+/**
  * Enqueue the deep triage task for an ingested message, subject to the daily
  * ceiling. Returns whether a task was created.
  */
@@ -909,7 +986,27 @@ export async function processMessage(
     return 'skipped';
   }
   if (drop === 'automated') {
-    console.log(`email-sync: skipping automated mail from ${from} ("${subject.slice(0, 40)}")`);
+    console.log(
+      `email-sync: no triage for automated mail from ${from} ("${subject.slice(0, 40)}")`,
+    );
+    // Still score and record it. The automated heuristic exists to keep
+    // newsletters from spending reasoning budget, but the same pattern matches
+    // most airline, hotel, bank and ticketing senders — so dropping outright
+    // discarded exactly the dated confirmations a personal assistant exists to
+    // notice, with nothing left behind to search or recall. Bulk headers settle
+    // real marketing at importance 1 without a model call, so this costs a
+    // scoring call only for the transactional mail that was worth keeping.
+    await recordDirectIngest(deps, {
+      agentId,
+      conversationId: null,
+      channelMessageId,
+      from,
+      subject,
+      body: text,
+      ...(msg.payload ? { payload: msg.payload } : {}),
+      contentTrust: trust,
+      authenticated,
+    });
     return 'skipped';
   }
 
@@ -923,6 +1020,20 @@ export async function processMessage(
     channelMessageId,
   });
   if (!persisted) return 'skipped'; // another instance won the idempotency race
+
+  // Record the verdict beside the triage task, so the pulse, the briefing and
+  // the memory extraction job have something to read in this mode too.
+  await recordDirectIngest(deps, {
+    agentId,
+    conversationId,
+    channelMessageId,
+    from,
+    subject,
+    body: text,
+    ...(msg.payload ? { payload: msg.payload } : {}),
+    contentTrust: trust,
+    authenticated,
+  });
 
   // Opportunistically learn the owner's voice from their own authenticated,
   // non-forwarded mail. Gated on owner trust + not quoting external content so
