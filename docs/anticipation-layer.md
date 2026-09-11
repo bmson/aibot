@@ -86,8 +86,12 @@ if it has any attendee. The declared flag buys the tier; the fetch is what makes
 the claim true. Adding an attendee in the same call contradicts the claim and
 stays gated. `sendUpdates=none` on the verified path.
 
-**Making silence legible.** Every producer here is self-silencing, so a broken
-pipeline and a quiet week look identical. Two surfaces tell them apart:
+**Making silence legible.** Every producer here is self-silencing — including
+`morning-brief` (`packages/db/src/seed.ts`), the older full-model-loop brief
+that shares the wake path with the anticipation layer's own `daily-briefing`;
+its prompt carries the same "say nothing on a quiet day" instruction as the
+rest — so a broken pipeline and a quiet week look identical. Two surfaces tell
+them apart:
 `proactiveConfigNotes` (`packages/modules/src/diagnostics.ts`, printed by
 `pnpm config:check`) names settings that are valid but leave the assistant mute,
 and `assessProactiveHealth` (`packages/core/src/proactive/pipeline-health.ts`,
