@@ -29,7 +29,7 @@ speak, noisy when it shouldn't":
 | Default | Consequence |
 | --- | --- |
 | `EMAIL_INGEST_MODE=direct` (`packages/config/src/index.ts:215`) | The table every mail-driven proactive surface reads stays empty — pulse mail moments, importance alerts, briefing highlights, `email.extract` all inert |
-| `CHAT_RECALL_ENABLED=false` (`config/src/index.ts:272`, via `booleanString` → `'false'` at `:24-27`) | Automatic recall never runs. Anything past the recent message window is unreachable unless the model happens to call a recall tool itself |
+| `CHAT_RECALL_ENABLED=false` in the schema (`config/src/index.ts:272`, via `booleanString` → `'false'` at `:24-27`) | Automatic recall never runs **on a local or Docker install**. Cloud Run deployments are unaffected: `deploy.sh:394-395` resolves an unset value to `true`, so a provisioned installation has recall on. Verified on the reference deployment — it was already `true` |
 | `GRAPH_RAG_ENABLED=false` (`config/src/index.ts:278`) | GraphRAG and the daily `graph.curiosity` question are permanent no-ops, and nothing reports it |
 | `morning-brief` seeded enabled (`packages/db/src/seed.ts:196-205`) | A second, older brief fires at 07:30 — 15 minutes before `daily-briefing` at 07:45 — through the full model/tool loop, with **no self-silence clause**, so it messages every morning regardless of whether anything happened |
 
@@ -265,9 +265,16 @@ namespaces, so one email can produce two suggestion cards.
 
 ## 7. Context assembly: recall is off, and corrections do not stick
 
-`CHAT_RECALL_ENABLED` defaults false, so on a default install the model sees the
-recent message window and whatever it fetches by tool call. Everything
-`docs/long-running-chat-memory.md` describes is inert.
+`CHAT_RECALL_ENABLED` defaults false **in the configuration schema**, so on a
+local or Docker install the model sees the recent message window and whatever it
+fetches by tool call, and everything `docs/long-running-chat-memory.md` describes
+is inert.
+
+This does **not** apply to a Cloud Run deployment. `deploy.sh:394-395` resolves an
+unset value to `true` before provisioning, so a deployed installation has recall
+on unless its `.env` says otherwise. The reference deployment was verified as
+`true`. An earlier draft of this review reported recall as off everywhere; that
+was read off the schema without checking what the provisioner does with it.
 
 Two findings hold even with recall on:
 
@@ -350,10 +357,14 @@ Items 1-3 and 7 are **done and merged**; the rest are open.
    self-silence clause every other producer has. Today it pings every morning
    regardless. `packages/db/src/seed.ts:196-205`,
    `packages/core/src/workflow/schedules.ts:725`.
-5. **Turn recall on, or explain the default.** `CHAT_RECALL_ENABLED` and
-   `GRAPH_RAG_ENABLED` both default false, which makes most of the memory
-   subsystem inert on a fresh install. At minimum `proactiveConfigNotes` should
-   say so, the way it now does for ingest mode. `packages/config/src/index.ts:272,278`.
+5. **Reconcile the two recall defaults.** The schema says `false`; `deploy.sh`
+   resolves an unset value to `true`. A local install and a deployed one
+   therefore behave differently with no note anywhere, which is how this review
+   first got it wrong. Pick one default and state it, and have
+   `proactiveConfigNotes` report the effective value the way it now does for
+   ingest mode. `GRAPH_RAG_ENABLED` has no such split and is genuinely off until
+   the graph backfill completes.
+   `packages/config/src/index.ts:272,278`, `infra/gcp/deploy.sh:394-395`.
 6. ~~**Ground live web and weather answers**~~ — partly done. `ungroundedLiveFigure`
    (`packages/core/src/workflow/live-lookup.ts`) compares scorelines and
    temperatures in the draft against the text the lookup actually retrieved, and
@@ -384,8 +395,8 @@ Items 1-3 and 7 are **done and merged**; the rest are open.
 ## Open questions
 
 - **Should these defaults change, or should the diagnostics just name them?**
-  Changing `CHAT_RECALL_ENABLED`, `GRAPH_RAG_ENABLED` or the seeded
-  `morning-brief` alters behaviour and cost for every existing installation.
+  Changing `GRAPH_RAG_ENABLED` or the seeded `morning-brief` alters behaviour and
+  cost for every existing installation.
   `EMAIL_INGEST_MODE` was resolved the other way — leave the default, make the
   mode work — and the same shape may fit here.
 - **What should the eval assertion vocabulary grow into?** The proactive surfaces
