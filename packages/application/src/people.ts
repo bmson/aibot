@@ -29,6 +29,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import {
   activeKnowledgeGraphWhere,
   getKnowledgeGraphNeighborhood,
+  type KnowledgeGraphEntityView,
   type KnowledgeGraphNeighborEdge,
 } from './knowledge-graph.js';
 import {
@@ -126,6 +127,12 @@ export interface PersonDossier {
   group: PersonGroup;
   /** Null when the contact has no graph node yet — every edge below is empty. */
   entityId: string | null;
+  /**
+   * The same node as a graph entity, so a caller can offer to connect this
+   * person to something without first going to the knowledge graph to look
+   * them up. Null exactly when `entityId` is.
+   */
+  entity: KnowledgeGraphEntityView | null;
   location: string | null;
   origins: PersonConnection[];
   relations: PersonRelation[];
@@ -333,6 +340,7 @@ export async function getPersonDossier(
     profile,
     group: derivePersonGroup({ relationship: profile.contact.relationship }),
     entityId,
+    entity: neighbourhood.entity,
     location,
     origins,
     relations,

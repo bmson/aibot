@@ -37,6 +37,7 @@ function dossier(overrides: Partial<PersonDossier> = {}): PersonDossier {
     } as unknown as PersonDossier['profile'],
     group: 'family',
     entityId: 'e-1',
+    entity: { id: 'e-1', label: 'Élise Aubert', kind: 'person', canonicalKey: 'contact:c-1' },
     location: 'Lyon',
     origins: [],
     relations: [],
