@@ -75,4 +75,52 @@ describe('isolated live-validation resource lifecycle', () => {
     );
     expect(calls.create).not.toHaveBeenCalled();
   });
+  it('starts independent indexes together and waits for all builds before cleanup after a failure', async () => {
+    let finishSecond!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finishSecond = resolve;
+    });
+    calls.index
+      .mockImplementationOnce(() => [
+        {
+          promise: async () => {
+            throw new Error('index failed');
+          },
+        },
+      ])
+      .mockImplementationOnce(() => [{ promise: () => pending }]);
+    const validate = vi.fn();
+    const progress = vi.fn();
+    const run = withValidationDatabase(
+      {
+        ...input,
+        progress,
+        indexes: [{ collectionGroup: 'tasks' }, { collectionGroup: 'outbox' }],
+      },
+      validate,
+    );
+    const rejection = expect(run).rejects.toThrow('index failed');
+    await vi.waitFor(() => expect(calls.index).toHaveBeenCalledTimes(2));
+    expect(calls.remove).not.toHaveBeenCalled();
+    finishSecond();
+    await rejection;
+    expect(validate).not.toHaveBeenCalled();
+    expect(calls.remove).toHaveBeenCalledOnce();
+    expect(progress).toHaveBeenCalledWith(
+      'validation_failed',
+      expect.objectContaining({ message: 'index failed' }),
+    );
+    expect(progress.mock.calls.findIndex(([stage]) => stage === 'validation_failed')).toBeLessThan(
+      progress.mock.calls.findIndex(([stage]) => stage === 'deleting_database'),
+    );
+  });
+  it('reports a passed workload before waiting for database cleanup', async () => {
+    const progress = vi.fn();
+    await expect(
+      withValidationDatabase({ ...input, progress }, async () => 'passed'),
+    ).resolves.toBe('passed');
+    expect(progress.mock.calls.findIndex(([stage]) => stage === 'validation_passed')).toBeLessThan(
+      progress.mock.calls.findIndex(([stage]) => stage === 'deleting_database'),
+    );
+  });
 });

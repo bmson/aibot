@@ -45,21 +45,37 @@ export async function withValidationDatabase<T>(
     created = true;
     await operation.promise();
     input.progress('creating_indexes', { name, count: input.indexes.length });
-    for (const definition of input.indexes) {
-      const { collectionGroup, ...index } = definition;
-      const [indexOperation] = await admin.createIndex({
-        parent: `${name}/collectionGroups/${collectionGroup}`,
-        index,
-      });
-      await indexOperation.promise();
-    }
+    // Index builds are independent and take minutes in real Firestore. Wait for
+    // every operation to settle, including after a failure, before deleting its database.
+    const builds = await Promise.allSettled(
+      input.indexes.map(async (definition) => {
+        const { collectionGroup, ...index } = definition;
+        const [indexOperation] = await admin.createIndex({
+          parent: `${name}/collectionGroups/${collectionGroup}`,
+          index,
+        });
+        await indexOperation.promise();
+        input.progress('index_ready', { name, collectionGroup, fields: index.fields });
+      }),
+    );
+    const failure = builds.find((build) => build.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
     input.progress('validating', { name });
     store = createInstallationStore({
       projectId: input.projectId,
       databaseId,
       installationId: `validation-${randomUUID()}`,
     });
-    return await validate(store);
+    const result = await validate(store);
+    input.progress('validation_passed', { name });
+    return result;
+  } catch (error) {
+    // Cleanup itself can take minutes; report the original failure immediately.
+    input.progress('validation_failed', {
+      name,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   } finally {
     try {
       if (store) await store.db.terminate();
