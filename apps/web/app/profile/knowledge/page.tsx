@@ -71,7 +71,11 @@ const CLEANUP_FOCI: Array<{
   {
     id: 'trust',
     label: 'Trust and review',
-    description: 'Decide what is ready to affect recall.',
+    // These are the library's held-for-review memories, not a second queue:
+    // approving one here is the same decision, on the same row. The scan caps
+    // at 100, so the library stays the place to work a longer backlog.
+    description:
+      'The same memories the library holds for review, with the connections waiting on you.',
     kinds: ['quarantined', 'unreviewed_connection'],
   },
   {
@@ -213,10 +217,13 @@ function CleanupGroup({
   title,
   description,
   findings,
+  fullQueue,
 }: {
   title: string;
   description: string;
   findings: KnowledgeCleanupFinding[];
+  /** Where the same items live in full, when this group is a sample of a longer queue. */
+  fullQueue?: { href: string; label: string };
 }) {
   const immediate = findings.slice(0, 6);
   const remaining = findings.slice(6);
@@ -226,6 +233,14 @@ function CleanupGroup({
         <div>
           <h3 className="text-base font-semibold text-strong">{title}</h3>
           <p className="mt-1 text-sm text-muted">{description}</p>
+          {fullQueue ? (
+            <Link
+              href={fullQueue.href}
+              className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-accent underline-offset-4 hover:underline"
+            >
+              {fullQueue.label}
+            </Link>
+          ) : null}
         </div>
         <Badge tone="neutral">{findingTotal(findings)}</Badge>
       </div>
@@ -817,6 +832,14 @@ export default async function KnowledgePage({
                   title={focus.label}
                   description={focus.description}
                   findings={focus.findings}
+                  fullQueue={
+                    focus.id === 'trust'
+                      ? {
+                          href: libraryHref({ state: 'review', filter: 'all' }),
+                          label: 'Work the full review queue in the library',
+                        }
+                      : undefined
+                  }
                 />
               ))
             ) : (
