@@ -24,7 +24,7 @@ import { remainingBirthdaySaves, requestedBirthdaySaves } from '../birthday-impo
 import { CARD_NOT_BUILT, requestedCardIntent } from '../card-intent.js';
 import { responseCardSteps } from '../card-steps.js';
 import { isGoalWorkEvidence } from '../goal-evidence.js';
-import { detectLiveLookup, liveLookupFailure } from '../live-lookup.js';
+import { detectLiveLookup, liveLookupFailure, ungroundedLiveFigure } from '../live-lookup.js';
 import {
   checkpointTask,
   completeTask,
@@ -365,7 +365,13 @@ export async function stageModelFinalResponse(
     task.trust === 'owner' && !isForwardedIngest(task)
       ? detectLiveLookup(currentRequest)
       : undefined;
-  const liveFailure = liveLookup ? liveLookupFailure(liveLookup, rows) : undefined;
+  // A lookup that succeeded is not the same as an answer that matches it. The
+  // failure check proves retrieval happened; the figure check proves the draft
+  // reported what was retrieved, which is the half that let a stale score
+  // through over a successful fetch that said otherwise.
+  const liveFailure = liveLookup
+    ? (liveLookupFailure(liveLookup, rows) ?? ungroundedLiveFigure(liveLookup, pending.text, rows))
+    : undefined;
   const birthdays =
     task.trust === 'owner' && !isForwardedIngest(task)
       ? requestedBirthdaySaves(currentRequest)

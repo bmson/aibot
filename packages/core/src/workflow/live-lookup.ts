@@ -103,6 +103,107 @@ export function nextLiveLookup(
   return undefined;
 }
 
+/**
+ * The text a live lookup actually retrieved, as one searchable corpus.
+ *
+ * Search *snippets* are deliberately included alongside fetched bodies: the
+ * Giants case turned on a snippet figure ("7-3") that was a batted-ball stat
+ * rather than the score, and a check that treated the snippet as unseen would
+ * have called the right answer ungrounded.
+ */
+function retrievedCorpus(evidence: ActionEvidence[]): string {
+  return evidence
+    .filter(successfulLookup)
+    .map((row) => {
+      const result = row.result as Record<string, unknown> | null;
+      const parts = [result?.text, result?.snippet, result?.summary, result?.title];
+      const results = (result?.results as Array<Record<string, unknown>> | undefined) ?? [];
+      for (const item of results) parts.push(item.snippet, item.title, item.description);
+      // Weather adapters return numbers, not prose; stringify so a temperature
+      // reading is searchable in the same corpus as fetched text.
+      if (row.toolName === 'weather.lookup') parts.push(JSON.stringify(result));
+      return parts.filter((part) => typeof part === 'string').join('\n');
+    })
+    .join('\n');
+}
+
+/** Digits only, so "5 - 4", "5–4" and "5-4" all compare equal. */
+const digitsOf = (value: string): string => value.replace(/\D/g, '');
+
+/**
+ * A scoreline (`5-4`, `5–4`) or a temperature (`72°F`, `-3C`) in the draft.
+ *
+ * Narrow on purpose. A general "every number must appear in the source" rule
+ * would fire on every figure the model legitimately derives — a count of list
+ * items, "10-15 minutes", a date it computed from "tomorrow" — and a false
+ * positive here replaces a correct answer with a refusal. These two shapes are
+ * the ones the September audit actually got wrong, they are never arithmetic
+ * the assistant should be doing itself, and they are exactly the claims an
+ * owner cannot check without re-doing the lookup.
+ */
+const SCORE_FIGURE = /\b(\d{1,3})\s*[-–—]\s*(\d{1,3})\b/g;
+const TEMPERATURE_FIGURE = /(-?\d{1,3})\s*°\s*[CF]?\b|\b(-?\d{1,3})\s*degrees\b/gi;
+/** A request whose answer is a scoreline, so the score rule is worth running. */
+const SCORE_REQUEST = /\b(?:score|final|beat|won|lost|standings)\b/i;
+/** Dates and version-like runs are not scorelines. */
+const DATE_LIKE = /\d{4}\s*[-–—]\s*\d{1,2}|\d{1,2}\s*[-–—]\s*\d{1,2}\s*[-–—]\s*\d{2,4}/;
+/**
+ * A unit right after the figure makes it a quantity, not a result: "10-15
+ * minutes" is the assistant estimating, which it is entitled to do and which no
+ * retrieved source would ever contain. Without this the rule refuses correct
+ * answers, which is worse than the defect it exists to catch.
+ */
+const RANGE_UNIT =
+  /^\s*(?:minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|seconds?|secs?|people|items?|percent|%|dollars?|euros?|miles?|kms?|km|degrees?)\b/i;
+
+/**
+ * A figure the answer asserts that the retrieved sources never contained.
+ *
+ * `liveLookupFailure` below proves a lookup *happened*; nothing proved the
+ * answer matched it, which is how a stale training-data score reached the owner
+ * over a successful fetch that said otherwise. This closes that specific gap
+ * the way `groundReadDraft` closes it for calendar reads: compare the claim
+ * against the literal evidence, and refuse rather than guess.
+ */
+export function ungroundedLiveFigure(
+  lookup: LiveLookup,
+  text: string,
+  evidence: ActionEvidence[],
+): string | undefined {
+  const rows = evidence.filter((row) => row.fromCurrentTask !== false);
+  const corpus = retrievedCorpus(rows);
+  if (!corpus.trim()) return undefined;
+  const corpusDigits = corpus.replace(/[^\d]+/g, ' ');
+
+  if (lookup.kind === 'weather') {
+    for (const match of text.matchAll(TEMPERATURE_FIGURE)) {
+      const reading = match[1] ?? match[2];
+      if (!reading) continue;
+      if (!new RegExp(`(?:^|\\s)-?${digitsOf(reading)}(?:\\s|$)`).test(corpusDigits))
+        return `The retrieved weather data does not contain ${reading}°, so I have not reported a temperature I cannot show you. The lookup needs to be retried.`;
+    }
+    return undefined;
+  }
+
+  if (!SCORE_REQUEST.test(lookup.request)) return undefined;
+  for (const match of text.matchAll(SCORE_FIGURE)) {
+    const [whole, left, right] = match;
+    if (!left || !right || DATE_LIKE.test(whole)) continue;
+    // The match may be the tail of a longer run the pattern cannot see from
+    // the inside: `2026-09-07` offers up `09-07`, which is a date, not a
+    // result. Judge by what sits either side of it.
+    const before = text.slice(0, match.index);
+    const after = text.slice(match.index + whole.length);
+    if (/[\d\-–—]\s*$/.test(before) || /^\s*[-–—]\s*\d/.test(after)) continue;
+    if (RANGE_UNIT.test(after)) continue;
+    // Accept either order: sources state a result home-first as often as not.
+    const stated = new RegExp(`${left}\\s+${right}|${right}\\s+${left}`);
+    if (!stated.test(corpusDigits))
+      return `The sources I retrieved do not state ${left}-${right}, so I have not reported a result they do not support. The lookup needs to be retried.`;
+  }
+  return undefined;
+}
+
 export function liveLookupFailure(
   lookup: LiveLookup,
   evidence: ActionEvidence[],

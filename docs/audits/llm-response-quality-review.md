@@ -354,8 +354,14 @@ Items 1-3 and 7 are **done and merged**; the rest are open.
    `GRAPH_RAG_ENABLED` both default false, which makes most of the memory
    subsystem inert on a fresh install. At minimum `proactiveConfigNotes` should
    say so, the way it now does for ingest mode. `packages/config/src/index.ts:272,278`.
-6. **Ground live web and weather answers** — a `groundLiveLookupDraft` parallel to
-   `groundReadDraft`, invoked whenever `detectLiveLookup` fired.
+6. ~~**Ground live web and weather answers**~~ — partly done. `ungroundedLiveFigure`
+   (`packages/core/src/workflow/live-lookup.ts`) compares scorelines and
+   temperatures in the draft against the text the lookup actually retrieved, and
+   refuses rather than reporting a figure no source stated. Deliberately narrow:
+   a general "every number must appear in the source" rule fires on figures the
+   model legitimately derives, and a false positive at the last step replaces a
+   correct answer with a refusal. Named entities and prose claims are still
+   ungrounded — extending it means solving that without the false-positive cost.
 7. ~~**Port the harness-only formatting checks out of the test suite**~~ — done.
    `gradeAuditedOutput` (`packages/core/src/model-router/audit-graders.ts`) is now
    the single implementation: `response-contract.ts` repairs what can be repaired
