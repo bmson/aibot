@@ -173,6 +173,7 @@ pnpm typecheck        # every workspace package
 pnpm build            # production builds
 pnpm format           # format the repository
 pnpm config:check     # safe configuration/module diagnostics
+pnpm audit:llm        # review captured model output for defects
 pnpm db:generate      # generate a migration from schema changes
 pnpm db:migrate
 pnpm seed
@@ -197,5 +198,6 @@ OIDC; the shared-secret mode exists only for local development.
 - [Backup, restore, and migration safety](docs/recovery.md)
 - [Google OAuth setup](infra/gcp/oauth-setup.md)
 - [Complex workflow test matrix](docs/complex-workflow-test-matrix.md)
+- [Reviewing what the models said](docs/llm-output-review.md)
 - [Anticipation layer](docs/anticipation-layer.md)
 - [Long-running chat memory](docs/long-running-chat-memory.md)

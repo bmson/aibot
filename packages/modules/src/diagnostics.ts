@@ -36,19 +36,22 @@ export function moduleDiagnostics(config: Config = loadConfig()): ModuleDiagnost
  * The one that matters: `EMAIL_INGEST_MODE` defaults to `direct`, which is for
  * people writing *to* the assistant. An owner who points a forwarding rule at
  * this mailbox and leaves the mode alone has their mail dropped as
- * unauthenticated (forwarding breaks SPF alignment) or as automated — the
- * flight confirmations, invoices and appointment reminders that carry every
- * date worth knowing. Nothing errors; `email_ingest` just stays empty, and with
- * it the importance alerts, the briefing's highlights, and the pulse's mail
- * moments. It is not a validation failure, because a genuinely direct mailbox
- * is a supported installation — so it is a note, not a problem.
+ * unauthenticated, because forwarding breaks SPF alignment — the flight
+ * confirmations, invoices and appointment reminders that carry every date worth
+ * knowing. Nothing errors, so the failure shows up as silence. It is not a
+ * validation failure, because a genuinely direct mailbox is a supported
+ * installation — so it is a note, not a problem.
+ *
+ * `direct` mode does now score and record what it reads, so the briefing, the
+ * pulse and memory extraction work there. The remaining gap is specifically
+ * forwarded mail, which never authenticates.
  */
 export function proactiveConfigNotes(config: Config = loadConfig()): string[] {
   const notes: string[] = [];
   if (isModuleEnabled(config, 'google') && config.EMAIL_INGEST_MODE !== 'forwarded') {
     notes.push(
-      'EMAIL_INGEST_MODE is "direct": mail forwarded from your own inbox is dropped rather than ' +
-        'scored, so the briefing and the pulse will have nothing to report. Set ' +
+      'EMAIL_INGEST_MODE is "direct": mail you forward from your own inbox fails SPF alignment ' +
+        'and is dropped as unauthenticated, so none of it reaches the briefing or the pulse. Set ' +
         'EMAIL_INGEST_MODE=forwarded if you forward your mail to this mailbox.',
     );
   }

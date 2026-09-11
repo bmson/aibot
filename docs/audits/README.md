@@ -23,3 +23,4 @@ the living references in the parent folder instead:
 | [codebase-review-3.md](codebase-review-3.md) | 2026-08 | Dead-code removal and verification tooling |
 | [codebase-review-4.md](codebase-review-4.md) | 2026-08 | Writing and organization: naming, comments, file layout |
 | [performance-review.md](performance-review.md) | 2026-08 | Unbounded reads, polling cadence, per-render work, the local queue driver |
+| [llm-response-quality-review.md](llm-response-quality-review.md) | 2026-09 | Model-call inventory, grounding coverage, the `direct`-mode mail gap, unrecorded output |

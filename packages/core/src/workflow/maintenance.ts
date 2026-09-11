@@ -5,11 +5,12 @@ import {
   type Db,
   memories,
   messages,
+  modelCallAudit,
   modelCalls,
   toolCache,
   toolCalls,
 } from '@assistant/db';
-import { and, eq, inArray, isNotNull, isNull, lte, notExists, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, lt, lte, notExists, or, sql } from 'drizzle-orm';
 import { loadConfig } from '../config.js';
 import { releaseStaleReservations } from '../cost.js';
 import { purgeStaleLocations } from '../memory/location.js';
@@ -52,6 +53,33 @@ export async function backfillMessageEmbeddings(
   return rows.length;
 }
 
+/**
+ * Drop captured prompts and answers past the retention window.
+ *
+ * This table holds the owner's mail and conversations in the clear when capture
+ * is on, so expiry is the point rather than housekeeping: keeping the record is
+ * only defensible because it does not keep it for long. Batched like the other
+ * purges so one sweep cannot take a long lock.
+ */
+export async function purgeStaleModelCallAudit(
+  db: Db,
+  retentionDays = 14,
+  batch = 500,
+): Promise<number> {
+  const days = Number.isFinite(retentionDays) ? Math.max(1, Math.trunc(retentionDays)) : 14;
+  const limit = Number.isFinite(batch) ? Math.max(1, Math.trunc(batch)) : 500;
+  const stale = db
+    .select({ id: modelCallAudit.id })
+    .from(modelCallAudit)
+    .where(lt(modelCallAudit.createdAt, sql`now() - make_interval(days => ${days})`))
+    .limit(limit);
+  const deleted = await db
+    .delete(modelCallAudit)
+    .where(inArray(modelCallAudit.id, stale))
+    .returning({ id: modelCallAudit.id });
+  return deleted.length;
+}
+
 /** Purge expired tool-cache rows and expired memories. */
 export async function purgeExpired(
   db: Db,
@@ -64,6 +92,7 @@ export async function purgeExpired(
   dreamNotes: number;
   recallMetrics: number;
   proactivePings: number;
+  modelCallAudit: number;
 }> {
   const expiredCache = db
     .select({ id: toolCache.cacheKey })
@@ -75,26 +104,34 @@ export async function purgeExpired(
     .from(memories)
     .where(and(isNotNull(memories.expiresAt), lte(memories.expiresAt, sql`now()`)))
     .limit(batch);
-  const [cacheRows, memoryRows, reservations, locations, dreamNotes, recallMetrics, pingLedger] =
-    await Promise.all([
-      db
-        .delete(toolCache)
-        .where(inArray(toolCache.cacheKey, expiredCache))
-        .returning({ id: toolCache.cacheKey }),
-      db
-        .delete(memories)
-        .where(inArray(memories.id, expiredMemories))
-        .returning({ id: memories.id }),
-      releaseStaleReservations(db, 120, batch),
-      // Phase 15: location pings are transient — purge past the retention window.
-      purgeStaleLocations(db, loadConfig().LOCATION_RETENTION_DAYS, batch),
-      // Phase 20: dream notes are kept 7 days for inspection, then purged.
-      purgeStaleDreamNotes(db, batch),
-      // Operational counters do not need the owner's long-term history policy.
-      purgeStaleRecallMetrics(db, 90, batch),
-      // The nudge-policy ledger is telemetry, not history — same 90 days.
-      purgeStaleProactivePings(db, 90, batch),
-    ]);
+  const [
+    cacheRows,
+    memoryRows,
+    reservations,
+    locations,
+    dreamNotes,
+    recallMetrics,
+    pingLedger,
+    auditRows,
+  ] = await Promise.all([
+    db
+      .delete(toolCache)
+      .where(inArray(toolCache.cacheKey, expiredCache))
+      .returning({ id: toolCache.cacheKey }),
+    db.delete(memories).where(inArray(memories.id, expiredMemories)).returning({ id: memories.id }),
+    releaseStaleReservations(db, 120, batch),
+    // Phase 15: location pings are transient — purge past the retention window.
+    purgeStaleLocations(db, loadConfig().LOCATION_RETENTION_DAYS, batch),
+    // Phase 20: dream notes are kept 7 days for inspection, then purged.
+    purgeStaleDreamNotes(db, batch),
+    // Operational counters do not need the owner's long-term history policy.
+    purgeStaleRecallMetrics(db, 90, batch),
+    // The nudge-policy ledger is telemetry, not history — same 90 days.
+    purgeStaleProactivePings(db, 90, batch),
+    // Captured prompts and answers hold the owner's mail in the clear, so the
+    // owner's own retention window governs them, not a fixed operational one.
+    purgeStaleModelCallAudit(db, loadConfig().LLM_AUDIT_RETENTION_DAYS, batch),
+  ]);
   return {
     cache: cacheRows.length,
     memories: memoryRows.length,
@@ -103,6 +140,7 @@ export async function purgeExpired(
     dreamNotes,
     recallMetrics,
     proactivePings: pingLedger,
+    modelCallAudit: auditRows,
   };
 }
 

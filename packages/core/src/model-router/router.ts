@@ -1,4 +1,13 @@
-import { conversations, type Db, modelCalls, modelRoles, models, tasks } from '@assistant/db';
+import { loadConfig } from '@assistant/config';
+import {
+  conversations,
+  type Db,
+  modelCallAudit,
+  modelCalls,
+  modelRoles,
+  models,
+  tasks,
+} from '@assistant/db';
 import { createOpenRouter, type OpenRouterProvider } from '@openrouter/ai-sdk-provider';
 import {
   embedMany,
@@ -20,6 +29,7 @@ import {
   reserveCost,
 } from '../cost.js';
 import { withSpan } from '../otel.js';
+import { type AuditCaptureMode, captureField, captureInput } from './audit-capture.js';
 import { type BudgetDecision, evaluateBudget } from './budget.js';
 
 export type ModelRole =
@@ -193,6 +203,38 @@ interface MeterInput {
   reservationId: string;
   promptCostPerMTok: number;
   completionCostPerMTok: number;
+  /**
+   * What to keep for quality review, when capture is enabled. Absent on the
+   * embed path: an embedding has no answer to judge.
+   */
+  audit?: AuditPayload;
+}
+
+/** The reviewable half of a call: what it was asked, and what it said back. */
+interface AuditPayload {
+  method: 'generate' | 'stream' | 'step' | 'object';
+  system?: string;
+  input?: string;
+  output?: string;
+}
+
+/** Structured output as reviewable text, never at the cost of the audit write. */
+function safeJson(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '[unserializable]';
+  }
+}
+
+/** A step's prose plus the calls it chose, so a tool-calling turn reads as one. */
+function stepOutputForAudit(
+  text: string,
+  toolCalls: ReadonlyArray<{ toolName: string; input?: unknown }>,
+): string | undefined {
+  const calls = toolCalls.map((tc) => `→ ${tc.toolName}(${safeJson(tc.input) ?? ''})`);
+  const parts = [text.trim(), ...calls].filter((part) => part.length > 0);
+  return parts.length > 0 ? parts.join('\n') : undefined;
 }
 
 const DEFAULT_MAX_OUTPUT_TOKENS: Record<Exclude<ModelRole, 'embed'>, number> = {
@@ -303,6 +345,13 @@ export class ModelRouter {
   constructor(
     private db: Db,
     apiKey: string,
+    /**
+     * Whether to keep prompts and answers for quality review. Resolved once,
+     * here, rather than read deep in the call path: capture policy is a
+     * property of this router, and a constructor argument is what lets a test
+     * exercise both modes against a memoized config.
+     */
+    private auditCapture: AuditCaptureMode = loadConfig().LLM_AUDIT_CAPTURE,
   ) {
     this.provider = createOpenRouter({ apiKey });
   }
@@ -572,17 +621,66 @@ export class ModelRouter {
         inputTokens + outputTokens > 0 ? costUsd / (inputTokens + outputTokens) : undefined,
       description: `${input.role}:${input.modelId}`,
     });
-    await this.db.insert(modelCalls).values({
-      taskId: input.taskId,
-      role: input.role,
-      model: input.modelId,
-      inputTokens,
-      outputTokens,
-      costUsd: costUsd.toFixed(6),
-      latencyMs: input.latencyMs,
-      finishReason: input.event.finishReason,
-      openrouterGenerationId: input.event.response?.id,
-    });
+    const [call] = await this.db
+      .insert(modelCalls)
+      .values({
+        taskId: input.taskId,
+        role: input.role,
+        model: input.modelId,
+        inputTokens,
+        outputTokens,
+        costUsd: costUsd.toFixed(6),
+        latencyMs: input.latencyMs,
+        finishReason: input.event.finishReason,
+        openrouterGenerationId: input.event.response?.id,
+      })
+      .returning({ id: modelCalls.id });
+
+    await this.recordForAudit(input, { callId: call?.id, inputTokens, outputTokens });
+  }
+
+  /**
+   * Keep what the model was asked and what it answered, when the owner has
+   * turned capture on.
+   *
+   * Isolated in its own try/catch rather than riding on the caller's: this is
+   * review telemetry, and it must never be able to mask a real metering failure
+   * or, worse, make the workflow repeat paid model work. A row that does not
+   * get written costs a line in a report; a throw here would cost a retry of
+   * the provider call that already happened.
+   */
+  private async recordForAudit(
+    input: MeterInput,
+    usage: { callId?: string; inputTokens: number; outputTokens: number },
+  ): Promise<void> {
+    const { audit } = input;
+    if (!audit) return;
+    const mode = this.auditCapture;
+    if (mode === 'off') return;
+
+    try {
+      const system = captureField(audit.system, mode);
+      const promptInput = captureField(audit.input, mode);
+      const output = captureField(audit.output, mode);
+      await this.db.insert(modelCallAudit).values({
+        modelCallId: usage.callId,
+        taskId: input.taskId,
+        role: input.role,
+        model: input.modelId,
+        method: audit.method,
+        capture: mode,
+        systemPrompt: system.text,
+        input: promptInput.text,
+        output: output.text,
+        truncated: system.truncated || promptInput.truncated || output.truncated,
+        finishReason: input.event.finishReason,
+        latencyMs: input.latencyMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+      });
+    } catch (err) {
+      console.error('model audit capture failed', err);
+    }
   }
 
   private async meterWithoutRepeatingProviderWork(input: MeterInput): Promise<void> {
@@ -633,6 +731,12 @@ export class ModelRouter {
           reservationId,
           promptCostPerMTok: route.promptCostPerMTok,
           completionCostPerMTok: route.completionCostPerMTok,
+          audit: {
+            method: 'generate',
+            system: opts.system,
+            input: captureInput(opts),
+            output: result.text,
+          },
         });
         return {
           ok: true as const,
@@ -692,6 +796,12 @@ export class ModelRouter {
               reservationId,
               promptCostPerMTok: route.promptCostPerMTok,
               completionCostPerMTok: route.completionCostPerMTok,
+              audit: {
+                method: 'stream',
+                system: opts.system,
+                input: captureInput(opts),
+                output: event.text,
+              },
             }),
             opts.onComplete?.(event.text ?? '') ?? Promise.resolve(),
           ]);
@@ -845,6 +955,15 @@ export class ModelRouter {
           reservationId,
           promptCostPerMTok: route.promptCostPerMTok,
           completionCostPerMTok: route.completionCostPerMTok,
+          audit: {
+            method: 'step',
+            system: opts.system,
+            input: captureInput(opts),
+            // A step's answer is its prose *and* what it decided to call. A
+            // record holding only the text would make every tool-calling turn
+            // — most of the agent loop — look like it returned nothing.
+            output: stepOutputForAudit(result.text, result.toolCalls),
+          },
         });
         const toolCalls: ProposedToolCall[] = result.toolCalls.map((tc) => ({
           toolCallId: tc.toolCallId,
@@ -908,6 +1027,12 @@ export class ModelRouter {
             reservationId,
             promptCostPerMTok: route.promptCostPerMTok,
             completionCostPerMTok: route.completionCostPerMTok,
+            audit: {
+              method: 'object',
+              system: opts.system,
+              input: captureInput(opts),
+              output: safeJson(result.object),
+            },
           });
           return {
             ok: true as const,

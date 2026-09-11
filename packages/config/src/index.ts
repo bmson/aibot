@@ -158,6 +158,26 @@ const ConfigSchema = z.object({
   LOCATION_PING_SECRET: z.string().default(''),
   LOCATION_RETENTION_DAYS: z.coerce.number().min(1).max(90).default(3),
   /**
+   * Whether to keep what the models were asked and what they answered, in the
+   * `model_call_audit` table. The cost ledger alone cannot answer a question
+   * about answer quality, so without this there is no way to review the
+   * assistant's own output, compare a routing change against real traffic, or
+   * notice a regression before an owner does.
+   *
+   * It is `off` by default because these rows necessarily contain the owner's
+   * mail, calendar and conversations.
+   *
+   * `redacted` scrubs email addresses, phone numbers, long digit runs (booking,
+   * account and card numbers) and URL paths before writing, keeping the shape
+   * of the exchange and the reasoning while dropping the identifiers. `full`
+   * stores the text verbatim: more useful for grounding review, and a much more
+   * sensitive table — appropriate for a single-owner installation reviewing its
+   * own assistant, not for one holding anyone else's mail.
+   */
+  LLM_AUDIT_CAPTURE: z.enum(['off', 'redacted', 'full']).default('off'),
+  /** How long captured prompts and answers are kept before maintenance purges them. */
+  LLM_AUDIT_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(14),
+  /**
    * APNs token auth for owner-facing push. All four together enable the push
    * module; any missing and it stands down. APNS_PRIVATE_KEY is the .p8 file
    * contents (base64-encoded so it fits one env line).
