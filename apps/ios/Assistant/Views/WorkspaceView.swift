@@ -911,46 +911,85 @@ struct WorkspaceView: View {
                     if let error = source.error, !error.isEmpty {
                         Text(error).font(.caption).foregroundStyle(.red)
                     }
-                    AssistantFlowLayout(spacing: 9) {
-                        if source.quarantinedNow > 0 {
-                            Button("Approve all") {
-                                updateImport(action: "review", source: source.source, verdict: "approve")
-                            }
-                            .buttonStyle(AssistantActionButtonStyle(kind: .primary))
-                            Button("Reject all") {
-                                updateImport(action: "review", source: source.source, verdict: "reject")
-                            }
-                            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                        }
-                        Menu {
-                            Button("Run again") {
-                                updateImport(
-                                    action: "start",
-                                    source: source.source,
-                                    workspacePath: source.workspacePath
-                                )
-                            }
-                        } label: {
-                            Label("More", systemImage: "ellipsis.circle")
-                        }
-                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                        AssistantConfirmationButton("Purge memories") {
-                            updateImport(action: "purge", source: source.source)
-                        }
-                        AssistantConfirmationButton("Delete source") {
-                            updateImport(action: "delete", source: source.source)
-                        }
-                    }
-                    .disabled(workspaceActionInFlight != nil)
+                    importActions(source)
                 }
                 .assistantCard(in: colorScheme)
             }
         }
     }
 
+    /// Controls for one import source.
+    ///
+    /// "Purge memories" and "Delete source" name two different destructive
+    /// acts on the same card, so neither can be shortened into the other
+    /// without becoming ambiguous, and the three of them will not share a line
+    /// at any type size. They used to wrap as one undifferentiated run, which
+    /// is what made the wrap read as an accident: a pending review sat in the
+    /// same row as a deletion. Reviewing the quarantine is a separate decision
+    /// from maintaining the source, so it gets its own row.
+    ///
+    /// Both rows stay `AssistantFlowLayout` rather than becoming stacks. It is
+    /// the only layout here that measures per item, so a row that outgrows the
+    /// card at large type wraps instead of squeezing its labels.
+    private func importActions(_ source: WorkspaceImportSource) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if source.quarantinedNow > 0 {
+                AssistantFlowLayout(spacing: 9) {
+                    importReviewButtons(source)
+                }
+            }
+            AssistantFlowLayout(spacing: 9) {
+                importOverflowMenu(source)
+                importPurgeButton(source)
+                importDeleteButton(source)
+            }
+        }
+        .disabled(workspaceActionInFlight != nil)
+    }
+
+    @ViewBuilder
+    private func importReviewButtons(_ source: WorkspaceImportSource) -> some View {
+        Button("Approve all") {
+            updateImport(action: "review", source: source.source, verdict: "approve")
+        }
+        .buttonStyle(AssistantActionButtonStyle(kind: .primary))
+        Button("Reject all") {
+            updateImport(action: "review", source: source.source, verdict: "reject")
+        }
+        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+    }
+
+    private func importOverflowMenu(_ source: WorkspaceImportSource) -> some View {
+        Menu {
+            Button("Run again") {
+                updateImport(
+                    action: "start",
+                    source: source.source,
+                    workspacePath: source.workspacePath
+                )
+            }
+        } label: {
+            Label("More", systemImage: "ellipsis.circle")
+        }
+        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+    }
+
+    private func importPurgeButton(_ source: WorkspaceImportSource) -> some View {
+        AssistantConfirmationButton("Purge memories") {
+            updateImport(action: "purge", source: source.source)
+        }
+    }
+
+    private func importDeleteButton(_ source: WorkspaceImportSource) -> some View {
+        AssistantConfirmationButton("Delete source") {
+            updateImport(action: "delete", source: source.source)
+        }
+    }
+
     @ViewBuilder
     private func deleteSkillButton(_ skill: WorkspaceSkill) -> some View {
-        AssistantConfirmationButton("Delete skill") {
+        AssistantConfirmationButton("Delete", hint: "Removes this procedure and its usage history.",
+            compact: true) {
             workspaceActionInFlight = skill.id
             _ = await model.deleteSkill(skill)
             workspaceActionInFlight = nil
@@ -1316,8 +1355,8 @@ struct WorkspaceView: View {
                 .font(.caption)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(tint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
@@ -1348,12 +1387,22 @@ struct WorkspaceView: View {
         )
     }
 
+    /// One line, which is what these three controls were always meant to be.
+    ///
+    /// They wrapped because each was carrying a longer word than it needed:
+    /// "Edit skill" and "Delete skill" inside a card that already names the
+    /// skill, and a confirmation label that restated the action again. With
+    /// the nouns dropped and compact padding the row measures about 288pt of
+    /// the 333pt a card offers on a 393pt phone, so it holds at default type
+    /// with room to spare — and the flow layout still wraps them per item at
+    /// larger type instead of squeezing the labels, so no size branch is
+    /// needed to hold the line.
     private func skillActions(_ skill: WorkspaceSkill) -> some View {
         AssistantFlowLayout(spacing: 9) {
-            Button("Edit skill", systemImage: "pencil") {
+            Button("Edit", systemImage: "pencil") {
                 editingSkill = skill
             }
-            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
 
             Menu {
                 Button("Retire skill", systemImage: "archivebox") {
@@ -1362,7 +1411,7 @@ struct WorkspaceView: View {
             } label: {
                 Label("More", systemImage: "ellipsis.circle")
             }
-            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
             deleteSkillButton(skill)
         }
         .disabled(workspaceActionInFlight != nil)
