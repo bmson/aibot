@@ -1774,6 +1774,53 @@ export const proactiveMoments = pgTable(
   ],
 );
 
+/**
+ * The last known shape of one still-upcoming calendar event, so the pulse can
+ * tell what changed on its next read instead of taking a fresh, stateless
+ * snapshot every time (`calendar-diff.ts`). Without this a meeting the
+ * organizer cancelled, an invite someone just declined, or a recurring
+ * instance that quietly moved were all structurally invisible — nothing had
+ * ever compared one calendar read to the last one.
+ *
+ * Google's event id is only unique WITHIN one calendar, hence the composite
+ * key; with `singleEvents` expansion it is also unique PER OCCURRENCE, which
+ * is what lets one cancelled Tuesday be told from the rest of the series.
+ * Attendee addresses are never stored here — `attendee_response_hash` keys
+ * each entry on a hash of the address instead, so this row names no one at
+ * rest; the diff still names the real person by re-hashing the CURRENT read's
+ * attendee list to look itself up, rather than needing this row to remember
+ * it. A cancelled event is deleted outright rather than kept with a
+ * `status`, so there is nothing here for a stale row to keep re-reporting.
+ */
+export const calendarEventSnapshots = pgTable(
+  'calendar_event_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    calendarId: text('calendar_id').notNull(),
+    eventId: text('event_id').notNull(),
+    iCalUID: text('ical_uid'),
+    summary: text('summary').notNull().default(''),
+    /** Raw ISO datetime or (all-day) date, exactly as the provider sent it. */
+    start: text('start').notNull(),
+    end: text('end').notNull(),
+    status: text('status'),
+    attendeeResponseHash: jsonb('attendee_response_hash').notNull().default({}),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('calendar_event_snapshots_event_idx').on(t.agentId, t.calendarId, t.eventId),
+    // The pulse's own staleness sweep: rows a read has not touched in a while.
+    index('calendar_event_snapshots_agent_updated_idx').on(t.agentId, t.updatedAt),
+    check(
+      'calendar_event_snapshots_status_check',
+      sql`${t.status} IS NULL OR ${t.status} IN ('confirmed','tentative','cancelled')`,
+    ),
+  ],
+);
+
 /** Durable, machine-readable health checks for deployed channel integrations. */
 export const canaryRuns = pgTable(
   'canary_runs',

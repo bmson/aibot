@@ -109,6 +109,9 @@ it('keeps portable record types compatible with all PostgreSQL tables', () => {
   expectTypeOf<Records['proactiveMoments']>().toEqualTypeOf<
     typeof schema.proactiveMoments.$inferSelect
   >();
+  expectTypeOf<Records['calendarEventSnapshots']>().toEqualTypeOf<
+    typeof schema.calendarEventSnapshots.$inferSelect
+  >();
   expectTypeOf<Records['canaryRuns']>().toEqualTypeOf<typeof schema.canaryRuns.$inferSelect>();
   expectTypeOf<Records['files']>().toEqualTypeOf<typeof schema.files.$inferSelect>();
   expectTypeOf<Records['documents']>().toEqualTypeOf<typeof schema.documents.$inferSelect>();

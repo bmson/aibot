@@ -32,6 +32,8 @@ interface RawEvent {
   id: string;
   iCalUID?: string;
   recurringEventId?: string;
+  /** 'confirmed' | 'tentative' | 'cancelled'. Not every provider populates it. */
+  status?: string;
   summary?: string;
   description?: string;
   location?: string;
@@ -143,6 +145,11 @@ function normalizeEvent(raw: RawEvent, calendar: CalendarEntry) {
     eventId: raw.id,
     iCalUID: raw.iCalUID,
     recurringEventId: raw.recurringEventId,
+    // Carried through verbatim so a caller can tell a merely-tentative hold
+    // from a firm booking, and — the reason this was added — so a change-diff
+    // downstream can recognize an explicit cancellation when the provider
+    // sends one, rather than inferring it purely from the event's absence.
+    status: raw.status,
     // Which calendar this came from — without it a merged list can't say
     // whether something is on the work calendar or the family one.
     calendar: calendar.name,

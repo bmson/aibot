@@ -88,8 +88,10 @@ function domainOf(email: string): string {
  * The calendar adapter renders attendees as `email (responseStatus)`. Parsing
  * it back is unlovely, but it is the shape the port already carries and
  * widening the adapter's return type is a bigger change than this earns.
+ * Exported so `calendar-diff.ts` reads the exact same shape rather than
+ * growing a second, slightly-different parser.
  */
-function parseAttendee(raw: string): { email: string; status: string } {
+export function parseAttendee(raw: string): { email: string; status: string } {
   const match = /^(.*?)\s*\(([^)]*)\)\s*$/.exec(raw.trim());
   if (!match?.[1]) return { email: raw.trim().toLowerCase(), status: '' };
   return { email: match[1].trim().toLowerCase(), status: (match[2] ?? '').trim().toLowerCase() };

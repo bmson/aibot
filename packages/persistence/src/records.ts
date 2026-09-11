@@ -660,6 +660,19 @@ export interface Records {
     pinged: boolean;
     deliveredAt: Date;
   };
+  calendarEventSnapshots: {
+    id: string;
+    agentId: string;
+    calendarId: string;
+    eventId: string;
+    iCalUID: string | null;
+    summary: string;
+    start: string;
+    end: string;
+    status: string | null;
+    attendeeResponseHash: unknown;
+    updatedAt: Date;
+  };
   canaryRuns: {
     id: string;
     status: string;

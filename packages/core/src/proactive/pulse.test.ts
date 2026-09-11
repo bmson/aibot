@@ -1,4 +1,5 @@
 import {
+  calendarEventSnapshots,
   conversations,
   createDb,
   type Db,
@@ -11,6 +12,8 @@ import {
 import { eq, like } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
+import type { BriefingCalendarEvent } from '../workflow/briefing.js';
+import { attendeeResponseDigest } from './calendar-diff.js';
 import type { EventSalience } from './calendar-salience.js';
 import { eventLeadMoments, type PulseMoment, runPulse, selectPulseMoment } from './pulse.js';
 
@@ -163,6 +166,9 @@ describe('runPulse', () => {
     await db.delete(suggestions).where(like(suggestions.sourceRef, `%${MARKER}%`));
     await db.delete(emailIngest).where(like(emailIngest.channelMessageId, `%${MARKER}%`));
     await db.delete(messages).where(like(messages.text, `%${MARKER}%`));
+    await db
+      .delete(calendarEventSnapshots)
+      .where(like(calendarEventSnapshots.eventId, `%${MARKER}%`));
   });
 
   afterAll(async () => {
@@ -310,5 +316,119 @@ describe('runPulse', () => {
       { now: NOW },
     );
     expect(result.delivered).toBe('mail-action');
+  });
+
+  describe('calendar change detection', () => {
+    function calEvent(over: Partial<BriefingCalendarEvent> = {}): BriefingCalendarEvent {
+      return {
+        summary: `${MARKER} standup`,
+        start: '2026-03-04T09:30:00Z',
+        end: '2026-03-04T10:00:00Z',
+        calendar: 'Work',
+        calendarId: `${MARKER}-cal`,
+        eventId: `${MARKER}-evt-1`,
+        allDay: false,
+        ...over,
+      };
+    }
+
+    async function seedSnapshot(over: Partial<typeof calendarEventSnapshots.$inferInsert> = {}) {
+      await db.insert(calendarEventSnapshots).values({
+        agentId,
+        calendarId: `${MARKER}-cal`,
+        eventId: `${MARKER}-evt-1`,
+        summary: `${MARKER} standup`,
+        start: '2026-03-04T09:30:00Z',
+        end: '2026-03-04T10:00:00Z',
+        ...over,
+      });
+    }
+
+    it('notices a cancelled event and outranks ordinary mail for it', async (ctx) => {
+      if (!dbUp) return ctx.skip();
+      await seedSnapshot();
+      await addActionableMail('cal-1');
+      // The event that was previously snapshotted is simply gone from this read.
+      const result = await runPulse(
+        { db, calendarReader: async () => ({ events: [], complete: true }) },
+        { now: NOW },
+      );
+      expect(result.delivered).toBe('calendar-cancelled');
+
+      const remaining = await db
+        .select({ eventId: calendarEventSnapshots.eventId })
+        .from(calendarEventSnapshots)
+        .where(eq(calendarEventSnapshots.eventId, `${MARKER}-evt-1`));
+      // The cancellation is told once; the row is gone so nothing re-reports it.
+      expect(remaining).toHaveLength(0);
+    });
+
+    it('notices a moved event', async (ctx) => {
+      if (!dbUp) return ctx.skip();
+      await seedSnapshot();
+      const moved = calEvent({ start: '2026-03-04T14:00:00Z', end: '2026-03-04T14:30:00Z' });
+      const result = await runPulse(
+        { db, calendarReader: async () => ({ events: [moved], complete: true }) },
+        { now: NOW },
+      );
+      expect(result.delivered).toBe('calendar-moved');
+
+      const [row] = await db
+        .select({ start: calendarEventSnapshots.start })
+        .from(calendarEventSnapshots)
+        .where(eq(calendarEventSnapshots.eventId, `${MARKER}-evt-1`));
+      // The snapshot now reflects the new time, so a second read stays quiet.
+      expect(row?.start).toBe('2026-03-04T14:00:00Z');
+    });
+
+    it('notices an attendee backing out after accepting', async (ctx) => {
+      if (!dbUp) return ctx.skip();
+      await seedSnapshot({
+        attendeeResponseHash: attendeeResponseDigest(['guest@example.com (accepted)']),
+      });
+      const declined = calEvent({ attendees: ['guest@example.com (declined)'] });
+      const result = await runPulse(
+        { db, calendarReader: async () => ({ events: [declined], complete: true }) },
+        { now: NOW },
+      );
+      expect(result.delivered).toBe('calendar-declined');
+    });
+
+    it('says nothing on a brand-new snapshot — nothing to compare against yet', async (ctx) => {
+      if (!dbUp) return ctx.skip();
+      // No seeded row: this agent has never had a calendar read before.
+      const result = await runPulse(
+        { db, calendarReader: async () => ({ events: [calEvent()], complete: true }) },
+        { now: NOW },
+      );
+      expect(result.delivered).toBeNull();
+      expect(result.heldBy).toBe('no-candidates');
+    });
+
+    it('CRITICAL: a failed calendar read must never be treated as everything being cancelled', async (ctx) => {
+      if (!dbUp) return ctx.skip();
+      await seedSnapshot();
+      await addActionableMail('cal-fail');
+      const result = await runPulse(
+        {
+          db,
+          calendarReader: async () => {
+            throw new Error('grant expired');
+          },
+        },
+        { now: NOW },
+      );
+      // Degrades to the mail half, exactly like the plain calendar-failure
+      // case above — never announces the seeded event as cancelled.
+      expect(result.delivered).toBe('mail-action');
+
+      const [row] = await db
+        .select({ eventId: calendarEventSnapshots.eventId })
+        .from(calendarEventSnapshots)
+        .where(eq(calendarEventSnapshots.eventId, `${MARKER}-evt-1`));
+      // The snapshot is untouched — a failed read must not corrupt the baseline
+      // the next SUCCESSFUL read will compare against.
+      expect(row).toBeDefined();
+    });
   });
 });

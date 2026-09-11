@@ -86,6 +86,12 @@ export interface BriefingCalendarEvent {
   /** Provider-stable identity used to collapse the same event across calendars. */
   iCalUID?: string;
   recurringEventId?: string;
+  /**
+   * 'confirmed' | 'tentative' | 'cancelled', when the provider sends one. This
+   * is what lets `calendar-diff.ts` recognize an explicit cancellation instead
+   * of only ever inferring one from the event going missing on a later read.
+   */
+  status?: string;
   location?: string;
   organizer?: string;
   /** Raw "email (responseStatus)" strings, as the calendar adapter renders them. */

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  calendarEventSnapshots,
   commitments,
   type Db,
   emailIngest,
@@ -7,14 +8,20 @@ import {
   proactiveMoments,
   tasks as taskTable,
 } from '@assistant/db';
-import { and, count, desc, eq, gte, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import { getAgent, postOwnerNotice } from '../chat.js';
 import { loadConfig } from '../config.js';
 import { withSpan } from '../otel.js';
 import { listSituationPacks, type SituationPackView } from '../situations.js';
-import type { BriefingCalendarReader } from '../workflow/briefing.js';
+import type { BriefingCalendarEvent, BriefingCalendarReader } from '../workflow/briefing.js';
 import type { ResponseCard } from '../workflow/response-cards.js';
 import { createSuggestion } from '../workflow/suggestions.js';
+import {
+  type AttendeeResponseDigest,
+  type CalendarChange,
+  diffCalendarEvents,
+  toSnapshotRow,
+} from './calendar-diff.js';
 import { type EventSalience, salientEvents } from './calendar-salience.js';
 import { type ProactiveNotifier, pingOwner } from './notify.js';
 
@@ -74,8 +81,26 @@ const MAIL_MIN_IMPORTANCE = 4;
 /** A commitment this close to its deadline is worth one reminder. */
 const COMMITMENT_HORIZON_HOURS = 36;
 const MAX_SUMMARY_CHARS = 400;
+/**
+ * The two moments the pulse treats as equally the most worth interrupting
+ * for: the event-lead nudge, and a cancellation (see `calendarChangeMoments`).
+ */
+const CANCELLED_OR_LEAD_PRIORITY = 100;
+/** A relocation still matters a lot, just a shade under "gone entirely". */
+const MOVED_PRIORITY = 90;
+/** Real news, but rarely as time-critical as a gone or moved meeting. */
+const DECLINED_PRIORITY = 62;
+/** How far back a snapshot row may go untouched before it is pruned. */
+const SNAPSHOT_STALE_HOURS = 24;
 
-export type PulseMomentKind = 'event-lead' | 'mail-action' | 'commitment-due' | 'situation-change';
+export type PulseMomentKind =
+  | 'event-lead'
+  | 'mail-action'
+  | 'commitment-due'
+  | 'situation-change'
+  | 'calendar-cancelled'
+  | 'calendar-moved'
+  | 'calendar-declined';
 
 export function situationChangeMoment(pack: SituationPackView): PulseMoment | null {
   if (pack.archived || !pack.changes.length) return null;
@@ -218,12 +243,97 @@ export function eventLeadMoments(salient: readonly EventSalience[], now: Date): 
             : []),
         ],
       },
-      // Time-boxed and about to expire: nothing else the pulse finds is more
-      // urgent than something the owner is about to be late for.
-      priority: 100,
+      // Time-boxed and about to expire: nothing the pulse finds outranks
+      // something the owner is about to be late for — except learning there is
+      // nothing left to be on time for at all (`calendarChangeMoments` below,
+      // same priority tier, for the same reason).
+      priority: CANCELLED_OR_LEAD_PRIORITY,
     });
   }
   return moments;
+}
+
+/** A timestamp for owner-facing text: trimmed to the minute, `T` read as a space. */
+function formatWhen(iso: string): string {
+  if (Number.isNaN(Date.parse(iso))) return iso;
+  return iso.length <= 10 ? iso : iso.slice(0, 16).replace('T', ' ');
+}
+
+/**
+ * The calendar diff's findings, turned into moments.
+ *
+ * Priority mirrors how much the owner stands to lose by finding out late.
+ * Cancelled and moved tie with (or sit just under) the lead-time nudge itself:
+ * a meeting that is gone or relocated is at least as worth interrupting for as
+ * one that is merely close, since it can save the exact trip the lead-time
+ * nudge exists to help the owner make. A decline is real news but rarely
+ * urgent in the same way, so it sits with mail-action instead.
+ *
+ * Every key includes the identity of what changed (and, for a move, the new
+ * time) so a second, different change to the same event earns its own moment
+ * rather than being swallowed by the `proactive_moments` fence — the same
+ * discipline `eventLeadMoments` already follows for a moved start time.
+ */
+export function calendarChangeMoments(changes: readonly CalendarChange[]): PulseMoment[] {
+  return changes.map((change): PulseMoment => {
+    const id = `calendar-${change.kind}:${change.calendarId}:${change.eventId}`;
+    if (change.kind === 'cancelled') {
+      return {
+        kind: 'calendar-cancelled',
+        key: id,
+        text: `"${change.summary}" (was ${formatWhen(change.start)}) has been cancelled.`,
+        priority: CANCELLED_OR_LEAD_PRIORITY,
+        card: {
+          kind: 'proactive-alert',
+          id,
+          category: 'event',
+          urgencyLabel: 'Cancelled',
+          title: change.summary,
+          summary: `Was scheduled for ${formatWhen(change.start)}.`,
+        },
+      };
+    }
+    if (change.kind === 'moved') {
+      const key = `${id}:${change.start}`;
+      return {
+        kind: 'calendar-moved',
+        key,
+        text: `"${change.summary}" moved from ${formatWhen(change.previousStart ?? '')} to ${formatWhen(change.start)}.`,
+        priority: MOVED_PRIORITY,
+        card: {
+          kind: 'proactive-alert',
+          id: key,
+          category: 'event',
+          urgencyLabel: 'Moved',
+          title: change.summary,
+          startsAt: change.start,
+          summary: `Was ${formatWhen(change.previousStart ?? '')}, now ${formatWhen(change.start)}.`,
+          details: [
+            ...(change.calendar?.trim()
+              ? [{ label: 'Calendar', value: change.calendar.trim() }]
+              : []),
+          ],
+        },
+      };
+    }
+    // 'declined'
+    const who = (change.declinedEmails ?? []).join(', ');
+    const key = `${id}:${who}`;
+    return {
+      kind: 'calendar-declined',
+      key,
+      text: `${who} declined "${change.summary}" (${formatWhen(change.start)}), having previously accepted.`,
+      priority: DECLINED_PRIORITY,
+      card: {
+        kind: 'proactive-alert',
+        id: key,
+        category: 'event',
+        urgencyLabel: 'Declined',
+        title: change.summary,
+        summary: `${who} had accepted, now declined.`,
+      },
+    };
+  });
 }
 
 /**
@@ -290,6 +400,95 @@ function commitmentMoment(row: {
     },
     priority: 50,
   };
+}
+
+/**
+ * Diff this read against the stored snapshot, then bring the snapshot up to
+ * date with what this read actually saw — so the NEXT read has something
+ * current to compare against, and this one's findings are never rediscovered.
+ *
+ * Only ever called from the branch where the calendar read is known to have
+ * succeeded (see the caller in `runPulse`); that is what keeps this from ever
+ * mistaking "the read failed" for "the calendar emptied out overnight."
+ */
+async function syncCalendarSnapshot(
+  db: Db,
+  agentId: string,
+  calendar: { events: readonly BriefingCalendarEvent[]; complete: boolean },
+  now: Date,
+): Promise<CalendarChange[]> {
+  const previousRows = await db
+    .select({
+      calendarId: calendarEventSnapshots.calendarId,
+      eventId: calendarEventSnapshots.eventId,
+      iCalUID: calendarEventSnapshots.iCalUID,
+      summary: calendarEventSnapshots.summary,
+      start: calendarEventSnapshots.start,
+      end: calendarEventSnapshots.end,
+      status: calendarEventSnapshots.status,
+      attendeeResponseHash: calendarEventSnapshots.attendeeResponseHash,
+    })
+    .from(calendarEventSnapshots)
+    .where(eq(calendarEventSnapshots.agentId, agentId));
+
+  const changes = diffCalendarEvents(
+    calendar.events,
+    previousRows.map((row) => ({
+      ...row,
+      attendeeResponseHash: (row.attendeeResponseHash ?? {}) as AttendeeResponseDigest,
+    })),
+    now,
+    calendar.complete,
+  );
+
+  // A cancelled event is deleted rather than upserted below (it is, by
+  // construction, absent from `calendar.events`) — delete its row outright so
+  // a stale snapshot entry never re-reports the same cancellation next time.
+  for (const change of changes) {
+    if (change.kind !== 'cancelled') continue;
+    await db
+      .delete(calendarEventSnapshots)
+      .where(
+        and(
+          eq(calendarEventSnapshots.agentId, agentId),
+          eq(calendarEventSnapshots.calendarId, change.calendarId),
+          eq(calendarEventSnapshots.eventId, change.eventId),
+        ),
+      );
+  }
+
+  for (const event of calendar.events) {
+    const row = toSnapshotRow(event);
+    if (!row) continue; // no stable identity to compare against next time
+    await db
+      .insert(calendarEventSnapshots)
+      .values({ agentId, updatedAt: now, ...row })
+      .onConflictDoUpdate({
+        target: [
+          calendarEventSnapshots.agentId,
+          calendarEventSnapshots.calendarId,
+          calendarEventSnapshots.eventId,
+        ],
+        set: { ...row, updatedAt: now },
+      });
+  }
+
+  // Bounded growth: once a row has gone a day without appearing in a read, it
+  // is either long past or already handled above — either way there is
+  // nothing left to compare it against.
+  await db
+    .delete(calendarEventSnapshots)
+    .where(
+      and(
+        eq(calendarEventSnapshots.agentId, agentId),
+        lt(
+          calendarEventSnapshots.updatedAt,
+          new Date(now.getTime() - SNAPSHOT_STALE_HOURS * 3600_000),
+        ),
+      ),
+    );
+
+  return changes;
 }
 
 export interface PulseDeps {
@@ -364,6 +563,14 @@ export async function runPulse(
         })
       : [];
 
+    // Change detection runs ONLY inside the branch where the read is known to
+    // have succeeded. `calendar` is `null` on a failed read (caught above);
+    // passing `[]` here in that case would read as "everything on the
+    // calendar just got cancelled" — see the safety contract on
+    // `diffCalendarEvents` — so a failed read must skip this entirely rather
+    // than degrade to an empty list the way `salient` does above.
+    const calendarChanges = calendar ? await syncCalendarSnapshot(db, agent.id, calendar, now) : [];
+
     const mailSince = new Date(now.getTime() - MAIL_WINDOW_HOURS * 3600_000);
     const mail = await db
       .select({
@@ -429,6 +636,7 @@ export async function runPulse(
     const candidates: PulseMoment[] = [
       ...packMoments,
       ...eventLeadMoments(salient, now),
+      ...calendarChangeMoments(calendarChanges),
       ...mail.map(mailMoment),
       ...dueCommitments
         .filter((row): row is typeof row & { dueAt: Date } => row.dueAt !== null)
