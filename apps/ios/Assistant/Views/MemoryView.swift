@@ -98,7 +98,7 @@ struct MemoryView: View {
             NavigationStack { MemoryEditor(ownerContactId: person.id, fact: nil) }
         }
         .sheet(item: $managingPerson) { person in
-            NavigationStack { PersonDetailsView(person: person) }
+            NavigationStack { PersonDetailsView(personId: person.id, personName: person.name) }
         }
         .sheet(isPresented: $showingVoiceProfile) {
             NavigationStack { VoiceProfileEditor() }
@@ -582,17 +582,23 @@ struct MemoryOrganizerPanel: View {
     }
 }
 
-private struct PersonDetailsView: View {
-    let person: WorkspacePerson
+/// Everything you can change about one person: relationship, aliases, their
+/// dates, merging a duplicate away. Reached from Memory and from the People
+/// directory, which is why it takes an id rather than a workspace row — People
+/// has a PersonCard in hand, not the same struct Memory does.
+struct PersonDetailsView: View {
+    let personId: String
+    let personName: String
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var showingOccasionEditor = false
     @State private var editingOccasion: PersonOccasion?
+    @State private var editingContact: PersonProfileContact?
     @State private var mergeTarget = ""
     @State private var isWorking = false
 
-    private var profile: PersonProfileResponse? { model.personProfiles[person.id] }
+    private var profile: PersonProfileResponse? { model.personProfiles[personId] }
 
     var body: some View {
         AssistantForm {
@@ -603,6 +609,9 @@ private struct PersonDetailsView: View {
                         : profile.contact.relationship)
                     if !profile.contact.aliases.isEmpty {
                         LabeledContent("Aliases", value: profile.contact.aliases.joined(separator: ", "))
+                    }
+                    Button("Edit name and relationship", systemImage: "pencil") {
+                        editingContact = profile.contact
                     }
                 }
 
@@ -657,7 +666,7 @@ private struct PersonDetailsView: View {
                             guard !mergeTarget.isEmpty else { return }
                             isWorking = true
                             Task {
-                                let merged = await model.mergePerson(person, targetId: mergeTarget)
+                                let merged = await model.mergePerson(id: personId, targetId: mergeTarget)
                                 isWorking = false
                                 if merged { dismiss() }
                             }
@@ -674,19 +683,22 @@ private struct PersonDetailsView: View {
                 ProgressView().frame(maxWidth: .infinity)
             }
         }
-        .navigationTitle(person.name)
+        .navigationTitle(personName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { dismiss() }
             }
         }
-        .task { await model.loadPersonProfile(id: person.id) }
+        .task { await model.loadPersonProfile(id: personId) }
         .sheet(isPresented: $showingOccasionEditor) {
-            NavigationStack { OccasionEditor(personId: person.id) }
+            NavigationStack { OccasionEditor(personId: personId) }
         }
         .sheet(item: $editingOccasion) { occasion in
-            NavigationStack { OccasionEditor(personId: person.id, occasion: occasion) }
+            NavigationStack { OccasionEditor(personId: personId, occasion: occasion) }
+        }
+        .sheet(item: $editingContact) { contact in
+            NavigationStack { PersonEditor(contact: contact) }
         }
     }
 
@@ -806,8 +818,9 @@ struct OccasionEditor: View {
     }
 }
 
-private struct PersonEditor: View {
-    let person: WorkspacePerson?
+struct PersonEditor: View {
+    /// The id being edited; nil creates a new person.
+    private let personId: String?
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -817,10 +830,19 @@ private struct PersonEditor: View {
     @State private var isSaving = false
 
     init(person: WorkspacePerson?) {
-        self.person = person
+        personId = person?.id
         _name = State(initialValue: person?.name ?? "")
         _relationship = State(initialValue: person?.relationship ?? "")
         _aliases = State(initialValue: person?.aliases.joined(separator: ", ") ?? "")
+    }
+
+    /// The same editor from a loaded profile, which is what the People
+    /// directory has rather than a workspace row.
+    init(contact: PersonProfileContact) {
+        personId = contact.id
+        _name = State(initialValue: contact.name)
+        _relationship = State(initialValue: contact.relationship)
+        _aliases = State(initialValue: contact.aliases.joined(separator: ", "))
     }
 
     var body: some View {
@@ -832,7 +854,7 @@ private struct PersonEditor: View {
                     .lineLimit(2...5)
             }
         }
-        .navigationTitle(person == nil ? "Add person" : "Edit person")
+        .navigationTitle(personId == nil ? "Add person" : "Edit person")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -849,7 +871,7 @@ private struct PersonEditor: View {
         isSaving = true
         Task {
             let saved = await model.savePerson(
-                id: person?.id,
+                id: personId,
                 mutation: .init(name: name, relationship: relationship, aliases: aliases)
             )
             isSaving = false

@@ -1382,11 +1382,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func mergePerson(_ person: WorkspacePerson, targetId: String) async -> Bool {
+    func mergePerson(id: String, targetId: String) async -> Bool {
         guard let client else { return false }
         do {
-            try await client.mergePerson(id: person.id, targetId: targetId)
-            personProfiles.removeValue(forKey: person.id)
+            try await client.mergePerson(id: id, targetId: targetId)
+            personProfiles.removeValue(forKey: id)
             await refreshWorkspace(reportFailure: false)
             return true
         } catch {

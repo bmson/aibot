@@ -8,15 +8,15 @@ import {
 import type { MemorySnapshot } from '@assistant/application/profile';
 import { Handshake, MapPin, Sparkles } from 'lucide-react';
 import { notFound } from 'next/navigation';
+import { MergeControl } from '@/app/people/merge-control';
+import { OccasionsPanel } from '@/app/people/occasions-panel';
 import { PersonAvatar } from '@/app/people/person-avatar';
+import { DeletePerson, PersonControls } from '@/app/people/person-controls';
 import { ConnectionList, RelationshipList } from '@/app/people/relationship-list';
 import { AddFact } from '@/app/profile/add-fact';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { AddKnowledgeRelation } from '@/app/profile/knowledge/add-relation';
 import { ConnectionTree } from '@/app/profile/knowledge/connection-tree';
-import { MergeControl } from '@/app/profile/merge-control';
-import { OccasionsPanel } from '@/app/profile/occasions-panel';
-import { DeletePerson, PersonControls } from '@/app/profile/person-controls';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';

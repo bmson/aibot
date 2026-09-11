@@ -568,6 +568,7 @@ struct PersonCardScreen: View {
     @State private var inspectingEvidence: PersonRelationSummary?
     @State private var showsDates = false
     @State private var showsTree = false
+    @State private var showsManage = false
 
     private var card: PersonCard? { model.personCards[personId] }
 
@@ -587,6 +588,22 @@ struct PersonCardScreen: View {
         .navigationTitle(card?.name ?? "Person")
         .navigationBarTitleDisplayMode(.inline)
         .assistantSubmenuChrome()
+        // Renaming someone, fixing their relationship or merging a duplicate
+        // used to live only in Memory, so the directory could show you a person
+        // it gave you no way to correct.
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Manage", systemImage: "person.crop.circle") { showsManage = true }
+                    .disabled(card == nil)
+            }
+        }
+        .sheet(isPresented: $showsManage) {
+            if let card {
+                NavigationStack {
+                    PersonDetailsView(personId: personId, personName: card.name)
+                }
+            }
+        }
         .refreshable { await model.loadPersonCard(id: personId) }
         .task(id: card == nil) { if card == nil { await model.loadPersonCard(id: personId) } }
         .sheet(isPresented: $showsDates) {

@@ -8,8 +8,8 @@ import {
 } from '@assistant/application/people-presentation';
 import { CalendarDays, MapPin, Search } from 'lucide-react';
 import Link from 'next/link';
+import { AddPerson } from '@/app/people/add-person';
 import { PersonAvatar } from '@/app/people/person-avatar';
-import { AddPerson } from '@/app/profile/add-person';
 import { requireOwner } from '@/auth';
 import { getDb } from '@/lib/server';
 import {

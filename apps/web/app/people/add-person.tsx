@@ -34,7 +34,7 @@ export function AddPerson() {
             aliases: String(formData.get('aliases') ?? ''),
           });
           if (result.error) setError(result.error);
-          else if (result.contactId) router.push(`/profile/people/${result.contactId}`);
+          else if (result.contactId) router.push(`/people/${result.contactId}`);
           else {
             setOpen(false);
             router.refresh();
