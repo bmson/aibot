@@ -335,7 +335,7 @@ Stated plainly, because a review that lists only faults misrepresents the system
 
 ## 10. Recommendations, in order
 
-Items 1-3 and 7 are **done on this branch**; the rest are open.
+Items 1-3 and 7 are **done and merged**; the rest are open.
 
 1. ~~**Record model input and output**~~ — done. `LLM_AUDIT_CAPTURE`, the
    `model_call_audit` table, and `pnpm audit:llm`. Nothing else here can be
@@ -356,11 +356,12 @@ Items 1-3 and 7 are **done on this branch**; the rest are open.
    say so, the way it now does for ingest mode. `packages/config/src/index.ts:272,278`.
 6. **Ground live web and weather answers** — a `groundLiveLookupDraft` parallel to
    `groundReadDraft`, invoked whenever `detectLiveLookup` fired.
-7. ~~**Port the harness-only formatting checks out of the test suite**~~ — done as
-   `gradeAuditedOutput` (`packages/core/src/model-router/audit-graders.ts`). **But
-   it is not yet wired into `response-contract.ts`, and the harness still
-   hand-rolls its own copy — three implementations of the same checks now coexist.**
-   Finishing this means calling the shared function from both.
+7. ~~**Port the harness-only formatting checks out of the test suite**~~ — done.
+   `gradeAuditedOutput` (`packages/core/src/model-router/audit-graders.ts`) is now
+   the single implementation: `response-contract.ts` repairs what can be repaired
+   without judgement before publish, and the regression harness grades with the
+   same functions instead of its own regexes. The suite can no longer fail a case
+   on a property the runtime does not enforce.
 8. **Make the verifier unconditional on live-lookup turns**, and route it to the
    `reason` tier for `critical` turns rather than the cheapest tier.
 9. **Cover the two busiest surfaces.** `chat-turn.ts:389` and `:596` have no test

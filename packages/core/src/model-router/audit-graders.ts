@@ -21,6 +21,7 @@ export type AuditDefectKind =
   | 'unclosed-code-fence'
   | 'background-notice-echo'
   | 'forbidden-theme-tag'
+  | 'leaked-markup'
   | 'excess-break-tags'
   | 'excess-chip-rows'
   | 'fabricated-interface-element'
@@ -60,6 +61,25 @@ const FAKE_BUTTON_ROW = /\[[A-Z][^\]\n]{2,40}\]\s*\|\s*\[[A-Z][^\]\n]{2,40}\]/;
 const EMOJI =
   /[\u{1F300}-\u{1FAFF}]|[\u{1F000}-\u{1F2FF}]|[\u{2600}-\u{27BF}]|[\u{1F1E6}-\u{1F1FF}]/u;
 
+/**
+ * Raw HTML and cue tags that should have been consumed before publish — a
+ * closing `[/break]`, a `[smile]`, a literal `<br>`. Their presence in the
+ * delivered text means a tag survived the stripper rather than being rendered.
+ */
+const LEAKED_MARKUP = /<br\s*\/?\s*>|\[\/(?:break|smile|nod)\]|\[(?:smile|nod)\]/i;
+
+/**
+ * Prose with fenced and inline code removed.
+ *
+ * Every marker check below has to run against this rather than the raw text: an
+ * answer that legitimately *shows* the owner a `<br>` tag or a bracketed cue in
+ * a code example is correct, and flagging it would make the checks unusable for
+ * exactly the technical questions where they matter.
+ */
+function prose(text: string): string {
+  return text.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+}
+
 function excerpt(text: string, around: number, span = 60): string {
   const start = Math.max(0, around - span / 2);
   return text
@@ -84,27 +104,36 @@ function unclosedCodeFence(text: string): AuditDefect | undefined {
  * regression case was written for.
  */
 function backgroundNoticeEcho(text: string): AuditDefect | undefined {
-  const at = text.indexOf('[Background notice');
+  const body = prose(text);
+  const at = body.indexOf('[Background notice');
   if (at < 0) return undefined;
-  return { kind: 'background-notice-echo', detail: excerpt(text, at) };
+  return { kind: 'background-notice-echo', detail: excerpt(body, at) };
 }
 
 function forbiddenThemeTag(text: string): AuditDefect | undefined {
-  const at = text.search(/\[theme:/i);
+  const body = prose(text);
+  const at = body.search(/\[theme:/i);
   if (at < 0) return undefined;
-  return { kind: 'forbidden-theme-tag', detail: excerpt(text, at) };
+  return { kind: 'forbidden-theme-tag', detail: excerpt(body, at) };
+}
+
+function leakedMarkup(text: string): AuditDefect | undefined {
+  const match = LEAKED_MARKUP.exec(prose(text));
+  if (!match) return undefined;
+  return { kind: 'leaked-markup', detail: `unrendered ${match[0]}` };
 }
 
 function cueOveruse(text: string): AuditDefect[] {
   const defects: AuditDefect[] = [];
-  const breaks = text.match(BREAK_TAG)?.length ?? 0;
+  const body = prose(text);
+  const breaks = body.match(BREAK_TAG)?.length ?? 0;
   if (breaks > MAX_BREAKS) {
     defects.push({
       kind: 'excess-break-tags',
       detail: `${breaks} [break] tags; at most ${MAX_BREAKS} are allowed`,
     });
   }
-  const chips = text.match(CHIP_ROW)?.length ?? 0;
+  const chips = body.match(CHIP_ROW)?.length ?? 0;
   if (chips > MAX_CHIP_ROWS) {
     defects.push({
       kind: 'excess-chip-rows',
@@ -115,7 +144,7 @@ function cueOveruse(text: string): AuditDefect[] {
 }
 
 function fabricatedInterfaceElement(text: string): AuditDefect | undefined {
-  const match = FAKE_BUTTON_ROW.exec(text);
+  const match = FAKE_BUTTON_ROW.exec(prose(text));
   if (!match) return undefined;
   return { kind: 'fabricated-interface-element', detail: match[0].slice(0, 80) };
 }
@@ -156,6 +185,7 @@ export function gradeAuditedOutput(
     unclosedCodeFence(text),
     backgroundNoticeEcho(text),
     forbiddenThemeTag(text),
+    leakedMarkup(text),
     fabricatedInterfaceElement(text),
   ];
   for (const defect of found) if (defect) defects.push(defect);
@@ -165,4 +195,38 @@ export function gradeAuditedOutput(
     if (match) defects.push({ kind: 'emoji', detail: `contains ${match[0]}` });
   }
   return defects;
+}
+
+/**
+ * Fix the presentation defects that can be fixed without judgement.
+ *
+ * The response contract already rewrites rather than blocks for fabricated
+ * links (`enforceUrlProvenance`), and this is the same bargain: a stray fence
+ * is a rendering bug, not dishonesty, so repairing it beats replacing a correct
+ * answer with a refusal.
+ *
+ * Only two repairs qualify, and the bar is that they cannot lose meaning:
+ * closing an unclosed fence is purely additive, and a `[theme:]` tag is
+ * explicitly forbidden and renders as nothing. Everything else
+ * `gradeAuditedOutput` finds is left alone on purpose — stripping a bracketed
+ * row or an emoji requires knowing what the owner asked for, and a wrong
+ * rewrite at the last step before delivery is worse than a defect caught in
+ * review. Those stay review signals for `pnpm audit:llm`.
+ */
+export function repairPresentationDefects(text: string): { text: string; repairs: string[] } {
+  const repairs: string[] = [];
+  let repaired = text;
+
+  const withoutTheme = repaired.replace(/\[theme:[^\]\n]*\]\s*/gi, '');
+  if (withoutTheme !== repaired) {
+    repairs.push('forbidden-theme-tag');
+    repaired = withoutTheme;
+  }
+
+  if ((repaired.match(/^\s*```/gm)?.length ?? 0) % 2) {
+    repairs.push('unclosed-code-fence');
+    repaired = `${repaired.replace(/\s+$/, '')}\n\`\`\``;
+  }
+
+  return { text: repaired, repairs };
 }

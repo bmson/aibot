@@ -1,4 +1,5 @@
 import { stripBackgroundNoticeEcho } from '../chat-card.js';
+import { repairPresentationDefects } from '../model-router/audit-graders.js';
 import { gmailThreadIdsToRead, type PersonalReadRequest } from './read-intent.js';
 import { isDurableSave, isMemoryWriteRequest, savedWorkSummary } from './saved-work.js';
 
@@ -2042,16 +2043,25 @@ export function enforceResponseContract(
     // The action-claim rules passed, but a fabricated link can still ride along
     // in an otherwise-honest answer. Only meaningful with a corpus (the finalize
     // call site provides one; existing unit callers omit it and skip the rule).
+    let published = text;
     if (opts?.urlCorpus !== undefined) {
-      const { text: cleaned, strippedUrls } = enforceUrlProvenance(text, opts.urlCorpus);
+      const { text: cleaned, strippedUrls } = enforceUrlProvenance(published, opts.urlCorpus);
       if (strippedUrls.length > 0) {
         console.warn('stripped unverifiable url(s) from final answer', {
           strippedUrls,
         });
       }
-      return { text: cleaned, blocked: false, unsupported: [] };
+      published = cleaned;
     }
-    return { text, blocked: false, unsupported: [] };
+    // An honest answer can still be malformed. The regression suite has always
+    // graded unclosed fences and leaked tags; until now nothing enforced them,
+    // so the suite promised a guarantee that did not ship. Same shared checks,
+    // same rewrite-not-block bargain as the links above.
+    const { text: repairedText, repairs } = repairPresentationDefects(published);
+    if (repairs.length > 0) {
+      console.warn('repaired presentation defects in final answer', { repairs });
+    }
+    return { text: repairedText, blocked: false, unsupported: [] };
   }
   if (unsupported.includes('approval')) {
     return {

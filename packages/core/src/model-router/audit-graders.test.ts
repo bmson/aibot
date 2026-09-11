@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { type AuditDefectKind, gradeAuditedOutput } from './audit-graders.js';
+import {
+  type AuditDefectKind,
+  gradeAuditedOutput,
+  repairPresentationDefects,
+} from './audit-graders.js';
 
 const kinds = (text: string | null | undefined, options = {}): AuditDefectKind[] =>
   gradeAuditedOutput(text, options).map((defect) => defect.kind);
@@ -81,5 +85,59 @@ describe('gradeAuditedOutput', () => {
   it('carries a detail a reviewer can act on', () => {
     const [defect] = gradeAuditedOutput('[Set alert] | [Check timing]');
     expect(defect?.detail).toContain('[Set alert]');
+  });
+});
+
+describe('code-aware marker checks', () => {
+  it('does not flag markers the answer is legitimately showing in code', () => {
+    // A technical question is exactly where these checks would be worst as
+    // false positives: the owner asked how to write a <br>, not for the
+    // assistant to emit one.
+    const answer = 'Use a line break:\n```html\n<br />\n```\nOr inline: `[/break]`.';
+    expect(kinds(answer)).toEqual([]);
+  });
+
+  it('still flags the same markers in prose', () => {
+    expect(kinds('Done.<br>Next up.')).toContain('leaked-markup');
+    expect(kinds('Here you go [smile]')).toContain('leaked-markup');
+  });
+
+  it('does not count cue tags inside a code sample toward the cue caps', () => {
+    expect(kinds('```\n[break]\n[break]\n[break]\n[break]\n```\nThat is the syntax.')).toEqual([]);
+  });
+});
+
+describe('repairPresentationDefects', () => {
+  it('closes an unclosed fence without touching the content', () => {
+    const { text, repairs } = repairPresentationDefects('Here:\n```js\nconsole.log(1);');
+    expect(repairs).toEqual(['unclosed-code-fence']);
+    expect(text).toBe('Here:\n```js\nconsole.log(1);\n```');
+    expect(gradeAuditedOutput(text)).toEqual([]);
+  });
+
+  it('strips a forbidden theme tag', () => {
+    const { text, repairs } = repairPresentationDefects('[theme: sunset] Your day:');
+    expect(repairs).toEqual(['forbidden-theme-tag']);
+    expect(text).toBe('Your day:');
+  });
+
+  it('leaves a well-formed answer byte-identical', () => {
+    const answer = 'Two things today: dentist at 09:00, review at 14:00.';
+    const { text, repairs } = repairPresentationDefects(answer);
+    expect(text).toBe(answer);
+    expect(repairs).toEqual([]);
+  });
+
+  it('does not touch defects that need judgement to fix', () => {
+    // Removing a bracketed row or an emoji requires knowing what the owner
+    // asked for; a wrong rewrite at the last step before delivery is worse
+    // than a defect caught in review.
+    const answer = '[Set alert] | [Check timing] 🎉';
+    expect(repairPresentationDefects(answer).text).toBe(answer);
+  });
+
+  it('is idempotent', () => {
+    const once = repairPresentationDefects('```js\nx();').text;
+    expect(repairPresentationDefects(once).text).toBe(once);
   });
 });

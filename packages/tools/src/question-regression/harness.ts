@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { enqueueTask, executeTask, getAgent, type ModelRouter } from '@assistant/core';
+import {
+  type AuditDefectKind,
+  enqueueTask,
+  executeTask,
+  getAgent,
+  gradeAuditedOutput,
+  type ModelRouter,
+} from '@assistant/core';
 import {
   approvals,
   conversations,
@@ -52,6 +59,22 @@ export interface QuestionResult {
   failures: string[];
 }
 
+/**
+ * The defect kinds that make a *delivered answer* wrong to ship. Emptiness and
+ * provider truncation are graded separately above, and emoji is suppressed
+ * because these fixtures predate that rule — widening the suite's scope is a
+ * separate decision from sharing its checks.
+ */
+const PRESENTATION_DEFECTS = new Set<AuditDefectKind>([
+  'unclosed-code-fence',
+  'background-notice-echo',
+  'forbidden-theme-tag',
+  'leaked-markup',
+  'fabricated-interface-element',
+  'excess-break-tags',
+  'excess-chip-rows',
+]);
+
 export function evaluateQuestion(
   fixture: QuestionCase,
   result: Omit<QuestionResult, 'failures'>,
@@ -81,11 +104,13 @@ export function evaluateQuestion(
   const saved = result.saved.map((row) => `${row.subject}: ${row.content}`).join('\n');
   for (const text of fixture.expect.savedContent ?? [])
     if (!saved.toLowerCase().includes(text.toLowerCase())) failures.push(`writes: missing ${text}`);
-  const withoutCode = answer.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
-  if (/\[Background notice|<br\s*\/?\s*>|\[\/?(?:break|smile|nod)\]/i.test(withoutCode))
-    failures.push('formatting: leaked internal marker or HTML');
-  if ((answer.match(/^\s*```/gm)?.length ?? 0) % 2)
-    failures.push('formatting: unclosed code fence');
+  // The shared checks, not a local copy: these same functions now run in
+  // `response-contract.ts` before publish, so a case can no longer fail here on
+  // a property the runtime does not enforce — which is exactly what the
+  // September audit found this suite doing.
+  for (const defect of gradeAuditedOutput(answer, { emojiRequested: true }))
+    if (PRESENTATION_DEFECTS.has(defect.kind))
+      failures.push(`formatting: ${defect.kind} (${defect.detail})`);
   const cards = result.parts.flatMap((part) => {
     if (
       typeof part !== 'object' ||
