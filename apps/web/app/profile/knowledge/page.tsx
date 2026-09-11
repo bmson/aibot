@@ -28,7 +28,7 @@ import {
 } from '@/app/profile/knowledge/actions';
 import { AddKnowledgeRelation } from '@/app/profile/knowledge/add-relation';
 import { EditKnowledgeEntity } from '@/app/profile/knowledge/entity-forms';
-import { GlobalKnowledgeMap } from '@/app/profile/knowledge/global-map';
+import { KnowledgeMap } from '@/app/profile/knowledge/knowledge-map';
 import { SourceImpactForget } from '@/app/profile/knowledge/source-impact-forget';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
@@ -704,7 +704,7 @@ export default async function KnowledgePage({
             </div>
           ) : (
             <div className="mt-5">
-              <GlobalKnowledgeMap
+              <KnowledgeMap
                 key={JSON.stringify([map.filters, params.entity])}
                 snapshot={map}
                 initialSelectedId={params.entity}

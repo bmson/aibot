@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ExplorerEdge } from './explorer-model';
+import type { ExplorerEdge } from './connection-tree';
 
 vi.mock('./actions', () => ({
   loadKnowledgeNeighborhood: vi.fn(),
