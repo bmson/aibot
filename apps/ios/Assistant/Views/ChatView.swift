@@ -2236,9 +2236,11 @@ private struct ComposerTextInput: UIViewRepresentable {
         context.coordinator.parent = self
         applyConfiguration(to: textView)
 
+        // Setting `text` already refreshes the suggestion through the view's
+        // own `didSet`; calling it again here bought a second dictionary
+        // lookup per pass and nothing else.
         if textView.text != text {
             textView.text = text
-            textView.refreshInlineCompletion()
         }
 
         if isFocused, !textView.isFirstResponder, textView.window != nil {
@@ -2261,20 +2263,33 @@ private struct ComposerTextInput: UIViewRepresentable {
         let lineHeight = textView.font?.lineHeight ?? UIFont.systemFont(ofSize: fontSize).lineHeight
         let maximumHeight = (lineHeight * 6) + textView.textContainerInset.top + textView.textContainerInset.bottom
         let height = min(max(fittingSize.height, lineHeight), maximumHeight)
-        textView.isScrollEnabled = fittingSize.height > maximumHeight
+        // SwiftUI treats this as a pure measurement and may call it more than
+        // once per layout pass. `isScrollEnabled` changes how a UITextView
+        // sizes itself, so writing it unconditionally here fed a different
+        // answer back into the next call and dirtied the layout being
+        // measured. Only the real crossing of the six-line cap is written.
+        let scrolls = fittingSize.height > maximumHeight
+        if textView.isScrollEnabled != scrolls {
+            textView.isScrollEnabled = scrolls
+        }
         return CGSize(width: width, height: ceil(height))
     }
 
+    /// Every write is guarded. `font` carries an overridden `didSet` that
+    /// invalidates layout, and SwiftUI re-runs `updateUIView` for any state
+    /// change in the composer's parent — including the measured composer
+    /// height, which changes the moment the draft wraps to a second line.
+    /// Re-applying identical values on each of those passes kept the field
+    /// permanently dirty.
     private func applyConfiguration(to textView: InlineCompletionTextView) {
         let font = UIFont.systemFont(ofSize: fontSize, weight: .regular)
-        textView.font = font
-        textView.textColor = textColor
-        textView.tintColor = cursorColor
-        textView.placeholderText = prompt
-        textView.placeholderColor = placeholderColor
-        textView.completionColor = completionColor
-        textView.accessibilityLabel = prompt
-        textView.refreshInlineCompletion()
+        if textView.font != font { textView.font = font }
+        if textView.textColor != textColor { textView.textColor = textColor }
+        if textView.tintColor != cursorColor { textView.tintColor = cursorColor }
+        if textView.placeholderText != prompt { textView.placeholderText = prompt }
+        if textView.accessibilityLabel != prompt { textView.accessibilityLabel = prompt }
+        if textView.placeholderColor != placeholderColor { textView.placeholderColor = placeholderColor }
+        if textView.completionColor != completionColor { textView.completionColor = completionColor }
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
@@ -2327,6 +2342,13 @@ private final class InlineCompletionTextView: UITextView {
     private let placeholderLabel = UILabel()
     private let completionLabel = UILabel()
     private let checker = UITextChecker()
+    private var isPositioningCompletion = false
+    /// The draft `cachedCompletionSuffix` was computed for. Both delegate
+    /// callbacks that ask for a suggestion — text change and selection change —
+    /// fire repeatedly for a caret that has not moved, and each miss is a
+    /// dictionary lookup.
+    private var completionCacheKey: String?
+    private var cachedCompletionSuffix: String?
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
@@ -2372,25 +2394,55 @@ private final class InlineCompletionTextView: UITextView {
             width: max(0, bounds.width - leading - inset.right - textContainer.lineFragmentPadding),
             height: font?.lineHeight ?? 0
         )
-        refreshInlineCompletion()
+
+        // Move the suggestion that is already on screen; do not recompute it.
+        // This used to call `refreshInlineCompletion()`, which put a
+        // `UITextChecker` dictionary lookup on every layout pass and, through
+        // `caretRect(for:)`, forced TextKit to lay the text out again from
+        // inside `layoutSubviews` — re-entering this method. One wrapped line
+        // multiplies how often a UITextView lays out, which is why the
+        // composer only locked up once the draft reached a second line.
+        positionCompletionLabel()
     }
 
     func refreshInlineCompletion() {
         placeholderLabel.isHidden = !text.isEmpty
 
         guard let suffix = suggestedCompletionSuffix(), !suffix.isEmpty else {
+            completionLabel.text = nil
             completionLabel.isHidden = true
             return
         }
 
-        let endOfText = endOfDocument
-        let caret = caretRect(for: endOfText)
+        // The label's text is what says a suggestion is outstanding; whether
+        // it is visible is decided by whether it fits at the caret, which only
+        // the layout pass can know.
+        completionLabel.text = suffix
+        positionCompletionLabel()
+    }
+
+    /// Place the suggestion at the caret, or withdraw it when it does not fit.
+    /// Cheap enough to run from a layout pass: no spell-checking, and it does
+    /// nothing at all when there is no suggestion showing.
+    ///
+    /// The re-entrancy guard lives here rather than at the call sites because
+    /// `caretRect(for:)` can drive a TextKit layout that lands back in
+    /// `layoutSubviews`, and this is the only method that asks for one.
+    private func positionCompletionLabel() {
+        guard !isPositioningCompletion else { return }
+        guard !(completionLabel.text ?? "").isEmpty else {
+            completionLabel.isHidden = true
+            return
+        }
+        isPositioningCompletion = true
+        defer { isPositioningCompletion = false }
+
+        let caret = caretRect(for: endOfDocument)
         guard caret != .zero else {
             completionLabel.isHidden = true
             return
         }
 
-        completionLabel.text = suffix
         completionLabel.sizeToFit()
         let availableWidth = bounds.maxX - textContainerInset.right - caret.maxX
         guard completionLabel.bounds.width <= availableWidth else {
@@ -2402,6 +2454,10 @@ private final class InlineCompletionTextView: UITextView {
             x: caret.maxX,
             y: caret.midY - (completionLabel.bounds.height / 2)
         )
+        // A caret that was not measurable on an earlier pass — the first
+        // character typed into a field that has not been laid out yet — left
+        // the suggestion hidden with its text still set. Showing it here is
+        // what lets the next layout recover it without another lookup.
         completionLabel.isHidden = false
     }
 
@@ -2411,7 +2467,16 @@ private final class InlineCompletionTextView: UITextView {
         guard selectedRange.length == 0, selectedRange.location == length, length > 1 else {
             return nil
         }
+        // The caret is pinned to the end of the draft by the guard above, so
+        // the draft alone identifies the answer.
+        if completionCacheKey == currentText { return cachedCompletionSuffix }
+        let suffix = lookUpCompletionSuffix(in: currentText, length: length)
+        completionCacheKey = currentText
+        cachedCompletionSuffix = suffix
+        return suffix
+    }
 
+    private func lookUpCompletionSuffix(in currentText: String, length: Int) -> String? {
         let source = currentText as NSString
         let wordCharacters = CharacterSet.letters.union(.decimalDigits)
         var start = length

@@ -752,8 +752,16 @@ struct AssistantConfirmationState {
     mutating func reset() { expiresAt = nil }
 }
 
-/// Keep confirmation at the original touch target. Both labels reserve the same
-/// space, so arming never moves this button or its neighbours under the finger.
+/// Keep confirmation at the original touch target. Every label the button can
+/// show reserves the same space, so arming never moves this button or its
+/// neighbours under the finger.
+///
+/// That reservation is why the confirmation word is short. Spelling the action
+/// out again — "Confirm delete source" against a "Delete source" title — sized
+/// every destructive button to a string it shows for at most eight seconds,
+/// leaving the resting label adrift in a box half again too wide. The armed
+/// state is already carried by the checkmark glyph and, for destructive
+/// actions, a filled red surface; VoiceOver still hears the full phrase.
 struct AssistantConfirmationButton: View {
     let title: String
     var confirmationTitle: String
@@ -777,7 +785,7 @@ struct AssistantConfirmationButton: View {
          prepare: (() async -> Bool)? = nil,
          action: @escaping () async -> Void) {
         self.title = title
-        self.confirmationTitle = confirmationTitle ?? "Confirm \(title.lowercased())"
+        self.confirmationTitle = confirmationTitle ?? Self.defaultConfirmationTitle
         self.systemImage = systemImage
         self.kind = kind
         self.hint = hint
@@ -787,7 +795,17 @@ struct AssistantConfirmationButton: View {
         self.action = action
     }
 
+    static let defaultConfirmationTitle = "Confirm?"
+
     private var armed: Bool { confirmation.expiresAt != nil }
+
+    /// What VoiceOver hears. The visible confirmation word is deliberately
+    /// terse; the spoken one still names the action being confirmed.
+    private var spokenConfirmation: String {
+        confirmationTitle == Self.defaultConfirmationTitle
+            ? "Confirm \(title.lowercased())"
+            : confirmationTitle
+    }
 
     var body: some View {
         Button {
@@ -819,7 +837,11 @@ struct AssistantConfirmationButton: View {
                 ZStack {
                     Text(title).hidden()
                     Text(confirmationTitle).hidden()
-                    Text(working ? "Working…" : armed ? confirmationTitle : title)
+                    // The working state keeps the resting title and swaps only
+                    // the glyph for its spinner. A third word here would widen
+                    // every button in the app for a state that lasts one
+                    // round-trip, after the decision has already been made.
+                    Text(armed && !working ? confirmationTitle : title)
                 }
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -827,7 +849,7 @@ struct AssistantConfirmationButton: View {
         .buttonStyle(AssistantActionButtonStyle(kind: kind, compact: compact, fillsWidth: fillsWidth,
             confirming: armed && kind == .destructive))
         .disabled(working)
-        .accessibilityLabel(working ? "Working" : armed ? confirmationTitle : title)
+        .accessibilityLabel(working ? "Working" : armed ? spokenConfirmation : title)
         .accessibilityHint(armed ? "Tap again to confirm. \(hint)" : "Requires two taps. \(hint)")
         .accessibilityAction(.escape) { confirmation.reset() }
         .task(id: confirmation.expiresAt) {

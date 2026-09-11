@@ -350,12 +350,16 @@ struct MoreView: View {
                 )
             ) { detail }
             .disabled(settingsActionInFlight != nil)
-            AssistantConfirmationButton("Delete", hint: "Deletes this standing approval rule.") {
+            // Trailing-aligned so the control hugs "Delete" instead of
+            // claiming the full row width the toggle above uses; compact
+            // keeps it reading as a secondary action under the toggle.
+            AssistantConfirmationButton("Delete", hint: "Deletes this standing approval rule.", compact: true) {
                 settingsActionInFlight = policy.id
                 _ = await model.deletePolicy(policy)
                 settingsActionInFlight = nil
             }
             .disabled(settingsActionInFlight != nil)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 
@@ -417,12 +421,16 @@ private struct RemindersView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            AssistantConfirmationButton("Remove", hint: "Stops queued and future reminder alerts.") {
+            // Trailing-aligned to match the standing-approvals row: a
+            // compact secondary action rather than a left-hugging control
+            // stranded under the full row width.
+            AssistantConfirmationButton("Remove", hint: "Stops queued and future reminder alerts.", compact: true) {
                 removalInFlight = reminder.id
                 _ = await model.deleteReminder(reminder)
                 removalInFlight = nil
             }
             .disabled(removalInFlight != nil)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.vertical, 4)
     }
