@@ -8,35 +8,45 @@ badly formed, and why the assistant is quieter than its design documents claim.
 Grounded in the code as of "Port task creation and durable queue dispatch behind
 persistence contracts" (#127).
 
-**Coverage.** Three of five planned tracks completed: the synchronous response
-path, inbound signal (mail/calendar/SMS/push/location), and a full model-call
-inventory. Two tracks — memory/context assembly and evaluation-infrastructure
-coverage — were cut short and are **not** represented here beyond what the other
-tracks touched. Their absence is noted rather than papered over; the open
-questions at the end say what was not looked at.
+**Coverage.** All five planned tracks completed: the synchronous response path,
+inbound signal (mail/calendar/SMS/push/location), the proactive layer,
+memory/context assembly, evaluation coverage, and a full model-call inventory.
 
 ## Verdict
 
-Three findings account for most of the gap between the assistant this repository
-describes and the one an owner experiences.
+The engineering here is not weak. `groundReadDraft`, the unsupported-claim regex
+family, `validateGroundedCard`, `enforceUrlProvenance`, the request checklist and
+the fact-quarantine rules are real, code-based guarantees of a kind most
+assistants do not have.
 
-1. **The default mail mode disables almost all proactive mail behavior.** One
-   enum default (`EMAIL_INGEST_MODE=direct`) leaves the table that every mail-driven
-   proactive surface reads permanently empty. This is not a quality problem to be
-   tuned; it is a switch that is off.
-2. **Factual grounding is strong where it was built and absent where it was not.**
+The gap between the assistant this repository describes and the one an owner
+experiences is mostly not missing machinery. **It is machinery that is switched
+off by default, next to one legacy surface that fires unconditionally.**
+
+Four defaults, each individually reasonable, compound into "quiet when it should
+speak, noisy when it shouldn't":
+
+| Default | Consequence |
+| --- | --- |
+| `EMAIL_INGEST_MODE=direct` (`packages/config/src/index.ts:215`) | The table every mail-driven proactive surface reads stays empty — pulse mail moments, importance alerts, briefing highlights, `email.extract` all inert |
+| `CHAT_RECALL_ENABLED=false` (`config/src/index.ts:272`, via `booleanString` → `'false'` at `:24-27`) | Automatic recall never runs. Anything past the recent message window is unreachable unless the model happens to call a recall tool itself |
+| `GRAPH_RAG_ENABLED=false` (`config/src/index.ts:278`) | GraphRAG and the daily `graph.curiosity` question are permanent no-ops, and nothing reports it |
+| `morning-brief` seeded enabled (`packages/db/src/seed.ts:196-205`) | A second, older brief fires at 07:30 — 15 minutes before `daily-briefing` at 07:45 — through the full model/tool loop, with **no self-silence clause**, so it messages every morning regardless of whether anything happened |
+
+So the three most-cited quality complaints have the same shape as each other and
+as the September audit's: the capability exists, is tested, is documented as
+shipped — and is off, or duplicated, in the configuration that actually ships.
+
+Beyond the defaults, two structural findings stand:
+
+1. **Factual grounding is strong where it was built and absent where it was not.**
    Calendar and email answers are verified word-by-word against the tool ledger.
    Web and weather answers — the categories that failed the September audit — have
    no deterministic check at all.
-3. **Nothing records what the model actually said.** The `model_calls` ledger
-   stores cost and token counts, not prompts or outputs. No quality question about
-   production can currently be answered from data.
-
-The system's engineering is not weak. `groundReadDraft`, the unsupported-claim
-regex family, `validateGroundedCard`, `enforceUrlProvenance` and the request
-checklist are real, code-based guarantees of a kind most assistants do not have.
-The problem is that this rigor is unevenly applied, and that its coverage is
-invisible because the output it guards is never stored.
+2. **Nothing recorded what the model actually said.** `model_calls` stored cost
+   and token counts, not prompts or outputs, so no production quality question was
+   answerable from data. (Addressed on this branch — see
+   [reviewing what the models said](../llm-output-review.md).)
 
 ## 1. One seam, thirty surfaces
 
@@ -225,7 +235,85 @@ The pulse is additionally gated by a 60-minute minimum gap and a six-per-day
 ambient ceiling shared across every producer (`pulse.ts:53,64`), so a busy mail
 morning can silence a same-day cancellation for the rest of the day.
 
-## 6. What is already right
+## 6. The proactive layer: two briefs, and switches that are off
+
+`docs/anticipation-layer.md:89-90` states that every proactive producer is
+self-silencing. One is not.
+
+Two morning briefs are seeded enabled and fire 15 minutes apart:
+
+| Schedule | Cron | How it works | Silences itself? |
+| --- | --- | --- | --- |
+| `morning-brief` (`seed.ts:196-205`) | `30 7 * * *` | Full model + tool loop at `trust:'assistant'`, prompt ends "send ONE concise brief via `owner.notify` with `ping=true`" | **No** |
+| `daily-briefing` (`seed.ts:231-233`) | `45 7 * * *` | The `briefing.compose` code job — deterministic assembly, model phrases only | Yes |
+
+So the owner is pinged every single morning by the older surface whether or not
+anything happened, and then potentially again by the newer one. The two do not
+share dedup state.
+
+`morning-brief` cannot simply be disabled: `WAKE_BRIEF_SCHEDULE`
+(`packages/core/src/workflow/schedules.ts:725`) points at it by name, so the
+wake-on-first-app-open path fires *that* schedule. Retiring it means moving the
+wake path to `daily-briefing` first. This is a design decision, not a cleanup.
+
+Two further surfaces are silently inert: `graph.curiosity` never runs because
+`GRAPH_RAG_ENABLED` defaults false, and neither `proactiveConfigNotes` nor
+`assessProactiveHealth` reports it — the exact "making silence legible" failure
+the anticipation doc was written to prevent. There is also no cross-surface
+dedup: the pulse and the next morning's briefing use disjoint `sourceRef`
+namespaces, so one email can produce two suggestion cards.
+
+## 7. Context assembly: recall is off, and corrections do not stick
+
+`CHAT_RECALL_ENABLED` defaults false, so on a default install the model sees the
+recent message window and whatever it fetches by tool call. Everything
+`docs/long-running-chat-memory.md` describes is inert.
+
+Two findings hold even with recall on:
+
+- **`memory.save` is pure append** (`packages/tools/src/builtin/index.ts:92-129`).
+  Supersession happens only in a nightly consolidation capped at 12 entities per
+  run (`memory/consolidation.ts:92,188`). A corrected fact and the stale one it
+  corrects can both reach the model in the same window, same day — the owner
+  tells the assistant they have moved, and it keeps citing the old address until
+  consolidation catches up.
+- **The controlled predicate vocabulary is prompt-only advice.**
+  `GraphExtractionSchema.predicate` is free text (`memory/knowledge-graph.ts:51`)
+  and `cleanPredicate` normalizes formatting without validating membership
+  (`:184-192`), so the graph accumulates synonymous predicates that later
+  traversals miss.
+- **Recall telemetry measures availability, not relevance.** `recall-metrics.ts`
+  and the health monitor detect recall being *down*, never recall being *wrong*,
+  and the owner-facing thumbs-up/down in `recall-feedback.ts` is written and
+  never read by anything.
+
+Tool schemas (~70-80 tools, `packages/tools/src/dispatcher.ts:245-264`) are the
+largest single context block on any action turn, with no cap, no measurement and
+no relevance filtering.
+
+## 8. Evaluation coverage
+
+Better than expected in breadth, with two holes exactly where traffic is heaviest.
+21 of 24 generative surfaces have scripted-model unit coverage of the actual call.
+The uncovered ones are the two busiest: the chat needs-action triage
+(`chat-turn.ts:389`) and the tool-less chat reply (`chat-turn.ts:596`) have **no
+coverage of any kind**, because both harnesses begin execution only after a task
+and plan already exist. Two step-loop retry branches that exist specifically to
+catch model misbehaviour (`step-loop.ts:813,853`) are never triggered by any
+fixture.
+
+The assertion vocabulary is regex, count and exact-string over
+`QuestionCase.expect` (`question-regression/harness.ts:55-116`). It structurally
+cannot express "should have asked a clarifying question", "should not have spoken
+at all" (an empty answer is always a failure), tone, proactive timing, or
+cross-turn non-duplication — which is precisely the vocabulary the proactive
+surfaces need.
+
+Nothing requiring a model key runs in CI. There is no LLM-as-judge, no rubric and
+no score anywhere: every check is binary pass/fail on hand-written assertions, so
+there is no number to track over time.
+
+## 9. What is already right
 
 Stated plainly, because a review that lists only faults misrepresents the system:
 
@@ -245,42 +333,60 @@ Stated plainly, because a review that lists only faults misrepresents the system
 - **The nudge ledger** — held pings are recorded with a reason and surfaced, so
   suppression is never silent loss.
 
-## 7. Recommendations, in order
+## 10. Recommendations, in order
 
-1. **Record model input and output**, opt-in, redacted, retention-bounded. Nothing
-   else on this list can be verified without it.
-2. **Populate `email_ingest` in `direct` mode**, or change the default. Highest
-   single leverage on proactivity. (`email-sync.ts` `processMessage`, ~:916.)
-3. **Persist something recoverable before the automated-sender regex drops a
-   message** (`email-sync.ts:328`), so travel and billing mail is at worst
-   unindexed rather than gone.
-4. **Ground live web and weather answers** the way reads are grounded — a
-   `groundLiveLookupDraft` parallel to `groundReadDraft`.
-5. **Make the verifier unconditional on live-lookup turns**, and route it to the
+Items 1-3 and 7 are **done on this branch**; the rest are open.
+
+1. ~~**Record model input and output**~~ — done. `LLM_AUDIT_CAPTURE`, the
+   `model_call_audit` table, and `pnpm audit:llm`. Nothing else here can be
+   measured without it.
+2. ~~**Populate `email_ingest` in `direct` mode**~~ — done. Scores and records
+   every authenticated message, automated senders included; trust semantics and
+   interrupt behaviour unchanged.
+3. ~~**Persist something recoverable before the automated-sender regex drops a
+   message**~~ — done, by the same change.
+4. **Decide the two-brief question.** Either retire `morning-brief` (moving
+   `WAKE_BRIEF_SCHEDULE` to `daily-briefing` first) or give its prompt the
+   self-silence clause every other producer has. Today it pings every morning
+   regardless. `packages/db/src/seed.ts:196-205`,
+   `packages/core/src/workflow/schedules.ts:725`.
+5. **Turn recall on, or explain the default.** `CHAT_RECALL_ENABLED` and
+   `GRAPH_RAG_ENABLED` both default false, which makes most of the memory
+   subsystem inert on a fresh install. At minimum `proactiveConfigNotes` should
+   say so, the way it now does for ingest mode. `packages/config/src/index.ts:272,278`.
+6. **Ground live web and weather answers** — a `groundLiveLookupDraft` parallel to
+   `groundReadDraft`, invoked whenever `detectLiveLookup` fired.
+7. ~~**Port the harness-only formatting checks out of the test suite**~~ — done as
+   `gradeAuditedOutput` (`packages/core/src/model-router/audit-graders.ts`). **But
+   it is not yet wired into `response-contract.ts`, and the harness still
+   hand-rolls its own copy — three implementations of the same checks now coexist.**
+   Finishing this means calling the shared function from both.
+8. **Make the verifier unconditional on live-lookup turns**, and route it to the
    `reason` tier for `critical` turns rather than the cheapest tier.
-6. **Port the harness-only formatting checks into `response-contract.ts`** so the
-   suite grades a property that actually ships.
-7. **Wrap `classifySender`'s model call in try/catch** (`email-sync.ts:331`). It is
-   currently the only unguarded one on the ingest path, and a throw stalls the
-   whole sync page behind the offending message.
-8. **Add a calendar snapshot diff** and emit `event-cancelled` / `event-moved`
-   moments; carry Google's `status` through `RawEvent`.
-9. **De-duplicate pending approvals** for structurally identical gated calls
-   (`dispatcher.ts` `parkForApproval`, ~:793).
-10. **Let a model phrase the pulse's deterministic findings** — decision stays in
-    code, wording comes from the model, exactly as the briefing already does.
+9. **Cover the two busiest surfaces.** `chat-turn.ts:389` and `:596` have no test
+   of any kind; both harnesses start after a plan exists.
+10. **Supersede facts on write**, not only in a 12-per-night batch, so a
+    correction the owner just made cannot be contradicted the same day.
+11. **Add a calendar snapshot diff** and emit `event-cancelled` / `event-moved`
+    moments; carry Google's `status` through `RawEvent`.
+12. **Let a model phrase the pulse's deterministic findings** — decision stays in
+    code, wording comes from the model, exactly as `briefing.compose` already does.
+13. **De-duplicate pending approvals** for structurally identical gated calls
+    (`dispatcher.ts` `parkForApproval`, ~:793).
 
 ## Open questions
 
-Not investigated, and needed before acting on parts of the above:
-
-- **Memory and context assembly.** What actually reaches the model's window on an
-  ordinary turn, how recall selects, what truncation drops first, and whether
-  superseded facts can coexist with current ones. This is usually the largest
-  single driver of answer quality and it is unexamined here.
-- **Evaluation coverage.** Which of the thirty surfaces any test exercises, what
-  the corpus assertion vocabulary can and cannot express, and what actually runs
-  in CI versus what needs a model key.
-- **Whether changing `EMAIL_INGEST_MODE`'s default is acceptable** for existing
-  installations, or whether `direct` mode should instead gain a lightweight
-  ingest-writing path that leaves the default alone.
+- **Should these defaults change, or should the diagnostics just name them?**
+  Changing `CHAT_RECALL_ENABLED`, `GRAPH_RAG_ENABLED` or the seeded
+  `morning-brief` alters behaviour and cost for every existing installation.
+  `EMAIL_INGEST_MODE` was resolved the other way — leave the default, make the
+  mode work — and the same shape may fit here.
+- **What should the eval assertion vocabulary grow into?** The proactive surfaces
+  need "should not have spoken", timing and non-duplication assertions that the
+  current regex/count vocabulary cannot express. The `model_call_audit` recorder
+  now makes recorded production calls available as eval inputs, which is a
+  different and probably better starting point than more hand-written fixtures.
+- **Is `full` capture acceptable for this installation?** `redacted` keeps dates,
+  amounts and scores but drops identifiers, which is enough for formatting and
+  timing review. Judging whether an answer was *grounded* generally needs the
+  evidence verbatim.
