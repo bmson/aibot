@@ -11,12 +11,16 @@ describe('proactiveConfigNotes', () => {
     expect(proactiveConfigNotes(loadConfig(base))).toEqual([]);
   });
 
-  it('names the default ingest mode as the reason the briefing is empty', () => {
+  it('names the default ingest mode as the reason forwarded mail never lands', () => {
     // The exact trap: a forwarding rule is set up, the mode is left alone, and
-    // the only symptom anywhere is silence.
+    // the only symptom anywhere is silence. Direct mode does now score and
+    // record what it reads, so the note has to name what is actually still
+    // broken — forwarded mail cannot pass SPF alignment — rather than the old
+    // blanket claim that nothing gets scored.
     const notes = proactiveConfigNotes(loadConfig({ ...base, EMAIL_INGEST_MODE: 'direct' }));
     expect(notes.join(' ')).toContain('EMAIL_INGEST_MODE');
-    expect(notes.join(' ')).toMatch(/dropped rather than scored/);
+    expect(notes.join(' ')).toMatch(/SPF alignment/);
+    expect(notes.join(' ')).toMatch(/dropped as unauthenticated/);
   });
 
   it('says nothing about mail when google is not installed', () => {
