@@ -1252,6 +1252,51 @@ export const modelCalls = pgTable(
 );
 
 /**
+ * What a model was actually asked and what it actually said.
+ *
+ * `model_calls` above is a cost ledger: it proves a call happened and what it
+ * spent, but it keeps neither the prompt nor the response, so no question about
+ * answer *quality* can be asked of production at all. This table is the missing
+ * half, and it is off by default because it necessarily holds the owner's mail,
+ * calendar and conversations: `LLM_AUDIT_CAPTURE=off|redacted|full` decides
+ * whether a row is written and whether identifiers are scrubbed first, and
+ * `LLM_AUDIT_RETENTION_DAYS` bounds how long it is kept. Rows are telemetry,
+ * never an input to the assistant's own reasoning — nothing reads this table
+ * back into a prompt.
+ */
+export const modelCallAudit = pgTable(
+  'model_call_audit',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** The cost-ledger row this records, when metering got far enough to make one. */
+    modelCallId: uuid('model_call_id').references(() => modelCalls.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id').references(() => tasks.id),
+    role: text('role').notNull(),
+    model: text('model').notNull(),
+    /** Which router entry point produced it: generate | stream | step | object. */
+    method: text('method').notNull(),
+    /** How the stored text was treated on write, so a reader knows what it holds. */
+    capture: text('capture').notNull(),
+    systemPrompt: text('system_prompt'),
+    input: text('input'),
+    output: text('output'),
+    /** True when any stored field hit the per-field character cap. */
+    truncated: boolean('truncated').notNull().default(false),
+    finishReason: text('finish_reason'),
+    latencyMs: integer('latency_ms'),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('model_call_audit_created_idx').on(t.createdAt),
+    index('model_call_audit_role_idx').on(t.role),
+    index('model_call_audit_task_idx').on(t.taskId),
+    check('model_call_audit_capture_check', sql`${t.capture} IN ('redacted','full')`),
+  ],
+);
+
+/**
  * Every billable event, whatever it costs money for (Phase 27). Model calls,
  * embeddings, SMS, job-seconds — one ledger, one dashboard number. Sources
  * must stay in sync with the CI wiring check in @assistant/core cost.ts.

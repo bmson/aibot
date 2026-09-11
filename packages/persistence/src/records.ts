@@ -478,6 +478,25 @@ export interface Records {
     finishReason: string | null;
     openrouterGenerationId: string | null;
   };
+  /** What a model was asked and what it answered. Written only when capture is on. */
+  modelCallAudit: {
+    id: string;
+    createdAt: Date;
+    modelCallId: string | null;
+    taskId: string | null;
+    role: string;
+    model: string;
+    method: string;
+    capture: string;
+    systemPrompt: string | null;
+    input: string | null;
+    output: string | null;
+    truncated: boolean;
+    finishReason: string | null;
+    latencyMs: number | null;
+    inputTokens: number;
+    outputTokens: number;
+  };
   costEvents: {
     id: string;
     createdAt: Date;
