@@ -104,10 +104,7 @@ describe('model_call_audit', () => {
     const auditId = row?.id as string;
 
     await db.delete(modelCalls).where(eq(modelCalls.id, callId));
-    const remaining = await db
-      .select()
-      .from(modelCallAudit)
-      .where(eq(modelCallAudit.id, auditId));
+    const remaining = await db.select().from(modelCallAudit).where(eq(modelCallAudit.id, auditId));
     expect(remaining).toHaveLength(0);
   });
 
@@ -119,14 +116,8 @@ describe('model_call_audit', () => {
     const deleted = await purgeStaleModelCallAudit(db, 14);
     expect(deleted).toBeGreaterThanOrEqual(1);
 
-    const staleRows = await db
-      .select()
-      .from(modelCallAudit)
-      .where(eq(modelCallAudit.id, stale));
-    const freshRows = await db
-      .select()
-      .from(modelCallAudit)
-      .where(eq(modelCallAudit.id, fresh));
+    const staleRows = await db.select().from(modelCallAudit).where(eq(modelCallAudit.id, stale));
+    const freshRows = await db.select().from(modelCallAudit).where(eq(modelCallAudit.id, fresh));
     expect(staleRows).toHaveLength(0);
     expect(freshRows).toHaveLength(1);
   });
