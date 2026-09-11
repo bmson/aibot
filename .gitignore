@@ -28,6 +28,10 @@ seed-data/voice/*.txt
 # assistant local workspace (FILES_DRIVER=local)
 .workspace/
 
+# Scratch git worktrees created for isolated agent runs. They are checkouts of
+# this same repository, so committing them would nest a working copy inside it.
+.claude/worktrees/
+
 # Xcode user state
 **/xcuserdata/
 **/*.xcuserstate
