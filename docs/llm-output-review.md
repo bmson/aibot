@@ -11,6 +11,12 @@ Capture closes that, and `pnpm audit:llm` reads it back.
 
 ## Turning capture on
 
+Set it in `.env` and provision — `infra/gcp/deploy.sh` forwards both settings to
+the agent and the web service. Setting them by hand in the Cloud Run console
+does not stick: the deploy uses `--set-env-vars`, which replaces the whole
+environment, so the next provisioning run silently wipes anything the script
+does not name.
+
 ```dotenv
 LLM_AUDIT_CAPTURE=redacted   # off | redacted | full
 LLM_AUDIT_RETENTION_DAYS=14

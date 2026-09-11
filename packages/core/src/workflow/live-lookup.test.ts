@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { detectLiveLookup, liveLookupFailure, nextLiveLookup } from './live-lookup.js';
+import {
+  detectLiveLookup,
+  liveLookupFailure,
+  nextLiveLookup,
+  ungroundedLiveFigure,
+} from './live-lookup.js';
 
 describe('live lookup routing from home-screen regressions', () => {
   it.each([
@@ -104,5 +109,95 @@ describe('live lookup routing from home-screen regressions', () => {
         },
       ]),
     ).toContain("haven't verified");
+  });
+});
+
+describe('ungroundedLiveFigure', () => {
+  const webLookup = { kind: 'web', request: 'What was the final score last night?' } as const;
+  const weatherLookup = { kind: 'weather', request: 'what is the weather today' } as const;
+  const fetched = (text: string) => [
+    { toolName: 'web.fetch', status: 'succeeded', result: { text } } as never,
+  ];
+
+  it('blocks a score the retrieved sources never stated', () => {
+    // The September failure: a batted-ball stat in a snippet reported as the score.
+    const evidence = fetched('Final: San Francisco Giants 5, St. Louis Cardinals 4.');
+    expect(ungroundedLiveFigure(webLookup, 'The Giants led 7-3.', evidence)).toMatch(
+      /do not state 7-3/,
+    );
+  });
+
+  it('accepts a score the sources do state', () => {
+    const evidence = fetched('Final: San Francisco Giants 5, St. Louis Cardinals 4.');
+    expect(ungroundedLiveFigure(webLookup, 'Giants won 5-4.', evidence)).toBeUndefined();
+  });
+
+  it('accepts the same score stated in the other order', () => {
+    const evidence = fetched('Cardinals 4, Giants 5 (F/11)');
+    expect(
+      ungroundedLiveFigure(webLookup, 'It finished 5-4 to the Giants.', evidence),
+    ).toBeUndefined();
+  });
+
+  it('accepts a figure that only appeared in a search snippet', () => {
+    const evidence = [
+      {
+        toolName: 'web.search',
+        status: 'succeeded',
+        result: { results: [{ snippet: 'Giants 5, Cardinals 4 final' }] },
+      } as never,
+    ];
+    expect(ungroundedLiveFigure(webLookup, 'Giants 5-4.', evidence)).toBeUndefined();
+  });
+
+  it('ignores ranges and dates that are not scorelines', () => {
+    // These are the false positives that would make the rule unusable: a
+    // computed range and a date are not claims about a retrieved figure.
+    const evidence = fetched('The game is on.');
+    expect(
+      ungroundedLiveFigure(webLookup, 'Expect 10-15 minutes of delay.', evidence),
+    ).toBeUndefined();
+    expect(ungroundedLiveFigure(webLookup, 'Played on 2026-09-07.', evidence)).toBeUndefined();
+  });
+
+  it('stays out of requests that are not about a result', () => {
+    const lookup = { kind: 'web', request: 'who is the president of Iceland' } as const;
+    const evidence = fetched('Halla Tomasdottir is President.');
+    expect(ungroundedLiveFigure(lookup, 'She won 34-2 in the vote.', evidence)).toBeUndefined();
+  });
+
+  it('blocks a temperature the weather data never returned', () => {
+    const evidence = [
+      { toolName: 'weather.lookup', status: 'succeeded', result: { tempF: 61, high: 66 } } as never,
+    ];
+    expect(ungroundedLiveFigure(weatherLookup, 'It is 72°F right now.', evidence)).toMatch(
+      /does not contain 72/,
+    );
+  });
+
+  it('accepts a temperature the weather data did return', () => {
+    const evidence = [
+      { toolName: 'weather.lookup', status: 'succeeded', result: { tempF: 61, high: 66 } } as never,
+    ];
+    expect(
+      ungroundedLiveFigure(weatherLookup, 'It is 61°F, rising to 66 degrees.', evidence),
+    ).toBeUndefined();
+  });
+
+  it('says nothing when no lookup succeeded, leaving that to the failure check', () => {
+    const evidence = [{ toolName: 'web.fetch', status: 'failed', result: null } as never];
+    expect(ungroundedLiveFigure(webLookup, 'Giants 7-3.', evidence)).toBeUndefined();
+  });
+
+  it('ignores evidence from an earlier task', () => {
+    const evidence = [
+      {
+        toolName: 'web.fetch',
+        status: 'succeeded',
+        fromCurrentTask: false,
+        result: { text: 'Giants 7, Cardinals 3' },
+      } as never,
+    ];
+    expect(ungroundedLiveFigure(webLookup, 'Giants 7-3.', evidence)).toBeUndefined();
   });
 });

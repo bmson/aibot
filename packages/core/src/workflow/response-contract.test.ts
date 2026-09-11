@@ -1772,3 +1772,31 @@ it('acknowledges an owner-supplied completed event without inventing a status mu
   });
   expect(action.blocked).toBe(true);
 });
+
+describe('presentation repair before publish', () => {
+  it('closes an unclosed code fence in an otherwise honest answer', () => {
+    // The regression suite has graded this since the September audit; until
+    // now nothing enforced it, so the suite promised a guarantee that the
+    // runtime did not keep.
+    const result = enforceResponseContract('Here you go:\n```js\nconsole.log(1);', []);
+    expect(result.blocked).toBe(false);
+    expect(result.text).toBe('Here you go:\n```js\nconsole.log(1);\n```');
+  });
+
+  it('strips a forbidden theme tag', () => {
+    const result = enforceResponseContract('[theme: sunset] Two things today.', []);
+    expect(result).toMatchObject({ blocked: false, text: 'Two things today.' });
+  });
+
+  it('leaves a well-formed answer untouched', () => {
+    const text = 'Two things today: dentist at 09:00, review at 14:00.';
+    expect(enforceResponseContract(text, [])).toMatchObject({ blocked: false, text });
+  });
+
+  it('does not rescue a dishonest answer by repairing its formatting', () => {
+    // Repair is for the success path only: a claim with no evidence behind it
+    // must still be blocked, fence or no fence.
+    const result = enforceResponseContract('I emailed Alice.\n```', []);
+    expect(result.blocked).toBe(true);
+  });
+});
