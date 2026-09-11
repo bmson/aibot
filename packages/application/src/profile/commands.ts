@@ -226,6 +226,32 @@ export async function updatePersonRelationship(
   await compileOwnerCard(db);
 }
 
+/**
+ * Messages the db layer writes deliberately for the owner to read. Anything
+ * else that escapes it — a postgres.js driver error carrying the failed SQL and
+ * its bound parameters, a constraint violation, an unforeseen bug — is replaced
+ * with a plain fallback and logged instead of rendered. This is an allowlist of
+ * intentional copy rather than a blocklist of driver noise, so a new failure
+ * mode nobody anticipated degrades quietly instead of leaking by default.
+ */
+const OWNER_FACING_DB_ERRORS: ReadonlySet<string> = new Set([
+  'Person name is required.',
+  'Person name must be 120 characters or fewer.',
+  'Person name contains unsupported control characters.',
+  'A person can have at most 20 aliases.',
+  'Person not found or cannot be renamed.',
+  'Person not found.',
+  'The owner profile cannot be deleted.',
+  'Person could not be deleted.',
+]);
+
+export function ownerFacingError(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : '';
+  if (OWNER_FACING_DB_ERRORS.has(message)) return message;
+  console.error('[profile] unexpected person command failure:', error);
+  return fallback;
+}
+
 export async function updatePersonIdentity(
   db: Db,
   contactId: string,
@@ -244,7 +270,7 @@ export async function updatePersonIdentity(
         .filter(Boolean),
     });
   } catch (error) {
-    return { error: error instanceof Error ? error.message : 'Person could not be renamed.' };
+    return { error: ownerFacingError(error, 'Person could not be renamed. Please try again.') };
   }
   await compileOwnerCard(db);
   return {};
@@ -255,7 +281,7 @@ export async function deletePerson(db: Db, contactId: string): Promise<{ error?:
   try {
     await deleteContact(db, contactId);
   } catch (error) {
-    return { error: error instanceof Error ? error.message : 'Person could not be deleted.' };
+    return { error: ownerFacingError(error, 'Person could not be deleted. Please try again.') };
   }
   await compileOwnerCard(db);
   return {};
@@ -314,9 +340,20 @@ export async function organizeMemoryNow(db: Db): Promise<OrganizeMemoryState> {
   };
 }
 
-export async function mergePeople(db: Db, sourceId: string, targetId: string): Promise<void> {
-  await mergeContacts(db, { sourceId, targetId });
+export async function mergePeople(
+  db: Db,
+  sourceId: string,
+  targetId: string,
+): Promise<{ error?: string }> {
+  try {
+    await mergeContacts(db, { sourceId, targetId });
+  } catch (error) {
+    return {
+      error: ownerFacingError(error, 'These people could not be merged. Please try again.'),
+    };
+  }
   await compileOwnerCard(db);
+  return {};
 }
 
 export function purgeProfileVoiceSamples(

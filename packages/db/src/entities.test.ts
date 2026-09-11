@@ -11,7 +11,7 @@ import {
   renameContact,
   resolveSubjectContact,
 } from './entities.js';
-import { contacts, memories, memoryTombstones } from './schema.js';
+import { contacts, memories, memoryTombstones, occasions } from './schema.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -45,6 +45,10 @@ afterAll(async () => {
     await db
       .delete(memoryTombstones)
       .where(sql`${memoryTombstones.contentHash} LIKE 'xtest-entities-%'`);
+    // occasions reference contacts with no cascade — clear them before the rows go.
+    await db.execute(
+      sql`delete from occasions where contact_id in (select id from contacts where name like 'Xtest%')`,
+    );
     if (createdContactIds.length) {
       await db.delete(contacts).where(inArray(contacts.id, createdContactIds));
     }
@@ -161,7 +165,10 @@ describe('contact names', () => {
       supersededById: personFact.id,
     });
 
-    await expect(deleteContact(db, person.id)).resolves.toEqual({ deletedMemories: 1 });
+    await expect(deleteContact(db, person.id)).resolves.toEqual({
+      deletedMemories: 1,
+      deletedOccasions: 0,
+    });
     const [[deletedPerson], [deletedFact], [tombstone], [referringFact]] = await Promise.all([
       db.select().from(contacts).where(eq(contacts.id, person.id)),
       db.select().from(memories).where(eq(memories.contentHash, contentHash)),
@@ -174,6 +181,49 @@ describe('contact names', () => {
     expect(referringFact?.supersededById).toBeNull();
 
     await expect(deleteContact(db, ownerId)).rejects.toThrow('cannot be deleted');
+  });
+
+  it('deletes a person who still has an unapproved occasion', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [person] = await db
+      .insert(contacts)
+      .values({ name: 'Xtest-Delete Occasion Person', trust: 'known' })
+      .returning();
+    if (!person) throw new Error('failed to create test person');
+    const contentHash = 'xtest-entities-delete-occasion-hash';
+    await db.insert(memories).values({
+      agentId,
+      category: 'knowledge',
+      kind: 'person',
+      content: 'xtest-entities: fact about a person with an unapproved birthday',
+      contentHash,
+      originTrust: 'unknown',
+      subjectContactId: person.id,
+    });
+    const [occasion] = await db
+      .insert(occasions)
+      .values({
+        agentId,
+        contactId: person.id,
+        kind: 'birthday',
+        month: 3,
+        day: 14,
+        originTrust: 'unknown',
+        quarantined: true,
+      })
+      .returning();
+    if (!occasion) throw new Error('failed to create test occasion');
+
+    await expect(deleteContact(db, person.id)).resolves.toEqual({
+      deletedMemories: 1,
+      deletedOccasions: 1,
+    });
+    const [[deletedPerson], [deletedOccasion]] = await Promise.all([
+      db.select().from(contacts).where(eq(contacts.id, person.id)),
+      db.select().from(occasions).where(eq(occasions.id, occasion.id)),
+    ]);
+    expect(deletedPerson).toBeUndefined();
+    expect(deletedOccasion).toBeUndefined();
   });
 });
 
@@ -296,6 +346,36 @@ describe('mergeContacts', () => {
       .from(memories)
       .where(eq(memories.contentHash, 'xtest-entities-hash-1'));
     expect(fact?.subjectContactId).toBe((target as NonNullable<typeof target>).id);
+  });
+
+  it('moves occasions to the target and drops a colliding duplicate', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [dup] = await db
+      .insert(contacts)
+      .values({ name: 'Xtest-Dup Dates', trust: 'unknown' })
+      .returning();
+    const [target] = await db
+      .insert(contacts)
+      .values({ name: 'Xtest-Dup Dates Fullname', trust: 'unknown' })
+      .returning();
+    if (!dup || !target) throw new Error('failed to create test people');
+    createdContactIds.push(target.id);
+
+    await db.insert(occasions).values([
+      // the duplicate holds the same birthday as the target, plus a date only it knows
+      { agentId, contactId: dup.id, kind: 'birthday', month: 4, day: 2, quarantined: true },
+      { agentId, contactId: dup.id, kind: 'anniversary', month: 9, day: 9 },
+      { agentId, contactId: target.id, kind: 'birthday', month: 4, day: 2 },
+    ]);
+
+    const result = await mergeContacts(db, { sourceId: dup.id, targetId: target.id });
+    expect(result.movedOccasions).toBe(1);
+
+    const merged = await db.select().from(occasions).where(eq(occasions.contactId, target.id));
+    expect(merged.map((row) => row.kind).sort()).toEqual(['anniversary', 'birthday']);
+    expect(merged.filter((row) => row.kind === 'birthday')).toHaveLength(1);
+    const [gone] = await db.select().from(contacts).where(eq(contacts.id, dup.id));
+    expect(gone).toBeUndefined();
   });
 
   it('refuses to merge the owner away', async (ctx) => {

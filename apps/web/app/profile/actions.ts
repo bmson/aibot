@@ -160,10 +160,14 @@ export async function consolidateNow(
   return result;
 }
 
-export async function mergeContactAction(sourceId: string, targetId: string): Promise<void> {
+export async function mergeContactAction(
+  sourceId: string,
+  targetId: string,
+): Promise<{ error?: string }> {
   await requireOwner();
-  await mergePeople(getDb(), sourceId, targetId);
+  const result = await mergePeople(getDb(), sourceId, targetId);
   revalidateProfile();
+  return result;
 }
 
 export async function purgeVoiceSamplesAction(): Promise<void> {

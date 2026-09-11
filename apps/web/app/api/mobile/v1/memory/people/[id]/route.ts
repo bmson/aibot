@@ -67,8 +67,10 @@ export async function POST(
   ) {
     return mobileJson({ error: 'action must be merge with a valid targetId' }, { status: 400 });
   }
-  await mergePeople(getDb(), id, body.targetId);
-  return mobileJson({ ok: true });
+  const merged = await mergePeople(getDb(), id, body.targetId);
+  return merged.error
+    ? mobileJson({ error: merged.error }, { status: 409 })
+    : mobileJson({ ok: true });
 }
 
 export async function DELETE(

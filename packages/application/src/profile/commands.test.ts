@@ -1,11 +1,12 @@
 import { getAgent } from '@assistant/core/chat';
 import { agents, createDb, type Db, knowledgeGraphSources, memories, tasks } from '@assistant/db';
 import { and, eq, like, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   approveQuarantinedMemory,
   correctMemory,
   forgetMemory,
+  ownerFacingError,
   restoreMemory,
 } from './commands.js';
 
@@ -260,6 +261,40 @@ describe('memory correction graph refresh (integration)', () => {
     } finally {
       await db.delete(memories).where(eq(memories.id, foreignMemory.id));
       await db.delete(agents).where(eq(agents.id, otherAgent.id));
+    }
+  });
+});
+
+// Pure mapping — no database, so it runs everywhere the suite does.
+describe('owner-facing error mapping', () => {
+  it('keeps the messages the db layer wrote for the owner', () => {
+    for (const message of [
+      'Person not found.',
+      'The owner profile cannot be deleted.',
+      'Person could not be deleted.',
+      'Person not found or cannot be renamed.',
+      'A person can have at most 20 aliases.',
+    ]) {
+      expect(ownerFacingError(new Error(message), 'fallback')).toBe(message);
+    }
+  });
+
+  it('replaces a driver error with the fallback and logs the original', () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const driver = new Error(
+      'Failed query: delete from "contacts" where ("contacts"."id" = $1 and "contacts"."trust" <> $2) returning "id" params: 84db3716-316a-4c43-8377-d602f06129c0,owner',
+    );
+    try {
+      expect(ownerFacingError(driver, 'Person could not be deleted. Please try again.')).toBe(
+        'Person could not be deleted. Please try again.',
+      );
+      expect(ownerFacingError('not even an error', 'These people could not be merged.')).toBe(
+        'These people could not be merged.',
+      );
+      expect(logged).toHaveBeenCalledTimes(2);
+      expect(logged).toHaveBeenCalledWith(expect.any(String), driver);
+    } finally {
+      logged.mockRestore();
     }
   });
 });

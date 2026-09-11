@@ -1,6 +1,6 @@
 import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
-import { type ContactRow, contacts, memories, memoryTombstones } from './schema.js';
+import { type ContactRow, contacts, memories, memoryTombstones, occasions } from './schema.js';
 
 /** Subjects that are the assistant itself — facts about it never become contacts. */
 const ASSISTANT_ALIASES = new Set(['assistant', 'ai bot', 'b bot', 'the assistant', 'bot']);
@@ -137,7 +137,7 @@ export function findDuplicateContactSuggestions(
 export async function deleteContact(
   db: Db,
   contactId: string,
-): Promise<{ deletedMemories: number }> {
+): Promise<{ deletedMemories: number; deletedOccasions: number }> {
   return db.transaction(async (tx) => {
     const [contact] = await tx
       .select()
@@ -169,12 +169,20 @@ export async function deleteContact(
       await tx.delete(memories).where(eq(memories.subjectContactId, contactId));
     }
 
+    // occasions.contact_id is NOT NULL with no cascade, so a birthday — including
+    // one still quarantined awaiting review — would block the delete outright.
+    // The person and their facts go for good, so their dates go with them.
+    const removedOccasions = await tx
+      .delete(occasions)
+      .where(eq(occasions.contactId, contactId))
+      .returning({ id: occasions.id });
+
     const [deleted] = await tx
       .delete(contacts)
       .where(and(eq(contacts.id, contactId), ne(contacts.trust, 'owner')))
       .returning({ id: contacts.id });
     if (!deleted) throw new Error('Person could not be deleted.');
-    return { deletedMemories: facts.length };
+    return { deletedMemories: facts.length, deletedOccasions: removedOccasions.length };
   });
 }
 
@@ -261,42 +269,91 @@ export async function findContactsByName(db: Db, query: string): Promise<Contact
   );
 }
 
+/** Identity of an occasion under the (agent, contact, kind, month, day) dedup index. */
+function occasionDedupKey(row: { agentId: string; kind: string; month: number; day: number }) {
+  return [row.agentId, row.kind, row.month, row.day].join('|');
+}
+
 /**
- * Merge one contact into another: memories move to the target, emails/phones
- * union, the fuller relationship survives, the source row is deleted.
+ * Merge one contact into another: memories and occasions move to the target,
+ * emails/phones union, the fuller relationship survives, the source row is
+ * deleted. One transaction — a half-merged pair (facts moved, duplicate still
+ * present) is worse than no merge at all.
  */
 export async function mergeContacts(
   db: Db,
   input: { sourceId: string; targetId: string },
-): Promise<{ movedMemories: number }> {
+): Promise<{ movedMemories: number; movedOccasions: number }> {
   if (input.sourceId === input.targetId) throw new Error('cannot merge a contact into itself');
-  const [source] = await db.select().from(contacts).where(eq(contacts.id, input.sourceId));
-  const [target] = await db.select().from(contacts).where(eq(contacts.id, input.targetId));
-  if (!source || !target) throw new Error('merge: contact not found');
-  if (source.trust === 'owner') throw new Error('cannot merge the owner away');
+  return db.transaction(async (tx) => {
+    const [source] = await tx.select().from(contacts).where(eq(contacts.id, input.sourceId));
+    const [target] = await tx.select().from(contacts).where(eq(contacts.id, input.targetId));
+    if (!source || !target) throw new Error('merge: contact not found');
+    if (source.trust === 'owner') throw new Error('cannot merge the owner away');
 
-  const moved = await db
-    .update(memories)
-    .set({ subjectContactId: target.id })
-    .where(eq(memories.subjectContactId, source.id))
-    .returning({ id: memories.id });
+    const moved = await tx
+      .update(memories)
+      .set({ subjectContactId: target.id })
+      .where(eq(memories.subjectContactId, source.id))
+      .returning({ id: memories.id });
 
-  await db
-    .update(contacts)
-    .set({
-      aliases: normalizeContactAliases(
-        [...target.aliases, ...source.aliases, source.name],
-        target.name,
-      ),
-      emails: [...new Set([...target.emails, ...source.emails])],
-      phones: [...new Set([...target.phones, ...source.phones])],
-      relationship: target.relationship || source.relationship,
-      notes: [target.notes, source.notes].filter(Boolean).join('\n'),
-      updatedAt: sql`now()`,
-    })
-    .where(eq(contacts.id, target.id));
-  await db.delete(contacts).where(eq(contacts.id, source.id));
-  return { movedMemories: moved.length };
+    // occasions.contact_id is NOT NULL with no cascade, so the source's dates
+    // must be repointed before its row can go. A date both people already hold
+    // would collide on occasions_dedup_idx — keep the target's row and drop the
+    // source duplicate, the same "same date, one row" rule saveOccasion upserts by.
+    const sourceOccasions = await tx
+      .select({
+        id: occasions.id,
+        agentId: occasions.agentId,
+        kind: occasions.kind,
+        month: occasions.month,
+        day: occasions.day,
+      })
+      .from(occasions)
+      .where(eq(occasions.contactId, source.id));
+    let movedOccasions = 0;
+    if (sourceOccasions.length > 0) {
+      const targetOccasions = await tx
+        .select({
+          agentId: occasions.agentId,
+          kind: occasions.kind,
+          month: occasions.month,
+          day: occasions.day,
+        })
+        .from(occasions)
+        .where(eq(occasions.contactId, target.id));
+      const taken = new Set(targetOccasions.map(occasionDedupKey));
+      const duplicateIds = sourceOccasions
+        .filter((row) => taken.has(occasionDedupKey(row)))
+        .map((row) => row.id);
+      if (duplicateIds.length > 0) {
+        await tx.delete(occasions).where(inArray(occasions.id, duplicateIds));
+      }
+      const repointed = await tx
+        .update(occasions)
+        .set({ contactId: target.id, updatedAt: sql`now()` })
+        .where(eq(occasions.contactId, source.id))
+        .returning({ id: occasions.id });
+      movedOccasions = repointed.length;
+    }
+
+    await tx
+      .update(contacts)
+      .set({
+        aliases: normalizeContactAliases(
+          [...target.aliases, ...source.aliases, source.name],
+          target.name,
+        ),
+        emails: [...new Set([...target.emails, ...source.emails])],
+        phones: [...new Set([...target.phones, ...source.phones])],
+        relationship: target.relationship || source.relationship,
+        notes: [target.notes, source.notes].filter(Boolean).join('\n'),
+        updatedAt: sql`now()`,
+      })
+      .where(eq(contacts.id, target.id));
+    await tx.delete(contacts).where(eq(contacts.id, source.id));
+    return { movedMemories: moved.length, movedOccasions };
+  });
 }
 
 /** True when this content hash was forgotten by the owner — it must never be re-saved. */
