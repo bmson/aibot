@@ -1,6 +1,6 @@
 # Firestore migration implementation status
 
-Updated 2026-09-08. This tracks the implementation batches of the [migration and consumer-install plan](firestore-consumer-install-plan.md). **The complete migration and single-click installer are not finished.** The current application and deployments continue to require PostgreSQL and the existing model/authentication configuration. Production release of the adapter foundation applies the additive PostgreSQL lease-token migration; it does not move production data into Firestore.
+Updated 2026-09-10. This tracks the implementation batches of the [migration and consumer-install plan](firestore-consumer-install-plan.md). **The complete migration and single-click installer are not finished.** The current application and deployments continue to require PostgreSQL and the existing model/authentication configuration. Production release of the adapter foundation applies the additive PostgreSQL lease-token migration; it does not move production data into Firestore.
 
 ## Implemented
 
@@ -32,7 +32,7 @@ The Firestore outbox and Cloud Tasks transport are integrated and exercised toge
 
 | Plan phase | Current state | Next required result |
 |---|---|---|
-| P0 | Partial | Real Firestore/index/IAM/cost checks; actual Cloud Shell authorization flow; Google-model and passkey feasibility |
+| P0 | Partial | Runtime-service-account IAM, live queue delivery and representative cost checks; remaining domain indexes; actual Cloud Shell authorization flow; Google-model and passkey feasibility |
 | P1 | Partial | Complete command contracts and remove remaining SDK imports from business logic; select adapters at composition roots |
 | P2 | Partial | Schedule commands, chat reads/cursors, approval sweeps, external-delivery fences, and Firestore application/dispatcher composition |
 | P3 | Pending | All remaining domain/module queries, graph/recall, imports, erasure/export, and operational parity across all 63 table families |
@@ -49,6 +49,10 @@ Foundation checks: 225 test files / 2,040 tests passed in the combined PostgreSQ
 Task-lifecycle follow-up: all 227 test files / 2,050 tests passed with PostgreSQL and the Firestore emulator, including deterministic renewal-versus-recovery races against both adapters. Typecheck, lint/architecture checks, production build, and whitespace checks passed. This batch was built in an isolated worktree without a web `.env.local`; it has no additional SQL schema migration.
 
 Task-creation/dispatch follow-up: all 231 test files / 2,073 tests passed with PostgreSQL and the Firestore emulator; the dedicated emulator command passed 46 tests, including dispatch transport composition and the same synthetic task checks used by the live validation harness. Typecheck, lint/architecture checks, production build, dependency audit, and whitespace checks passed. The validation preview ran successfully; real Firestore validation remains unexecuted because local Google Cloud authentication needs refreshing and Application Default Credentials are absent.
+
+Real-cloud follow-up (2026-09-10): refreshed credentials cleared that blocker, and the Firestore API was enabled in `bmson-assistant`. The first live workload exposed a missing `(runAfter, status, updatedAt)` index for the due-query's null wake-time branch; the failed run's temporary database was deleted. After adding that index alongside the scheduled-work index, the synthetic workload and Query Explain passed on a fresh Standard/Native Firestore database. This covers task creation, event deduplication, rate-limit contention, generation fencing, sleep/wake recovery, cancellation, and outbox transactions under the supplied administrative credentials. It does not prove runtime-service-account permissions, real Cloud Tasks transport/OIDC, production-workload costs, or other database domains. Production remains on PostgreSQL.
+
+The harness now builds indexes concurrently, waits for every operation before cleanup even on failure, and reports validation outcomes before waiting for database deletion. All 231 test files / 2,075 tests passed locally, including six resource-lifecycle tests. Typecheck, lint/architecture checks, production build, and whitespace checks passed.
 
 ```sh
 pnpm lint
