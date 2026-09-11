@@ -19,6 +19,7 @@ struct MemoryView: View {
     @State private var managingPerson: WorkspacePerson?
     @State private var profileActionInFlight: String?
     @State private var showingVoiceImporter = false
+    @State private var showingVoiceProfile = false
     @State private var voiceRegister = "email_casual"
 
     var body: some View {
@@ -99,6 +100,9 @@ struct MemoryView: View {
         .sheet(item: $managingPerson) { person in
             NavigationStack { PersonDetailsView(person: person) }
         }
+        .sheet(isPresented: $showingVoiceProfile) {
+            NavigationStack { VoiceProfileEditor() }
+        }
     }
 
     private var isLandscape: Bool { verticalSizeClass == .compact }
@@ -110,6 +114,13 @@ struct MemoryView: View {
                 KnowledgeView()
             } label: {
                 Label("Connections and cleanup", systemImage: "point.3.connected.trianglepath.dotted")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            NavigationLink {
+                MemoryDataScreen()
+            } label: {
+                Label("Your data", systemImage: "arrow.down.circle")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
@@ -226,6 +237,10 @@ struct MemoryView: View {
                             showingVoiceImporter = true
                         }
                         .buttonStyle(AssistantActionButtonStyle(kind: .primary))
+                        Button("Edit voice", systemImage: "pencil") {
+                            showingVoiceProfile = true
+                        }
+                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                         if voice.auto + voice.uploaded > 0 {
                             AssistantConfirmationButton("Clear") {
                                 updateProfile(action: "purge-voice")

@@ -1224,6 +1224,65 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func voiceProfile() async -> VoiceProfileResponse? {
+        guard let client else { return nil }
+        do {
+            return try await client.voiceProfile()
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
+    func saveVoiceProfile(_ profile: VoiceProfileMutation) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateVoiceProfile(profile)
+            await refreshWorkspace(reportFailure: false)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
+    func forgetLongTermMemory() async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.forgetLongTermMemory()
+            await refreshWorkspace(reportFailure: false)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
+    /// Writes the export to a temporary file and hands back its URL, because
+    /// the share sheet moves files rather than bytes. Named for the day it was
+    /// taken so a folder of them stays readable.
+    func exportMemoryFile() async -> URL? {
+        guard let client else { return nil }
+        errorMessage = nil
+        do {
+            let data = try await client.memoryExport()
+            let day = ISO8601DateFormatter.string(
+                from: Date(),
+                timeZone: .current,
+                formatOptions: [.withFullDate]
+            )
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("assistant-long-term-memory-\(day).json")
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
     func savePerson(id: String? = nil, mutation: PersonMutation) async -> Bool {
         guard let client else { return false }
         errorMessage = nil

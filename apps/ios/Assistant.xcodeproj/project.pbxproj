@@ -34,6 +34,7 @@
 		B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000023 /* Views/WorkspaceView.swift */; };
 		B0000000000000000000001B /* Components/ChatDashboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000024 /* Components/ChatDashboard.swift */; };
 		B0000000000000000000001C /* Views/MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000025 /* Views/MemoryView.swift */; };
+		B00000000000000000000076 /* Views/MemoryDataView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000076 /* Views/MemoryDataView.swift */; };
 		B00000000000000000000050 /* AssistantMarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000050 /* AssistantMarkdownTests.swift */; };
 		B00000000000000000000051 /* System/LocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000051 /* System/LocationManager.swift */; };
 		B00000000000000000000052 /* Components/OnDeviceCardParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000053 /* Components/OnDeviceCardParser.swift */; };
@@ -114,6 +115,7 @@
 		C00000000000000000000023 /* Views/WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WorkspaceView.swift; sourceTree = "<group>"; };
 		C00000000000000000000024 /* Components/ChatDashboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ChatDashboard.swift; sourceTree = "<group>"; };
 		C00000000000000000000025 /* Views/MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MemoryView.swift; sourceTree = "<group>"; };
+		C00000000000000000000076 /* Views/MemoryDataView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MemoryDataView.swift; sourceTree = "<group>"; };
 		C00000000000000000000050 /* AssistantMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMarkdownTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000051 /* System/LocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/LocationManager.swift; sourceTree = "<group>"; };
 		C00000000000000000000052 /* Assistant.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Assistant.entitlements; sourceTree = "<group>"; };
@@ -208,6 +210,7 @@
 				C00000000000000000000010 /* Views/ConnectionView.swift */,
 				C00000000000000000000023 /* Views/WorkspaceView.swift */,
 				C00000000000000000000025 /* Views/MemoryView.swift */,
+				C00000000000000000000076 /* Views/MemoryDataView.swift */,
 				C00000000000000000000054 /* Views/KnowledgeView.swift */,
 				C00000000000000000000071 /* Views/KnowledgeGraphView.swift */,
 				C00000000000000000000072 /* Views/PeopleConnectionsView.swift */,
@@ -401,6 +404,7 @@
 				B00000000000000000000010 /* Views/ConnectionView.swift in Sources */,
 				B0000000000000000000001A /* Views/WorkspaceView.swift in Sources */,
 				B0000000000000000000001C /* Views/MemoryView.swift in Sources */,
+				B00000000000000000000076 /* Views/MemoryDataView.swift in Sources */,
 				B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */,
 				B00000000000000000000071 /* Views/KnowledgeGraphView.swift in Sources */,
 				B00000000000000000000072 /* Views/PeopleConnectionsView.swift in Sources */,

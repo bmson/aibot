@@ -1138,6 +1138,31 @@ struct WorkspaceVoiceStats: Codable, Sendable {
     let uploaded: Int
 }
 
+/// The distilled writing voice: what the assistant imitates when it drafts.
+/// `dos` and `donts` are lines on the wire and lines in the editor; the server
+/// splits and trims them, so nothing here needs to.
+struct VoiceProfile: Codable, Sendable {
+    var description: String
+    var dos: [String]
+    var donts: [String]
+    var signature: String
+
+    static let empty = Self(description: "", dos: [], donts: [], signature: "")
+}
+
+struct VoiceProfileResponse: Codable, Sendable {
+    let voiceStats: WorkspaceVoiceStats
+    let voiceProfile: VoiceProfile
+}
+
+struct VoiceProfileMutation: Encodable, Sendable {
+    var action = "voice-profile"
+    let description: String
+    let dos: String
+    let donts: String
+    let signature: String
+}
+
 struct WorkspaceMemoryOrganizer: Codable, Sendable {
     let id: String
     let status: String

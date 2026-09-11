@@ -641,6 +641,38 @@ struct APIClient: Sendable {
         try await postWorkspaceAction(path: "memory/profile", action: action)
     }
 
+    func voiceProfile() async throws -> VoiceProfileResponse {
+        try await get("api/mobile/v1/memory/profile")
+    }
+
+    func updateVoiceProfile(_ profile: VoiceProfileMutation) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/profile")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(profile)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    /// Irreversible: drops saved facts, graph projections, voice samples, and
+    /// the learned voice profile. Chats, goals and people records survive.
+    func forgetLongTermMemory() async throws {
+        try await postWorkspaceAction(path: "memory/profile", action: "forget-all")
+    }
+
+    /// The owner's memory export, as the raw JSON bytes the server sends, so it
+    /// can be written to a file and handed to the share sheet unmodified.
+    func memoryExport() async throws -> Data {
+        let request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/export")
+        )
+        let (data, response) = try await load(request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        try await validate(http, data: data)
+        return data
+    }
+
     func createPerson(_ person: PersonMutation) async throws {
         var request = makeRequest(
             url: configuration.baseURL.appending(path: "api/mobile/v1/memory/people")
