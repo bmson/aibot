@@ -713,7 +713,7 @@ struct PersonDetailsView: View {
         isWorking = true
         Task {
             _ = await model.reviewOccasion(
-                personId: person.id,
+                personId: personId,
                 occasion: occasion,
                 verdict: verdict
             )
@@ -724,7 +724,7 @@ struct PersonDetailsView: View {
     private func delete(_ occasion: PersonOccasion) {
         isWorking = true
         Task {
-            _ = await model.deleteOccasion(personId: person.id, occasion: occasion)
+            _ = await model.deleteOccasion(personId: personId, occasion: occasion)
             isWorking = false
         }
     }
