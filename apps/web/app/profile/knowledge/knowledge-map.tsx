@@ -45,6 +45,11 @@ export function KnowledgeMap({
   const nodes = useMemo(() => layoutKnowledgeMap(snapshot), [snapshot]);
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const [selectedId, setSelectedId] = useState(initialSelectedId ?? nodes[0]?.id ?? null);
+  // The inspector always needs something selected, so `selected` falls back to
+  // the first node. Dimming must not follow that fallback: at rest the whole
+  // graph is the point, and only a selection the owner actually made should
+  // quiet everything around it.
+  const [focused, setFocused] = useState(!!initialSelectedId);
   const [search, setSearch] = useState('');
   const [view, setView] = useState<'map' | 'list'>('map');
   const [viewport, setViewport] = useState<Viewport>(() => frame(nodes, W, H));
@@ -87,8 +92,11 @@ export function KnowledgeMap({
     [selectedEdges],
   );
 
-  /** The whole graph, framed. The map's home position. */
-  const showEverything = useCallback(() => setViewport(frame(nodes, W, H)), [nodes]);
+  /** The whole graph, framed and undimmed. The map's home position. */
+  const showEverything = useCallback(() => {
+    setFocused(false);
+    setViewport(frame(nodes, W, H));
+  }, [nodes]);
 
   /**
    * Select an item and move in on it — the one gesture that takes the map from
@@ -99,6 +107,7 @@ export function KnowledgeMap({
   const moveIn = useCallback(
     (id: string) => {
       setSelectedId(id);
+      setFocused(true);
       const node = nodeById.get(id);
       if (!node) return;
       const around = snapshot.edges
@@ -124,7 +133,7 @@ export function KnowledgeMap({
         const subject = nodeById.get(edge.subjectId);
         const object = nodeById.get(edge.objectId);
         if (!subject || !object) return null;
-        const active = activeId === subject.id || activeId === object.id;
+        const active = focused && (activeId === subject.id || activeId === object.id);
         return (
           <line
             key={edge.id}
@@ -134,19 +143,19 @@ export function KnowledgeMap({
             y2={object.y}
             strokeWidth={active ? 2.6 : 1.2}
             className={active ? 'stroke-accent' : 'stroke-edge'}
-            opacity={activeId && !active ? 0.2 : 0.7}
+            opacity={focused && !active ? 0.2 : 0.7}
             strokeDasharray={edge.reviewStatus === 'unreviewed' ? '5 4' : undefined}
           />
         );
       }),
-    [snapshot.edges, nodeById, activeId],
+    [snapshot.edges, nodeById, activeId, focused],
   );
 
   const nodeMarks = useMemo(
     () =>
       nodes.map((node) => {
-        const isSelected = node.id === activeId;
-        const isNeighbor = neighbors.has(node.id);
+        const isSelected = focused && node.id === activeId;
+        const isNeighbor = focused && neighbors.has(node.id);
         const radius = Math.min(15, 7 + Math.sqrt(node.degree) * 2);
         return (
           // biome-ignore lint/a11y/useSemanticElements: SVG cannot contain an HTML button; the group implements button keyboard semantics.
@@ -157,7 +166,7 @@ export function KnowledgeMap({
             aria-label={`${node.label}, ${entityKindLabel(node.kind)}, ${node.degree} connections`}
             aria-pressed={isSelected}
             className={`cursor-pointer ${focusRing}`}
-            opacity={activeId && !isSelected && !isNeighbor ? 0.45 : 1}
+            opacity={focused && !isSelected && !isNeighbor ? 0.45 : 1}
             onClick={(event) => {
               event.stopPropagation();
               if (suppressClick.current) return;
@@ -192,7 +201,7 @@ export function KnowledgeMap({
           </g>
         );
       }),
-    [nodes, activeId, neighbors, showLabels, moveIn],
+    [nodes, activeId, neighbors, showLabels, moveIn, focused],
   );
 
   if (nodes.length === 0) {
@@ -368,7 +377,7 @@ export function KnowledgeMap({
               </button>
             </div>
 
-            {selected ? (
+            {focused ? (
               <button
                 type="button"
                 onClick={showEverything}
