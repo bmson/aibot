@@ -122,6 +122,24 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
+          "fieldPath": "runAfter",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "updatedAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "tasks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
           "fieldPath": "trust",
           "order": "ASCENDING"
         },
