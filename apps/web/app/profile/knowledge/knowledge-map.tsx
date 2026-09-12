@@ -285,7 +285,10 @@ export function KnowledgeMap({
               }}
               onPointerDown={(event) => {
                 pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-                event.currentTarget.setPointerCapture(event.pointerId);
+                // Capture is deliberately NOT taken here. Capturing on pointerdown
+                // retargets the click that follows to this <svg>, so a node's own
+                // onClick never runs and selecting an item silently does nothing.
+                // It is taken below, once a gesture has actually begun.
                 if (pointers.current.size === 2) {
                   const [a, b] = [...pointers.current.values()];
                   pinch.current = { distance: Math.hypot(a.x - b.x, a.y - b.y), viewport };
@@ -310,6 +313,7 @@ export function KnowledgeMap({
                   const distance = Math.hypot(a.x - b.x, a.y - b.y);
                   if (pinch.current.distance <= 0) return;
                   suppressClick.current = true;
+                  event.currentTarget.setPointerCapture(event.pointerId);
                   const rect = event.currentTarget.getBoundingClientRect();
                   const midpoint = toViewPoint((a.x + b.x) / 2, (a.y + b.y) / 2, rect, W, H);
                   const factor = distance / pinch.current.distance;
@@ -322,6 +326,7 @@ export function KnowledgeMap({
                 const dy = event.clientY - drag.current.y;
                 if (!suppressClick.current && Math.hypot(dx, dy) < DRAG_SLOP) return;
                 suppressClick.current = true;
+                event.currentTarget.setPointerCapture(event.pointerId);
                 const delta = screenDelta(dx, dy, drag.current.width, W);
                 setViewport({
                   ...drag.current.viewport,
