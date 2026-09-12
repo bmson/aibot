@@ -14,6 +14,7 @@ RUN apt-get update \
   && apt-get install -y --only-upgrade \
     bsdutils libblkid1 liblastlog2-2 libmount1 libsmartcols1 libuuid1 login mount util-linux \
     libssl3t64 openssl openssl-provider-legacy libpcre2-8-0 \
+    gzip libperl5.40 perl perl-base perl-modules-5.40 libsqlite3-0 \
   && rm -rf /var/lib/apt/lists/* \
   && rm -f /usr/local/bin/gosu
 

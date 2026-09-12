@@ -141,14 +141,15 @@ jobs:
   # runner without shipping the image around — the build stays in that runner's
   # daemon, and the scan and the SBOM read it from there.
   #
-  # fail-fast (the default) is deliberate: a HIGH CVE in any image should stop
-  # the release, and cancelling the siblings means no rollout follows. Images
-  # already pushed by a cancelled sibling are inert — nothing rolls them out.
+  # Finish independent scans so a failed release reports every blocked image.
+  # The release job still requires the entire matrix to succeed; images pushed
+  # by successful siblings remain inert when any other image fails.
   image:
     needs: plan
     runs-on: ubuntu-latest
     environment: production
     strategy:
+      fail-fast: false
       matrix:
         entry: ${{ fromJSON(needs.plan.outputs.images) }}
     env:
