@@ -57,7 +57,15 @@ export function PersonControls({
         return;
       }
       if (relationship !== initialRelationship) {
-        await updateContactRelationship(contactId, relationship);
+        // This one reports failure by throwing rather than returning an error,
+        // so an unguarded await escaped the transition: the owner saw neither a
+        // confirmation nor a message, even though the name had already saved.
+        try {
+          await updateContactRelationship(contactId, relationship);
+        } catch {
+          setError('The name was saved, but the relationship could not be. Try again.');
+          return;
+        }
       }
       setSaved(true);
     });

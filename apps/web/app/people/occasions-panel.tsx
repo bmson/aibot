@@ -17,6 +17,7 @@ import {
   SectionHeading,
   selectClass,
 } from '@/lib/ui';
+import { ConfirmButton } from '@/lib/ui-client';
 
 /** Plain-serializable occasion view built in the page. */
 export interface OccasionView {
@@ -59,6 +60,15 @@ function dateLabel(o: OccasionView): string {
   return o.year ? `${md}, ${o.year}` : md;
 }
 
+/**
+ * Distinguishes one row's controls from another's for a screen reader: two
+ * anniversaries on different dates, or two custom occasions sharing a label,
+ * both announced identically when the name was the kind alone.
+ */
+function rowName(o: OccasionView): string {
+  return `${kindLabel(o)} (${dateLabel(o)})`;
+}
+
 function kindLabel(o: OccasionView): string {
   if (o.kind === 'custom') return o.label || 'occasion';
   return o.kind;
@@ -76,10 +86,24 @@ export function OccasionsPanel({
   suggestions?: OccasionSuggestion[];
 }) {
   const [pending, startTransition] = useTransition();
+  /**
+   * Which occasion an action is running against. `pending` alone is panel-wide,
+   * so confirming one date disabled every other row's buttons — and the Add
+   * button — for a round trip that only touched one record.
+   */
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<OccasionView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+
+  const runForRow = (id: string, action: () => Promise<unknown>) => {
+    setBusyId(id);
+    startTransition(async () => {
+      await action();
+      setBusyId(null);
+    });
+  };
 
   const saveSuggestion = (suggestion: OccasionSuggestion) => {
     const key = `${suggestion.month}-${suggestion.day}`;
@@ -120,9 +144,20 @@ export function OccasionsPanel({
                   : 'border-edge'
               }`}
             >
-              <span className="text-sm font-medium capitalize">{kindLabel(o)}</span>
-              <span className="text-sm text-muted">{dateLabel(o)}</span>
-              {o.notes ? <span className="text-xs text-muted">— {o.notes}</span> : null}
+              {/* Owner-supplied text: a long unbroken custom label or note has
+                  no wrap opportunity, and a flex child defaults to min-width
+                  auto, so without these the row pushes past a 390px viewport. */}
+              <span className="min-w-0 max-w-full text-sm font-medium break-words capitalize">
+                {kindLabel(o)}
+              </span>
+              <span className="min-w-0 max-w-full text-sm break-words text-muted">
+                {dateLabel(o)}
+              </span>
+              {o.notes ? (
+                <span className="min-w-0 max-w-full text-xs break-words text-muted">
+                  — {o.notes}
+                </span>
+              ) : null}
               {o.quarantined ? (
                 <Badge tone="amber" size="xs">
                   Unverified
@@ -131,9 +166,9 @@ export function OccasionsPanel({
               <span className="ml-auto flex gap-2">
                 <button
                   type="button"
-                  disabled={pending}
+                  disabled={busyId === o.id}
                   className={btnSm.outline}
-                  aria-label={`Edit ${kindLabel(o)}`}
+                  aria-label={`Edit ${rowName(o)}`}
                   onClick={() => {
                     setEditing(o);
                     setAdding(true);
@@ -146,30 +181,37 @@ export function OccasionsPanel({
                   <>
                     <button
                       type="button"
-                      disabled={pending}
-                      onClick={() => startTransition(() => reviewOccasionAction(o.id, 'approve'))}
+                      disabled={busyId === o.id}
+                      onClick={() => runForRow(o.id, () => reviewOccasionAction(o.id, 'approve'))}
                       className={btnSm.outline}
+                      aria-label={`Confirm ${rowName(o)}`}
                     >
                       Confirm
                     </button>
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() => startTransition(() => reviewOccasionAction(o.id, 'reject'))}
-                      className={btnSm.dangerOutline}
+                    {/* Rejecting deletes the occasion outright, with no
+                        tombstone and no undo, and sits one button away from
+                        Confirm in a list the owner skims. It asks twice now,
+                        like every other irreversible action in the app. */}
+                    <ConfirmButton
+                      size="sm"
+                      confirmLabel="Really reject?"
+                      disabled={busyId === o.id}
+                      title={`Deletes this ${kindLabel(o)} permanently`}
+                      onConfirm={() => runForRow(o.id, () => reviewOccasionAction(o.id, 'reject'))}
                     >
                       Reject
-                    </button>
+                    </ConfirmButton>
                   </>
                 ) : (
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => startTransition(() => forgetOccasionAction(o.id))}
-                    className={btnSm.dangerOutline}
+                  <ConfirmButton
+                    size="sm"
+                    confirmLabel="Really forget?"
+                    disabled={busyId === o.id}
+                    title={`Deletes this ${kindLabel(o)} permanently`}
+                    onConfirm={() => runForRow(o.id, () => forgetOccasionAction(o.id))}
                   >
                     Forget
-                  </button>
+                  </ConfirmButton>
                 )}
               </span>
             </div>
