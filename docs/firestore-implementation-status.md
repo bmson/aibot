@@ -92,7 +92,15 @@ The consumer Terraform foundation now permits explicit creation of `(default)` i
 
 Do not advertise an install button or enable `DATABASE_DRIVER=firestore` until the relevant runtime and installation gates pass. The Firestore package intentionally does not pretend to implement arbitrary Drizzle queries or a complete application database.
 
-The next bounded offline work is the owner-scoped pending-decision lookup in `packages/application/src/approvals.ts`, followed by the approved-call reads and transitions in `packages/tools/src/dispatcher.ts`. Those contracts need PostgreSQL and Firestore parity before the hardcoded composition in `apps/agent/src/deps.ts` and `apps/web/lib/server.ts` can select a Firestore runtime. Emulator composition can be tested before Google authentication is restored; authenticated IAM, queue, model, and fresh-account installation checks remain separate.
+The approve-and-remember lookup now uses an owner-scoped persistence contract on PostgreSQL and Firestore. Both adapters validate the task/tool linkage, and policy creation checks that the rule belongs to the linked task owner and tool. Mixed or malformed recipient lists cannot silently create a standing email rule. The application keeps its existing PostgreSQL entry point and also accepts the portable repository.
+
+The next bounded offline work is the approved-call reads and transitions in `packages/tools/src/dispatcher.ts`. Those contracts need PostgreSQL and Firestore parity before the hardcoded composition in `apps/agent/src/deps.ts` and `apps/web/lib/server.ts` can select a Firestore runtime. Emulator composition can be tested before local Google authentication is restored; authenticated IAM, queue, model, and fresh-account installation checks remain separate.
+
+## PostgreSQL release maintenance
+
+The release investigation found `relation "agents" does not exist` during identity repair after a successful backup and migration command. Read-only checks through the existing Google Cloud browser session verified that `public.agents` and the migration journal exist, and the exact migration image could read them in a later execution. This is consistent with session-state problems from running maintenance over a transaction pooler, rather than missing application tables. [Neon recommends direct connections for pg_dump](https://neon.com/docs/import/migrate-from-neon).
+
+Backup and reconciliation now use the direct endpoint for recognized Neon pooled URLs. Reconciliation covers migrations, identity repair, and seeding; normal application traffic keeps its pooled connection. Other PostgreSQL URLs are preserved. The release still stops on migration failure and now reports bounded diagnostics for the exact failed execution. `pnpm --filter @assistant/db diagnose-schema` provides a separate read-only metadata report without printing credentials or application rows. These changes do not migrate the workspace to Firestore.
 
 ## Validation
 

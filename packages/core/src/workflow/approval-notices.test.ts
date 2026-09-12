@@ -67,6 +67,7 @@ function portableFixture(groups: ApprovalNoticeGroup[], appendError?: Error) {
     create: async (): Promise<CreatedApproval> => {
       throw new Error('unused');
     },
+    getRememberable: async () => null,
     listInbox: async () => ({ pending: [], resolved: [] }),
     listStalledNotices,
     markNotified,

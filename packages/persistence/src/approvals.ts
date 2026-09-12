@@ -71,6 +71,8 @@ export interface ApprovalRepository {
   readonly kind: 'approval-repository';
   /** Commit the gated tool call and approval together; task parking is a separate lease-fenced command. */
   create(input: CreateApprovalInput): Promise<CreatedApproval>;
+  /** Read the current owner-scoped approval payload needed to derive a standing policy. */
+  getRememberable(agentId: string, approvalId: string): Promise<RememberableApproval | null>;
   /** Owner-scoped bounded approval screen projection; resolved history excludes payloads. */
   listInbox(agentId: string, options?: ApprovalInboxQuery): Promise<ApprovalInbox>;
   /** A bounded scan may return no eligible notices while its durable cursor still has more pages. */
@@ -82,6 +84,11 @@ export interface ApprovalRepository {
   expireStale(batch?: number, now?: Date): Promise<ApprovalWake[]>;
   /** Recheck the locked task checkpoint and every referenced approval before waking. */
   resumeResolved(batch?: number, now?: Date): Promise<ApprovalWake[]>;
+}
+
+export interface RememberableApproval {
+  approval: Records['approvals'];
+  toolName: string;
 }
 
 export interface ApprovalWake {

@@ -4,6 +4,9 @@
 # networking, Scheduler, and Pub/Sub setup remains in deploy.sh.
 set -euo pipefail
 
+# shellcheck source=infra/gcp/release-diagnostics.sh
+source "$(dirname "${BASH_SOURCE[0]}")/release-diagnostics.sh"
+
 PROJECT="${GCP_PROJECT:?Set GCP_PROJECT to the Google Cloud project id}"
 REGION="${GCP_REGION:-us-west1}"
 REPO="${ARTIFACT_REPOSITORY:-assistant}"
@@ -161,7 +164,7 @@ else
     --set-secrets "DATABASE_URL=database-url:latest" \
     --memory 512Mi --cpu 1 --task-timeout 600 --max-retries 0 --quiet
 fi
-gcloud run jobs execute assistant-migrate --project "$PROJECT" --region "$REGION" --wait --quiet
+run_migration_job
 
 # This script rolls images only; deploy.sh owns environment and provisioning.
 # That split is silent by default: a commit that starts depending on a new env

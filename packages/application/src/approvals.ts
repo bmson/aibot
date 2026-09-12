@@ -6,8 +6,7 @@ import {
   type ResolveApprovalResult,
   resolveApproval,
 } from '@assistant/core/workflow/approvals';
-import { approvals, type Db, toolCalls } from '@assistant/db';
-import { eq } from 'drizzle-orm';
+import { createPostgresApprovalRepository, type Db } from '@assistant/db';
 
 export type ApprovalDecision = 'approved' | 'denied';
 
@@ -33,6 +32,11 @@ export type {
 } from '@assistant/core/workflow/approvals';
 
 export interface ApprovalInboxStore {
+  agentId: string;
+  approvals: ApprovalRepository;
+}
+
+export interface ApprovalRememberStore {
   agentId: string;
   approvals: ApprovalRepository;
 }
@@ -107,38 +111,33 @@ export function rememberedApprovalPolicy(
 ): RememberedApprovalPolicy | null {
   if (toolName !== 'gmail.send' || !payload || typeof payload !== 'object') return null;
   const to = (payload as { to?: unknown }).to;
-  const recipients = Array.isArray(to)
-    ? to.filter((item): item is string => typeof item === 'string' && item.trim() !== '')
-    : [];
-  const [recipient] = recipients;
-  if (recipients.length !== 1 || !recipient) return null;
+  if (!Array.isArray(to) || to.length !== 1 || typeof to[0] !== 'string') return null;
+  const recipient = to[0].trim().toLowerCase();
+  if (!recipient) return null;
   return {
     agentId,
     toolName: 'gmail.send',
     templateKey: 'gmail.send.to_recipient',
-    match: { recipient: recipient.toLowerCase() },
+    match: { recipient },
     effect: 'allow',
   };
 }
 
 /** Approve once, optionally remembering the one safe recipient-scoped rule. */
 export async function approveAndRememberApproval(
-  db: Db,
+  store: Db | ApprovalRememberStore,
   approvalId: string,
 ): Promise<ResolveApprovalResult> {
-  const [row] = await db
-    .select({ approval: approvals, toolName: toolCalls.toolName })
-    .from(approvals)
-    .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
-    .where(eq(approvals.id, approvalId))
-    .limit(1);
-  if (row?.approval.status !== 'pending') {
+  const portable = 'approvals' in store && 'agentId' in store;
+  const repository = portable ? store.approvals : createPostgresApprovalRepository(store as Db);
+  const agentId = portable ? store.agentId : (await getAgent(store as Db)).id;
+  const row = await repository.getRememberable(agentId, approvalId);
+  if (!row) {
     return { ok: false, reason: 'no pending approval matched (already resolved or expired?)' };
   }
 
-  const agent = await getAgent(db);
-  const policy = rememberedApprovalPolicy(agent.id, row.toolName, row.approval.payload);
-  return resolveApproval(db, {
+  const policy = rememberedApprovalPolicy(agentId, row.toolName, row.approval.payload);
+  return resolveApproval(repository, {
     approvalId,
     decision: 'approved',
     via: 'web',

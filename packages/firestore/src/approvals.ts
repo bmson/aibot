@@ -14,6 +14,7 @@ import {
   type CreatedApproval,
   parkedApprovalIds,
   type Records,
+  type RememberableApproval,
   type ResolveApprovalInput,
   type ResolvedApprovalItem,
 } from '@assistant/persistence';
@@ -149,6 +150,41 @@ async function collectInboxCandidates<T>(
 export class FirestoreApprovalRepository implements ApprovalRepository {
   readonly kind = 'approval-repository' as const;
   constructor(readonly store: InstallationStore) {}
+
+  async getRememberable(agentId: string, approvalId: string): Promise<RememberableApproval | null> {
+    if (!validDocumentIdentifier(approvalId)) return null;
+    const approvalSnapshot = await this.store.doc('approvals', approvalId).get();
+    if (!approvalSnapshot.exists) return null;
+    try {
+      const approval = decodeRecord<Records['approvals']>(approvalSnapshot.data());
+      if (
+        !validDocumentIdentifier(approval.id) ||
+        documentKey(approval.id) !== approvalSnapshot.ref.id ||
+        !validPersistedDate(approval.requestedAt) ||
+        approval.status !== 'pending' ||
+        !validDocumentIdentifier(approval.taskId) ||
+        !validDocumentIdentifier(approval.toolCallId)
+      )
+        return null;
+      const taskSnapshot = await this.store.doc('tasks', approval.taskId).get();
+      const toolSnapshot = await this.store.doc('toolCalls', approval.toolCallId).get();
+      if (!taskSnapshot.exists || !toolSnapshot.exists) return null;
+      const task = decodeRecord<Records['tasks']>(taskSnapshot.data());
+      const tool = decodeRecord<Records['toolCalls']>(toolSnapshot.data());
+      if (
+        task.id !== approval.taskId ||
+        task.agentId !== agentId ||
+        tool.id !== approval.toolCallId ||
+        tool.taskId !== approval.taskId ||
+        typeof tool.toolName !== 'string' ||
+        tool.toolName.length === 0
+      )
+        return null;
+      return { approval, toolName: tool.toolName };
+    } catch {
+      return null;
+    }
+  }
 
   async listInbox(agentId: string, options: ApprovalInboxQuery = {}): Promise<ApprovalInbox> {
     const recentLimit = approvalInboxLimit(options.recentLimit);
