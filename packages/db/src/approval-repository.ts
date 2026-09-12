@@ -117,13 +117,19 @@ export async function expireStaleApprovals(
       .where(and(eq(approvals.status, 'pending'), lte(approvals.expiresAt, now)))
       .orderBy(asc(approvals.expiresAt), asc(approvals.id))
       .limit(limit);
-    // The status predicate is repeated here so a concurrent resolver wins
+    // Repeat eligibility here so a concurrent decision or expiry extension wins
     // cleanly: whichever UPDATE acquires the approval row first determines the
     // terminal outcome, and the loser returns no row for that approval.
     const expired = await tx
       .update(approvals)
       .set({ status: 'expired', resolvedAt: now })
-      .where(and(inArray(approvals.id, due), eq(approvals.status, 'pending')))
+      .where(
+        and(
+          inArray(approvals.id, due),
+          eq(approvals.status, 'pending'),
+          lte(approvals.expiresAt, now),
+        ),
+      )
       .returning({ id: approvals.id, taskId: approvals.taskId, toolCallId: approvals.toolCallId });
     if (expired.length === 0) return [];
 
