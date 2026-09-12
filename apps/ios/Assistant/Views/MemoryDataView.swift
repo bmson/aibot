@@ -69,9 +69,8 @@ struct MemoryDataScreen: View {
             .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
         }
-        .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Your data")
-        .navigationBarTitleDisplayMode(.inline)
+        .assistantSubmenuChrome()
         .sheet(item: $exported) { file in
             ShareSheet(url: file.url)
         }

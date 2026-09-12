@@ -35,7 +35,7 @@ struct MemoryLibraryScreen: View {
             VStack(alignment: .leading, spacing: 14) {
                 filters
                 if loading && response.rows.isEmpty {
-                    ProgressView().frame(maxWidth: .infinity, minHeight: 200)
+                    AssistantLoadingState(title: "Loading your memory library")
                 } else if response.rows.isEmpty {
                     AssistantEmptyState(
                         loaded ? "Nothing matches those filters" : "Memory library",
@@ -53,9 +53,8 @@ struct MemoryLibraryScreen: View {
             .padding(16)
             .padding(.bottom, 28)
         }
-        .background(AssistantTheme.canvas(for: colorScheme).ignoresSafeArea())
         .navigationTitle("Memory library")
-        .navigationBarTitleDisplayMode(.inline)
+        .assistantSubmenuChrome()
         .searchable(text: $search, prompt: "Search saved memories")
         .onSubmit(of: .search) { apply { $0.search = search } }
         .refreshable { await load() }
@@ -84,6 +83,16 @@ struct MemoryLibraryScreen: View {
                 Text("Any").tag("all")
                 Text("Connected").tag("connected")
                 Text("Not connected").tag("unconnected")
+            }
+            // The server sends these with every page; without a control for
+            // them two of the web library's filters were unreachable here.
+            if !response.subjects.isEmpty {
+                Picker("About", selection: subjectBinding) {
+                    Text("Anyone").tag("")
+                    ForEach(response.subjects) { subject in
+                        Text(subject.label).tag(subject.id)
+                    }
+                }
             }
         }
         .assistantPanel(in: colorScheme)
@@ -114,7 +123,7 @@ struct MemoryLibraryScreen: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .assistantPanel(in: colorScheme)
+        .assistantCard(in: colorScheme)
     }
 
     private func memoryTag(_ text: String) -> some View {
@@ -160,6 +169,7 @@ struct MemoryLibraryScreen: View {
     private var domainBinding: Binding<String> { binding(\.domain) }
     private var filterBinding: Binding<String> { binding(\.filter) }
     private var connectivityBinding: Binding<String> { binding(\.connectivity) }
+    private var subjectBinding: Binding<String> { binding(\.subjectId) }
 
     private func apply(_ change: (inout MemoryLibraryQuery) -> Void) {
         var next = query

@@ -1307,11 +1307,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func deletePerson(_ person: WorkspacePerson) async -> Bool {
+    func deletePerson(id: String) async -> Bool {
         guard let client else { return false }
         errorMessage = nil
         do {
-            try await client.deletePerson(id: person.id)
+            try await client.deletePerson(id: id)
+            personProfiles.removeValue(forKey: id)
             await refreshWorkspace(reportFailure: false)
             return true
         } catch {

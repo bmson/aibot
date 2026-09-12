@@ -16,6 +16,7 @@ struct PeopleView: View {
     @State private var showsConnections = true
     @State private var activeMapID: String?
     @State private var showsVisualGraph = false
+    @State private var showsPersonCreator = false
 
     /// Birthdays inside this window get their own section at the top.
     private let comingUpWindowDays = 30
@@ -95,6 +96,18 @@ struct PeopleView: View {
             }
             .navigationTitle("People")
             .assistantSubmenuChrome()
+            // Adding someone used to mean switching to Memory; the web
+            // directory offers it right here.
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Add person", systemImage: "person.badge.plus") {
+                        showsPersonCreator = true
+                    }
+                }
+            }
+            .sheet(isPresented: $showsPersonCreator) {
+                NavigationStack { PersonEditor(person: nil) }
+            }
             .searchable(text: $query, prompt: "Name, relationship, or place")
             .contentMargins(.bottom, 72, for: .scrollContent)
             .refreshable {
@@ -738,8 +751,7 @@ struct PersonCardScreen: View {
             )
         }
 
-        // Editing lives in Memory, which already owns the person controls.
-        Text("\(card.factCount) saved \(card.factCount == 1 ? "fact" : "facts") · manage in Memory")
+        Text("\(card.factCount) saved \(card.factCount == 1 ? "fact" : "facts")")
             .font(.caption)
             .foregroundStyle(.secondary)
     }

@@ -316,7 +316,7 @@ struct MemoryView: View {
                     .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 AssistantConfirmationButton("Delete", hint: "Deletes this person and their saved facts.") {
                     profileActionInFlight = person.id
-                    _ = await model.deletePerson(person)
+                    _ = await model.deletePerson(id: person.id)
                     profileActionInFlight = nil
                 }
                 .disabled(profileActionInFlight != nil)
@@ -685,6 +685,25 @@ struct PersonDetailsView: View {
                     } footer: {
                         Text("Moves every saved fact onto the selected person and removes this duplicate.")
                     }
+                }
+
+                Section {
+                    AssistantConfirmationButton(
+                        "Delete \(personName)",
+                        confirmationTitle: "Delete for good",
+                        hint: "Removes this person and every fact saved about them.",
+                        fillsWidth: true
+                    ) {
+                        isWorking = true
+                        let deleted = await model.deletePerson(id: personId)
+                        isWorking = false
+                        if deleted { dismiss() }
+                    }
+                    .disabled(isWorking)
+                } header: {
+                    Text("Remove")
+                } footer: {
+                    Text("This cannot be undone.")
                 }
             } else {
                 ProgressView().frame(maxWidth: .infinity)
