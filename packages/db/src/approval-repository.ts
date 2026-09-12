@@ -1,11 +1,20 @@
 import type {
   ApprovalRepository,
   ApprovalResolution,
+  ApprovalWake,
   ResolveApprovalInput,
 } from '@assistant/persistence';
-import { and, eq, sql } from 'drizzle-orm';
+import { approvalIsResolved, approvalSweepBatch, parkedApprovalIds } from '@assistant/persistence';
+import { and, asc, eq, gt, inArray, lte, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
-import { approvalPolicies, approvals, tasks, toolCalls } from './schema.js';
+import { approvalPolicies, approvals, maintenanceCursors, tasks, toolCalls } from './schema.js';
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function validateApprovalTime(now: Date): void {
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime()))
+    throw new Error('Invalid approval time');
+}
 
 export async function resolveApproval(
   db: Db,
@@ -93,6 +102,159 @@ export async function resolveApproval(
   };
 }
 
+/** Expire a bounded page of pending approvals and wake each parked task once. */
+export async function expireStaleApprovals(
+  db: Db,
+  batch = 200,
+  now = new Date(),
+): Promise<ApprovalWake[]> {
+  const limit = approvalSweepBatch(batch);
+  validateApprovalTime(now);
+  return db.transaction(async (tx) => {
+    const due = tx
+      .select({ id: approvals.id })
+      .from(approvals)
+      .where(and(eq(approvals.status, 'pending'), lte(approvals.expiresAt, now)))
+      .orderBy(asc(approvals.expiresAt), asc(approvals.id))
+      .limit(limit);
+    // The status predicate is repeated here so a concurrent resolver wins
+    // cleanly: whichever UPDATE acquires the approval row first determines the
+    // terminal outcome, and the loser returns no row for that approval.
+    const expired = await tx
+      .update(approvals)
+      .set({ status: 'expired', resolvedAt: now })
+      .where(and(inArray(approvals.id, due), eq(approvals.status, 'pending')))
+      .returning({ id: approvals.id, taskId: approvals.taskId, toolCallId: approvals.toolCallId });
+    if (expired.length === 0) return [];
+
+    await tx
+      .update(toolCalls)
+      .set({ status: 'denied', error: 'approval expired' })
+      .where(
+        inArray(
+          toolCalls.id,
+          expired.map((approval) => approval.toolCallId),
+        ),
+      );
+
+    const taskIds = [...new Set(expired.map((approval) => approval.taskId))];
+    return tx
+      .update(tasks)
+      .set({
+        status: 'pending',
+        runAfter: null,
+        lockedUntil: null,
+        leaseToken: null,
+        queueGeneration: sql`${tasks.queueGeneration} + 1`,
+        attempt: 0,
+        attentionNotifiedAt: null,
+        updatedAt: now,
+      })
+      .where(and(inArray(tasks.id, taskIds), eq(tasks.status, 'waiting_approval')))
+      .returning({ taskId: tasks.id, generation: tasks.queueGeneration });
+  });
+}
+
+/** Wake parked tasks whose complete approval checkpoint has reached a terminal state. */
+export async function resumeResolvedApprovals(
+  db: Db,
+  batch = 200,
+  now = new Date(),
+): Promise<ApprovalWake[]> {
+  const limit = approvalSweepBatch(batch);
+  validateApprovalTime(now);
+  const candidates = await db.transaction(async (tx) => {
+    await tx
+      .insert(maintenanceCursors)
+      .values({ name: 'approval-recovery', cursor: null })
+      .onConflictDoNothing({ target: maintenanceCursors.name });
+    const [cursor] = await tx
+      .select()
+      .from(maintenanceCursors)
+      .where(eq(maintenanceCursors.name, 'approval-recovery'))
+      .for('update');
+    if (!cursor) throw new Error('Missing approval recovery cursor');
+
+    let page = await tx
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.status, 'waiting_approval'),
+          cursor.cursor ? gt(tasks.id, cursor.cursor) : undefined,
+        ),
+      )
+      .orderBy(asc(tasks.id))
+      .limit(limit);
+    // A deleted task can leave the durable cursor beyond every remaining ID.
+    // Wrap in this same allocation transaction so a cycle still makes
+    // progress instead of spending one full invocation on an empty page.
+    if (page.length === 0 && cursor.cursor !== null) {
+      page = await tx
+        .select({ id: tasks.id })
+        .from(tasks)
+        .where(eq(tasks.status, 'waiting_approval'))
+        .orderBy(asc(tasks.id))
+        .limit(limit);
+    }
+    const lastId = page.at(-1)?.id ?? null;
+    await tx
+      .update(maintenanceCursors)
+      .set({ cursor: page.length === limit ? lastId : null, updatedAt: now })
+      .where(eq(maintenanceCursors.name, 'approval-recovery'));
+    return page;
+  });
+
+  const wakes: ApprovalWake[] = [];
+  for (const candidate of candidates) {
+    const wake = await db.transaction(async (tx) => {
+      // ResolveApproval updates approval first and then the task. Do not take
+      // approval row locks after this task lock, or the two paths can deadlock.
+      const [task] = await tx.select().from(tasks).where(eq(tasks.id, candidate.id)).for('update');
+      if (task?.status !== 'waiting_approval') return null;
+      const ids = parkedApprovalIds(task.state);
+      if (!ids || ids.some((id) => !UUID_PATTERN.test(id))) return null;
+
+      const rows = await tx
+        .select({ id: approvals.id, taskId: approvals.taskId, status: approvals.status })
+        .from(approvals)
+        .where(inArray(approvals.id, ids));
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      if (
+        rows.length !== ids.length ||
+        ids.some((id) => {
+          const approval = byId.get(id);
+          return !approval || approval.taskId !== task.id || !approvalIsResolved(approval.status);
+        })
+      )
+        return null;
+
+      const [updated] = await tx
+        .update(tasks)
+        .set({
+          status: 'pending',
+          runAfter: null,
+          lockedUntil: null,
+          leaseToken: null,
+          queueGeneration: sql`${tasks.queueGeneration} + 1`,
+          attempt: 0,
+          attentionNotifiedAt: null,
+          updatedAt: now,
+        })
+        .where(and(eq(tasks.id, task.id), eq(tasks.status, 'waiting_approval')))
+        .returning({ taskId: tasks.id, generation: tasks.queueGeneration });
+      return updated ?? null;
+    });
+    if (wake) wakes.push(wake);
+  }
+  return wakes;
+}
+
 export function createPostgresApprovalRepository(db: Db): ApprovalRepository {
-  return { kind: 'approval-repository', resolve: (input) => resolveApproval(db, input) };
+  return {
+    kind: 'approval-repository',
+    resolve: (input) => resolveApproval(db, input),
+    expireStale: (batch, now) => expireStaleApprovals(db, batch, now),
+    resumeResolved: (batch, now) => resumeResolvedApprovals(db, batch, now),
+  };
 }

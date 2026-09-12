@@ -20,7 +20,7 @@ Build a version of the current assistant that a customer installs into their own
 
 **2. Current code and the real migration surface**
 
-The schema contains 63 `pgTable` declarations. A source scan found approximately 140 non-test TypeScript files importing database or Drizzle APIs, including 66 in core and 31 in application. This is a persistence refactor across business use cases, not a replacement of `createDb()` alone.
+The original planning baseline contained 63 `pgTable` declarations; the current schema now has 66. A source scan found approximately 140 non-test TypeScript files importing database or Drizzle APIs, including 66 in core and 31 in application. This is a persistence refactor across business use cases, not a replacement of `createDb()` alone.
 
 | Current area | Evidence and implication |
 |---|---|
@@ -77,7 +77,7 @@ Proposed central configuration additions: `DATABASE_DRIVER`, `FIRESTORE_DATABASE
 
 **5. Firestore data model and complete coverage**
 
-Use installation-scoped collections with stable IDs and explicit relationship IDs. One document per message, task, approval, event, or memory; never grow an entire conversation or ledger inside one document. The following is a coverage inventory of all 63 current table exports, not a requirement to translate each into exactly one collection.
+Use installation-scoped collections with stable IDs and explicit relationship IDs. One document per message, task, approval, event, or memory; never grow an entire conversation or ledger inside one document. The following is a coverage inventory of the original 63 table exports (extend this inventory for subsequent schema additions), not a requirement to translate each into exactly one collection.
 
 | Domain | Current table exports that must be mapped |
 |---|---|
@@ -217,7 +217,7 @@ Do not add a publisher OAuth proxy or shared secret to hide these steps. Credent
 
 Keep the old service operational while developing and rehearsing against copies. Select the data store at installation level; do not run production dual writes as the default migration strategy.
 
-1. Build a repeatable PostgreSQL exporter and Firestore importer with a versioned format, manifest, entity counts, checksums, ID/reference mappings, timestamps, and resumable checkpoints. Export all 63 table families, including history, ledger data, tombstones, model preferences, schedules, and pending approvals.
+1. Build a repeatable PostgreSQL exporter and Firestore importer with a versioned format, manifest, entity counts, checksums, ID/reference mappings, timestamps, and resumable checkpoints. Export all current table families, including history, ledger data, tombstones, model preferences, schedules, and pending approvals.
 2. Inventory current Cloud Storage objects, encryption keys, and provider secrets. Reuse existing customer-owned storage where appropriate; otherwise copy with digests and preserve the keys required to decrypt migrated data. Keep secrets in a separately restricted transfer path, not an ordinary data export.
 3. Rehearse from a consistent PostgreSQL snapshot into an isolated Firestore database/project. Validate every mapping, relationship, uniqueness invariant, money total, pending operation, and index. Produce an exceptions report; no silently dropped rows or truncated payloads.
 4. Run side-by-side read/recall comparisons without executing external actions from the rehearsal. Repair discrepancies and measure runtime/cost at actual corpus size.
@@ -247,7 +247,7 @@ These are planning estimates in engineer-days for one experienced engineer, incl
 | P0 | Feasibility spikes: Firestore atomic commands/vector costs; actual Cloud Shell entry/auth; Google models; passkey claim | None | 3–5 | No unresolved blocker hidden behind the installer promise; record measured baselines |
 | P1 | Provider-neutral entities and repository contracts; boundary checks; PostgreSQL adapter parity | P0 | 4–7 | First use cases pass identical behavioral contracts; public API shape unchanged |
 | P2 | Firestore chat, tasks, approvals, budgets, outbox, leases, reminders | P1 | 6–10 | Concurrency/crash/replay suite passes on emulator and real Firestore |
-| P3 | Remaining application/module repositories, graph/recall, imports, privacy, diagnostics | P2 | 8–12 | All 63 table families mapped; no live SQL requirement for Firestore profile |
+| P3 | Remaining application/module repositories, graph/recall, imports, privacy, diagnostics | P2 | 8–12 | All current table families mapped; no live SQL requirement for Firestore profile |
 | P4 | Google provider, optional OpenRouter, versioned embeddings | P1; integrate with P2/P3 | 3–5 | Tool, streaming, cost, fallback, and recall evaluations pass |
 | P5 | Due-work scheduling, polling reduction, idle-cost profile | P2/P3 | 3–5 | Reminders remain timely and measured idle/database costs meet agreed targets |
 | P6 | Passkeys, owner recovery, sessions, per-device pairing | P1/P2 | 4–7 | Unclaimed server cannot be taken over; web/mobile authentication and recovery pass |

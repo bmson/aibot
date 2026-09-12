@@ -31,4 +31,38 @@ export type ApprovalResolution = ResolveApprovalResult & {
 export interface ApprovalRepository {
   readonly kind: 'approval-repository';
   resolve(input: ResolveApprovalInput): Promise<ApprovalResolution>;
+  /** Each expired approval, tool denial and eligible task wake commit atomically. */
+  expireStale(batch?: number, now?: Date): Promise<ApprovalWake[]>;
+  /** Recheck the locked task checkpoint and every referenced approval before waking. */
+  resumeResolved(batch?: number, now?: Date): Promise<ApprovalWake[]>;
+}
+
+export interface ApprovalWake {
+  taskId: string;
+  generation: number;
+}
+
+/** Bound both the sweep query and each parked task's approval reads. */
+export function approvalSweepBatch(batch = 200): number {
+  if (!Number.isInteger(batch) || batch < 1 || batch > 200)
+    throw new Error('Invalid approval sweep batch');
+  return batch;
+}
+
+/** Malformed or oversized checkpoints must not authorize resuming a task. */
+export function parkedApprovalIds(state: unknown): string[] | null {
+  const entries = (state as { pendingApprovals?: unknown } | null)?.pendingApprovals;
+  if (!Array.isArray(entries) || entries.length === 0 || entries.length > 200) return null;
+  const ids: string[] = [];
+  for (const entry of entries) {
+    const id = (entry as { approvalId?: unknown } | null)?.approvalId;
+    if (typeof id !== 'string' || id.length === 0 || new TextEncoder().encode(id).length > 1000)
+      return null;
+    ids.push(id);
+  }
+  return [...new Set(ids)];
+}
+
+export function approvalIsResolved(status: unknown): boolean {
+  return status === 'approved' || status === 'denied' || status === 'expired';
 }

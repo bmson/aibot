@@ -1,6 +1,11 @@
 /** Portable record shapes. PostgreSQL compatibility is checked by records.test.ts.
  * These types are owned by persistence: change them intentionally, not on every SQL migration. */
 export interface Records {
+  maintenanceCursors: {
+    name: string;
+    cursor: string | null;
+    updatedAt: Date;
+  };
   situationPacks: {
     id: string;
     data: unknown;

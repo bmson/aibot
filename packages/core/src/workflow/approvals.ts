@@ -14,7 +14,6 @@ import type {
 import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 import { persistMessage } from '../chat.js';
 import { getQueueNotifier } from '../queue.js';
-import { wakeTask } from './machine.js';
 
 export type { ResolveApprovalInput, ResolveApprovalResult } from '@assistant/persistence';
 
@@ -190,82 +189,36 @@ export async function renotifyStalledApprovals(
  * waiting_approval forever. Resume any waiting_approval task whose parked
  * approvals are ALL resolved (nothing still pending) — so a task genuinely
  * waiting on a human is never woken early, but a stranded one recovers on the
- * next sweep. Idempotent via wakeTask's status-guarded CAS.
+ * next bounded scan cycle. Each repository rechecks and atomically wakes the task.
  */
-export async function resumeResolvedApprovalTasks(db: Db, batch = 200): Promise<string[]> {
-  const parked = await db
-    .select({ id: tasks.id, state: tasks.state })
-    .from(tasks)
-    .where(eq(tasks.status, 'waiting_approval'))
-    .limit(batch);
-
-  const woken: string[] = [];
-  for (const task of parked) {
-    const pendingApprovals =
-      (task.state as { pendingApprovals?: Array<{ approvalId?: unknown }> } | null)
-        ?.pendingApprovals ?? [];
-    const ids = pendingApprovals
-      .map((entry) => entry.approvalId)
-      .filter((id): id is string => typeof id === 'string');
-    if (ids.length === 0) continue;
-    const rows = await db
-      .select({ status: approvals.status })
-      .from(approvals)
-      .where(inArray(approvals.id, ids));
-    // Only resume when every parked approval is decided; a still-pending one
-    // means the task is legitimately waiting and must not be churned.
-    if (rows.length < ids.length || rows.some((row) => row.status === 'pending')) continue;
-    if (await wakeTask(db, task.id)) woken.push(task.id);
-  }
-  return woken;
+export async function resumeResolvedApprovalTasks(
+  store: Db | ApprovalRepository,
+  batch = 200,
+  now?: Date,
+): Promise<string[]> {
+  const portable = 'kind' in store && store.kind === 'approval-repository';
+  const repository = portable
+    ? (store as ApprovalRepository)
+    : createPostgresApprovalRepository(store as Db);
+  const wakes = await repository.resumeResolved(batch, now);
+  if (!portable) for (const wake of wakes) getQueueNotifier().notify(wake.taskId, wake.generation);
+  return wakes.map((wake) => wake.taskId);
 }
 
 /**
  * Sweep: expire stale pending approvals and wake their tasks so the model
  * learns the approval expired (instead of the task dying silently).
  */
-export async function expireStaleApprovals(db: Db, batch = 200): Promise<string[]> {
-  const taskIds = await db.transaction(async (tx) => {
-    const due = tx
-      .select({ id: approvals.id })
-      .from(approvals)
-      .where(and(eq(approvals.status, 'pending'), lte(approvals.expiresAt, sql`now()`)))
-      .orderBy(approvals.expiresAt)
-      .limit(batch);
-    const expired = await tx
-      .update(approvals)
-      .set({ status: 'expired', resolvedAt: sql`now()` })
-      .where(and(inArray(approvals.id, due), eq(approvals.status, 'pending')))
-      .returning();
-    if (expired.length === 0) return [];
-
-    await tx
-      .update(toolCalls)
-      .set({ status: 'denied', error: 'approval expired' })
-      .where(
-        inArray(
-          toolCalls.id,
-          expired.map((approval) => approval.toolCallId),
-        ),
-      );
-
-    const uniqueTaskIds = [...new Set(expired.map((approval) => approval.taskId))];
-    const woken = await tx
-      .update(tasks)
-      .set({
-        status: 'pending',
-        runAfter: null,
-        lockedUntil: null,
-        queueGeneration: sql`${tasks.queueGeneration} + 1`,
-        attempt: 0,
-        updatedAt: sql`now()`,
-      })
-      .where(and(inArray(tasks.id, uniqueTaskIds), eq(tasks.status, 'waiting_approval')))
-      .returning({ id: tasks.id, queueGeneration: tasks.queueGeneration });
-    return woken;
-  });
-
-  const notifier = getQueueNotifier();
-  for (const task of taskIds) notifier.notify(task.id, task.queueGeneration);
-  return taskIds.map((task) => task.id);
+export async function expireStaleApprovals(
+  store: Db | ApprovalRepository,
+  batch = 200,
+  now?: Date,
+): Promise<string[]> {
+  const portable = 'kind' in store && store.kind === 'approval-repository';
+  const repository = portable
+    ? (store as ApprovalRepository)
+    : createPostgresApprovalRepository(store as Db);
+  const wakes = await repository.expireStale(batch, now);
+  if (!portable) for (const wake of wakes) getQueueNotifier().notify(wake.taskId, wake.generation);
+  return wakes.map((wake) => wake.taskId);
 }
