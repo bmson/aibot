@@ -17,6 +17,7 @@ struct MemoryLibraryScreen: View {
     @State private var loading = false
     @State private var loaded = false
     @State private var pendingRowID: String?
+    @State private var loadTask: Task<Void, Never>?
     @State private var correctingRow: MemoryLibraryRow?
 
     /// The domains the extractor assigns. Fixed rather than derived so the
@@ -61,7 +62,7 @@ struct MemoryLibraryScreen: View {
         .onSubmit(of: .search) { apply { $0.search = search } }
         .refreshable { await load() }
         .task { if !loaded { await load() } }
-        .sheet(item: $correctingRow, onDismiss: { Task { await load() } }) { row in
+        .sheet(item: $correctingRow, onDismiss: { reload() }) { row in
             NavigationStack { MemoryEditor(row: row) }
         }
     }
@@ -259,12 +260,25 @@ struct MemoryLibraryScreen: View {
         if next.page == before.page { next.page = 1 }
         guard next != query else { return }
         query = next
-        Task { await load() }
+        reload()
+    }
+
+    /// Filter changes arrive faster than the network answers. Each one used to
+    /// spawn an untracked Task, so two quick taps ran concurrently and whichever
+    /// replied last won — even when that was the older request — and the first
+    /// to finish cleared the spinner while the other was still in flight.
+    private func reload() {
+        loadTask?.cancel()
+        loadTask = Task { await load() }
     }
 
     private func load() async {
         loading = true
-        if let result = await model.memoryLibrary(query) { response = result }
+        let requested = query
+        let result = await model.memoryLibrary(requested)
+        // Only the request that still matches the current filters may publish.
+        guard !Task.isCancelled, requested == query else { return }
+        if let result { response = result }
         loading = false
         loaded = true
     }

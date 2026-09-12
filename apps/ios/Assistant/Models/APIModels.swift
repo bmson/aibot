@@ -1010,6 +1010,30 @@ struct PersonProfileResponse: Codable, Sendable {
     let contact: PersonProfileContact
     let occasions: [PersonOccasion]
     let mergeOptions: [PersonMergeOption]
+    /// Dates already sitting in this person's saved facts that are not yet
+    /// recurring occasions. The endpoint has always sent these; leaving them
+    /// off this struct meant Codable dropped them and the phone could not
+    /// offer the one-tap save the web page does.
+    /// Optional, not a defaulted array: synthesized Codable throws on a missing
+    /// key rather than falling back to a default, so a server that ever omits
+    /// this would fail the whole profile fetch. Same reason MessagePart keeps
+    /// its newer fields optional.
+    var occasionSuggestions: [PersonOccasionSuggestion]?
+    /// Present only when another contact looks like the same person. Web shows
+    /// this as a "possible duplicate" hint beside the merge control.
+    var duplicate: PersonDuplicateHint?
+}
+
+struct PersonOccasionSuggestion: Codable, Sendable, Identifiable, Hashable {
+    let kind: String
+    let month: Int
+    let day: Int
+    var id: String { "\(kind)-\(month)-\(day)" }
+}
+
+struct PersonDuplicateHint: Codable, Sendable {
+    let targetId: String
+    let reason: String
 }
 
 // Identifiable because MemoryView presents the person editor with

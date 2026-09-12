@@ -610,8 +610,12 @@ struct PersonDetailsView: View {
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showingOccasionEditor = false
     @State private var editingOccasion: PersonOccasion?
+    /// Suggestions already saved in this sitting. The profile only reloads on
+    /// the next fetch, so without this a just-saved date stays on offer.
+    @State private var savedSuggestions: Set<String> = []
     @State private var editingContact: PersonProfileContact?
     @State private var mergeTarget = ""
     @State private var isWorking = false
@@ -668,6 +672,28 @@ struct PersonDetailsView: View {
                     Button("Add occasion", systemImage: "calendar.badge.plus") {
                         showingOccasionEditor = true
                     }
+                    // Dates the extractor already found in this person's facts
+                    // but that are not recurring reminders yet. The endpoint
+                    // has always sent them; web offers the same one-tap save.
+                    if !visibleSuggestions.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Found in saved facts — save any of these as a recurring reminder:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            AssistantFlowLayout(spacing: 8) {
+                                ForEach(visibleSuggestions) { suggestion in
+                                    Button {
+                                        save(suggestion)
+                                    } label: {
+                                        Text("+ \(suggestionLabel(suggestion))")
+                                            .font(.caption)
+                                    }
+                                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
+                                    .disabled(isWorking)
+                                }
+                            }
+                        }
+                    }
                 } header: {
                     Text("Important dates")
                 }
@@ -692,7 +718,16 @@ struct PersonDetailsView: View {
                         .id(mergeTarget)
                         .disabled(isWorking || mergeTarget.isEmpty)
                     } header: {
-                        Text("Merge")
+                        // Web badges this as "possible duplicate" with the
+                        // reason; without it the phone gave no clue why these
+                        // merge options were being offered at all.
+                        if let duplicate = profile.duplicate {
+                            Label("Possible duplicate — \(duplicate.reason)", systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(AssistantTheme.warning(for: colorScheme))
+                        } else {
+                            Text("Merge")
+                        }
                     } footer: {
                         Text("Moves every saved fact onto the selected person and removes this duplicate.")
                     }
@@ -736,6 +771,38 @@ struct PersonDetailsView: View {
         }
         .sheet(item: $editingContact) { contact in
             NavigationStack { PersonEditor(contact: contact) }
+        }
+    }
+
+    private var visibleSuggestions: [PersonOccasionSuggestion] {
+        (profile.occasionSuggestions ?? []).filter { !savedSuggestions.contains($0.id) }
+    }
+
+    private func suggestionLabel(_ suggestion: PersonOccasionSuggestion) -> String {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("MMMMd")
+        let date = Calendar.current.date(from: DateComponents(year: 2024, month: suggestion.month, day: suggestion.day))
+        let day = date.map(formatter.string(from:)) ?? "\(suggestion.month)/\(suggestion.day)"
+        return "\(day) · \(suggestion.kind)"
+    }
+
+    private func save(_ suggestion: PersonOccasionSuggestion) {
+        isWorking = true
+        Task {
+            let saved = await model.addOccasion(
+                personId: personId,
+                mutation: OccasionMutation(
+                    kind: suggestion.kind,
+                    label: "",
+                    month: String(suggestion.month),
+                    day: String(suggestion.day),
+                    year: "",
+                    leadDays: "7",
+                    notes: ""
+                )
+            )
+            isWorking = false
+            if saved { savedSuggestions.insert(suggestion.id) }
         }
     }
 
