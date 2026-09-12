@@ -30,6 +30,7 @@
     "config:check": "tsx scripts/config-doctor.ts",
     "modules:plan": "tsx scripts/module-plan.ts",
     "install:plan": "tsx scripts/installation-plan.ts",
+    "install:state": "tsx scripts/installation-state.ts",
     "check:boundaries": "tsx scripts/check-boundaries.ts",
     "dev": "turbo dev",
     "up": "docker compose up --build",

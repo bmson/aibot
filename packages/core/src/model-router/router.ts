@@ -8,12 +8,11 @@ import {
   models,
   tasks,
 } from '@assistant/db';
-import { createOpenRouter, type OpenRouterProvider } from '@openrouter/ai-sdk-provider';
 import {
+  type EmbeddingModel,
   embedMany,
   generateObject,
   generateText,
-  type JSONValue,
   type LanguageModel,
   type ModelMessage,
   streamText,
@@ -31,6 +30,12 @@ import {
 import { withSpan } from '../otel.js';
 import { type AuditCaptureMode, captureField, captureInput } from './audit-capture.js';
 import { type BudgetDecision, evaluateBudget } from './budget.js';
+import {
+  createOpenRouterModelProvider,
+  type ModelProvider,
+  type ProviderOptions,
+  type ProviderUsage,
+} from './provider.js';
 
 export type ModelRole =
   | 'plan'
@@ -191,7 +196,118 @@ interface FinishEventLike {
   usage?: { inputTokens?: number; outputTokens?: number };
   providerMetadata?: Record<string, unknown>;
   response?: { id?: string };
+  responses?: unknown[];
   finishReason?: string;
+}
+
+interface EmbeddingProviderEvidence {
+  usage?: { tokens?: number };
+  providerMetadata?: Record<string, unknown>;
+}
+
+function observeEmbeddingModel(
+  model: EmbeddingModel,
+  evidence: EmbeddingProviderEvidence[],
+): {
+  model: EmbeddingModel;
+  stop: () => void;
+  waitForSettled: () => Promise<void>;
+} {
+  if (typeof model !== 'object' || model === null || !('doEmbed' in model)) {
+    return { model, stop: () => {}, waitForSettled: async () => {} };
+  }
+  const candidate = model as {
+    doEmbed?: (options: unknown) => PromiseLike<EmbeddingProviderEvidence>;
+  };
+  const doEmbed = candidate.doEmbed;
+  if (typeof doEmbed !== 'function') {
+    return { model, stop: () => {}, waitForSettled: async () => {} };
+  }
+  let stopped = false;
+  const inFlight = new Set<Promise<EmbeddingProviderEvidence>>();
+  let observedDoEmbed: ((options: unknown) => Promise<EmbeddingProviderEvidence>) | undefined;
+  const observed = new Proxy(model as object, {
+    get(target, property) {
+      if (property === 'doEmbed') return observedDoEmbed;
+      return Reflect.get(target, property, target);
+    },
+  }) as typeof candidate;
+  observedDoEmbed = async (options) => {
+    if (stopped) throw new Error('embedding batch stopped after provider failure');
+    const operation = (async () => {
+      const result = await doEmbed.call(model, options);
+      evidence.push(result);
+      return result;
+    })();
+    inFlight.add(operation);
+    operation.then(
+      () => inFlight.delete(operation),
+      () => {
+        stopped = true;
+        inFlight.delete(operation);
+      },
+    );
+    return operation;
+  };
+  return {
+    model: observed as EmbeddingModel,
+    stop: () => {
+      stopped = true;
+    },
+    waitForSettled: async () => {
+      while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
+    },
+  };
+}
+
+function validTokenCount(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 2_147_483_647
+  );
+}
+
+function providerResultFromError(error: unknown): FinishEventLike | undefined {
+  if (!isUnparseableObjectError(error) || !(error instanceof Error)) return undefined;
+  const candidate = error as Error & FinishEventLike;
+  if (!candidate.usage && !candidate.providerMetadata && !candidate.response) return undefined;
+  return candidate;
+}
+
+function aggregateEmbeddingUsage(
+  provider: ModelProvider,
+  evidence: EmbeddingProviderEvidence[],
+): ProviderUsage | undefined {
+  if (evidence.length === 0) return undefined;
+  let inputTokens = 0;
+  let tokensKnown = true;
+  let costUsd = 0;
+  let costKnown = true;
+  for (const result of evidence) {
+    const usage = provider.normalizeUsage({
+      usage: result.usage ? { inputTokens: result.usage.tokens, outputTokens: 0 } : undefined,
+      providerMetadata: result.providerMetadata,
+    });
+    if (validTokenCount(usage.inputTokens)) {
+      inputTokens += usage.inputTokens;
+    } else {
+      tokensKnown = false;
+    }
+    if (typeof usage.costUsd === 'number' && Number.isFinite(usage.costUsd) && usage.costUsd >= 0) {
+      costUsd += usage.costUsd;
+    } else {
+      costKnown = false;
+    }
+  }
+  const aggregateTokens = tokensKnown && validTokenCount(inputTokens) ? inputTokens : undefined;
+  return {
+    inputTokens: aggregateTokens,
+    outputTokens: aggregateTokens === undefined ? undefined : 0,
+    costUsd: costKnown && Number.isFinite(costUsd) ? costUsd : undefined,
+  };
 }
 
 interface MeterInput {
@@ -201,6 +317,8 @@ interface MeterInput {
   latencyMs: number;
   event: FinishEventLike;
   reservationId: string;
+  estimatedUsd: number;
+  usageOverride?: ProviderUsage;
   promptCostPerMTok: number;
   completionCostPerMTok: number;
   /**
@@ -248,6 +366,7 @@ const DEFAULT_MAX_OUTPUT_TOKENS: Record<Exclude<ModelRole, 'embed'>, number> = {
 };
 const HARD_MAX_OUTPUT_TOKENS = 4_096;
 const ESTIMATE_SAFETY_FACTOR = 1.25;
+export const EMBEDDING_DIMENSIONS = 1_536;
 // OpenRouter load-balances each request across upstream providers, and the
 // slow tail is real: successful deepseek-chat calls on goal-session prompts
 // have been observed at 97–118s in prod. 120s cut those off mid-generation
@@ -268,17 +387,9 @@ const MODEL_CALL_TIMEOUT_MS = 150_000;
  */
 const REASONING_HEADROOM_TOKENS = 4_096;
 
-/** Structural match for the AI SDK's `providerOptions` param ({ provider: { ... } }). */
-type ProviderOptions = Record<string, Record<string, JSONValue>>;
-
 function modelCallSignal(signal?: AbortSignal): AbortSignal {
   const deadline = AbortSignal.timeout(MODEL_CALL_TIMEOUT_MS);
   return signal ? AbortSignal.any([signal, deadline]) : deadline;
-}
-
-function extractCost(providerMetadata: Record<string, unknown> | undefined): number {
-  const openrouter = providerMetadata?.openrouter as { usage?: { cost?: number } } | undefined;
-  return openrouter?.usage?.cost ?? 0;
 }
 
 function promptArgs(opts: CallOptions): { messages: ModelMessage[] } | { prompt: string } {
@@ -340,7 +451,7 @@ export function isProviderCapabilityError(err: unknown): boolean {
 }
 
 export class ModelRouter {
-  private provider: OpenRouterProvider;
+  private provider: ModelProvider;
 
   constructor(
     private db: Db,
@@ -352,8 +463,9 @@ export class ModelRouter {
      * exercise both modes against a memoized config.
      */
     private auditCapture: AuditCaptureMode = loadConfig().LLM_AUDIT_CAPTURE,
+    provider: ModelProvider = createOpenRouterModelProvider(apiKey),
   ) {
-    this.provider = createOpenRouter({ apiKey });
+    this.provider = provider;
   }
 
   /**
@@ -440,6 +552,7 @@ export class ModelRouter {
     ) {
       throw new Error(`model ${modelId} is missing cost rates; refusing an unbudgeted call`);
     }
+    this.provider.assertModelId(modelId);
     const capabilities = (modelRow.capabilities ?? {}) as { thinking?: boolean };
 
     return {
@@ -450,7 +563,7 @@ export class ModelRouter {
       // deepseek-chat is also served by providers with no structured-output
       // support, which hard-fail the request. Per-request semantics: plain
       // text calls still use the full provider pool.
-      model: this.provider.chat(modelId, { provider: { require_parameters: true } }),
+      model: this.provider.chat(modelId),
       modelId,
       degraded,
       thinking: capabilities.thinking === true,
@@ -489,14 +602,17 @@ export class ModelRouter {
     opts: CallOptions,
   ): { maxOutputTokens: number; providerOptions?: ProviderOptions } {
     const visibleLimit = this.outputLimit(role, route, opts);
-    if (!route.thinking) return { maxOutputTokens: visibleLimit };
+    if (!route.thinking) {
+      return {
+        maxOutputTokens: visibleLimit,
+        providerOptions: this.provider.optionsFor({ thinking: false }),
+      };
+    }
     // Reasoning models still need headroom when a tool is mandatory. Removing
     // it can exhaust the completion budget before the tool call is emitted.
     return {
       maxOutputTokens: visibleLimit + REASONING_HEADROOM_TOKENS,
-      providerOptions: {
-        openrouter: { reasoning: { max_tokens: REASONING_HEADROOM_TOKENS } },
-      },
+      providerOptions: this.provider.optionsFor({ thinking: true }),
     };
   }
 
@@ -520,7 +636,7 @@ export class ModelRouter {
       description: `${role}:${route.modelId} preflight`,
       critical: opts.critical,
     });
-    return { reservation, maxOutputTokens, providerOptions };
+    return { reservation, maxOutputTokens, providerOptions, estimatedUsd };
   }
 
   /**
@@ -541,6 +657,7 @@ export class ModelRouter {
         reservationId: string;
         maxOutputTokens: number;
         providerOptions?: ProviderOptions;
+        estimatedUsd: number;
       }
   > {
     const attempt = async (forceFallback: boolean) => {
@@ -560,6 +677,7 @@ export class ModelRouter {
         reservationId: prepared.reservation.reservationId,
         maxOutputTokens: prepared.maxOutputTokens,
         providerOptions: prepared.providerOptions,
+        estimatedUsd: prepared.estimatedUsd,
       };
     };
 
@@ -594,20 +712,44 @@ export class ModelRouter {
   }
 
   private async meter(input: MeterInput): Promise<void> {
-    const providerMetadata =
-      input.event.providerMetadata ??
-      (input.event as { finalStep?: { providerMetadata?: Record<string, unknown> } }).finalStep
-        ?.providerMetadata;
-    let costUsd = extractCost(providerMetadata);
-    const inputTokens = input.event.usage?.inputTokens ?? 0;
-    const outputTokens = input.event.usage?.outputTokens ?? 0;
+    const normalized = input.usageOverride ?? this.provider.normalizeUsage(input.event);
+    const usage = {
+      ...normalized,
+      inputTokens: validTokenCount(normalized.inputTokens) ? normalized.inputTokens : undefined,
+      outputTokens: validTokenCount(normalized.outputTokens) ? normalized.outputTokens : undefined,
+      costUsd:
+        typeof normalized.costUsd === 'number' &&
+        Number.isFinite(normalized.costUsd) &&
+        normalized.costUsd >= 0
+          ? normalized.costUsd
+          : undefined,
+    };
+    const inputTokens = usage.inputTokens ?? 0;
+    const outputTokens = usage.outputTokens ?? 0;
+    const completeTokenUsage = usage.inputTokens !== undefined && usage.outputTokens !== undefined;
+    const hasPositiveTokenUsage = completeTokenUsage && inputTokens + outputTokens > 0;
+    // embedMany may split a batch into several provider calls. Its aggregate
+    // providerMetadata is a shallow merge of the last chunk, so never treat
+    // that one cost as the total charge for a multi-response result.
+    let costUsd =
+      !input.usageOverride && input.event.responses && input.event.responses.length > 1
+        ? undefined
+        : usage.costUsd;
 
     // Provider cost is authoritative. If it is absent, fail closed to the
     // configured rate table rather than silently treating a paid call as free.
-    if (costUsd === 0 && inputTokens + outputTokens > 0) {
+    let costDescription = `${input.role}:${input.modelId}`;
+    if (costUsd === undefined && hasPositiveTokenUsage) {
       costUsd =
         (inputTokens * input.promptCostPerMTok + outputTokens * input.completionCostPerMTok) /
         1_000_000;
+    }
+    if (costUsd === undefined) {
+      // A successful provider call with no usage is still paid work. Reconcile
+      // to the positive preflight estimate so the hold cannot be refunded as
+      // zero; the description keeps the conservative accounting visible.
+      costUsd = input.estimatedUsd;
+      costDescription = `${costDescription} estimated: provider usage unavailable`;
     }
 
     // Reconcile the budget hold first. If the secondary model-call telemetry
@@ -615,11 +757,9 @@ export class ModelRouter {
     // must not be repeated.
     await reconcileReservation(this.db, input.reservationId, {
       usd: costUsd,
-      quantity: inputTokens + outputTokens,
-      unit: 'tokens',
-      unitPriceUsd:
-        inputTokens + outputTokens > 0 ? costUsd / (inputTokens + outputTokens) : undefined,
-      description: `${input.role}:${input.modelId}`,
+      ...(hasPositiveTokenUsage ? { quantity: inputTokens + outputTokens, unit: 'tokens' } : {}),
+      unitPriceUsd: hasPositiveTokenUsage ? costUsd / (inputTokens + outputTokens) : undefined,
+      description: costDescription,
     });
     const [call] = await this.db
       .insert(modelCalls)
@@ -632,7 +772,10 @@ export class ModelRouter {
         costUsd: costUsd.toFixed(6),
         latencyMs: input.latencyMs,
         finishReason: input.event.finishReason,
-        openrouterGenerationId: input.event.response?.id,
+        openrouterGenerationId:
+          this.provider.kind === 'openrouter'
+            ? (usage.generationId ?? input.event.response?.id)
+            : null,
       })
       .returning({ id: modelCalls.id });
 
@@ -707,7 +850,7 @@ export class ModelRouter {
   ): Promise<GenerateOutcome> {
     const prepared = await this.prepareModelCall(role, opts);
     if (!prepared.ok) return prepared;
-    const { route, reservationId, maxOutputTokens, providerOptions } = prepared;
+    const { route, reservationId, maxOutputTokens, providerOptions, estimatedUsd } = prepared;
 
     const started = Date.now();
     try {
@@ -715,7 +858,7 @@ export class ModelRouter {
         const result = await generateText({
           model: route.model,
           ...(opts.messages
-            ? ModelRouter.cacheHintedArgs(opts.system, opts.messages)
+            ? this.cacheHintedArgs(opts.system, opts.messages)
             : { system: opts.system, ...promptArgs(opts) }),
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),
           maxOutputTokens,
@@ -729,6 +872,7 @@ export class ModelRouter {
           latencyMs: Date.now() - started,
           event: result as FinishEventLike,
           reservationId,
+          estimatedUsd,
           promptCostPerMTok: route.promptCostPerMTok,
           completionCostPerMTok: route.completionCostPerMTok,
           audit: {
@@ -766,9 +910,14 @@ export class ModelRouter {
     if (role === 'embed') throw new Error('stream() cannot use the embed role');
     const prepared = await this.prepareModelCall(role, opts);
     if (!prepared.ok) return prepared;
-    const { route, reservationId, maxOutputTokens, providerOptions } = prepared;
+    const { route, reservationId, maxOutputTokens, providerOptions, estimatedUsd } = prepared;
 
     const started = Date.now();
+    let terminal: Promise<void> | undefined;
+    const terminalOnce = (work: () => Promise<void>): Promise<void> => {
+      if (!terminal) terminal = Promise.resolve().then(work);
+      return terminal;
+    };
     let result: ReturnType<typeof streamText>;
     try {
       result = streamText({
@@ -777,23 +926,24 @@ export class ModelRouter {
         // turn is the highest-frequency call in the system, and re-billed the
         // whole system prompt every turn without this). Mirrors stepOnce.
         ...(opts.messages
-          ? ModelRouter.cacheHintedArgs(opts.system, opts.messages)
+          ? this.cacheHintedArgs(opts.system, opts.messages)
           : { system: opts.system, ...promptArgs(opts) }),
         temperature: opts.temperature ?? (route.params.temperature as number | undefined),
         maxOutputTokens,
         providerOptions,
         abortSignal: modelCallSignal(opts.abortSignal),
         onFinish: async (event: FinishEventLike & { text?: string }) => {
-          // AI SDK pauses stream finalization until this promise resolves. Run
-          // persistence independently so a ledger failure cannot lose a reply.
-          await Promise.all([
-            this.meterWithoutRepeatingProviderWork({
+          await terminalOnce(async () => {
+            // AI SDK pauses stream finalization until this promise resolves.
+            // Metering failures are contained so they cannot prevent reply persistence.
+            await this.meterWithoutRepeatingProviderWork({
               taskId: opts.taskId,
               role,
               modelId: route.modelId,
               latencyMs: Date.now() - started,
               event,
               reservationId,
+              estimatedUsd,
               promptCostPerMTok: route.promptCostPerMTok,
               completionCostPerMTok: route.completionCostPerMTok,
               audit: {
@@ -802,26 +952,39 @@ export class ModelRouter {
                 input: captureInput(opts),
                 output: event.text,
               },
-            }),
-            opts.onComplete?.(event.text ?? '') ?? Promise.resolve(),
-          ]);
+            });
+            if (event.finishReason === 'error') {
+              const error = new Error('model stream finished with an error');
+              if (opts.onError) {
+                await opts.onError(error).catch((callbackError) => {
+                  console.error('stream error callback failed', callbackError);
+                });
+              }
+            } else {
+              await opts.onComplete?.(event.text ?? '');
+            }
+          });
         },
         onError: async ({ error }: { error: unknown }) => {
-          await releaseReservation(this.db, reservationId).catch(() => {});
-          if (opts.onError) {
-            await opts.onError(error).catch((callbackError) => {
-              console.error('stream error callback failed', callbackError);
-            });
-          }
+          await terminalOnce(async () => {
+            await releaseReservation(this.db, reservationId).catch(() => {});
+            if (opts.onError) {
+              await opts.onError(error).catch((callbackError) => {
+                console.error('stream error callback failed', callbackError);
+              });
+            }
+          });
         },
         onAbort: async () => {
-          const error = new Error('model stream aborted');
-          await releaseReservation(this.db, reservationId).catch(() => {});
-          if (opts.onError) {
-            await opts.onError(error).catch((callbackError) => {
-              console.error('stream abort callback failed', callbackError);
-            });
-          }
+          await terminalOnce(async () => {
+            const error = new Error('model stream aborted');
+            await releaseReservation(this.db, reservationId).catch(() => {});
+            if (opts.onError) {
+              await opts.onError(error).catch((callbackError) => {
+                console.error('stream abort callback failed', callbackError);
+              });
+            }
+          });
         },
       });
     } catch (err) {
@@ -881,11 +1044,12 @@ export class ModelRouter {
    * set. Bundling the flag with the messages makes it impossible for a call
    * site to take the hinted messages and forget the opt-in.
    */
-  private static cacheHintedArgs(
+  private cacheHintedArgs(
     system: string | undefined,
     messages: ModelMessage[],
-  ): { messages: ModelMessage[]; allowSystemInMessages: true } {
-    const hint = { openrouter: { cacheControl: { type: 'ephemeral' } } };
+  ): { messages: ModelMessage[]; allowSystemInMessages?: true; system?: string } {
+    const hint = this.provider.cacheHint();
+    if (!hint) return { ...(system ? { system } : {}), messages };
     const hinted = [...messages];
     const last = hinted[hinted.length - 1];
     if (last) {
@@ -923,7 +1087,7 @@ export class ModelRouter {
   ): Promise<StepCallOutcome> {
     const prepared = await this.prepareModelCall(role, opts);
     if (!prepared.ok) return prepared;
-    const { route, reservationId, maxOutputTokens, providerOptions } = prepared;
+    const { route, reservationId, maxOutputTokens, providerOptions, estimatedUsd } = prepared;
 
     const { encoded, decode } = encodeToolNames(opts.tools);
     const toolChoice =
@@ -937,7 +1101,7 @@ export class ModelRouter {
         const result = await generateText({
           model: route.model,
           ...(opts.messages
-            ? ModelRouter.cacheHintedArgs(opts.system, encodeMessageToolNames(opts.messages))
+            ? this.cacheHintedArgs(opts.system, encodeMessageToolNames(opts.messages))
             : { system: opts.system, ...promptArgs(opts) }),
           tools: encoded,
           toolChoice: toolChoice as never,
@@ -953,6 +1117,7 @@ export class ModelRouter {
           latencyMs: Date.now() - started,
           event: result as FinishEventLike,
           reservationId,
+          estimatedUsd,
           promptCostPerMTok: route.promptCostPerMTok,
           completionCostPerMTok: route.completionCostPerMTok,
           audit: {
@@ -1002,7 +1167,7 @@ export class ModelRouter {
         ...(maxTokensOverride ? { maxOutputTokens: maxTokensOverride } : {}),
       });
       if (!prepared.ok) return prepared;
-      const { route, reservationId, maxOutputTokens, providerOptions } = prepared;
+      const { route, reservationId, maxOutputTokens, providerOptions, estimatedUsd } = prepared;
 
       const started = Date.now();
       try {
@@ -1010,7 +1175,7 @@ export class ModelRouter {
           const result = await generateObject({
             model: route.model,
             ...(opts.messages
-              ? ModelRouter.cacheHintedArgs(opts.system, opts.messages)
+              ? this.cacheHintedArgs(opts.system, opts.messages)
               : { system: opts.system, ...promptArgs(opts) }),
             schema: opts.schema,
             temperature: opts.temperature ?? (route.params.temperature as number | undefined),
@@ -1025,6 +1190,7 @@ export class ModelRouter {
             latencyMs: Date.now() - started,
             event: result as unknown as FinishEventLike,
             reservationId,
+            estimatedUsd,
             promptCostPerMTok: route.promptCostPerMTok,
             completionCostPerMTok: route.completionCostPerMTok,
             audit: {
@@ -1043,7 +1209,27 @@ export class ModelRouter {
           };
         });
       } catch (err) {
-        await releaseReservation(this.db, reservationId).catch(() => {});
+        const providerEvent = providerResultFromError(err);
+        if (providerEvent) {
+          await this.meterWithoutRepeatingProviderWork({
+            taskId: opts.taskId,
+            role,
+            modelId: route.modelId,
+            latencyMs: Date.now() - started,
+            event: providerEvent,
+            reservationId,
+            estimatedUsd,
+            promptCostPerMTok: route.promptCostPerMTok,
+            completionCostPerMTok: route.completionCostPerMTok,
+            audit: {
+              method: 'object',
+              system: opts.system,
+              input: captureInput(opts),
+            },
+          });
+        } else {
+          await releaseReservation(this.db, reservationId).catch(() => {});
+        }
         throw err;
       }
     };
@@ -1100,7 +1286,10 @@ export class ModelRouter {
   }
 
   /** Embeddings via the embed role. */
-  async embed(values: string[], opts: { taskId?: string } = {}): Promise<number[][]> {
+  async embed(
+    values: string[],
+    opts: { taskId?: string; abortSignal?: AbortSignal } = {},
+  ): Promise<number[][]> {
     const [roleRow] = await this.db.select().from(modelRoles).where(eq(modelRoles.role, 'embed'));
     if (!roleRow) throw new Error('no model_roles row for role: embed');
     if (values.length === 0) return [];
@@ -1113,42 +1302,107 @@ export class ModelRouter {
     if (!modelRow || modelRow.promptCostPerMTok === null || !Number.isFinite(promptCostPerMTok)) {
       throw new Error(`embedding model ${roleRow.primaryModel} is missing a cost rate`);
     }
+    this.provider.assertModelId(roleRow.primaryModel);
     const inputTokens = Math.max(
       1,
       Math.ceil(values.reduce((n, value) => n + value.length, 0) / 2),
     );
+    const estimatedUsd = Math.max(
+      0.000001,
+      ((inputTokens * promptCostPerMTok) / 1_000_000) * ESTIMATE_SAFETY_FACTOR,
+    );
     const reservation = await reserveCost(this.db, {
       source: 'embedding',
-      estimatedUsd: Math.max(
-        0.000001,
-        ((inputTokens * promptCostPerMTok) / 1_000_000) * ESTIMATE_SAFETY_FACTOR,
-      ),
+      estimatedUsd,
       taskId: opts.taskId,
       description: `embed:${roleRow.primaryModel} preflight`,
     });
     if (!reservation.ok) throw new BudgetReservationError(reservation.reason, reservation.resumeAt);
 
     const started = Date.now();
+    let providerSucceeded = false;
+    let metered = false;
+    const providerEvidence: EmbeddingProviderEvidence[] = [];
+    let observation: ReturnType<typeof observeEmbeddingModel> | undefined;
     try {
-      const { embeddings, usage } = await embedMany({
-        model: this.provider.textEmbeddingModel(roleRow.primaryModel),
+      observation = observeEmbeddingModel(
+        this.provider.textEmbeddingModel(roleRow.primaryModel),
+        providerEvidence,
+      );
+      const { embeddings, usage, providerMetadata, responses } = await embedMany({
+        model: observation.model,
         values,
         maxParallelCalls: 4,
-        abortSignal: modelCallSignal(),
+        providerOptions: this.provider.embeddingOptions(),
+        abortSignal: modelCallSignal(opts.abortSignal),
       });
+      providerSucceeded = true;
+      const event = {
+        usage: usage ? { inputTokens: usage.tokens, outputTokens: 0 } : undefined,
+        providerMetadata,
+        responses,
+      };
+      const usageOverride = aggregateEmbeddingUsage(this.provider, providerEvidence);
       await this.meterWithoutRepeatingProviderWork({
         taskId: opts.taskId,
         role: 'embed',
         modelId: roleRow.primaryModel,
         latencyMs: Date.now() - started,
-        event: { usage: { inputTokens: usage?.tokens ?? inputTokens, outputTokens: 0 } },
+        event,
         reservationId: reservation.reservationId,
+        estimatedUsd,
+        usageOverride,
         promptCostPerMTok,
         completionCostPerMTok: 0,
       });
-      return embeddings;
+      metered = true;
+
+      // Account for the successful provider call before inspecting its
+      // result. A malformed response is still paid work, and validation must
+      // never throw before metering can reconcile the reservation.
+      const vectorList = Array.isArray(embeddings) ? embeddings : undefined;
+      const invalid = vectorList?.findIndex((embedding) => {
+        if (!Array.isArray(embedding) || embedding.length !== EMBEDDING_DIMENSIONS) {
+          return true;
+        }
+        for (let index = 0; index < embedding.length; index += 1) {
+          if (!(index in embedding) || !Number.isFinite(embedding[index])) return true;
+        }
+        return false;
+      });
+      if (!vectorList) {
+        throw new Error('embedding provider returned a non-array result');
+      }
+      if (vectorList.length !== values.length) {
+        throw new Error(
+          `embedding provider returned ${vectorList.length} vectors for ${values.length} values`,
+        );
+      }
+      if (invalid !== undefined && invalid !== -1) {
+        throw new Error(`embedding provider returned an invalid vector at index ${invalid}`);
+      }
+      return vectorList as number[][];
     } catch (err) {
-      await releaseReservation(this.db, reservation.reservationId).catch(() => {});
+      observation?.stop();
+      await observation?.waitForSettled();
+      if (!providerSucceeded && providerEvidence.length > 0 && !metered) {
+        await this.meterWithoutRepeatingProviderWork({
+          taskId: opts.taskId,
+          role: 'embed',
+          modelId: roleRow.primaryModel,
+          latencyMs: Date.now() - started,
+          event: { responses: providerEvidence },
+          reservationId: reservation.reservationId,
+          estimatedUsd,
+          usageOverride: aggregateEmbeddingUsage(this.provider, providerEvidence),
+          promptCostPerMTok,
+          completionCostPerMTok: 0,
+        });
+        metered = true;
+      }
+      if (!providerSucceeded && !metered) {
+        await releaseReservation(this.db, reservation.reservationId).catch(() => {});
+      }
       throw err;
     }
   }

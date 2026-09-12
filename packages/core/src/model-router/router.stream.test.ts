@@ -92,6 +92,70 @@ describe('ModelRouter streaming finalization', () => {
     expect(onComplete).toHaveBeenCalledWith('answer');
   });
 
+  it('runs only the first terminal path when finish, error, and abort race', async () => {
+    const { router, meter } = makeRouter();
+    const onComplete = vi.fn(async () => {});
+    const onError = vi.fn(async () => {});
+    await router.stream('draft', { prompt: 'hello', onComplete, onError });
+    const options = stubs.streamText.mock.calls[0]?.[0] as {
+      onFinish: (event: { text: string }) => Promise<void>;
+      onError: (event: { error: unknown }) => Promise<void>;
+      onAbort: () => Promise<void>;
+    };
+
+    await Promise.all([
+      options.onFinish({ text: 'answer' }),
+      options.onError({ error: new Error('late error') }),
+      options.onAbort(),
+    ]);
+
+    expect(meter).toHaveBeenCalledOnce();
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+    expect(stubs.releaseReservation).not.toHaveBeenCalled();
+  });
+
+  it('keeps error terminal when finish and abort arrive afterward', async () => {
+    const { router, meter } = makeRouter();
+    const onComplete = vi.fn(async () => {});
+    const onError = vi.fn(async () => {});
+    await router.stream('draft', { prompt: 'hello', onComplete, onError });
+    const options = stubs.streamText.mock.calls[0]?.[0] as {
+      onFinish: (event: { text: string }) => Promise<void>;
+      onError: (event: { error: unknown }) => Promise<void>;
+      onAbort: () => Promise<void>;
+    };
+    const error = new Error('provider stream failed');
+
+    await options.onError({ error });
+    await Promise.all([options.onFinish({ text: 'late' }), options.onAbort()]);
+
+    expect(meter).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(error);
+    expect(stubs.releaseReservation).toHaveBeenCalledOnce();
+  });
+
+  it('does not complete when the SDK reports an error finish reason', async () => {
+    const { router, meter } = makeRouter();
+    const onComplete = vi.fn(async () => {});
+    const onError = vi.fn(async () => {});
+    await router.stream('draft', { prompt: 'hello', onComplete, onError });
+    const options = stubs.streamText.mock.calls[0]?.[0] as {
+      onFinish: (event: { text: string; finishReason: string }) => Promise<void>;
+    };
+
+    await options.onFinish({ text: '', finishReason: 'error' });
+
+    expect(meter).toHaveBeenCalledOnce();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('error') }),
+    );
+  });
+
   it('releases a reservation when stream setup throws synchronously', async () => {
     const { router } = makeRouter();
     stubs.streamText.mockImplementationOnce(() => {

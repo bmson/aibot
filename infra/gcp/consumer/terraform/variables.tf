@@ -29,17 +29,24 @@ variable "installation_id" {
 }
 
 variable "firestore_database_id" {
-  description = "Explicit named Firestore Native database ID. The provider default database is not managed here."
+  description = "Explicit Firestore Native database ID. Creating (default) requires a separate opt-in after verifying that the customer project has no existing default database."
   type        = string
 
   validation {
     condition = (
-      var.firestore_database_id != "(default)" &&
-      can(regex("^[a-z][a-z0-9-]{2,61}[a-z0-9]$", var.firestore_database_id)) &&
-      !can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.firestore_database_id))
+      var.firestore_database_id == "(default)" || (
+        can(regex("^[a-z][a-z0-9-]{2,61}[a-z0-9]$", var.firestore_database_id)) &&
+        !can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.firestore_database_id))
+      )
     )
-    error_message = "firestore_database_id must be a named 4-63 character ID and cannot be (default) or UUID-like."
+    error_message = "firestore_database_id must be (default) or a named 4-63 character ID that is not UUID-like."
   }
+}
+
+variable "create_default_database" {
+  description = "Explicit creation intent for (default) in a fresh customer project. The installer must verify absence first; this never imports or adopts an existing database."
+  type        = bool
+  default     = false
 }
 
 variable "firestore_location_id" {

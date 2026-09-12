@@ -18,9 +18,21 @@ export interface InstallationPreview {
   mode: 'preview-only';
   runtimeGated: true;
   manifest: InstallationManifest;
+  databaseCreationIntent: DatabaseCreationIntent;
   deploymentPlan: DeploymentPlan;
   baseGcpApiIntent: readonly string[];
   blockers: readonly string[];
+}
+
+/** Offline intent only; no cloud absence check has been performed. */
+export interface DatabaseCreationIntent {
+  selectedDatabaseId: string;
+  createOnly: true;
+  allowAdoption: false;
+  absenceVerification: {
+    requiredBeforeProvisioning: true;
+    performed: false;
+  };
 }
 
 const BASE_GCP_APIS = [
@@ -82,6 +94,15 @@ export function previewInstallation(input: InstallationPreviewInput): Installati
     mode: 'preview-only',
     runtimeGated: true,
     manifest,
+    databaseCreationIntent: {
+      selectedDatabaseId: manifest.identity.databaseId,
+      createOnly: true,
+      allowAdoption: false,
+      absenceVerification: {
+        requiredBeforeProvisioning: true,
+        performed: false,
+      },
+    },
     deploymentPlan: normalizedPlan,
     baseGcpApiIntent: baseGcpApiIntent(manifest.selection.modelProvider),
     blockers: [

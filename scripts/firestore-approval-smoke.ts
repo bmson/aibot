@@ -8,6 +8,7 @@ import {
 import {
   createApproval,
   expireStaleApprovals,
+  listApprovalInbox,
   markApprovalsNotified,
   renotifyStalledApprovals,
   resumeResolvedApprovalTasks,
@@ -230,7 +231,54 @@ export async function firestoreApprovalSmoke(store: InstallationStore) {
   const recreatedPolicies = await listApprovalPolicies(policyRepository, agentId);
   assert.equal(recreatedPolicies.length, 1);
   assert.notEqual(recreatedPolicies[0]?.id, policyId);
+
+  // Read the same approval screen through the portable core entry point. An
+  // expired-but-not-yet-swept row belongs in history and never grants a decision.
+  const unanswered = await fixture();
+  const unswept = await fixture();
+  const inboxNow = new Date();
+  await store.doc('approvals', unswept.approvalId).update({
+    expiresAt: new Date(inboxNow.getTime() - 1_000),
+  });
+  const edited = await fixture();
+  assert.equal(
+    (
+      await repository.resolve({
+        approvalId: edited.approvalId,
+        decision: 'approved',
+        via: 'web',
+        editedPayload: { synthetic: 'edited' },
+      })
+    ).ok,
+    true,
+  );
+  const inbox = await listApprovalInbox(repository, agentId, { now: inboxNow, recentLimit: 20 });
+  assert.ok(inbox.pending.some((item) => item.approval.id === unanswered.approvalId));
+  assert.ok(!inbox.pending.some((item) => item.approval.id === unswept.approvalId));
+  assert.ok(inbox.resolved.some((item) => item.approval.id === unswept.approvalId));
+  assert.equal(
+    inbox.resolved.find((item) => item.approval.id === edited.approvalId)?.approval.edited,
+    true,
+  );
+  for (const item of inbox.resolved) {
+    assert.equal('payload' in item.approval, false);
+    assert.equal('resolutionPayload' in item.approval, false);
+  }
+  assert.deepEqual(await listApprovalInbox(repository, randomUUID()), {
+    pending: [],
+    resolved: [],
+  });
+  const historical = await listApprovalInbox(repository, agentId, {
+    now: new Date(inboxNow.getTime() - 2_000),
+  });
+  assert.ok(historical.pending.some((item) => item.approval.id === unswept.approvalId));
+  assert.ok(!historical.resolved.some((item) => item.approval.id === unswept.approvalId));
+  assert.equal(
+    (await listApprovalInbox(repository, agentId, { recentLimit: 1 })).resolved.length,
+    1,
+  );
   return {
+    approvalInbox: 'passed',
     policyManagement: 'passed',
     approvalCreation: 'passed',
     notificationRepair: 'passed',

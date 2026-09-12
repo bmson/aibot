@@ -81,7 +81,7 @@ const idPattern = /^[a-z][a-z0-9-]{2,19}[a-z0-9]$/;
 const projectPattern = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 const regionPattern = /^[a-z][a-z0-9-]+[0-9]$/;
 const databasePattern =
-  /^(?![0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$)[a-z][a-z0-9-]{2,61}[a-z0-9]$/;
+  /^(?:\(default\)|(?![0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$)[a-z][a-z0-9-]{2,61}[a-z0-9])$/;
 const shaPattern = /^[0-9a-f]{40}$/i;
 const digestPattern = /^sha256:[0-9a-f]{64}$/i;
 const resourceKindPattern = /^[a-z][a-z0-9._-]{0,62}$/;

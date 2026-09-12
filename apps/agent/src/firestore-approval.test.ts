@@ -27,6 +27,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore approval mainte
   it('rehearses approval creation, notices, expiry and pre-park recovery', async () => {
     const report = await firestoreApprovalSmoke(store);
     expect(report).toMatchObject({
+      approvalInbox: 'passed',
       policyManagement: 'passed',
       approvalCreation: 'passed',
       notificationRepair: 'passed',

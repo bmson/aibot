@@ -41,6 +41,15 @@ describe('offline installation preview', () => {
     expect(first).toEqual(second);
     expect(first.mode).toBe('preview-only');
     expect(first.runtimeGated).toBe(true);
+    expect(first.databaseCreationIntent).toEqual({
+      selectedDatabaseId: 'assistant-db',
+      createOnly: true,
+      allowAdoption: false,
+      absenceVerification: {
+        requiredBeforeProvisioning: true,
+        performed: false,
+      },
+    });
     expect(first.blockers.join('\n')).toContain('no cloud checks');
     expect(first.blockers.join('\n')).toContain('Firestore application and dispatcher composition');
     expect(first.blockers.join('\n')).toContain('Google model and passkey/recovery runtime');
@@ -68,6 +77,22 @@ describe('offline installation preview', () => {
     expect(result.deploymentPlan.gcpApis).toEqual([]);
     expect(result.deploymentPlan.schedulerJobs).toEqual([]);
     expect(result.baseGcpApiIntent).not.toContain('aiplatform.googleapis.com');
+  });
+
+  it('reports the same create-only intent for the default database without claiming absence', () => {
+    const result = previewInstallation({
+      ...base,
+      identity: { ...base.identity, databaseId: '(default)' },
+    });
+    expect(result.databaseCreationIntent).toEqual({
+      selectedDatabaseId: '(default)',
+      createOnly: true,
+      allowAdoption: false,
+      absenceVerification: {
+        requiredBeforeProvisioning: true,
+        performed: false,
+      },
+    });
   });
 
   it('keeps the pure installation entrypoint from loading a repository .env', async () => {

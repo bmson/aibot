@@ -60,15 +60,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/google-vertex": "5.0.81",
     "@assistant/config": "workspace:*",
     "@assistant/db": "workspace:*",
+    "@assistant/persistence": "workspace:*",
     "@openrouter/ai-sdk-provider": "^3.0.0",
     "@opentelemetry/api": "^1.9.0",
     "ai": "^7.0.93",
     "croner": "^10.0.1",
     "drizzle-orm": "^0.45.2",
     "unpdf": "^1.8.1",
-    "zod": "^4.5.4",
-    "@assistant/persistence": "workspace:*"
+    "zod": "^4.5.4"
   }
 }

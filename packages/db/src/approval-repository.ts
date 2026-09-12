@@ -1,5 +1,7 @@
 import { randomInt } from 'node:crypto';
 import type {
+  ApprovalInbox,
+  ApprovalInboxQuery,
   ApprovalNoticeGroup,
   ApprovalNoticeQuery,
   ApprovalRepository,
@@ -9,8 +11,13 @@ import type {
   CreatedApproval,
   ResolveApprovalInput,
 } from '@assistant/persistence';
-import { approvalIsResolved, approvalSweepBatch, parkedApprovalIds } from '@assistant/persistence';
-import { and, asc, eq, gt, inArray, lte, sql } from 'drizzle-orm';
+import {
+  approvalInboxLimit,
+  approvalIsResolved,
+  approvalSweepBatch,
+  parkedApprovalIds,
+} from '@assistant/persistence';
+import { and, asc, eq, gt, inArray, lte, or, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { approvalPolicies, approvals, maintenanceCursors, tasks, toolCalls } from './schema.js';
 
@@ -43,6 +50,78 @@ async function nextShortCode(db: Db): Promise<string> {
   if (!Number.isSafeInteger(next) || next < 1)
     throw new Error('Invalid approval short code sequence');
   return `A${next}${randomCodeSuffix()}`;
+}
+
+function validateInboxTime(now: Date): void {
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime()))
+    throw new Error('Invalid approval inbox time');
+}
+
+export async function listApprovalInbox(
+  db: Db,
+  agentId: string,
+  options: ApprovalInboxQuery = {},
+): Promise<ApprovalInbox> {
+  const recentLimit = approvalInboxLimit(options.recentLimit);
+  const now = options.now ?? new Date();
+  validateInboxTime(now);
+  const [pending, resolved] = await Promise.all([
+    db
+      .select({
+        approval: approvals,
+        taskType: tasks.type,
+        taskTrust: tasks.trust,
+        toolName: toolCalls.toolName,
+        decision: toolCalls.decision,
+      })
+      .from(approvals)
+      .innerJoin(tasks, eq(approvals.taskId, tasks.id))
+      .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
+      .where(
+        and(
+          eq(tasks.agentId, agentId),
+          eq(toolCalls.taskId, approvals.taskId),
+          eq(approvals.status, 'pending'),
+          gt(approvals.expiresAt, now),
+        ),
+      )
+      .orderBy(asc(approvals.requestedAt), asc(approvals.id))
+      .limit(50),
+    db
+      .select({
+        id: approvals.id,
+        taskId: approvals.taskId,
+        shortCode: approvals.shortCode,
+        summary: approvals.summary,
+        status: approvals.status,
+        requestedAt: approvals.requestedAt,
+        resolvedAt: approvals.resolvedAt,
+        resolvedVia: approvals.resolvedVia,
+        expiresAt: approvals.expiresAt,
+        edited: sql<boolean>`${approvals.resolutionPayload} IS NOT NULL`,
+        taskType: tasks.type,
+      })
+      .from(approvals)
+      .innerJoin(tasks, eq(approvals.taskId, tasks.id))
+      .where(
+        and(
+          eq(tasks.agentId, agentId),
+          or(
+            inArray(approvals.status, ['approved', 'denied', 'expired']),
+            and(eq(approvals.status, 'pending'), lte(approvals.expiresAt, now)),
+          ),
+        ),
+      )
+      .orderBy(
+        sql`coalesce(${approvals.resolvedAt}, ${approvals.expiresAt}) DESC`,
+        sql`${approvals.id} DESC`,
+      )
+      .limit(recentLimit),
+  ]);
+  return {
+    pending,
+    resolved: resolved.map(({ taskType, ...approval }) => ({ approval, taskType })),
+  };
 }
 
 /** Atomically create the approval, its gated tool call, and their link. */
@@ -402,6 +481,7 @@ export function createPostgresApprovalRepository(db: Db): ApprovalRepository {
   return {
     kind: 'approval-repository',
     create: (input) => createApproval(db, input),
+    listInbox: (agentId, options) => listApprovalInbox(db, agentId, options),
     listStalledNotices: (options) => listStalledNotices(db, options),
     markNotified: (approvalIds, channels) => markApprovalNotified(db, approvalIds, channels),
     resolve: (input) => resolveApproval(db, input),
