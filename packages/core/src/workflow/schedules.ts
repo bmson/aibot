@@ -2,6 +2,7 @@ import {
   type AgentRow,
   agents,
   conversations,
+  createPostgresScheduleRepository,
   type Db,
   type GoalRow,
   goals,
@@ -10,13 +11,30 @@ import {
   schedules,
   tasks,
 } from '@assistant/db';
+import type { ScheduleRepository } from '@assistant/persistence';
 import { Cron } from 'croner';
-import { and, desc, eq, gt, isNull, like, lte, notInArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, like, notInArray, sql } from 'drizzle-orm';
 import { persistMessage } from '../chat.js';
 import { InboundEventSchema } from '../events.js';
-import { isCodeJobEnabled } from '../memory/jobs.js';
-import { type AutonomyGrant, buildAutonomyGrant } from './autonomy.js';
-import { completeTask, enqueueTask, type TaskType } from './machine.js';
+import { getQueueNotifier } from '../queue.js';
+import { buildAutonomyGrant } from './autonomy.js';
+import { completeTask, deriveTaskTitle, type TaskType } from './machine.js';
+import {
+  runScheduleBatch,
+  type ScheduledTaskTemplate,
+  type SchedulePreparation,
+  type ScheduleRunnerOptions,
+} from './schedule-runner.js';
+import { nextRun } from './schedule-time.js';
+
+export { runScheduleBatch, type ScheduleRunnerOptions } from './schedule-runner.js';
+export { nextRun } from './schedule-time.js';
+
+export function scheduleRepository(store: Db | ScheduleRepository): ScheduleRepository {
+  return 'kind' in store && store.kind === 'schedule-repository'
+    ? (store as ScheduleRepository)
+    : createPostgresScheduleRepository(store as Db);
+}
 
 const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
 const GOAL_SCHEDULE_PREFIX = 'goal:';
@@ -67,20 +85,6 @@ const GOAL_SESSION_BUDGET_USD = '0.75';
 export interface GoalAutomationCadence {
   cron: string;
   label: string;
-}
-
-/** Compute the next firing of a cron expression in the given timezone. */
-export function nextRun(cron: string, timezone: string, from: Date = new Date()): Date {
-  const expression = new Cron(cron, { timezone });
-  let next = expression.nextRun(from);
-  // Some cron expressions resolve an exact minute boundary inclusively. A
-  // schedule that just fired must advance to the following occurrence or the
-  // sweeper can observe the same timestamp again on its next tick.
-  if (next && next.getTime() <= from.getTime()) {
-    next = expression.nextRun(new Date(from.getTime() + 1_000));
-  }
-  if (!next) throw new Error(`cron never fires: ${cron}`);
-  return next;
 }
 
 /** The durable schedule name makes one recurring runner belong to one goal. */
@@ -525,153 +529,51 @@ export async function goalAutomationGate(
  * Runs from the sweeper/poller — at-least-once safe.
  */
 export async function runDueSchedules(
-  db: Db,
+  store: Db | ScheduleRepository,
   agentTimezone: string,
+  options: ScheduleRunnerOptions = {},
 ): Promise<Array<{ schedule: string; taskId: string }>> {
-  await syncGoalAutomations(db);
-  // Initialize next_run_at for fresh rows
-  const uninitialized = await db
-    .select()
-    .from(schedules)
-    .where(and(eq(schedules.enabled, true), isNull(schedules.nextRunAt)));
-  for (const row of uninitialized) {
-    await db
-      .update(schedules)
-      .set({ nextRunAt: nextRun(row.cron, agentTimezone), updatedAt: sql`now()` })
-      .where(eq(schedules.id, row.id));
-  }
+  const portable = 'kind' in store && store.kind === 'schedule-repository';
+  if (!portable) await syncGoalAutomations(store as Db);
+  return runScheduleBatch(scheduleRepository(store), agentTimezone, {
+    ...options,
+    prepareGoal:
+      options.prepareGoal ??
+      (portable
+        ? undefined
+        : async (_row, template) => preparePostgresGoalSchedule(store as Db, template)),
+    onCreated:
+      options.onCreated ??
+      (portable ? undefined : (id, generation) => getQueueNotifier().notify(id, generation)),
+  });
+}
 
-  const due = await db
-    .select()
-    .from(schedules)
-    .where(
-      and(
-        eq(schedules.enabled, true),
-        or(isNull(schedules.nextRunAt), lte(schedules.nextRunAt, sql`now()`)),
-      ),
-    );
-
-  const fired: Array<{ schedule: string; taskId: string }> = [];
-  for (const row of due) {
-    const firing = row.nextRunAt ?? new Date();
-    const template = (row.taskTemplate ?? {}) as {
-      type?: TaskType;
-      instruction?: string;
-      /** Code-job schedules run a registered function instead of the model loop. */
-      job?: string;
-      /** Typed reminder payload consumed by the deterministic reminder job. */
-      reminderText?: string;
-      reminderKind?: 'once' | 'recurring';
-      budgetUsdLimit?: string;
-      maxSteps?: number;
-      goalId?: string;
-      conversationId?: string;
-      /** A goal created from a tainted session — its firings must start tainted. */
-      taintedOrigin?: boolean;
-    };
-    // Keep opt-in feature schedules present and ready for a later enable, but
-    // do not create no-op task history or call providers while disabled.
-    if (template.job && !isCodeJobEnabled(template.job)) {
-      await db
-        .update(schedules)
-        .set({
-          lastRunAt: sql`now()`,
-          nextRunAt: nextRun(row.cron, agentTimezone),
-          updatedAt: sql`now()`,
-        })
-        .where(eq(schedules.id, row.id));
-      continue;
-    }
-    // A goal in free-range mode arms each of its automatic sessions with a grant
-    // so they can consult memory AND act outward without parking every call —
-    // the dispatcher's hard floor still holds. Never for a tainted-origin goal.
-    let goalAutonomyGrant: AutonomyGrant | undefined;
-    if (template.goalId) {
-      const [goalRow] = await db
-        .select({ autonomy: goals.autonomy, taintedOrigin: goals.taintedOrigin })
-        .from(goals)
-        .where(eq(goals.id, template.goalId));
-      // A schedule that outlived its goal can never enqueue: tasks.goal_id is a
-      // foreign key, so the insert raises and takes down the rest of the sweep
-      // with it — every other schedule silently stops firing because of one
-      // orphan. Retire the orphan instead and keep going.
-      if (!goalRow) {
-        await db
-          .update(schedules)
-          .set({ enabled: false, nextRunAt: null, updatedAt: sql`now()` })
-          .where(eq(schedules.id, row.id));
-        continue;
-      }
-      if (goalRow.autonomy && !goalRow.taintedOrigin) {
-        goalAutonomyGrant = buildAutonomyGrant({ grantedVia: 'goal', nowMs: Date.now() });
-      }
-    }
-    if (template.goalId) {
-      const verdict = await goalAutomationGate(db, template.goalId, template.conversationId);
-      if (!verdict.fire) {
-        await db
-          .update(schedules)
-          .set({
-            lastRunAt: sql`now()`,
-            nextRunAt: nextRun(row.cron, agentTimezone),
-            updatedAt: sql`now()`,
-          })
-          .where(eq(schedules.id, row.id));
-        continue;
-      }
-      for (const staleId of verdict.cancelTaskIds) {
-        await completeTask(db, staleId, {
-          status: 'cancelled',
-          progress: GOAL_SESSION_SUPERSEDED,
-        });
-      }
-    }
-    const event = InboundEventSchema.parse({
-      source: 'schedule',
-      externalEventId: `schedule:${row.id}:${firing.toISOString()}`,
-      agentId: row.agentId,
-      conversationId: template.conversationId,
-      trust: 'assistant',
-      payload: {
-        schedule: row.name,
-        instruction: template.instruction ?? row.name,
-        ...(template.goalId ? { goalId: template.goalId } : {}),
-        ...(template.job ? { job: template.job } : {}),
-        ...(template.reminderText ? { reminderText: template.reminderText } : {}),
-        ...(template.reminderKind ? { reminderKind: template.reminderKind } : {}),
-        scheduleId: row.id,
-        ...(template.taintedOrigin ? { taintedOrigin: true } : {}),
-      },
+/** Existing goal policy stays in the PostgreSQL domain until its repository is ported. */
+async function preparePostgresGoalSchedule(
+  db: Db,
+  template: ScheduledTaskTemplate,
+): Promise<SchedulePreparation> {
+  if (!template.goalId) return { action: 'fire' };
+  const [goal] = await db
+    .select({ autonomy: goals.autonomy, taintedOrigin: goals.taintedOrigin })
+    .from(goals)
+    .where(eq(goals.id, template.goalId));
+  if (!goal) return { action: 'disable' };
+  const verdict = await goalAutomationGate(db, template.goalId, template.conversationId);
+  if (!verdict.fire) return { action: 'skip' };
+  for (const id of verdict.cancelTaskIds)
+    await completeTask(db, id, {
+      status: 'cancelled',
+      progress: GOAL_SESSION_SUPERSEDED,
     });
-    const { task, created } = await enqueueTask(db, {
-      event,
-      type: template.type ?? 'scheduled',
-      goalId: template.goalId,
-      budgetUsdLimit: template.budgetUsdLimit,
-      maxSteps: template.maxSteps,
-      ...(goalAutonomyGrant ? { autonomyGrant: goalAutonomyGrant } : {}),
-    });
-    if (created) fired.push({ schedule: row.name, taskId: task.id });
-
-    await db
-      .update(schedules)
-      .set(
-        template.reminderKind === 'once'
-          ? {
-              enabled: false,
-              lastRunAt: sql`now()`,
-              nextRunAt: null,
-              updatedAt: sql`now()`,
-            }
-          : {
-              lastRunAt: sql`now()`,
-              nextRunAt: nextRun(row.cron, agentTimezone),
-              updatedAt: sql`now()`,
-            },
-      )
-      .where(eq(schedules.id, row.id));
-  }
-  return fired;
+  return {
+    action: 'fire',
+    ...(goal.autonomy && !goal.taintedOrigin
+      ? {
+          autonomyGrant: buildAutonomyGrant({ grantedVia: 'goal', nowMs: Date.now() }),
+        }
+      : {}),
+  };
 }
 
 /** The agent-local calendar date and hour of a moment — dedupe granularity. */
@@ -735,22 +637,13 @@ const WAKE_BRIEF_EARLIEST_HOUR = 4;
  * idempotency as the cron path.
  */
 export async function maybeFireWakeBrief(
-  db: Db,
+  db: Db | ScheduleRepository,
   agent: { id: string; timezone: string },
   now: Date = new Date(),
 ): Promise<boolean> {
-  const [row] = await db
-    .select()
-    .from(schedules)
-    .where(
-      and(
-        eq(schedules.agentId, agent.id),
-        eq(schedules.name, WAKE_BRIEF_SCHEDULE),
-        eq(schedules.enabled, true),
-      ),
-    )
-    .limit(1);
-  if (!row) return false;
+  const repository = scheduleRepository(db);
+  const row = await repository.getByName(agent.id, WAKE_BRIEF_SCHEDULE);
+  if (!row?.enabled) return false;
 
   const localNow = zonedParts(agent.timezone, now);
   if (localNow.hour < WAKE_BRIEF_EARLIEST_HOUR) return false;
@@ -778,30 +671,38 @@ export async function maybeFireWakeBrief(
     externalEventId: `schedule:${row.id}:wake:${localNow.date}`,
     agentId: row.agentId,
     trust: 'assistant',
-    payload: { schedule: row.name, instruction: template.instruction ?? row.name },
+    payload: {
+      schedule: row.name,
+      scheduleId: row.id,
+      occurrenceId: `schedule:${row.id}:wake:${localNow.date}`,
+      instruction: template.instruction ?? row.name,
+    },
   });
-  const { created } = await enqueueTask(db, {
-    event,
-    type: template.type ?? 'scheduled',
-    budgetUsdLimit: template.budgetUsdLimit,
-    maxSteps: template.maxSteps,
+  const committed = await repository.commitOccurrence({
+    expected: row,
+    now,
+    mode: 'early',
+    enabled: true,
+    nextRunAt: nextRun(row.cron, agent.timezone, todaysRun),
+    task: {
+      agentId: row.agentId,
+      type: template.type ?? 'scheduled',
+      trust: 'assistant',
+      trigger: event,
+      externalEventId: event.externalEventId,
+      title: deriveTaskTitle(event),
+      budgetUsdLimit: template.budgetUsdLimit,
+      maxSteps: template.maxSteps,
+    },
   });
-  // Briefed for today either way: a lost enqueue race still means the task
-  // exists. Moving next_run_at past today's instance keeps the cron quiet.
-  await db
-    .update(schedules)
-    .set({
-      lastRunAt: now,
-      nextRunAt: nextRun(row.cron, agent.timezone, todaysRun),
-      updatedAt: sql`now()`,
-    })
-    .where(eq(schedules.id, row.id));
-  return created;
+  if (committed?.task?.created && !('kind' in db && db.kind === 'schedule-repository'))
+    getQueueNotifier().notify(committed.task.task.id, committed.task.task.queueGeneration);
+  return committed?.task?.created ?? false;
 }
 
 /** Convenience for seeding/creating schedules with a computed first firing. */
 export async function upsertSchedule(
-  db: Db,
+  db: Db | ScheduleRepository,
   input: {
     agentId: string;
     name: string;
@@ -809,30 +710,16 @@ export async function upsertSchedule(
     timezone: string;
     taskTemplate: Record<string, unknown>;
     enabled?: boolean;
+    /** An exact first occurrence for one-time reminders. */
+    nextRunAt?: Date;
   },
 ): Promise<ScheduleRow> {
-  const existing = await db
-    .select()
-    .from(schedules)
-    .where(and(eq(schedules.agentId, input.agentId), eq(schedules.name, input.name)));
-  if (existing[0]) return existing[0];
-  const [row] = await db
-    .insert(schedules)
-    .values({
-      agentId: input.agentId,
-      name: input.name,
-      cron: input.cron,
-      taskTemplate: input.taskTemplate,
-      enabled: input.enabled ?? true,
-      nextRunAt: nextRun(input.cron, input.timezone),
-    })
-    .onConflictDoNothing({ target: [schedules.agentId, schedules.name] })
-    .returning();
-  if (row) return row;
-  const [raced] = await db
-    .select()
-    .from(schedules)
-    .where(and(eq(schedules.agentId, input.agentId), eq(schedules.name, input.name)));
-  if (!raced) throw new Error('schedule upsert failed');
-  return raced;
+  return scheduleRepository(db).ensure({
+    agentId: input.agentId,
+    name: input.name,
+    cron: input.cron,
+    taskTemplate: input.taskTemplate,
+    enabled: input.enabled,
+    nextRunAt: input.nextRunAt ?? nextRun(input.cron, input.timezone),
+  });
 }
