@@ -85,6 +85,9 @@ const ConfigSchema = z.object({
   DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(120).default(10),
   DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(0).max(600_000).default(60_000),
   OPENROUTER_API_KEY: z.string().default(''),
+  LLM_PROVIDER: z.enum(['openrouter', 'vertex']).default('openrouter'),
+  VERTEX_PROJECT: z.string().default(''),
+  VERTEX_LOCATION: z.string().default(''),
   OWNER_NAME: z.string().trim().min(1).default('Owner'),
   OWNER_EMAIL: z.string().trim().email().default('owner@example.com'),
   OWNER_PHONE: z.string().default(''),
@@ -302,6 +305,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return cached;
 }
 
+/** Local validation only; model availability and service-account permissions need live checks. */
+export function modelProviderConfigProblems(config: Config): string[] {
+  const problems: string[] = [];
+  if (config.LLM_PROVIDER !== 'vertex' && !config.OPENROUTER_API_KEY) {
+    problems.push('OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter');
+  }
+  if (config.LLM_PROVIDER === 'vertex') {
+    if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(config.VERTEX_PROJECT))
+      problems.push('VERTEX_PROJECT must identify the customer Google project');
+    if (!/^(?:global|[a-z][a-z0-9-]*[0-9])$/.test(config.VERTEX_LOCATION))
+      problems.push('VERTEX_LOCATION must be an explicit Vertex region or global');
+  }
+  return problems;
+}
+
 /**
  * Fail loudly when a cloud-shaped installation would otherwise boot broken.
  * Local and intentionally minimal installations may run in a degraded state.
@@ -324,9 +342,7 @@ export function validateProdConfig(config: Config = loadConfig()): string[] {
       problems.push('INTERNAL_OIDC_SERVICE_ACCOUNT is required when INTERNAL_AUTH_MODE=oidc');
     }
   }
-  if (!config.OPENROUTER_API_KEY) {
-    problems.push('OPENROUTER_API_KEY is required (every model call fails without it)');
-  }
+  problems.push(...modelProviderConfigProblems(config));
   if (config.PUBLIC_URL.includes('localhost')) {
     problems.push('PUBLIC_URL still points at localhost — set the public service URL for webhooks');
   }

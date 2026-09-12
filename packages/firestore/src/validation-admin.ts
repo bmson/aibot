@@ -1,5 +1,6 @@
 /** Explicit tooling subpath; never imported by an application composition root. */
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import firestore from '@google-cloud/firestore';
 import { createInstallationStore, type InstallationStore } from './store.js';
 import { dueTasksQuery } from './task-lifecycle.js';
@@ -10,6 +11,35 @@ export type ValidationIndex = NonNullable<IndexRequest['index']> & { collectionG
 
 export function validationDatabaseId(): string {
   return `assistant-validation-${randomUUID().replaceAll('-', '').slice(0, 16)}`;
+}
+
+async function waitForDatabaseDeleted(admin: AdminClient, name: string): Promise<void> {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    try {
+      await admin.getDatabase(
+        { name },
+        { timeout: Math.max(1, Math.min(5_000, deadline - Date.now())) },
+      );
+    } catch (error) {
+      if ((error as { code?: number }).code === 5) return;
+      throw error;
+    }
+    await delay(1_000);
+  }
+  throw new Error(`Timed out waiting for Firestore database deletion: ${name}`);
+}
+
+async function deleteDatabaseWithRetry(admin: AdminClient, name: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await admin.deleteDatabase({ name }, { timeout: 10_000 });
+      return;
+    } catch (error) {
+      if ((error as { code?: number }).code !== 10 || attempt >= 5) throw error;
+      await delay(250 * 2 ** attempt);
+    }
+  }
 }
 
 /** Creates a fresh named database only, waits for indexes, and cleans up its own resource. */
@@ -31,6 +61,7 @@ export async function withValidationDatabase<T>(
   const admin = new firestore.v1.FirestoreAdminClient({ projectId: input.projectId });
   let created = false;
   let store: InstallationStore | undefined;
+  let validationFailed = false;
   input.progress('creating_database', { name, location: input.location });
   try {
     const [operation] = await admin.createDatabase({
@@ -47,18 +78,46 @@ export async function withValidationDatabase<T>(
     input.progress('creating_indexes', { name, count: input.indexes.length });
     // Index builds are independent and take minutes in real Firestore. Wait for
     // every operation to settle, including after a failure, before deleting its database.
-    const builds = await Promise.allSettled(
-      input.indexes.map(async (definition) => {
-        const { collectionGroup, ...index } = definition;
-        const [indexOperation] = await admin.createIndex({
-          parent: `${name}/collectionGroups/${collectionGroup}`,
-          index,
+    const builds: Promise<PromiseSettledResult<void>>[] = [];
+    for (const definition of input.indexes) {
+      const { collectionGroup, ...index } = definition;
+      try {
+        // Submit control-plane changes serially; their builds still run concurrently.
+        // Google can abort even independent index creations due to metadata contention.
+        let operation: { promise(): Promise<unknown> } | undefined;
+        for (let attempt = 0; !operation; attempt++) {
+          try {
+            [operation] = await admin.createIndex({
+              parent: `${name}/collectionGroups/${collectionGroup}`,
+              index,
+            });
+          } catch (error) {
+            if ((error as { code?: number }).code !== 10 || attempt >= 4) throw error;
+            input.progress('index_creation_retry', { name, collectionGroup, attempt: attempt + 1 });
+            await delay(250 * 2 ** attempt);
+          }
+        }
+        // Attach rejection handlers immediately, even while later creates are pending.
+        builds.push(
+          operation.promise().then(
+            () => {
+              input.progress('index_ready', { name, collectionGroup, fields: index.fields });
+              return { status: 'fulfilled', value: undefined } as const;
+            },
+            (reason: unknown) => ({ status: 'rejected', reason }) as const,
+          ),
+        );
+      } catch (reason) {
+        input.progress('index_creation_failed', {
+          name,
+          collectionGroup,
+          message: reason instanceof Error ? reason.message : String(reason),
         });
-        await indexOperation.promise();
-        input.progress('index_ready', { name, collectionGroup, fields: index.fields });
-      }),
-    );
-    const failure = builds.find((build) => build.status === 'rejected');
+        builds.push(Promise.resolve({ status: 'rejected', reason }));
+      }
+    }
+    const completedBuilds = await Promise.all(builds);
+    const failure = completedBuilds.find((build) => build.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
     input.progress('validating', { name });
     store = createInstallationStore({
@@ -70,6 +129,7 @@ export async function withValidationDatabase<T>(
     input.progress('validation_passed', { name });
     return result;
   } catch (error) {
+    validationFailed = true;
     // Cleanup itself can take minutes; report the original failure immediately.
     input.progress('validation_failed', {
       name,
@@ -82,10 +142,21 @@ export async function withValidationDatabase<T>(
     } finally {
       try {
         if (created) {
-          input.progress('deleting_database', { name });
-          const [deletion] = await admin.deleteDatabase({ name });
-          await deletion.promise();
-          input.progress('database_deleted', { name });
+          try {
+            input.progress('deleting_database', { name });
+            await deleteDatabaseWithRetry(admin, name);
+            await waitForDatabaseDeleted(admin, name);
+            input.progress('database_deleted', { name });
+          } catch (error) {
+            input.progress('database_deletion_failed', {
+              name,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            // Preserve a validation failure when cleanup also fails; surface cleanup errors
+            // when validation itself succeeded.
+            // biome-ignore lint/correctness/noUnsafeFinally: cleanup failure must reject a successful validation
+            if (!validationFailed) throw error;
+          }
         }
       } finally {
         await admin.close();

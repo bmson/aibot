@@ -66,6 +66,8 @@ export class InstallationStore {
     readonly db: Firestore,
     readonly installationId: string,
     readonly now: () => Date = () => new Date(),
+    readonly projectId?: string,
+    readonly databaseId = '(default)',
   ) {
     this.root = db.collection('installations').doc(documentKey(installationId));
   }
@@ -89,5 +91,8 @@ export function createInstallationStore(input: {
   return new InstallationStore(
     new Firestore({ projectId: input.projectId, databaseId: input.databaseId ?? '(default)' }),
     input.installationId,
+    undefined,
+    input.projectId,
+    input.databaseId ?? '(default)',
   );
 }

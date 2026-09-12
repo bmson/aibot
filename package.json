@@ -51,7 +51,10 @@
     "eval:questions": "tsx scripts/question-regression.ts",
     "eval:questions:config": "tsx scripts/question-regression-config.ts",
     "test:firestore": "tsx scripts/test-firestore.ts",
-    "firestore:validate": "tsx scripts/validate-firestore.ts"
+    "firestore:validate": "tsx scripts/validate-firestore.ts",
+    "workspace:export": "tsx scripts/workspace-migration-export.ts",
+    "workspace:import": "tsx scripts/workspace-migration-import.ts",
+    "consumer:install": "tsx scripts/consumer-install.ts"
   },
   "devDependencies": {
     "@assistant/config": "workspace:^",
@@ -70,6 +73,7 @@
     "turbo": "^2.10.12",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0",
-    "zod": "^4.5.4"
+    "zod": "^4.5.4",
+    "@assistant/persistence": "workspace:*"
   }
 }

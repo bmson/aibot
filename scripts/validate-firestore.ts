@@ -6,6 +6,7 @@ import {
   withValidationDatabase,
 } from '@assistant/firestore/validation-admin';
 import { firestoreApprovalSmoke } from './firestore-approval-smoke.js';
+import { firestoreRuntimeSmoke } from './firestore-runtime-smoke.js';
 import { firestoreScheduleSmoke } from './firestore-schedule-smoke.js';
 import { firestoreTaskSmoke } from './firestore-task-smoke.js';
 
@@ -22,7 +23,15 @@ const spec = JSON.parse(
   await readFile(new URL('../infra/gcp/firestore/firestore.indexes.json', import.meta.url), 'utf8'),
 ) as { indexes: ValidationIndex[] };
 const indexes = spec.indexes.filter((index) =>
-  ['tasks', 'outbox', 'schedules', 'approvals', 'approvalPolicies'].includes(index.collectionGroup),
+  [
+    'tasks',
+    'outbox',
+    'schedules',
+    'approvals',
+    'approvalPolicies',
+    'toolCalls',
+    'messages',
+  ].includes(index.collectionGroup),
 );
 const input = {
   projectId: values.project,
@@ -39,7 +48,7 @@ if (!values.run) {
         location: input.location,
         database: 'new assistant-validation-* database; never (default)',
         indexes: indexes.length,
-        data: 'synthetic tasks, reminders and approvals only',
+        data: 'synthetic tasks, reminders, approvals and routing telemetry; no model requests',
         cleanup: 'delete the database after success or failure',
         authentication:
           'Application Default Credentials with Firestore database/index administration',
@@ -56,6 +65,7 @@ if (!values.run) {
     dueTaskQueryExplain: await explainDueTaskQuery(store),
     schedules: await firestoreScheduleSmoke(store),
     approvals: await firestoreApprovalSmoke(store),
+    runtime: await firestoreRuntimeSmoke(store),
   }));
   console.log(JSON.stringify({ stage: 'complete', ...report }, null, 2));
 }

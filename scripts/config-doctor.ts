@@ -1,4 +1,4 @@
-import { loadConfig } from '@assistant/config';
+import { loadConfig, modelProviderConfigProblems } from '@assistant/config';
 import {
   moduleDiagnostics,
   proactiveConfigNotes,
@@ -37,8 +37,8 @@ if (problems.length > 0) {
   console.error('Production configuration problems:');
   for (const problem of problems) console.error(`  - ${problem}`);
   process.exitCode = 1;
-} else if (!config.OPENROUTER_API_KEY) {
-  console.warn('OPENROUTER_API_KEY is empty; the app can boot locally but model calls will fail.');
+} else if (modelProviderConfigProblems(config).length > 0) {
+  console.warn(modelProviderConfigProblems(config).join('; '));
 } else {
   console.log('Configuration is ready.');
 }

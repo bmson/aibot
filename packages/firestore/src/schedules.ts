@@ -235,6 +235,8 @@ export class FirestoreScheduleRepository implements ScheduleRepository {
       : null;
 
     return this.store.db.runTransaction(async (tx) => {
+      const migration = await tx.get(this.store.doc('coordination', 'migration'));
+      if (migration.exists && migration.get('status') !== 'active') return null;
       const scheduleSnapshot = await tx.get(scheduleRef);
       if (!scheduleSnapshot.exists) return null;
       const current = decodeSchedule(scheduleSnapshot.data());

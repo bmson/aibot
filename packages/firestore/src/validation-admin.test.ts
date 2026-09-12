@@ -1,9 +1,11 @@
+import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const calls = vi.hoisted(() => ({
   create: vi.fn(),
   index: vi.fn(),
   remove: vi.fn(),
+  getDatabase: vi.fn(),
   close: vi.fn(),
   terminate: vi.fn(),
 }));
@@ -14,6 +16,7 @@ vi.mock('@google-cloud/firestore', () => ({
         createDatabase = calls.create;
         createIndex = calls.index;
         deleteDatabase = calls.remove;
+        getDatabase = calls.getDatabase;
         close = calls.close;
       },
     },
@@ -33,6 +36,9 @@ describe('isolated live-validation resource lifecycle', () => {
     calls.create.mockReset().mockImplementation(operation);
     calls.index.mockReset().mockImplementation(operation);
     calls.remove.mockReset().mockImplementation(operation);
+    calls.getDatabase
+      .mockReset()
+      .mockRejectedValue(Object.assign(new Error('missing'), { code: 5 }));
     calls.close.mockReset().mockResolvedValue(undefined);
     calls.terminate.mockReset().mockResolvedValue(undefined);
   });
@@ -51,9 +57,12 @@ describe('isolated live-validation resource lifecycle', () => {
     ).rejects.toThrow('validation failed');
     const create = calls.create.mock.calls[0]?.[0];
     expect(create.databaseId).toMatch(/^assistant-validation-[a-f0-9]{16}$/);
-    expect(calls.remove).toHaveBeenCalledWith({
-      name: `projects/test-project/databases/${create.databaseId}`,
-    });
+    expect(calls.remove).toHaveBeenCalledWith(
+      {
+        name: `projects/test-project/databases/${create.databaseId}`,
+      },
+      { timeout: 10_000 },
+    );
     expect(calls.close).toHaveBeenCalledOnce();
   });
   it('does not adopt or delete a database after rejected creation', async () => {
@@ -114,6 +123,18 @@ describe('isolated live-validation resource lifecycle', () => {
       progress.mock.calls.findIndex(([stage]) => stage === 'deleting_database'),
     );
   });
+  it('retries an aborted index creation while retaining cleanup ownership', async () => {
+    calls.index.mockRejectedValueOnce(
+      Object.assign(new Error('metadata contention'), { code: 10 }),
+    );
+    const validate = vi.fn(async () => true);
+    await expect(
+      withValidationDatabase({ ...input, indexes: [{ collectionGroup: 'tasks' }] }, validate),
+    ).resolves.toBe(true);
+    expect(calls.index).toHaveBeenCalledTimes(2);
+    expect(validate).toHaveBeenCalledOnce();
+    expect(calls.remove).toHaveBeenCalledOnce();
+  });
   it('reports a passed workload before waiting for database cleanup', async () => {
     const progress = vi.fn();
     await expect(
@@ -123,4 +144,59 @@ describe('isolated live-validation resource lifecycle', () => {
       progress.mock.calls.findIndex(([stage]) => stage === 'deleting_database'),
     );
   });
+  it('polls the exact database until it is absent after deletion submission', async () => {
+    calls.getDatabase
+      .mockResolvedValueOnce([{}])
+      .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 5 }));
+    await expect(withValidationDatabase(input, async () => true)).resolves.toBe(true);
+    expect(calls.getDatabase).toHaveBeenCalledTimes(2);
+    expect(calls.getDatabase.mock.calls[0]?.[0]).toEqual({
+      name: calls.remove.mock.calls[0]?.[0].name,
+    });
+    expect(calls.getDatabase.mock.calls[0]?.[1].timeout).toBeGreaterThan(0);
+  });
+  it('does not treat permission failures as deletion success', async () => {
+    calls.getDatabase.mockRejectedValue(Object.assign(new Error('denied'), { code: 7 }));
+    await expect(withValidationDatabase(input, async () => true)).rejects.toThrow('denied');
+    expect(calls.remove).toHaveBeenCalledOnce();
+  });
+  it('retries transient delete contention before polling absence', async () => {
+    calls.remove
+      .mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 10 }))
+      .mockImplementationOnce(() => [{ promise: async () => [] }]);
+    await expect(withValidationDatabase(input, async () => true)).resolves.toBe(true);
+    expect(calls.remove).toHaveBeenCalledTimes(2);
+  });
+  it('preserves a non-retryable delete failure', async () => {
+    calls.remove.mockRejectedValue(Object.assign(new Error('forbidden'), { code: 7 }));
+    await expect(withValidationDatabase(input, async () => true)).rejects.toThrow('forbidden');
+    expect(calls.remove).toHaveBeenCalledOnce();
+    expect(calls.getDatabase).not.toHaveBeenCalled();
+  });
+});
+
+it('keeps deployable composite indexes and field overrides in their correct sections', async () => {
+  const spec = JSON.parse(
+    await readFile(
+      new URL('../../../infra/gcp/firestore/firestore.indexes.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  for (const index of spec.indexes) {
+    expect(index).toMatchObject({
+      collectionGroup: expect.any(String),
+      queryScope: expect.any(String),
+      fields: expect.any(Array),
+    });
+    expect(index.fields.length).toBeGreaterThan(1);
+    expect(index).not.toHaveProperty('fieldPath');
+  }
+  for (const override of spec.fieldOverrides) {
+    expect(override).toMatchObject({
+      collectionGroup: expect.any(String),
+      fieldPath: expect.any(String),
+      indexes: expect.any(Array),
+    });
+    expect(override).not.toHaveProperty('fields');
+  }
 });

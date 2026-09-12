@@ -29,6 +29,8 @@ export class FirestoreTaskLeaseRepository implements TaskLeaseRepository {
       return null;
     const ref = this.store.doc('tasks', taskId);
     return this.store.db.runTransaction(async (tx) => {
+      const migration = await tx.get(this.store.doc('coordination', 'migration'));
+      if (migration.exists && migration.get('status') !== 'active') return null;
       const snap = await tx.get(ref);
       if (!snap.exists) return null;
       const row = decodeRecord<Records['tasks']>(snap.data());

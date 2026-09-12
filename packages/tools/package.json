@@ -27,6 +27,7 @@
   "dependencies": {
     "@assistant/core": "workspace:*",
     "@assistant/db": "workspace:*",
+    "@assistant/persistence": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "zod": "^4.5.4"
   }

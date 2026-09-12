@@ -1,4 +1,5 @@
 import { createVertex } from '@ai-sdk/google-vertex';
+import type { Config } from '@assistant/config';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import type { EmbeddingModel, JSONValue, LanguageModel } from 'ai';
 
@@ -169,6 +170,20 @@ function assertVertexModelId(modelId: string): void {
 }
 
 /**
+ * Vertex's gemini-embedding-001 predict endpoint accepts one text per request.
+ * The SDK otherwise advertises a larger batch size for this model, so expose
+ * the stricter limit to AI SDK's embedMany splitter while preserving the SDK instance.
+ */
+function singleInputVertexEmbeddingModel(model: EmbeddingModel): EmbeddingModel {
+  if (typeof model === 'string')
+    throw new Error('Vertex embedding provider returned an unresolved model ID');
+  // This model is constructed solely for this adapter invocation. Override the
+  // advertised batch limit on that instance so methods retain their original receiver.
+  Object.defineProperty(model, 'maxEmbeddingsPerCall', { value: 1, configurable: false });
+  return model;
+}
+
+/**
  * Construct the opt-in ADC-backed Vertex adapter. This does not make a
  * request during construction; the AI SDK obtains credentials only when a
  * model call is executed. No API-key/Express mode is configured here.
@@ -195,7 +210,9 @@ export function createVertexModelProvider(options: VertexModelProviderOptions): 
       return provider.languageModel(vertexModelId(modelId));
     },
     textEmbeddingModel(modelId) {
-      return provider.embeddingModel(vertexModelId(modelId));
+      const id = vertexModelId(modelId);
+      const model = provider.embeddingModel(id);
+      return id === 'gemini-embedding-001' ? singleInputVertexEmbeddingModel(model) : model;
     },
     optionsFor({ thinking }) {
       return thinking ? { vertex: { thinkingConfig: { thinkingBudget: 4_096 } } } : undefined;
@@ -204,4 +221,19 @@ export function createVertexModelProvider(options: VertexModelProviderOptions): 
     cacheHint: () => undefined,
     normalizeUsage: normalizeVertexUsage,
   };
+}
+
+/** Explicit application composition; preserves OpenRouter unless the owner selects Vertex. */
+export function createConfiguredModelProvider(
+  config: Pick<
+    Config,
+    'LLM_PROVIDER' | 'OPENROUTER_API_KEY' | 'VERTEX_PROJECT' | 'VERTEX_LOCATION'
+  >,
+): ModelProvider {
+  return config.LLM_PROVIDER === 'vertex'
+    ? createVertexModelProvider({
+        project: config.VERTEX_PROJECT,
+        location: config.VERTEX_LOCATION,
+      })
+    : createOpenRouterModelProvider(config.OPENROUTER_API_KEY);
 }

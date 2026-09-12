@@ -4,6 +4,8 @@ export * from './contracts.js';
 export * from './cost-policy.js';
 export * from './dispatch.js';
 export * from './embedding.js';
+export * from './migration.js';
+export * from './model-routing.js';
 export * from './money.js';
 export * from './records.js';
 export * from './reminders.js';

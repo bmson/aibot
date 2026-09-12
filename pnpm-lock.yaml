@@ -33,6 +33,9 @@ importers:
       '@assistant/modules':
         specifier: workspace:*
         version: link:packages/modules
+      '@assistant/persistence':
+        specifier: workspace:*
+        version: link:packages/persistence
       '@assistant/setup':
         specifier: workspace:*
         version: link:packages/setup
@@ -350,6 +353,9 @@ importers:
       '@assistant/db':
         specifier: workspace:*
         version: link:../db
+      '@assistant/persistence':
+        specifier: workspace:*
+        version: link:../persistence
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@opentelemetry/api@1.9.1)(postgres@3.4.9)

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { type Config, loadConfig, repoRoot } from '@assistant/config';
 import {
+  createConfiguredModelProvider,
   type DocumentProcessorConfig,
   findPrimaryConversation,
   getAgent,
@@ -230,7 +231,12 @@ export function buildDeps(): AgentDeps {
     connectTimeoutSeconds: config.DB_CONNECT_TIMEOUT_SECONDS,
     statementTimeoutMs: config.DB_STATEMENT_TIMEOUT_MS,
   });
-  const router = new ModelRouter(db, config.OPENROUTER_API_KEY);
+  const router = new ModelRouter(
+    db,
+    config.OPENROUTER_API_KEY,
+    config.LLM_AUDIT_CAPTURE,
+    createConfiguredModelProvider(config),
+  );
   const workspacePrefix = `workspace/${config.ASSISTANT_WORKSPACE_ID}`;
   const workspaceRoot = path.join(repoRoot, '.workspace');
   const workspace: WorkspaceStore =

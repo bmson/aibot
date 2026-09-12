@@ -127,7 +127,10 @@ describe('ModelRouter timeout retry', () => {
     expect(stubs.generateText).toHaveBeenCalledTimes(2);
     // The timed-out try must not hold budget: its reservation was released
     // and the retry made its own.
-    expect(stubs.releaseReservation).toHaveBeenCalledWith({} as Db, 'reservation-1');
+    expect(stubs.releaseReservation).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'cost-repository' }),
+      'reservation-1',
+    );
     expect(stubs.reserveCost).toHaveBeenCalledTimes(2);
   });
 
