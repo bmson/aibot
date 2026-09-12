@@ -585,8 +585,8 @@ export const approvals = pgTable(
     resolvedVia: text('resolved_via'),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     notifiedChannels: text('notified_channels').array().notNull().default([]),
-    /** Set when resolved as Always/Never — the policy row that resolution created. */
-    createdPolicyId: uuid('created_policy_id').references((): AnyPgColumn => approvalPolicies.id),
+    /** Always/Never policy ID, retained after rule deletion (like anomalies.policyId). */
+    createdPolicyId: uuid('created_policy_id'),
   },
   (t) => [
     check('approvals_status_check', sql`${t.status} IN ('pending','approved','denied','expired')`),

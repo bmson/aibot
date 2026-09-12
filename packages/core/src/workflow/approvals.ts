@@ -1,8 +1,15 @@
-import { createPostgresApprovalRepository, type Db, type TaskRow } from '@assistant/db';
+import {
+  createPostgresApprovalPolicyRepository,
+  createPostgresApprovalRepository,
+  type Db,
+  type TaskRow,
+} from '@assistant/db';
 import type {
+  ApprovalPolicyRepository,
   ApprovalRepository,
   CreateApprovalInput,
   MessageRepository,
+  Records,
   ResolveApprovalInput,
   ResolveApprovalResult,
 } from '@assistant/persistence';
@@ -198,4 +205,39 @@ export async function expireStaleApprovals(
   const wakes = await repository.expireStale(batch, now);
   if (!portable) for (const wake of wakes) getQueueNotifier().notify(wake.taskId, wake.generation);
   return wakes.map((wake) => wake.taskId);
+}
+
+export type { ApprovalPolicyRepository } from '@assistant/persistence';
+export type ApprovalPolicy = Records['approvalPolicies'];
+export type ApprovalPolicyStore = Db | ApprovalPolicyRepository;
+
+function policyRepository(store: ApprovalPolicyStore): ApprovalPolicyRepository {
+  return 'kind' in store && store.kind === 'approval-policy-repository'
+    ? (store as ApprovalPolicyRepository)
+    : createPostgresApprovalPolicyRepository(store as Db);
+}
+
+export function listApprovalPolicies(
+  store: ApprovalPolicyStore,
+  agentId: string,
+  options?: { toolName?: string; enabledOnly?: boolean },
+) {
+  return policyRepository(store).list(agentId, options);
+}
+
+export function setApprovalPolicyEnabledForAgent(
+  store: ApprovalPolicyStore,
+  agentId: string,
+  policyId: string,
+  enabled: boolean,
+) {
+  return policyRepository(store).setEnabled(agentId, policyId, enabled);
+}
+
+export function deleteApprovalPolicyForAgent(
+  store: ApprovalPolicyStore,
+  agentId: string,
+  policyId: string,
+) {
+  return policyRepository(store).delete(agentId, policyId);
 }

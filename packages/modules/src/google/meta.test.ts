@@ -1,6 +1,6 @@
 import { loadConfig, resetConfigForTest } from '@assistant/config';
 import { afterEach, describe, expect, it } from 'vitest';
-import { gmailSyncEnabled } from './meta.js';
+import { gmailSyncEnabled } from './runtime.js';
 
 describe('gmailSyncEnabled', () => {
   afterEach(() => resetConfigForTest());

@@ -27,6 +27,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore scheduling', ()
   it('rehearses atomic schedule firing, reminder delivery, and cancellation races', async () => {
     const report = await firestoreScheduleSmoke(store);
     expect(report).toMatchObject({
+      reminderManagement: 'passed',
       oneTimeAtomicFiring: 'passed',
       oneTimeDeliveryFence: 'passed',
       recurringAdvancement: 'passed',

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { cancelNamedReminder, listReminderSchedules } from '@assistant/core';
 import { runScheduleBatch } from '@assistant/core/workflow/schedules';
 import {
   FirestoreReminderRepository,
@@ -184,7 +185,36 @@ export async function firestoreScheduleSmoke(store: InstallationStore) {
   assert.equal(staleCommit, null);
   assert.equal((await taskDocsFor(stale.id)).length, 0);
 
+  const ownedReminders = await listReminderSchedules(schedules, agentId);
+  assert.ok(ownedReminders.some((row) => row.id === recurring.id));
+  assert.deepEqual(await listReminderSchedules(schedules, randomUUID()), []);
+  const namedCancellation = await cancelNamedReminder(
+    { schedules, reminders },
+    agentId,
+    {
+      query: 'the recurring schedule smoke reminder',
+    },
+    now,
+  );
+  assert.equal(namedCancellation.cancelled, true);
+  assert.equal(
+    'reminderId' in namedCancellation ? namedCancellation.reminderId : null,
+    recurring.id,
+  );
+  assert.equal(
+    (
+      await cancelNamedReminder(
+        { schedules, reminders },
+        agentId,
+        { reminderId: recurring.id },
+        now,
+      )
+    ).cancelled,
+    false,
+  );
+
   return {
+    reminderManagement: 'passed',
     oneTimeAtomicFiring: 'passed',
     oneTimeDeliveryFence: 'passed',
     recurringAdvancement: 'passed',

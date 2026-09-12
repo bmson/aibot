@@ -1,4 +1,5 @@
-import { type AssistantModule, type Config, isModuleEnabled } from '@assistant/config';
+import type { AssistantModule, Config } from '@assistant/config';
+import { isModuleEnabled } from '@assistant/config/modules';
 import type {
   ModuleBillingLine,
   ModuleExternalCost,
@@ -35,7 +36,10 @@ export interface DeploymentPlan {
  * repository would describe an installation nobody composed, which is the drift
  * this mechanism exists to prevent.
  */
-export function deploymentPlan(config: Config, metas: readonly ModuleMeta[]): DeploymentPlan {
+export function deploymentPlan(
+  config: Pick<Config, 'ASSISTANT_MODULES'>,
+  metas: readonly ModuleMeta[],
+): DeploymentPlan {
   const installed = metas.filter((meta) => isModuleEnabled(config, meta.name));
 
   // Every worker key stays present, so a module this installation excludes

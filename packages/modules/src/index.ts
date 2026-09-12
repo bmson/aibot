@@ -25,6 +25,7 @@ export {
 } from './google/application-confirmations.js';
 export { type EmailSyncDeps, processMessage } from './google/email-sync.js';
 export { googleModule } from './google/module.js';
+export { emailIngestForwarded, gmailSyncEnabled } from './google/runtime.js';
 export * from './install.js';
 export * from './meta.js';
 export * from './platform.js';

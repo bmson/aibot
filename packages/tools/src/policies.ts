@@ -1,6 +1,8 @@
-import type { ApprovalPolicyRow, Db } from '@assistant/db';
-import { approvalPolicies } from '@assistant/db';
-import { and, eq } from 'drizzle-orm';
+import {
+  type ApprovalPolicy as ApprovalPolicyRow,
+  type ApprovalPolicyStore,
+  listApprovalPolicies,
+} from '@assistant/core/workflow/approval-policies';
 import type { ToolContext } from './types.js';
 
 /**
@@ -63,7 +65,7 @@ export interface PolicyMatch {
 
 /** First matching enabled policy wins; deny templates are checked before allows. */
 export async function matchPolicies(
-  db: Db,
+  store: ApprovalPolicyStore,
   input: {
     agentId: string;
     toolName: string;
@@ -71,16 +73,10 @@ export async function matchPolicies(
     ctx: ToolContext;
   },
 ): Promise<PolicyMatch | null> {
-  const rows = await db
-    .select()
-    .from(approvalPolicies)
-    .where(
-      and(
-        eq(approvalPolicies.agentId, input.agentId),
-        eq(approvalPolicies.toolName, input.toolName),
-        eq(approvalPolicies.enabled, true),
-      ),
-    );
+  const rows = await listApprovalPolicies(store, input.agentId, {
+    toolName: input.toolName,
+    enabledOnly: true,
+  });
 
   const evaluate = (row: ApprovalPolicyRow): boolean => {
     const template = policyTemplates[row.templateKey];

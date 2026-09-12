@@ -43,6 +43,7 @@
     "./situations": "./src/situations.ts",
     "./situations-schema": "./src/situations-schema.ts",
     "./workflow/anomaly": "./src/workflow/anomaly.ts",
+    "./workflow/approval-policies": "./src/workflow/approvals.ts",
     "./workflow/approvals": "./src/workflow/approvals.ts",
     "./workflow/autonomy": "./src/workflow/autonomy.ts",
     "./workflow/improve": "./src/workflow/improve.ts",

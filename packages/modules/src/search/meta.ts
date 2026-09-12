@@ -1,4 +1,4 @@
-import { isModuleEnabled } from '@assistant/config';
+import { isModuleEnabled } from '@assistant/config/modules';
 import type { ModuleMeta } from '../contract.js';
 import { searchToolLabels } from './labels.js';
 

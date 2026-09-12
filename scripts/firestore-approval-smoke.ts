@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import {
+  deleteApprovalPolicyForAgent,
+  listApprovalPolicies,
+  setApprovalPolicyEnabledForAgent,
+} from '@assistant/core/workflow/approval-policies';
+import {
   createApproval,
   expireStaleApprovals,
   markApprovalsNotified,
@@ -8,6 +13,7 @@ import {
   resumeResolvedApprovalTasks,
 } from '@assistant/core/workflow/approvals';
 import {
+  FirestoreApprovalPolicyRepository,
   FirestoreApprovalRepository,
   FirestoreMessageRepository,
   FirestoreTaskRepository,
@@ -156,7 +162,76 @@ export async function firestoreApprovalSmoke(store: InstallationStore) {
   const cards = await store.collection('messages').where('taskId', '==', notice.task.id).get();
   assert.equal(cards.size, 1);
   assert.equal(cards.docs[0]?.get('parts').length, 2);
+  const policyRepository = new FirestoreApprovalPolicyRepository(store);
+  const remembered = await fixture();
+  const policy = {
+    agentId,
+    toolName: 'synthetic.action',
+    templateKey: 'synthetic.only',
+    match: { recipient: 'synthetic@example.invalid' },
+    effect: 'allow' as const,
+  };
+  assert.equal(
+    (
+      await repository.resolve({
+        approvalId: remembered.approvalId,
+        decision: 'approved',
+        via: 'web',
+        policy,
+      })
+    ).ok,
+    true,
+  );
+  const policyId = (await store.doc('approvals', remembered.approvalId).get()).get(
+    'createdPolicyId',
+  );
+  assert.equal(typeof policyId, 'string');
+  assert.equal((await listApprovalPolicies(policyRepository, agentId)).length, 1);
+  assert.equal(
+    (
+      await listApprovalPolicies(policyRepository, agentId, {
+        toolName: 'synthetic.action',
+        enabledOnly: true,
+      })
+    ).length,
+    1,
+  );
+  assert.deepEqual(await listApprovalPolicies(policyRepository, randomUUID()), []);
+  assert.equal(
+    await setApprovalPolicyEnabledForAgent(policyRepository, randomUUID(), policyId, false),
+    false,
+  );
+  assert.equal(await deleteApprovalPolicyForAgent(policyRepository, randomUUID(), policyId), false);
+  assert.equal(
+    await setApprovalPolicyEnabledForAgent(policyRepository, agentId, policyId, false),
+    true,
+  );
+  assert.deepEqual(
+    await listApprovalPolicies(policyRepository, agentId, { enabledOnly: true }),
+    [],
+  );
+  assert.equal(await deleteApprovalPolicyForAgent(policyRepository, agentId, policyId), true);
+  assert.equal(
+    (await store.doc('approvals', remembered.approvalId).get()).get('createdPolicyId'),
+    policyId,
+  );
+  const recreated = await fixture();
+  assert.equal(
+    (
+      await repository.resolve({
+        approvalId: recreated.approvalId,
+        decision: 'approved',
+        via: 'web',
+        policy,
+      })
+    ).ok,
+    true,
+  );
+  const recreatedPolicies = await listApprovalPolicies(policyRepository, agentId);
+  assert.equal(recreatedPolicies.length, 1);
+  assert.notEqual(recreatedPolicies[0]?.id, policyId);
   return {
+    policyManagement: 'passed',
     approvalCreation: 'passed',
     notificationRepair: 'passed',
     approvalExpiry: 'passed',

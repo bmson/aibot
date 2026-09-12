@@ -17,7 +17,7 @@ import {
   validateScheduleCreate,
 } from '@assistant/persistence';
 import { createWakeIntent } from './outbox.js';
-import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
+import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 /**
  * Schedule names are installation-local, but the name itself is not a safe
@@ -142,6 +142,40 @@ export class FirestoreScheduleRepository implements ScheduleRepository {
     // keeps reads compatible with installations where a schedule was removed
     // before its uniqueness fence was cleaned up.
     return null;
+  }
+
+  async listPage(
+    agentId: string,
+    options: { afterId?: string; limit?: number } = {},
+  ): Promise<{ items: ScheduleRecord[]; nextCursor: string | null }> {
+    if (!agentId) throw new Error('Invalid schedule owner');
+    if (
+      options.afterId !== undefined &&
+      (typeof options.afterId !== 'string' || options.afterId.length === 0)
+    )
+      throw new Error('Invalid schedule cursor');
+    const limit = scheduleBatch(options.limit);
+    let query = this.store
+      .collection('schedules')
+      .where('agentId', '==', agentId)
+      .orderBy('id', 'asc');
+    if (options.afterId !== undefined) query = query.startAfter(options.afterId);
+    const page = await query.limit(limit).get();
+    const items = page.docs.map((doc) => {
+      const row = decodeSchedule(doc.data());
+      try {
+        if (
+          row.id !== doc.get('id') ||
+          documentKey(row.id) !== doc.ref.id ||
+          row.agentId !== agentId
+        )
+          throw new Error('Schedule document identity mismatch');
+      } catch {
+        throw new Error('Schedule document identity mismatch');
+      }
+      return row;
+    });
+    return { items, nextCursor: page.size === limit ? (items.at(-1)?.id ?? null) : null };
   }
 
   async listUninitialized(limit = 100): Promise<ScheduleRecord[]> {

@@ -1,3 +1,4 @@
+export { createPostgresApprovalPolicyRepository } from './approval-policy-repository.js';
 export { createPostgresApprovalRepository } from './approval-repository.js';
 export * from './client.js';
 export { createPostgresCostRepository } from './cost-repository.js';

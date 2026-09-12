@@ -512,6 +512,13 @@
       "when": 1789237304953,
       "tag": "0072_approval_recovery_cursor",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1789242037865,
+      "tag": "0073_historical_approval_policy",
+      "breakpoints": true
     }
   ]
 }

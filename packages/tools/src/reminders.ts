@@ -1,28 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import {
-  cancelReminderSchedule,
+  cancelNamedReminder,
   getAgent,
+  listReminderSchedules,
   nextRun,
   reminderScheduleIsActive,
   reminderScheduleTemplate,
   upsertSchedule,
 } from '@assistant/core';
-import { schedules } from '@assistant/db';
-import { and, desc, eq, like } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ToolRegistry } from './registry.js';
 import type { AssistantTool, ToolFlags } from './types.js';
 
 const REMINDER_PREFIX = 'reminder:';
-function normalizeReminderText(value: string): string {
-  return value
-    .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .replace(/\b(?:the|a|an|reminder)\b/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 /** A valid placeholder cron for a one-time row; nextRunAt remains authoritative. */
 function cronForInstant(at: Date, timezone: string): string {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -189,13 +179,14 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
       acceptsUntrustedInput: false,
       execute: async (_args, ctx) => {
         const agent = await getAgent(ctx.db);
-        const rows = await ctx.db
-          .select()
-          .from(schedules)
-          .where(
-            and(eq(schedules.agentId, ctx.agentId), like(schedules.name, `${REMINDER_PREFIX}%`)),
-          )
-          .orderBy(desc(schedules.enabled), schedules.nextRunAt);
+        const rows = await listReminderSchedules(ctx.db, ctx.agentId);
+        rows.sort(
+          (a, b) =>
+            Number(b.enabled) - Number(a.enabled) ||
+            (a.nextRunAt?.getTime() ?? Number.POSITIVE_INFINITY) -
+              (b.nextRunAt?.getTime() ?? Number.POSITIVE_INFINITY) ||
+            a.id.localeCompare(b.id),
+        );
         return {
           reminders: rows.filter(reminderScheduleIsActive).map((r) => ({
             reminderId: r.id,
@@ -229,56 +220,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
-        const rows = await ctx.db
-          .select()
-          .from(schedules)
-          .where(
-            and(eq(schedules.agentId, ctx.agentId), like(schedules.name, `${REMINDER_PREFIX}%`)),
-          );
-        const active = rows.filter(reminderScheduleIsActive);
-        let matches = args.reminderId ? active.filter((row) => row.id === args.reminderId) : [];
-        if (args.query) {
-          const query = normalizeReminderText(args.query);
-          if (!query) return { cancelled: false, reason: 'not_found' as const };
-          const exact = active.filter(
-            (row) =>
-              normalizeReminderText(
-                reminderScheduleTemplate(row.taskTemplate).reminderText ?? '',
-              ) === query,
-          );
-          matches =
-            exact.length > 0
-              ? exact
-              : active.filter((row) => {
-                  const text = normalizeReminderText(
-                    reminderScheduleTemplate(row.taskTemplate).reminderText ?? '',
-                  );
-                  return text.includes(query) || query.includes(text);
-                });
-        }
-        if (matches.length === 0) {
-          return { cancelled: false, reason: 'not_found' as const };
-        }
-        if (matches.length > 1) {
-          return {
-            cancelled: false,
-            reason: 'ambiguous' as const,
-            matches: matches.map((row) => ({
-              reminderId: row.id,
-              text: reminderScheduleTemplate(row.taskTemplate).reminderText ?? '',
-              nextFires: row.nextRunAt?.toISOString() ?? null,
-            })),
-          };
-        }
-        const reminder = matches[0] as (typeof matches)[number];
-        const result = await cancelReminderSchedule(ctx.db, ctx.agentId, reminder.id, ctx.now());
-        if (!result.cancelled) return { cancelled: false, reason: 'not_found' as const };
-        return {
-          cancelled: true,
-          reminderId: reminder.id,
-          text: result.text ?? '',
-          queuedTasksCancelled: result.queuedTasksCancelled ?? 0,
-        };
+        return cancelNamedReminder(ctx.db, ctx.agentId, args, ctx.now());
       },
     },
     { privateWrite: true },

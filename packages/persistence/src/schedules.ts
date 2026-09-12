@@ -27,6 +27,11 @@ export interface ScheduleCommitResult {
 }
 export interface ScheduleRepository {
   readonly kind: 'schedule-repository';
+  /** Owner-scoped ID keyset page. Cursor is the last scanned ID; null means exhausted. */
+  listPage(
+    agentId: string,
+    options?: { afterId?: string; limit?: number },
+  ): Promise<{ items: ScheduleRecord[]; nextCursor: string | null }>;
   /** Create once per agent/name; an existing schedule is returned unchanged. */
   ensure(input: ScheduleCreateInput): Promise<ScheduleRecord>;
   getByName(agentId: string, name: string): Promise<ScheduleRecord | null>;

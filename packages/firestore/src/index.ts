@@ -1,3 +1,4 @@
+export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 export { FirestoreApprovalRepository } from './approvals.js';
 export { FirestoreCostRepository } from './costs.js';
 export { embeddingSpaceKey, FirestoreMemoryRepository } from './memory.js';
