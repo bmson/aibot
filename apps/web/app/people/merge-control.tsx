@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { mergeContactAction } from '@/app/profile/actions';
-import { btnSm, selectClass } from '@/lib/ui';
+import { Badge, btnSm, selectClass } from '@/lib/ui';
 
 /** Fold a duplicate person into another contact (facts move, duplicate disappears). */
 export function MergeControl({
@@ -35,12 +35,9 @@ export function MergeControl({
   return (
     <span className="flex flex-wrap items-center gap-1.5">
       {suggested ? (
-        <span
-          className="rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-          title={`Possible duplicate: ${suggested.reason}`}
-        >
+        <Badge tone="amber" size="xs" title={`Possible duplicate: ${suggested.reason}`}>
           possible duplicate
-        </span>
+        </Badge>
       ) : null}
       <select
         aria-label="Merge into"

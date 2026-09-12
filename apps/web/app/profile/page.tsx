@@ -119,7 +119,7 @@ export default async function ProfilePage() {
             className={`${cardInteractiveClass} group rounded-2xl p-4 ring-1 sm:p-5 ${
               memoryHealth.awaitingReview > 0
                 ? 'bg-amber-50/70 ring-amber-200 dark:bg-amber-950/20 dark:ring-amber-900'
-                : 'bg-raised ring-edge/60'
+                : 'bg-raised ring-edge/70'
             }`}
           >
             <div className="flex items-start justify-between gap-4">

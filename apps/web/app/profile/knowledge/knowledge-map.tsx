@@ -352,9 +352,7 @@ export function KnowledgeMap({
                 suppressClick.current = true;
               }}
             >
-              {/* A <title> names the graphic without role="img"'s flattening,
-                  so the node buttons below stay in the accessibility tree. */}
-              <title>{`Knowledge map: ${nodes.length} items, ${snapshot.edges.length} connections`}</title>
+              <title>Knowledge map</title>
               <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
                 {edgeMarks}
                 {nodeMarks}
@@ -441,6 +439,15 @@ export function KnowledgeMap({
           className="min-w-0 rounded-2xl border border-edge bg-raised p-4 sm:p-5"
           aria-label="Selected knowledge item"
         >
+          {/* Moving in on an item rewrites this panel and moves the viewport,
+              neither of which announces itself. This says what was selected. */}
+          <p aria-live="polite" className="sr-only">
+            {selected
+              ? `${selected.label} selected, ${connections.length} ${
+                  connections.length === 1 ? 'connection' : 'connections'
+                }`
+              : ''}
+          </p>
           {selected ? (
             <>
               <p className="text-xs font-medium text-muted">{entityKindLabel(selected.kind)}</p>

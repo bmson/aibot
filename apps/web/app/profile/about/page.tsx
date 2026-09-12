@@ -8,6 +8,7 @@ import { getDb } from '@/lib/server';
 import {
   countBadgeClass,
   EmptyState,
+  microLabelClass,
   PageHeader,
   PageShell,
   Panel,
@@ -119,9 +120,7 @@ export default async function AboutYouPage() {
               return (
                 <details key={group.domain} className="rounded-xl bg-sunken/55 p-3.5">
                   <summary className={summaryClass}>
-                    <span className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
-                      {group.domain}
-                    </span>
+                    <span className={`${microLabelClass} text-muted`}>{group.domain}</span>
                     <span className={countBadgeClass}>{group.facts.length}</span>
                     {pinnedInDomain > 0 ? (
                       <span className="text-xs font-medium text-accent">

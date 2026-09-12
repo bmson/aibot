@@ -95,15 +95,11 @@ export default async function PeoplePage({
 
       <section className="mt-8">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold tracking-[-0.025em]">
-              {query ? `Matching “${query}”` : 'Everyone'}
-            </h2>
-            <p className="mt-1 text-sm leading-5 text-muted">
-              {everyone.length} {everyone.length === 1 ? 'person' : 'people'}
-              {query ? ` · ${people.length} shown` : ''}
-            </p>
-          </div>
+          <SectionHeading
+            title={query ? `Matching “${query}”` : 'Everyone'}
+            count={everyone.length}
+            hint={query ? `${people.length} shown` : undefined}
+          />
           <AddPerson />
         </div>
 

@@ -425,7 +425,7 @@ export default async function KnowledgePage({
       </section>
 
       {view === 'library' && library && libraryFilters ? (
-        <section className="mt-7">
+        <section className="mt-8">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className={microLabelClass}>Source of truth</p>
@@ -626,7 +626,7 @@ export default async function KnowledgePage({
       ) : null}
 
       {view === 'map' && map ? (
-        <section className="mt-7">
+        <section className="mt-8">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className={microLabelClass}>Overview and focus</p>
@@ -798,7 +798,7 @@ export default async function KnowledgePage({
       ) : null}
 
       {view === 'cleanup' ? (
-        <section className="mt-7 max-w-4xl">
+        <section className="mt-8 max-w-4xl">
           <div className="flex items-start gap-3">
             <span className="inline-flex size-10 items-center justify-center rounded-xl bg-accent/10 text-accent">
               <Sparkles className="size-5" />
