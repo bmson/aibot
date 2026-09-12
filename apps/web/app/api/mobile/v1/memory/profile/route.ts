@@ -23,6 +23,7 @@ export async function POST(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const body = (await request.json().catch(() => null)) as {
     action?: unknown;
+    confirm?: unknown;
     description?: unknown;
     dos?: unknown;
     donts?: unknown;
@@ -53,8 +54,17 @@ export async function POST(request: Request): Promise<Response> {
         return mobileJson({ ok: true });
       }
       // Irreversible, and the one action here the owner can never undo, so it
-      // stays explicit rather than riding along with purge-voice.
+      // stays explicit rather than riding along with purge-voice. It also wants
+      // the intent spelled out a second time: every other action on this route
+      // is recoverable, so a malformed or mis-sent body should not be one field
+      // away from erasing everything.
       case 'forget-all':
+        if (body.confirm !== 'forget-all') {
+          return mobileJson(
+            { error: 'forget-all requires confirm: "forget-all"' },
+            { status: 400 },
+          );
+        }
         await getApplication().forgetLongTermMemory();
         return mobileJson({ ok: true });
       default:

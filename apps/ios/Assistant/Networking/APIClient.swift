@@ -668,7 +668,18 @@ struct APIClient: Sendable {
     /// Irreversible: drops saved facts, graph projections, voice samples, and
     /// the learned voice profile. Chats, goals and people records survive.
     func forgetLongTermMemory() async throws {
-        try await postWorkspaceAction(path: "memory/profile", action: "forget-all")
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/profile")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        // The server asks for the intent twice on this one action; every other
+        // action on that route is recoverable and this one is not.
+        request.httpBody = try JSONEncoder().encode([
+            "action": "forget-all",
+            "confirm": "forget-all",
+        ])
+        _ = try await perform(request, as: OkPayload.self)
     }
 
     /// The owner's memory export, as the raw JSON bytes the server sends, so it
