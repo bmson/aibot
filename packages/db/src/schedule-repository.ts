@@ -19,6 +19,7 @@ import { schedules } from './schema.js';
 import { createTask } from './task-creation-repository.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * PostgreSQL's transaction-scoped lock is shared with reminder cancellation and
@@ -38,6 +39,27 @@ async function lockedSchedule(tx: Tx, scheduleId: string): Promise<ScheduleRecor
 export function createPostgresScheduleRepository(db: Db): ScheduleRepository {
   return {
     kind: 'schedule-repository',
+
+    async listPage(agentId, options = {}) {
+      const batch = scheduleBatch(options.limit);
+      if (options.afterId !== undefined && !UUID_PATTERN.test(options.afterId))
+        throw new Error('Invalid schedule cursor');
+      const rows = await db
+        .select()
+        .from(schedules)
+        .where(
+          and(
+            eq(schedules.agentId, agentId),
+            options.afterId === undefined ? undefined : sql`${schedules.id} > ${options.afterId}`,
+          ),
+        )
+        .orderBy(asc(schedules.id))
+        .limit(batch);
+      return {
+        items: rows,
+        nextCursor: rows.length === batch ? (rows.at(-1)?.id ?? null) : null,
+      };
+    },
 
     async ensure(input) {
       validateScheduleCreate(input);

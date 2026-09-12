@@ -21,7 +21,8 @@ import {
   renewWatch,
   syncMailboxWithDistributedLock,
 } from './email-sync.js';
-import { gmailSyncEnabled, googleMeta } from './meta.js';
+import { googleMeta } from './meta.js';
+import { gmailSyncEnabled } from './runtime.js';
 
 /**
  * A client with no credentials: `configured()` is false and every call is

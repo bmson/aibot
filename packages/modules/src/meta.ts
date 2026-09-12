@@ -8,7 +8,7 @@
  */
 export * from './contract.js';
 export * from './diagnostics.js';
-export { gmailSyncEnabled } from './google/meta.js';
+export { gmailSyncEnabled } from './google/runtime.js';
 export * from './plan.js';
 export * from './registry.js';
 export * from './ui.js';

@@ -34,7 +34,7 @@ Schedule creation, bounded due queries, initialization, and occurrence commits n
 
 The current PostgreSQL scheduler, early morning brief, and reminder creation tools use this seam. One-time reminders retain their exact first firing time and remain deliverable after their schedule is disabled. Firestore delivery binds the occurrence ID to the persisted task event and payload before committing the in-app message. Shared adapter tests cover concurrent creation/firing, cancellation races, stale edits, initialization, transaction rollback, owner isolation, and early-versus-due races. The portable runner also has a synthetic Firestore smoke test shared between emulator CI and isolated cloud validation.
 
-This does not yet port the reminder list/cancel lookup tools, goal synchronization/policy queries, or complete executor composition. A goal schedule without a goal preparation adapter explicitly rejects the portable sweep rather than authorizing unchecked work. Firestore runtime activation remains gated on those domains. Future imports must preserve schedule IDs, backfill task `scheduleId` and `occurrenceId` from validated event provenance, and reject ambiguous legacy schedule names. `ensure` can adopt a unique legacy schedule and creates a transactional `scheduleNames` uniqueness record scoped to its agent. The new schedule index orders by `enabled`, `nextRunAt`, and `id`. There is no additional SQL migration for this batch.
+At this checkpoint, reminder list/cancel lookups, goal synchronization/policy queries, and complete executor composition remained PostgreSQL-bound. The management follow-up below ports reminder lookups. A goal schedule without a goal preparation adapter explicitly rejects the portable sweep rather than authorizing unchecked work. Firestore runtime activation remains gated on those domains. Future imports must preserve schedule IDs, backfill task `scheduleId` and `occurrenceId` from validated event provenance, and reject ambiguous legacy schedule names. `ensure` can adopt a unique legacy schedule and creates a transactional `scheduleNames` uniqueness record scoped to its agent. The new schedule index orders by `enabled`, `nextRunAt`, and `id`. There is no additional SQL migration for this batch.
 
 ## Approval expiry and recovery follow-up
 
@@ -52,7 +52,21 @@ Notification repair uses approval and message repositories. Delivered channels a
 
 Firestore scans a bounded page of old pending approvals and uses a durable cursor to move past already-notified or otherwise ineligible rows. It then checks the linked task and tool records before returning grouped notices. PostgreSQL filters those joins directly. A page may produce no notices while Firestore's cursor continues through the backlog. The shared synthetic smoke now creates approvals through the adapter and repairs a mixed delivery group into real Firestore chat cards using a fake outbound callback.
 
-This does not make the whole tool dispatcher or application Firestore-ready. Approval management reads, policy lookups, the remaining tool-call execution queries, and full application composition are still PostgreSQL-bound. No SQL migration or live workspace cutover is required for this batch.
+This does not make the whole tool dispatcher or application Firestore-ready. At this checkpoint, approval management reads, policy lookups, the remaining tool-call execution queries, and full application composition remained PostgreSQL-bound. The policy follow-up below moves policy lookups and management behind adapters. No SQL migration or live workspace cutover is required for this batch.
+
+## Policy and reminder management follow-up
+
+Approval policy listing, tool matching, enable/disable, and deletion now use owner-scoped PostgreSQL and Firestore repositories. Deleting a rule preserves historical approval/anomaly policy IDs. PostgreSQL migration `0073_historical_approval_policy.sql` removes the historical approval foreign key so deleting a previously used rule succeeds without deleting its audit history. Firestore deletes the rule and its uniqueness mappings atomically; a later owner approval can create a new rule. The synthetic approval smoke exercises pause, delete, recreation, owner isolation, and historical references.
+
+Schedule management uses owner-scoped ID pagination on both adapters. Reminder listing and named cancellation share portable core commands. Named cancellation scans the complete bounded set before deciding whether a phrase is unique; hitting the bound fails explicitly, and cancellation by ID avoids that scan. Empty legacy reminder text cannot match arbitrary phrases. Cancellation reports success only when the authoritative repository confirms it. The composed schedule smoke now covers owner-scoped listing and cancellation by phrase.
+
+Settings uses these policy and schedule reads. Generic job controls exclude reminders and refuse reminder IDs, preserving their dedicated cancellation fence; job updates are owner-scoped. Notification preferences, approval inbox reads, goal preparation, and the remaining application/executor composition still require PostgreSQL. The new Firestore management indexes remain subject to real-cloud validation.
+
+## Offline consumer installation foundation
+
+`pnpm install:plan` generates a deterministic, local-only installation preview from an explicit identity and module selection. The versioned manifest binds the installation to the customer project, region, database, full release commit, and source archive digest. Its pure resume helpers reject mismatched identity and invalid stage progress. Resource ownership is a declaration that future provisioning must verify against cloud resources and state. No preview or stage helper authorizes, provisions, or proves a working installation. See [consumer installation preview](consumer-install-preview.md).
+
+The customer-owned [Terraform foundation](../infra/gcp/consumer/terraform/README.md) defines a protected named Firestore database, private assets/source buckets, Artifact Registry, and a dedicated runtime identity. State is held in a separately bootstrapped customer-owned bucket. This foundation can be authored and validated without Google login; actual provisioning, IAM verification, index deployment, and service startup require cloud access. Cloud Run services, verified image builds, full application composition, Google model support, and owner authentication are still pending. There is no published working install button.
 
 ## Remaining delivery gates
 
@@ -60,10 +74,10 @@ This does not make the whole tool dispatcher or application Firestore-ready. App
 |---|---|---|
 | P0 | Partial | Runtime-service-account IAM, live queue delivery and representative cost checks; remaining domain indexes; actual Cloud Shell authorization flow; Google-model and passkey feasibility |
 | P1 | Partial | Complete command contracts and remove remaining SDK imports from business logic; select adapters at composition roots |
-| P2 | Partial | Chat reads/cursors, approval management/policy reads, external-delivery fences, reminder management reads, and Firestore application/dispatcher composition |
+| P2 | Partial | Chat reads/cursors, approval inbox reads, external-delivery fences, and Firestore application/dispatcher composition |
 | P3 | Pending | All remaining domain/module queries, graph/recall, imports, erasure/export, and operational parity across all current table families |
 | P4–P6 | Pending | Google models and metering, embedding migration, bounded scheduling, passkeys/recovery and per-device pairing |
-| P7–P8 | Pending | Customer-owned Terraform/build pipeline, resumable install manifest/bootstrap, owner onboarding, optional Workspace wizard |
+| P7–P8 | Partial | Terraform foundation and pure manifest/preview implemented; actual bootstrap/build/deployment/resume orchestration, owner onboarding and optional Workspace wizard pending |
 | P9–P11 | Pending | Consistent export/import and migration rehearsal; update/restore/uninstall; fresh-account pilot and release checks |
 
 Do not advertise an install button or enable `DATABASE_DRIVER=firestore` until the relevant runtime and installation gates pass. The Firestore package intentionally does not pretend to implement arbitrary Drizzle queries or a complete application database.
@@ -85,6 +99,8 @@ Schedule follow-up (2026-09-12): all 239 files / 2,198 tests passed in the final
 Approval maintenance follow-up (2026-09-12): all 244 files / 2,217 tests passed with PostgreSQL and the Firestore emulator. The dedicated emulator command passed 15 files / 73 tests. Lint/architecture checks, typecheck, production build, whitespace checks, and the non-mutating cloud validation preview passed. The new approval and scheduling workloads still await real-cloud validation after Google reauthentication; no live database migration or runtime switch was performed.
 
 Approval creation/notice follow-up (2026-09-12): all 247 files / 2,231 tests passed with PostgreSQL and the Firestore emulator; the dedicated emulator command passed 16 files / 79 tests. The existing dispatcher and notification integration tests passed (39 tests), along with the portable wrapper tests. Lint/architecture checks, typecheck, safe production build, dependency audit, whitespace checks, and the non-mutating validation preview passed. The preview includes the new notice index (11 validation indexes total). Real-cloud notice/index validation remains deferred pending Google reauthentication; no production database switch or data import was performed.
+
+Policy/reminder management and offline install follow-up (2026-09-12): all 257 files / 2,265 tests passed with PostgreSQL and a fresh Firestore emulator; the dedicated emulator suite passed 18 files / 87 tests. The initial run caught an obsolete default-database preview fixture and an existing emulator transaction-lifecycle error; the fixture was updated, the emulator restarted, and the complete suite passed without a production retry workaround. Lint/architecture checks, typecheck, safe production build, dependency audit, whitespace checks, deterministic CLI output, and the dotenv-isolation regression passed. The cloud validation preview includes 14 indexes. Terraform formatting, backend-disabled initialization, and provider validation passed with Terraform 1.14.5 and locked Google provider 8.2.0. No authenticated Terraform plan/apply, new real-cloud validation, model call, or workspace cutover ran.
 
 ```sh
 pnpm lint

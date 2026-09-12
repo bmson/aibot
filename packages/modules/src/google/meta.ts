@@ -1,4 +1,4 @@
-import { type Config, isModuleEnabled, loadConfig } from '@assistant/config';
+import { isModuleEnabled } from '@assistant/config/modules';
 import type { ModuleMeta } from '../contract.js';
 import { googleToolLabels } from './labels.js';
 
@@ -110,32 +110,3 @@ export const googleMeta = {
     ],
   },
 } satisfies ModuleMeta;
-
-/**
- * Whether the agent should poll Gmail for new mail.
- *
- * An explicit true or false always wins; otherwise sync runs only in
- * production, so a developer's machine does not quietly consume the same
- * mailbox as the deployed assistant. The module being installed is a hard gate
- * either way.
- */
-export function gmailSyncEnabled(config: Config = loadConfig()): boolean {
-  if (!isModuleEnabled(config, 'google')) return false;
-  if (config.GMAIL_SYNC_ENABLED === 'true') return true;
-  if (config.GMAIL_SYNC_ENABLED === 'false') return false;
-  return process.env.NODE_ENV === 'production';
-}
-
-/**
- * Is this mailbox the owner's forwarding pipe rather than an inbox strangers
- * write to? This single predicate decides that inbound mail is owner-DIRECTED
- * (so a task may reach the owner's own calendar, files and notifications) while
- * remaining sender-AUTHORED (so it stays tainted and nothing outward-facing
- * runs unapproved). It is deliberately a setting rather than a header sniff:
- * `X-Forwarded-For` and `Delivered-To` are sender-supplied and forgeable, and a
- * message sent straight to this mailbox carries the attacker's copy at the top,
- * so no amount of header reading can distinguish the two.
- */
-export function emailIngestForwarded(config: Config = loadConfig()): boolean {
-  return isModuleEnabled(config, 'google') && config.EMAIL_INGEST_MODE === 'forwarded';
-}

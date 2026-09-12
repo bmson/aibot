@@ -22,7 +22,7 @@ const spec = JSON.parse(
   await readFile(new URL('../infra/gcp/firestore/firestore.indexes.json', import.meta.url), 'utf8'),
 ) as { indexes: ValidationIndex[] };
 const indexes = spec.indexes.filter((index) =>
-  ['tasks', 'outbox', 'schedules', 'approvals'].includes(index.collectionGroup),
+  ['tasks', 'outbox', 'schedules', 'approvals', 'approvalPolicies'].includes(index.collectionGroup),
 );
 const input = {
   projectId: values.project,

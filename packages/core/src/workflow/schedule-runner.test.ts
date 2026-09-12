@@ -49,6 +49,7 @@ function repository(
   const commits: ScheduleOccurrence[] = [];
   const repo: ScheduleRepository = {
     kind: 'schedule-repository',
+    listPage: async () => ({ items: [], nextCursor: null }),
     ensure: async (input) => schedule(input),
     getByName: async () => null,
     listUninitialized: async () => [],

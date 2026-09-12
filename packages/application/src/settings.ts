@@ -1,12 +1,20 @@
 import {
   cancelReminderSchedule,
+  listOwnerSchedules,
   reminderScheduleIsActive,
   reminderScheduleTemplate,
 } from '@assistant/core';
 import { getAgent } from '@assistant/core/chat';
 import { countHeldPings } from '@assistant/core/proactive/nudge-policy';
-import { agents, approvalPolicies, type Db, notificationPrefs, schedules } from '@assistant/db';
-import { asc, eq, sql } from 'drizzle-orm';
+import {
+  type ApprovalPolicy,
+  type ApprovalPolicyRepository,
+  deleteApprovalPolicyForAgent,
+  listApprovalPolicies,
+  setApprovalPolicyEnabledForAgent,
+} from '@assistant/core/workflow/approval-policies';
+import { agents, type Db, notificationPrefs, schedules } from '@assistant/db';
+import { and, eq, notLike, sql } from 'drizzle-orm';
 
 export interface NotificationPrefsView {
   /** "HH:MM" owner-local, or empty when quiet hours are off. */
@@ -28,7 +36,7 @@ export interface SettingsOverview {
     status: 'scheduled' | 'delivering';
     nextRunAt: Date | null;
   }>;
-  policies: Array<typeof approvalPolicies.$inferSelect>;
+  policies: ApprovalPolicy[];
   goalAutomationCount: number;
   notificationPrefs: NotificationPrefsView;
 }
@@ -53,27 +61,33 @@ function parseHHMM(value: string): { ok: true; minutes: number | null } | { ok: 
 }
 
 export async function getSettingsOverview(db: Db): Promise<SettingsOverview> {
+  const agentPromise = getAgent(db);
   const [agent, scheduleRows, policies, prefsRows] = await Promise.all([
-    getAgent(db),
-    db.select().from(schedules).orderBy(asc(schedules.name)),
-    db.select().from(approvalPolicies).orderBy(asc(approvalPolicies.toolName)),
+    agentPromise,
+    agentPromise.then(async (agent) =>
+      (await listOwnerSchedules(db, agent.id)).sort(
+        (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+      ),
+    ),
+    agentPromise.then((agent) => listApprovalPolicies(db, agent.id)),
     db.select().from(notificationPrefs),
   ]);
-  const directSchedules = scheduleRows.filter((schedule) => !schedule.name.startsWith('goal:'));
-  const reminders = directSchedules
-    .filter(
-      (schedule) => schedule.name.startsWith('reminder:') && reminderScheduleIsActive(schedule),
-    )
-    .map((schedule) => {
-      const template = reminderScheduleTemplate(schedule.taskTemplate);
-      return {
-        id: schedule.id,
-        text: template.reminderText ?? '',
-        kind: template.reminderKind ?? ('recurring' as const),
-        status: schedule.enabled ? ('scheduled' as const) : ('delivering' as const),
-        nextRunAt: schedule.nextRunAt,
-      };
-    });
+  const reminderSchedules = scheduleRows.filter((schedule) =>
+    schedule.name.startsWith('reminder:'),
+  );
+  const directSchedules = scheduleRows.filter(
+    (schedule) => !schedule.name.startsWith('goal:') && !schedule.name.startsWith('reminder:'),
+  );
+  const reminders = reminderSchedules.filter(reminderScheduleIsActive).map((schedule) => {
+    const template = reminderScheduleTemplate(schedule.taskTemplate);
+    return {
+      id: schedule.id,
+      text: template.reminderText ?? '',
+      kind: template.reminderKind ?? ('recurring' as const),
+      status: schedule.enabled ? ('scheduled' as const) : ('delivering' as const),
+      nextRunAt: schedule.nextRunAt,
+    };
+  });
   const prefs = prefsRows.find((row) => row.agentId === agent.id);
   const heldLast24h = await countHeldPings(db, agent.id, new Date(Date.now() - 24 * 3600 * 1000));
   return {
@@ -81,7 +95,8 @@ export async function getSettingsOverview(db: Db): Promise<SettingsOverview> {
     schedules: directSchedules,
     reminders,
     policies,
-    goalAutomationCount: scheduleRows.length - directSchedules.length,
+    goalAutomationCount: scheduleRows.filter((schedule) => schedule.name.startsWith('goal:'))
+      .length,
     notificationPrefs: {
       quietStart: minutesToHHMM(prefs?.quietStartMin ?? null),
       quietEnd: minutesToHHMM(prefs?.quietEndMin ?? null),
@@ -160,11 +175,20 @@ export async function setRecurringJobEnabled(
   db: Db,
   scheduleId: string,
   enabled: boolean,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const agent = await getAgent(db);
+  const [updated] = await db
     .update(schedules)
     .set({ enabled, ...(enabled ? { nextRunAt: null } : {}), updatedAt: sql`now()` })
-    .where(eq(schedules.id, scheduleId));
+    .where(
+      and(
+        eq(schedules.id, scheduleId),
+        eq(schedules.agentId, agent.id),
+        notLike(schedules.name, 'reminder:%'),
+      ),
+    )
+    .returning({ id: schedules.id });
+  return Boolean(updated);
 }
 
 export async function deleteReminder(db: Db, reminderId: string): Promise<boolean> {
@@ -172,14 +196,35 @@ export async function deleteReminder(db: Db, reminderId: string): Promise<boolea
   return (await cancelReminderSchedule(db, agent.id, reminderId)).cancelled;
 }
 
+/** Composition supplies the authenticated installation owner for the portable path. */
+export interface ApprovalPolicySettingsStore {
+  agentId: string;
+  policies: ApprovalPolicyRepository;
+}
+
+async function policyContext(store: Db | ApprovalPolicySettingsStore) {
+  if ('policies' in store) return { agentId: store.agentId, repository: store.policies };
+  return { agentId: (await getAgent(store)).id, repository: store };
+}
+
+export async function getApprovalPolicySettings(store: Db | ApprovalPolicySettingsStore) {
+  const context = await policyContext(store);
+  return listApprovalPolicies(context.repository, context.agentId);
+}
+
 export async function setApprovalPolicyEnabled(
-  db: Db,
+  store: Db | ApprovalPolicySettingsStore,
   policyId: string,
   enabled: boolean,
 ): Promise<void> {
-  await db.update(approvalPolicies).set({ enabled }).where(eq(approvalPolicies.id, policyId));
+  const context = await policyContext(store);
+  await setApprovalPolicyEnabledForAgent(context.repository, context.agentId, policyId, enabled);
 }
 
-export async function deleteApprovalPolicy(db: Db, policyId: string): Promise<void> {
-  await db.delete(approvalPolicies).where(eq(approvalPolicies.id, policyId));
+export async function deleteApprovalPolicy(
+  store: Db | ApprovalPolicySettingsStore,
+  policyId: string,
+): Promise<void> {
+  const context = await policyContext(store);
+  await deleteApprovalPolicyForAgent(context.repository, context.agentId, policyId);
 }

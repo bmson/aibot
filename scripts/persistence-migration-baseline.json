@@ -111,9 +111,7 @@
   "packages/tools/src/dispatcher.ts",
   "packages/tools/src/google/drive.ts",
   "packages/tools/src/mcp.ts",
-  "packages/tools/src/policies.ts",
   "packages/tools/src/question-regression/harness.ts",
-  "packages/tools/src/reminders.ts",
   "packages/tools/src/types.ts",
   "packages/tools/src/watches.ts"
 ]

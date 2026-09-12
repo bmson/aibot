@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./meta": "./src/meta.ts",
+    "./installation-meta": "./src/installation-meta.ts",
     "./ui": "./src/ui.ts"
   },
   "scripts": {

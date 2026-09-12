@@ -35,7 +35,7 @@ import { z } from 'zod';
 import type { InboundEmailEvent, OwnerNotifier } from '../platform.js';
 import { processApplicationConfirmation } from './application-confirmations.js';
 import { scoreEmailImportance } from './email-importance.js';
-import { emailIngestForwarded } from './meta.js';
+import { emailIngestForwarded } from './runtime.js';
 
 /**
  * What mail sync consumes. The client comes from the module's own create()

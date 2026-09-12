@@ -36,6 +36,29 @@ export function scheduleRepository(store: Db | ScheduleRepository): ScheduleRepo
     : createPostgresScheduleRepository(store as Db);
 }
 
+/** Complete owner-scoped management reads, with a hard stop instead of silently truncating. */
+export async function listOwnerSchedules(
+  store: Db | ScheduleRepository,
+  agentId: string,
+): Promise<ScheduleRow[]> {
+  const repository = scheduleRepository(store);
+  const rows: ScheduleRow[] = [];
+  let afterId: string | undefined;
+  for (let page = 0; page < 50; page += 1) {
+    const result = await repository.listPage(agentId, { afterId, limit: 200 });
+    if (result.items.some((row) => row.agentId !== agentId))
+      throw new Error('Schedule owner mismatch');
+    rows.push(...result.items);
+    if (result.nextCursor === null) return rows;
+    if (result.nextCursor === afterId || result.items.length === 0)
+      throw new Error('Schedule cursor did not advance');
+    afterId = result.nextCursor;
+  }
+  throw new Error(
+    'Too many schedules to safely complete this lookup; use a reminder ID for cancellation',
+  );
+}
+
 const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
 const GOAL_SCHEDULE_PREFIX = 'goal:';
 

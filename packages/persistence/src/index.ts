@@ -1,3 +1,4 @@
+export * from './approval-policies.js';
 export * from './approvals.js';
 export * from './contracts.js';
 export * from './cost-policy.js';

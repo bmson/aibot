@@ -29,6 +29,7 @@
     "setup": "tsx scripts/setup.ts",
     "config:check": "tsx scripts/config-doctor.ts",
     "modules:plan": "tsx scripts/module-plan.ts",
+    "install:plan": "tsx scripts/installation-plan.ts",
     "check:boundaries": "tsx scripts/check-boundaries.ts",
     "dev": "turbo dev",
     "up": "docker compose up --build",
