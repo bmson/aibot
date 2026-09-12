@@ -13,6 +13,35 @@ export function validationDatabaseId(): string {
   return `assistant-validation-${randomUUID().replaceAll('-', '').slice(0, 16)}`;
 }
 
+async function waitForDatabaseDeleted(admin: AdminClient, name: string): Promise<void> {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    try {
+      await admin.getDatabase(
+        { name },
+        { timeout: Math.max(1, Math.min(5_000, deadline - Date.now())) },
+      );
+    } catch (error) {
+      if ((error as { code?: number }).code === 5) return;
+      throw error;
+    }
+    await delay(1_000);
+  }
+  throw new Error(`Timed out waiting for Firestore database deletion: ${name}`);
+}
+
+async function deleteDatabaseWithRetry(admin: AdminClient, name: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await admin.deleteDatabase({ name }, { timeout: 10_000 });
+      return;
+    } catch (error) {
+      if ((error as { code?: number }).code !== 10 || attempt >= 5) throw error;
+      await delay(250 * 2 ** attempt);
+    }
+  }
+}
+
 /** Creates a fresh named database only, waits for indexes, and cleans up its own resource. */
 export async function withValidationDatabase<T>(
   input: {
@@ -32,6 +61,7 @@ export async function withValidationDatabase<T>(
   const admin = new firestore.v1.FirestoreAdminClient({ projectId: input.projectId });
   let created = false;
   let store: InstallationStore | undefined;
+  let validationFailed = false;
   input.progress('creating_database', { name, location: input.location });
   try {
     const [operation] = await admin.createDatabase({
@@ -99,6 +129,7 @@ export async function withValidationDatabase<T>(
     input.progress('validation_passed', { name });
     return result;
   } catch (error) {
+    validationFailed = true;
     // Cleanup itself can take minutes; report the original failure immediately.
     input.progress('validation_failed', {
       name,
@@ -111,10 +142,21 @@ export async function withValidationDatabase<T>(
     } finally {
       try {
         if (created) {
-          input.progress('deleting_database', { name });
-          const [deletion] = await admin.deleteDatabase({ name });
-          await deletion.promise();
-          input.progress('database_deleted', { name });
+          try {
+            input.progress('deleting_database', { name });
+            await deleteDatabaseWithRetry(admin, name);
+            await waitForDatabaseDeleted(admin, name);
+            input.progress('database_deleted', { name });
+          } catch (error) {
+            input.progress('database_deletion_failed', {
+              name,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            // Preserve a validation failure when cleanup also fails; surface cleanup errors
+            // when validation itself succeeded.
+            // biome-ignore lint/correctness/noUnsafeFinally: cleanup failure must reject a successful validation
+            if (!validationFailed) throw error;
+          }
         }
       } finally {
         await admin.close();
