@@ -28,8 +28,8 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore reminder delive
       id: 'reminder',
       agentId: 'agent',
       name: 'reminder:test',
-      enabled: true,
-      taskTemplate: { reminderKind: 'recurring' },
+      enabled: false,
+      taskTemplate: { reminderKind: 'once' },
     });
     await store.doc('tasks', 'task').set({
       ...taskFixture({
@@ -80,6 +80,10 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore reminder delive
     expect((await store.collection('messages').get()).size).toBe(1);
   }, 20_000);
   it('rejects a different occurrence on the same recurring task', async () => {
+    await store.doc('schedules', 'reminder').update({
+      enabled: true,
+      taskTemplate: { reminderKind: 'recurring' },
+    });
     expect(
       await reminders.deliver({
         agentId: 'agent',
@@ -90,6 +94,43 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore reminder delive
       }),
     ).toBe(false);
     expect((await store.collection('messages').get()).size).toBe(0);
+  });
+  it('delivers a recurring reminder before cancellation and fences later delivery', async () => {
+    await store.doc('schedules', 'reminder').update({
+      enabled: true,
+      taskTemplate: { reminderKind: 'recurring' },
+    });
+    expect(await deliver()).toBe(true);
+    const secondTaskId = 'task-two';
+    const secondOccurrence = 'schedule:reminder:two';
+    await store.doc('tasks', secondTaskId).set({
+      ...taskFixture({
+        id: secondTaskId,
+        agentId: 'agent',
+        conversationId: 'conversation',
+        reminderId: 'reminder',
+      }),
+      externalEventId: secondOccurrence,
+      trigger: {
+        payload: {
+          scheduleId: 'reminder',
+          occurrenceId: secondOccurrence,
+        },
+      },
+    });
+    const secondLease = await new FirestoreTaskLeaseRepository(store).claim(secondTaskId);
+    expect(secondLease).not.toBeNull();
+    expect((await reminders.cancel('agent', 'reminder')).cancelled).toBe(true);
+    expect(
+      await reminders.deliver({
+        agentId: 'agent',
+        reminderId: 'reminder',
+        occurrenceId: secondOccurrence,
+        lease: secondLease as TaskLease,
+        message: { ...message, taskId: secondTaskId },
+      }),
+    ).toBe(false);
+    expect((await store.collection('messages').get()).size).toBe(1);
   });
   it('expired and replaced leases cannot deliver', async () => {
     now = new Date(now.getTime() + 11 * 60_000);
