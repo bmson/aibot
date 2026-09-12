@@ -152,7 +152,28 @@ async function ensureFreshBucket(
     '--format=json',
   ]);
   if (result.ok) {
-    jsonOutput(result, 'State bucket description');
+    const description = jsonOutput(result, 'State bucket description') as Record<
+      string,
+      unknown
+    > | null;
+    const projectNumber = await runOk(runner, 'gcloud', [
+      'projects',
+      'describe',
+      project,
+      '--format=value(projectNumber)',
+    ]);
+    if (
+      !/^\d+$/.test(projectNumber.stdout) ||
+      !description ||
+      String(description.project_number) !== projectNumber.stdout ||
+      String(description.location).toLowerCase() !== region.toLowerCase() ||
+      description.name !== bucket ||
+      description.uniform_bucket_level_access !== true ||
+      description.public_access_prevention !== 'enforced'
+    )
+      throw new Error(
+        `Refusing to reuse state bucket gs://${bucket}: project, location, or access protection differs`,
+      );
     const receipt = await runner.run('gcloud', [
       'storage',
       'objects',
@@ -505,7 +526,26 @@ export async function provisionConsumerInstallation(
       `--custom-metadata=assistant_installation=${current.identity.installationId},assistant_archive_digest=${current.identity.release.archiveDigest}`,
     ]);
     const previous = current;
-    current = advanceInstallationStage(previous, 'bootstrapped', now());
+    current = validateInstallationManifest({
+      ...advanceInstallationStage(previous, 'bootstrapped', now()),
+      resources: [
+        ...previous.resources,
+        {
+          kind: 'state-bucket',
+          name: options.stateBucket,
+          scope: 'installation',
+          owner: 'bootstrap',
+          installationId: current.identity.installationId,
+        },
+        {
+          kind: 'release-receipt',
+          name: `gs://${options.stateBucket}/releases/${current.identity.release.commitSha}.tar.gz`,
+          scope: 'installation',
+          owner: 'bootstrap',
+          installationId: current.identity.installationId,
+        },
+      ],
+    });
     await persistInstallationProgress(options.statePath, current, previous);
   }
   if (current.stage.current === 'bootstrapped') {

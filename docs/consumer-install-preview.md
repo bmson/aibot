@@ -65,8 +65,8 @@ The new `consumer:install` command builds the customer-owned infrastructure foun
 Use Node/pnpm, gcloud credentials for the target project, Application Default Credentials for Terraform, and Terraform 1.14.5. The target project must have billing available. Generate a canonical source archive from the selected release checkout:
 
 ```sh
-git archive --format=tar --output=assistant-source.tar HEAD
-shasum -a 256 assistant-source.tar
+git archive --format=tar.gz --output=assistant-source.tar.gz HEAD
+shasum -a 256 assistant-source.tar.gz
 git rev-parse HEAD
 ```
 
@@ -76,11 +76,11 @@ From the matching repository root, preview the cloud foundation:
 
 ```sh
 pnpm consumer:install --manifest install-manifest.json \
-  --archive assistant-source.tar --state .assistant-install/manifest.json \
+  --archive assistant-source.tar.gz --state .assistant-install/manifest.json \
   --state-bucket YOUR_PROJECT-YOUR_INSTALLATION-state \
   --terraform-dir infra/gcp/consumer/terraform
 ```
 
-The preview performs read-only cloud checks and reports missing APIs. Add `--apply` to enable required APIs, create the private state bucket, upload the release receipt, and apply the foundation. Resources and Terraform state stay in the selected customer's project. It refuses adoption of an existing selected Firestore database and requires matching receipts before reusing a bootstrap bucket.
+The preview performs read-only cloud checks and reports missing APIs. Add `--apply` to enable required APIs, create the private state bucket, upload the release receipt, and apply the foundation. Resources and Terraform state stay in the selected customer's project. It refuses adoption of an existing selected Firestore database and requires a matching receipt, project number, region, and enforced access protection before reusing a bootstrap bucket. The backend bucket and receipt are recorded in the installation inventory.
 
 Repeat the identical command to resume from persisted stages. Terraform state is remote and the last local completed stage is updated atomically. If creation of the state bucket succeeds but upload of its ownership receipt fails, the next run stops for manual ownership verification; it must not automatically adopt that unverified bucket. Failed Terraform work directories are retained for recovery. No initialized/ready stage is recorded until future runtime deployment and readiness work exists.

@@ -82,7 +82,11 @@ function fakeRunner(
     async run(command, args) {
       log.push([command, ...args].join(' '));
       if (command === 'gcloud' && args[0] === 'projects') {
-        return { ok: true, stdout: 'customer-project', stderr: '' };
+        return {
+          ok: true,
+          stdout: args.includes('--format=value(projectNumber)') ? '123456789' : 'customer-project',
+          stderr: '',
+        };
       }
       if (command === 'gcloud' && args[0] === 'services') {
         return { ok: true, stdout: JSON.stringify(requiredServiceRows), stderr: '' };
@@ -100,6 +104,11 @@ function fakeRunner(
           ? {
               ok: true,
               stdout: JSON.stringify({
+                name: 'customer-project-consumer-install-state',
+                project_number: '123456789',
+                location: 'US-CENTRAL1',
+                uniform_bucket_level_access: true,
+                public_access_prevention: 'enforced',
                 labels: foreignBucket
                   ? { installation: 'other', managed_by: 'terraform' }
                   : {
@@ -187,6 +196,12 @@ describe('consumer installation', () => {
       },
     );
     expect(result.manifest.stage.current).toBe('provisioned');
+    expect(result.manifest.resources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'state-bucket', owner: 'bootstrap' }),
+        expect.objectContaining({ kind: 'release-receipt', owner: 'bootstrap' }),
+      ]),
+    );
     expect(result.runtimeReady).toBe(false);
     expect(result.pending).toEqual(['initialized', 'ready']);
     expect(log.some((entry) => entry.includes('storage cp'))).toBe(true);
@@ -274,7 +289,7 @@ describe('consumer installation', () => {
     ).rejects.toThrow('advanced manifest');
   });
 
-  it('resumes after bucket creation and upload failure using owned labels', async () => {
+  it('resumes an ambiguous upload when the verified ownership receipt exists', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-'));
     const archive = join(dir, 'release.tar.gz');
     const state = join(dir, 'state.json');
@@ -305,6 +320,55 @@ describe('consumer installation', () => {
     );
     expect(resumed.manifest.stage.current).toBe('provisioned');
   });
+
+  it.each([
+    { project_number: '987654321' },
+    { location: 'EU' },
+    { uniform_bucket_level_access: false },
+    { public_access_prevention: 'inherited' },
+  ])(
+    'rejects a matching receipt on a bucket with unsafe identity or policy: %j',
+    async (override) => {
+      const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-'));
+      const archive = join(dir, 'release.tar.gz');
+      await foundationArchive(archive);
+      const digest = await sha256File(archive);
+      const log: string[] = [];
+      const original = fakeRunner(log, true, '[]', undefined, false, digest);
+      const runner: CommandRunner = {
+        async run(command, args) {
+          const result = await original.run(command, args);
+          if (
+            command === 'gcloud' &&
+            args[0] === 'storage' &&
+            args[1] === 'buckets' &&
+            args[2] === 'describe'
+          )
+            return {
+              ...result,
+              stdout: JSON.stringify({ ...JSON.parse(result.stdout), ...override }),
+            };
+          return result;
+        },
+      };
+      await expect(
+        provisionConsumerInstallation(
+          { runner },
+          {
+            manifest: manifest(digest),
+            archivePath: archive,
+            statePath: join(dir, 'state.json'),
+            terraformDir: 'infra/gcp/consumer/terraform',
+            stateBucket: 'customer-project-consumer-install-state',
+            apply: true,
+          },
+        ),
+      ).rejects.toThrow('project, location, or access protection differs');
+      expect(
+        log.some((entry) => entry.startsWith('terraform') || entry.includes('storage cp')),
+      ).toBe(false);
+    },
+  );
 
   it('rejects invalid Terraform output without exposing command details', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-'));

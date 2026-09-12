@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const calls = vi.hoisted(() => ({
@@ -123,4 +124,30 @@ describe('isolated live-validation resource lifecycle', () => {
       progress.mock.calls.findIndex(([stage]) => stage === 'deleting_database'),
     );
   });
+});
+
+it('keeps deployable composite indexes and field overrides in their correct sections', async () => {
+  const spec = JSON.parse(
+    await readFile(
+      new URL('../../../infra/gcp/firestore/firestore.indexes.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  for (const index of spec.indexes) {
+    expect(index).toMatchObject({
+      collectionGroup: expect.any(String),
+      queryScope: expect.any(String),
+      fields: expect.any(Array),
+    });
+    expect(index.fields.length).toBeGreaterThan(1);
+    expect(index).not.toHaveProperty('fieldPath');
+  }
+  for (const override of spec.fieldOverrides) {
+    expect(override).toMatchObject({
+      collectionGroup: expect.any(String),
+      fieldPath: expect.any(String),
+      indexes: expect.any(Array),
+    });
+    expect(override).not.toHaveProperty('fields');
+  }
 });
