@@ -1,4 +1,5 @@
 import { createVertex } from '@ai-sdk/google-vertex';
+import type { Config } from '@assistant/config';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import type { EmbeddingModel, JSONValue, LanguageModel } from 'ai';
 
@@ -204,4 +205,19 @@ export function createVertexModelProvider(options: VertexModelProviderOptions): 
     cacheHint: () => undefined,
     normalizeUsage: normalizeVertexUsage,
   };
+}
+
+/** Explicit application composition; preserves OpenRouter unless the owner selects Vertex. */
+export function createConfiguredModelProvider(
+  config: Pick<
+    Config,
+    'LLM_PROVIDER' | 'OPENROUTER_API_KEY' | 'VERTEX_PROJECT' | 'VERTEX_LOCATION'
+  >,
+): ModelProvider {
+  return config.LLM_PROVIDER === 'vertex'
+    ? createVertexModelProvider({
+        project: config.VERTEX_PROJECT,
+        location: config.VERTEX_LOCATION,
+      })
+    : createOpenRouterModelProvider(config.OPENROUTER_API_KEY);
 }

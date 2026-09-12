@@ -68,7 +68,7 @@ const allowedWorkspaceDependencies: Record<string, readonly string[]> = {
   '@assistant/db': ['@assistant/config', '@assistant/persistence'],
   '@assistant/core': ['@assistant/config', '@assistant/db', '@assistant/persistence'],
   '@assistant/application': ['@assistant/config', '@assistant/core', '@assistant/db'],
-  '@assistant/tools': ['@assistant/core', '@assistant/db'],
+  '@assistant/tools': ['@assistant/core', '@assistant/db', '@assistant/persistence'],
   // Modules compose the layers below them; nothing may depend on modules except
   // the agent composition root and metadata consumers.
   '@assistant/modules': [

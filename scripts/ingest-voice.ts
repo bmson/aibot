@@ -16,7 +16,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '@assistant/config';
-import { ModelRouter, registerForFilename } from '@assistant/core';
+import { createConfiguredModelProvider, ModelRouter, registerForFilename } from '@assistant/core';
 import { createDb, voiceProfile, writingSamples } from '@assistant/db';
 import { count, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -32,7 +32,12 @@ if (!dbUrl) {
   process.exit(1);
 }
 const db = createDb(dbUrl);
-const router = new ModelRouter(db, config.OPENROUTER_API_KEY);
+const router = new ModelRouter(
+  db,
+  config.OPENROUTER_API_KEY,
+  config.LLM_AUDIT_CAPTURE,
+  createConfiguredModelProvider(config),
+);
 
 let files: string[] = [];
 try {

@@ -11,6 +11,7 @@ import {
 import { sha256File, verifyInstallationArchive } from './installation-provenance.js';
 import {
   persistInstallationManifest,
+  persistInstallationProgress,
   readPersistedInstallation,
   resumePersistedInstallation,
 } from './installation-state.js';
@@ -189,6 +190,29 @@ describe('persisted installation state', () => {
     const advanced = advanceInstallationStage(manifest(), 'authorized', '2026-09-12T12:01:00.000Z');
     await expect(persistInstallationManifest(statePath, advanced)).rejects.toThrow(
       'active previewed manifest',
+    );
+  });
+
+  it('only persists the immediate cloud stage and keeps identity and selection immutable', async () => {
+    const directory = await temporaryDirectory();
+    const statePath = path.join(directory, 'manifest.json');
+    const preview = manifest();
+    const authorized = advanceInstallationStage(preview, 'authorized', '2026-09-12T12:01:00.000Z');
+    await persistInstallationProgress(statePath, authorized, null);
+    const forged = advanceInstallationStage(authorized, 'bootstrapped', '2026-09-12T12:02:00.000Z');
+    await expect(
+      persistInstallationProgress(
+        statePath,
+        {
+          ...forged,
+          identity: { ...forged.identity, projectId: 'other-project-123' },
+        },
+        authorized,
+      ),
+    ).rejects.toThrow('immutable installation identity');
+    const skipped = advanceInstallationStage(forged, 'provisioned', '2026-09-12T12:03:00.000Z');
+    await expect(persistInstallationProgress(statePath, skipped, authorized)).rejects.toThrow(
+      'immediate next stage',
     );
   });
 });

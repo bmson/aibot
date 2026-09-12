@@ -2,6 +2,7 @@ import type { Db } from '@assistant/db';
 import type { EmbeddingModel, LanguageModel } from 'ai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  createConfiguredModelProvider,
   createOpenRouterModelProvider,
   type ModelProvider,
   normalizeOpenRouterUsage,
@@ -81,6 +82,34 @@ beforeEach(() => {
 });
 
 describe('injected model providers', () => {
+  it('composes only the explicitly selected application provider', () => {
+    const config = {
+      LLM_PROVIDER: 'openrouter' as const,
+      OPENROUTER_API_KEY: 'fake',
+      VERTEX_PROJECT: '',
+      VERTEX_LOCATION: '',
+    };
+    expect(createConfiguredModelProvider(config).kind).toBe('openrouter');
+    expect(stubs.createVertex).not.toHaveBeenCalled();
+    expect(() => createConfiguredModelProvider({ ...config, LLM_PROVIDER: 'vertex' })).toThrow(
+      'project',
+    );
+    stubs.createVertex.mockReturnValue({ languageModel: vi.fn(), embeddingModel: vi.fn() });
+    expect(
+      createConfiguredModelProvider({
+        ...config,
+        LLM_PROVIDER: 'vertex',
+        VERTEX_PROJECT: 'customer-project',
+        VERTEX_LOCATION: 'global',
+      }).kind,
+    ).toBe('vertex');
+    expect(stubs.createVertex).toHaveBeenCalledWith({
+      project: 'customer-project',
+      location: 'global',
+      apiKey: '',
+    });
+  });
+
   it('does not record Vertex request IDs as OpenRouter generation IDs', async () => {
     const values = vi.fn(() => ({ returning: async () => [{ id: 'call-1' }] }));
     const db = { insert: () => ({ values }) } as unknown as Db;

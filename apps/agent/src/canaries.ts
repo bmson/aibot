@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { modelProviderConfigProblems } from '@assistant/config';
 import {
   type BrowserPlan,
   claimTask,
@@ -174,7 +175,7 @@ function assertCanaryConfiguration(deps: AgentDeps): void {
   const missing: string[] = [];
   if (!googleClientOf(deps).configured()) missing.push('Google OAuth');
   if (!deps.browserLauncher) missing.push('browser module');
-  if (!deps.config.OPENROUTER_API_KEY) missing.push('OPENROUTER_API_KEY');
+  missing.push(...modelProviderConfigProblems(deps.config));
   if (deps.config.BROWSER_DRIVER === 'cloudrun') {
     if (!deps.config.GCP_PROJECT) missing.push('GCP_PROJECT');
     try {
@@ -409,7 +410,8 @@ async function approvalCanary(deps: AgentDeps, runId: string): Promise<string> {
 }
 
 async function chatCanary(deps: AgentDeps, runId: string, signal: AbortSignal): Promise<string> {
-  if (!deps.config.OPENROUTER_API_KEY) throw new Error('OPENROUTER_API_KEY is not configured');
+  const problems = modelProviderConfigProblems(deps.config);
+  if (problems.length) throw new Error(problems.join('; '));
   const agent = await getAgent(deps.db);
   const [conversation] = await deps.db
     .insert(conversations)

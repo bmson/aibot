@@ -57,3 +57,30 @@ The versioned manifest records the target identity, selected modules/provider, r
 Resources declare an owner of `bootstrap`, `terraform`, or `preexisting`. Installation-owned resources must match the installation identity; preexisting resources require a null installation ID. Duplicate physical resource identities and foreign-project ownership claims are rejected. These declarations are not proof of cloud ownership. Provisioning and uninstall must additionally verify actual resource names, labels, and state before adopting or deleting anything. Existing/default resources must not be silently adopted or removed.
 
 The preview derives optional workers, API intent, scheduler declarations, and module billing metadata from the existing module registry. Base Google APIs are reported separately. This is an intended configuration, not a cloud readiness check, a priced quote, or a guarantee that an installation can run yet. Terraform/bootstrap execution, the remaining Firestore application adapters, Google model configuration, owner authentication, and live IAM/index/model validation are separate gates.
+
+## Authenticated foundation provisioning
+
+The new `consumer:install` command builds the customer-owned infrastructure foundation. It does **not** deploy the application or finish owner onboarding. It always reports `runtimeReady: false`.
+
+Use Node/pnpm, gcloud credentials for the target project, Application Default Credentials for Terraform, and Terraform 1.14.5. The target project must have billing available. Generate a canonical source archive from the selected release checkout:
+
+```sh
+git archive --format=tar --output=assistant-source.tar HEAD
+shasum -a 256 assistant-source.tar
+git rev-parse HEAD
+```
+
+Put that full SHA and digest into the installation input, then generate the preview and manifest using the commands above. The provisioner checks the digest and compares the five consumer Terraform foundation files against the trusted checkout. It rejects archive path overrides and links and executes only those verified files in an isolated directory. Archives with a top-level repository prefix are unsupported; use the canonical archive command above. Source hashing binds local bytes and does not independently authenticate the release publisher.
+
+From the matching repository root, preview the cloud foundation:
+
+```sh
+pnpm consumer:install --manifest install-manifest.json \
+  --archive assistant-source.tar --state .assistant-install/manifest.json \
+  --state-bucket YOUR_PROJECT-YOUR_INSTALLATION-state \
+  --terraform-dir infra/gcp/consumer/terraform
+```
+
+The preview performs read-only cloud checks and reports missing APIs. Add `--apply` to enable required APIs, create the private state bucket, upload the release receipt, and apply the foundation. Resources and Terraform state stay in the selected customer's project. It refuses adoption of an existing selected Firestore database and requires matching receipts before reusing a bootstrap bucket.
+
+Repeat the identical command to resume from persisted stages. Terraform state is remote and the last local completed stage is updated atomically. If creation of the state bucket succeeds but upload of its ownership receipt fails, the next run stops for manual ownership verification; it must not automatically adopt that unverified bucket. Failed Terraform work directories are retained for recovery. No initialized/ready stage is recorded until future runtime deployment and readiness work exists.

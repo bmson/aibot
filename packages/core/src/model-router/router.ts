@@ -1,13 +1,6 @@
 import { loadConfig } from '@assistant/config';
-import {
-  conversations,
-  type Db,
-  modelCallAudit,
-  modelCalls,
-  modelRoles,
-  models,
-  tasks,
-} from '@assistant/db';
+import { createPostgresModelRoutingRepository, type Db } from '@assistant/db';
+import type { ModelRoutingRepository } from '@assistant/persistence';
 import {
   type EmbeddingModel,
   embedMany,
@@ -18,7 +11,6 @@ import {
   streamText,
   type ToolSet,
 } from 'ai';
-import { and, eq } from 'drizzle-orm';
 import type { ZodType } from 'zod';
 import {
   BudgetReservationError,
@@ -452,9 +444,10 @@ export function isProviderCapabilityError(err: unknown): boolean {
 
 export class ModelRouter {
   private provider: ModelProvider;
+  private readonly persistence: ModelRoutingRepository;
 
   constructor(
-    private db: Db,
+    store: Db | ModelRoutingRepository,
     apiKey: string,
     /**
      * Whether to keep prompts and answers for quality review. Resolved once,
@@ -466,6 +459,10 @@ export class ModelRouter {
     provider: ModelProvider = createOpenRouterModelProvider(apiKey),
   ) {
     this.provider = provider;
+    this.persistence =
+      'kind' in store && store.kind === 'model-routing-repository'
+        ? (store as ModelRoutingRepository)
+        : createPostgresModelRoutingRepository(store as Db);
   }
 
   /**
@@ -475,15 +472,12 @@ export class ModelRouter {
    * budget can't be double-spent before it reports actuals.
    */
   private async budgetSnapshot(taskId?: string) {
-    const totals = await costTotals(this.db);
+    const totals = await costTotals(this.persistence.costs);
 
     let taskLimitUsd: number | undefined;
     let taskSpentUsd: number | undefined;
     if (taskId) {
-      const [task] = await this.db
-        .select({ limit: tasks.budgetUsdLimit, spent: tasks.spentUsd })
-        .from(tasks)
-        .where(eq(tasks.id, taskId));
+      const task = await this.persistence.taskBudget(taskId);
       if (task) {
         taskLimitUsd = Number(task.limit);
         taskSpentUsd = Number(task.spent);
@@ -511,7 +505,7 @@ export class ModelRouter {
       return { ok: false, decision };
     }
 
-    const [roleRow] = await this.db.select().from(modelRoles).where(eq(modelRoles.role, role));
+    const roleRow = await this.persistence.role(role);
     if (!roleRow) throw new Error(`no model_roles row for role: ${role}`);
 
     let primaryId = roleRow.primaryModel;
@@ -519,19 +513,11 @@ export class ModelRouter {
     // The conversation picker applies to tool-driven work as well as streamed
     // replies. Background planning/extraction keep their inexpensive role routes.
     if (!modelOverride && opts.taskId && (role === 'reason' || role === 'draft')) {
-      const [conversation] = await this.db
-        .select({ modelOverride: conversations.modelOverride })
-        .from(tasks)
-        .innerJoin(conversations, eq(tasks.conversationId, conversations.id))
-        .where(and(eq(tasks.id, opts.taskId), eq(tasks.type, 'chat_turn')));
-      modelOverride = conversation?.modelOverride ?? undefined;
+      modelOverride = (await this.persistence.conversationOverride(opts.taskId)) ?? undefined;
     }
     if (modelOverride) {
-      const [override] = await this.db
-        .select()
-        .from(models)
-        .where(and(eq(models.id, modelOverride), eq(models.enabled, true)));
-      if (override && !(override.capabilities as { embedding?: boolean }).embedding) {
+      const override = await this.persistence.model(modelOverride);
+      if (override?.enabled && !(override.capabilities as { embedding?: boolean }).embedding) {
         primaryId = override.id;
       }
     }
@@ -539,7 +525,7 @@ export class ModelRouter {
     const degraded = opts.forceFallback || decision.mode === 'fallback';
     const modelId = degraded ? roleRow.fallbackModel : primaryId;
     const params = (roleRow.params ?? {}) as Record<string, unknown>;
-    const [modelRow] = await this.db.select().from(models).where(eq(models.id, modelId));
+    const modelRow = await this.persistence.model(modelId);
     if (!modelRow) throw new Error(`model row missing for routed model: ${modelId}`);
     if (!modelRow.enabled) throw new Error(`routed model is disabled: ${modelId}`);
     const promptCostPerMTok = Number(modelRow.promptCostPerMTok);
@@ -629,7 +615,7 @@ export class ModelRouter {
         1_000_000) *
         ESTIMATE_SAFETY_FACTOR,
     );
-    const reservation = await reserveCost(this.db, {
+    const reservation = await reserveCost(this.persistence.costs, {
       source: 'model',
       estimatedUsd,
       taskId: opts.taskId,
@@ -755,31 +741,28 @@ export class ModelRouter {
     // Reconcile the budget hold first. If the secondary model-call telemetry
     // insert fails, spend is still safely accounted and the paid provider call
     // must not be repeated.
-    await reconcileReservation(this.db, input.reservationId, {
+    await reconcileReservation(this.persistence.costs, input.reservationId, {
       usd: costUsd,
       ...(hasPositiveTokenUsage ? { quantity: inputTokens + outputTokens, unit: 'tokens' } : {}),
       unitPriceUsd: hasPositiveTokenUsage ? costUsd / (inputTokens + outputTokens) : undefined,
       description: costDescription,
     });
-    const [call] = await this.db
-      .insert(modelCalls)
-      .values({
-        taskId: input.taskId,
-        role: input.role,
-        model: input.modelId,
-        inputTokens,
-        outputTokens,
-        costUsd: costUsd.toFixed(6),
-        latencyMs: input.latencyMs,
-        finishReason: input.event.finishReason,
-        openrouterGenerationId:
-          this.provider.kind === 'openrouter'
-            ? (usage.generationId ?? input.event.response?.id)
-            : null,
-      })
-      .returning({ id: modelCalls.id });
+    const callId = await this.persistence.recordCall({
+      taskId: input.taskId,
+      role: input.role,
+      model: input.modelId,
+      inputTokens,
+      outputTokens,
+      costUsd: costUsd.toFixed(6),
+      latencyMs: input.latencyMs,
+      finishReason: input.event.finishReason,
+      openrouterGenerationId:
+        this.provider.kind === 'openrouter'
+          ? (usage.generationId ?? input.event.response?.id)
+          : null,
+    });
 
-    await this.recordForAudit(input, { callId: call?.id, inputTokens, outputTokens });
+    await this.recordForAudit(input, { callId, inputTokens, outputTokens });
   }
 
   /**
@@ -805,16 +788,16 @@ export class ModelRouter {
       const system = captureField(audit.system, mode);
       const promptInput = captureField(audit.input, mode);
       const output = captureField(audit.output, mode);
-      await this.db.insert(modelCallAudit).values({
+      await this.persistence.recordAudit({
         modelCallId: usage.callId,
         taskId: input.taskId,
         role: input.role,
         model: input.modelId,
         method: audit.method,
         capture: mode,
-        systemPrompt: system.text,
-        input: promptInput.text,
-        output: output.text,
+        systemPrompt: system.text ?? null,
+        input: promptInput.text ?? null,
+        output: output.text ?? null,
         truncated: system.truncated || promptInput.truncated || output.truncated,
         finishReason: input.event.finishReason,
         latencyMs: input.latencyMs,
@@ -891,7 +874,7 @@ export class ModelRouter {
         };
       });
     } catch (err) {
-      await releaseReservation(this.db, reservationId).catch(() => {});
+      await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
       throw err;
     }
   }
@@ -967,7 +950,7 @@ export class ModelRouter {
         },
         onError: async ({ error }: { error: unknown }) => {
           await terminalOnce(async () => {
-            await releaseReservation(this.db, reservationId).catch(() => {});
+            await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
             if (opts.onError) {
               await opts.onError(error).catch((callbackError) => {
                 console.error('stream error callback failed', callbackError);
@@ -978,7 +961,7 @@ export class ModelRouter {
         onAbort: async () => {
           await terminalOnce(async () => {
             const error = new Error('model stream aborted');
-            await releaseReservation(this.db, reservationId).catch(() => {});
+            await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
             if (opts.onError) {
               await opts.onError(error).catch((callbackError) => {
                 console.error('stream abort callback failed', callbackError);
@@ -988,7 +971,7 @@ export class ModelRouter {
         },
       });
     } catch (err) {
-      await releaseReservation(this.db, reservationId).catch(() => {});
+      await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
       throw err;
     }
 
@@ -1145,7 +1128,7 @@ export class ModelRouter {
         };
       });
     } catch (err) {
-      await releaseReservation(this.db, reservationId).catch(() => {});
+      await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
       throw err;
     }
   }
@@ -1228,7 +1211,7 @@ export class ModelRouter {
             },
           });
         } else {
-          await releaseReservation(this.db, reservationId).catch(() => {});
+          await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
         }
         throw err;
       }
@@ -1290,14 +1273,12 @@ export class ModelRouter {
     values: string[],
     opts: { taskId?: string; abortSignal?: AbortSignal } = {},
   ): Promise<number[][]> {
-    const [roleRow] = await this.db.select().from(modelRoles).where(eq(modelRoles.role, 'embed'));
+    if (values.length > 0 && opts.taskId) await this.persistence.taskBudget(opts.taskId);
+    const roleRow = await this.persistence.role('embed');
     if (!roleRow) throw new Error('no model_roles row for role: embed');
     if (values.length === 0) return [];
     if (values.length > 100) throw new Error('embedding batch exceeds 100 values');
-    const [modelRow] = await this.db
-      .select()
-      .from(models)
-      .where(eq(models.id, roleRow.primaryModel));
+    const modelRow = await this.persistence.model(roleRow.primaryModel);
     const promptCostPerMTok = Number(modelRow?.promptCostPerMTok);
     if (!modelRow || modelRow.promptCostPerMTok === null || !Number.isFinite(promptCostPerMTok)) {
       throw new Error(`embedding model ${roleRow.primaryModel} is missing a cost rate`);
@@ -1311,7 +1292,7 @@ export class ModelRouter {
       0.000001,
       ((inputTokens * promptCostPerMTok) / 1_000_000) * ESTIMATE_SAFETY_FACTOR,
     );
-    const reservation = await reserveCost(this.db, {
+    const reservation = await reserveCost(this.persistence.costs, {
       source: 'embedding',
       estimatedUsd,
       taskId: opts.taskId,
@@ -1401,7 +1382,7 @@ export class ModelRouter {
         metered = true;
       }
       if (!providerSucceeded && !metered) {
-        await releaseReservation(this.db, reservation.reservationId).catch(() => {});
+        await releaseReservation(this.persistence.costs, reservation.reservationId).catch(() => {});
       }
       throw err;
     }

@@ -1,7 +1,7 @@
 import { access, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loadConfig } from '@assistant/config';
-import { ModelRouter } from '@assistant/core/model-router';
+import { createConfiguredModelProvider, ModelRouter } from '@assistant/core/model-router';
 import { agents, conversations, createDb, messages } from '@assistant/db';
 import { and, eq } from 'drizzle-orm';
 
@@ -49,7 +49,12 @@ function statePath(run: RunName): string {
 async function generate(run: RunName): Promise<void> {
   const config = loadConfig();
   const db = createDb(config.DATABASE_URL);
-  const router = new ModelRouter(db, config.OPENROUTER_API_KEY);
+  const router = new ModelRouter(
+    db,
+    config.OPENROUTER_API_KEY,
+    config.LLM_AUDIT_CAPTURE,
+    createConfiguredModelProvider(config),
+  );
   const input = await corpus();
   if (input.prompts.length !== 30)
     throw new Error(`expected 30 prompts, found ${input.prompts.length}`);

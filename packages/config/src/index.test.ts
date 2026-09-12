@@ -91,6 +91,25 @@ describe('config', () => {
     expect(validateProdConfig(config)).toEqual([]);
   });
 
+  it('requires only the selected model provider credentials in cloud mode', () => {
+    const config = loadConfig({
+      QUEUE_DRIVER: 'cloudtasks',
+      LLM_PROVIDER: 'vertex',
+      VERTEX_PROJECT: 'customer-project',
+      VERTEX_LOCATION: 'global',
+    });
+    expect(validateProdConfig(config).some((p) => /OPENROUTER|VERTEX/.test(p))).toBe(false);
+    expect(validateProdConfig({ ...config, VERTEX_PROJECT: '', VERTEX_LOCATION: '' })).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('VERTEX_PROJECT'),
+        expect.stringContaining('VERTEX_LOCATION'),
+      ]),
+    );
+    expect(validateProdConfig({ ...config, LLM_PROVIDER: 'openrouter' })).toContain(
+      'OPENROUTER_API_KEY is required when LLM_PROVIDER=openrouter',
+    );
+  });
+
   // Module-specific production rules moved to each module's metadata; they are
   // covered by the conformance suite in @assistant/modules.
 });

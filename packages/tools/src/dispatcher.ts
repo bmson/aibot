@@ -3,28 +3,26 @@ import { outboundEmailAllowed } from '@assistant/config';
 import {
   activeAutonomyGrant,
   autonomyFloorBlocks,
-  getRate,
   isBrowserJobPending,
   isGoalWorkEvidence,
-  reconcileReservation,
-  releaseReservation,
-  reserveCost,
   withSpan,
 } from '@assistant/core';
 import { createApproval } from '@assistant/core/workflow/approvals';
 import { detectLiveLookup } from '@assistant/core/workflow/live-lookup';
-import type { Db, TaskRow } from '@assistant/db';
 import {
-  approvals,
-  contacts,
-  conversations,
-  messages,
-  rateLimits,
-  tasks,
-  toolCache,
-  toolCalls,
+  createPostgresApprovalPolicyRepository,
+  createPostgresApprovalRepository,
+  createPostgresCostRepository,
+  createPostgresToolExecutionRepository,
+  type Db,
+  type TaskRow,
 } from '@assistant/db';
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import type {
+  ApprovalPolicyRepository,
+  ApprovalRepository,
+  CostRepository,
+  ToolExecutionRepository,
+} from '@assistant/persistence';
 import { approvalFallbackSummary } from './approval-summaries.js';
 import { isAmbiguousGoogleMutationError } from './google/client.js';
 import { matchPolicies } from './policies.js';
@@ -51,7 +49,7 @@ export interface DispatchInput {
 
 /** The read may only reuse an exact URL already disclosed by a search the owner requested. */
 async function authorizedPublicSourceRead(
-  db: Db,
+  repository: ToolExecutionRepository,
   input: DispatchInput,
   args: Record<string, unknown>,
 ): Promise<boolean> {
@@ -70,40 +68,19 @@ async function authorizedPublicSourceRead(
   if (!lookup && input.task.conversationId) {
     // A terse retry may refer to an earlier owner question. Resolve only
     // persisted owner words from this chat before this task was created.
-    const owners = await db
-      .select({ text: messages.text })
-      .from(messages)
-      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
-      .where(
-        and(
-          eq(messages.conversationId, input.task.conversationId),
-          eq(conversations.agentId, input.task.agentId),
-          eq(conversations.channel, 'chat'),
-          eq(conversations.trust, 'owner'),
-          eq(messages.role, 'user'),
-          eq(messages.origin, 'owner'),
-          lte(messages.createdAt, input.task.createdAt),
-        ),
-      )
-      .orderBy(desc(messages.createdAt))
-      .limit(4);
-    const history = owners.reverse().map((row) => ({ role: 'user' as const, content: row.text }));
+    const owners = await repository.ownerMessageHistory(
+      input.task.agentId,
+      input.task.conversationId,
+      input.task.createdAt,
+    );
+    const history = owners.map((text) => ({ role: 'user' as const, content: text }));
     if (history.at(-1)?.content !== trigger.payload.text)
       history.push({ role: 'user', content: trigger.payload.text });
     lookup = detectLiveLookup(history);
   }
   if (lookup?.kind !== 'web') return false;
-  const searches = await db
-    .select({ result: toolCalls.result })
-    .from(toolCalls)
-    .where(
-      and(
-        eq(toolCalls.taskId, input.task.id),
-        eq(toolCalls.toolName, 'web.search'),
-        eq(toolCalls.status, 'succeeded'),
-      ),
-    );
-  return searches.some(({ result }) => {
+  const searches = await repository.searchResults(input.task.id);
+  return searches.some((result) => {
     const value = result as { results?: Array<{ url?: unknown }>; error?: unknown } | null;
     return (
       !value?.error &&
@@ -171,29 +148,6 @@ function cacheKey(toolName: string, args: Record<string, unknown>): string {
     .digest('hex');
 }
 
-async function underRateLimit(db: Db, scope: string): Promise<boolean> {
-  const [limit] = await db.select().from(rateLimits).where(eq(rateLimits.scope, scope));
-  if (!limit) return true;
-
-  const countSince = async (interval: string) => {
-    const [row] = await db
-      .select({ n: sql<number>`count(*)` })
-      .from(toolCalls)
-      .where(
-        and(
-          eq(toolCalls.toolName, scope.replace(/^tool:/, '')),
-          gte(toolCalls.createdAt, sql`now() - ${interval}::interval`),
-          eq(toolCalls.status, 'succeeded'),
-        ),
-      );
-    return Number(row?.n ?? 0);
-  };
-
-  if (limit.maxPerHour !== null && (await countSince('1 hour')) >= limit.maxPerHour) return false;
-  if (limit.maxPerDay !== null && (await countSince('1 day')) >= limit.maxPerDay) return false;
-  return true;
-}
-
 /**
  * The risk gate — the enforcement boundary between model output and the world.
  * Evaluation order is part of the security contract:
@@ -205,9 +159,23 @@ async function underRateLimit(db: Db, scope: string): Promise<boolean> {
  */
 export class ToolDispatcher {
   constructor(
-    private db: Db,
+    db: Db,
     private registry: ToolRegistry,
-  ) {}
+    executionRepository?: ToolExecutionRepository,
+    costRepository?: CostRepository,
+    approvalRepository?: ApprovalRepository,
+    policyRepository?: ApprovalPolicyRepository,
+  ) {
+    this.executionRepository = executionRepository ?? createPostgresToolExecutionRepository(db);
+    this.costRepository = costRepository ?? createPostgresCostRepository(db);
+    this.approvalRepository = approvalRepository ?? createPostgresApprovalRepository(db);
+    this.policyRepository = policyRepository ?? createPostgresApprovalPolicyRepository(db);
+  }
+
+  private executionRepository: ToolExecutionRepository;
+  private costRepository: CostRepository;
+  private approvalRepository: ApprovalRepository;
+  private policyRepository: ApprovalPolicyRepository;
 
   /**
    * Model-facing tool definitions for a task's trust level (no execute
@@ -253,8 +221,9 @@ export class ToolDispatcher {
     | { kind: 'failed'; error: string }
     | { kind: 'budget_blocked'; reason: string; resumeAt: Date }
   > {
-    const [call] = await this.db.select().from(toolCalls).where(eq(toolCalls.id, toolCallId));
-    if (!call) return { kind: 'failed', error: 'tool call not found' };
+    const loaded = await this.executionRepository.load(ctx.agentId, ctx.taskId, toolCallId);
+    const call = loaded?.toolCall;
+    if (!loaded || !call) return { kind: 'failed', error: 'tool call not found' };
     if (isBrowserJobPending(call.result)) return { kind: 'executed', result: call.result };
     if (call.status === 'succeeded') return { kind: 'executed', result: call.result };
     if (call.status !== 'approved') {
@@ -268,21 +237,23 @@ export class ToolDispatcher {
 
     let args = (call.args ?? {}) as Record<string, unknown>;
     if (call.approvalId) {
-      const [approval] = await this.db
-        .select()
-        .from(approvals)
-        .where(eq(approvals.id, call.approvalId));
-      if (approval?.resolutionPayload) {
-        args = approval.resolutionPayload as Record<string, unknown>;
+      if (loaded.approval?.resolutionPayload) {
+        args = loaded.approval.resolutionPayload as Record<string, unknown>;
       }
     }
 
     const parsed = registered.tool.inputSchema.safeParse(args);
     if (!parsed.success) {
-      await this.db
-        .update(toolCalls)
-        .set({ status: 'failed', error: `invalid approved args: ${parsed.error.message}` })
-        .where(eq(toolCalls.id, toolCallId));
+      const persisted = await this.executionRepository.outcome({
+        agentId: ctx.agentId,
+        taskId: ctx.taskId,
+        toolCallId,
+        status: 'failed',
+        fromStatus: 'approved',
+        error: `invalid approved args: ${parsed.error.message}`,
+      });
+      if (!persisted)
+        return { kind: 'failed', error: 'approved tool failure could not be persisted' };
       return { kind: 'failed', error: 'approved args failed validation' };
     }
 
@@ -304,19 +275,25 @@ export class ToolDispatcher {
       ...(reserved?.ok ? { reservationId: reserved.reservationId } : {}),
     };
 
-    const [claimed] = await this.db
-      .update(toolCalls)
-      .set({ status: 'executing', args: parsed.data, decision, startedAt: sql`now()` })
-      .where(and(eq(toolCalls.id, toolCallId), eq(toolCalls.status, 'approved')))
-      .returning({ id: toolCalls.id });
+    const claimed = await this.executionRepository.claim({
+      agentId: ctx.agentId,
+      taskId: ctx.taskId,
+      toolCallId,
+      args: parsed.data as Record<string, unknown>,
+      decision,
+      expectedApprovalId: call.approvalId,
+      expectedResolutionPayload: loaded.approval?.resolutionPayload ?? null,
+    });
     if (!claimed) {
-      if (reserved?.ok) await releaseReservation(this.db, reserved.reservationId).catch(() => {});
-      const [current] = await this.db.select().from(toolCalls).where(eq(toolCalls.id, toolCallId));
+      if (reserved?.ok) await this.costRepository.release(reserved.reservationId).catch(() => {});
+      const current = (await this.executionRepository.load(ctx.agentId, ctx.taskId, toolCallId))
+        ?.toolCall;
       return current?.status === 'succeeded'
         ? { kind: 'executed', result: current.result }
         : { kind: 'failed', error: `tool call is ${current?.status ?? 'missing'}, not approved` };
     }
 
+    let providerCompleted = false;
     try {
       const result = await withSpan(
         'tool.execute',
@@ -332,26 +309,47 @@ export class ToolDispatcher {
             ),
           ),
       );
-      await this.db
-        .update(toolCalls)
-        .set({
-          status: 'succeeded',
-          ...(isBrowserJobPending(result) ? {} : { result: result ?? null }),
-          finishedAt: sql`now()`,
-        })
-        .where(eq(toolCalls.id, toolCallId));
+      providerCompleted = true;
       if (reserved?.ok && !isBrowserJobPending(result)) {
-        await reconcileReservation(this.db, reserved.reservationId, {
-          usd: reserved.estimatedUsd,
-          quantity: reserved.quantity,
-          unit: reserved.unit,
-          unitPriceUsd: reserved.unitPriceUsd,
-          toolCallId,
-          description: reserved.description,
-        }).catch((error) => console.error('approved tool cost reconciliation failed', error));
+        await this.costRepository
+          .reconcile(reserved.reservationId, {
+            usd: reserved.estimatedUsd,
+            quantity: reserved.quantity,
+            unit: reserved.unit,
+            unitPriceUsd: reserved.unitPriceUsd,
+            toolCallId,
+            description: reserved.description,
+          })
+          .catch((error) => console.error('approved tool cost reconciliation failed', error));
       }
+      const persisted = await this.executionRepository.outcome({
+        agentId: ctx.agentId,
+        taskId: ctx.taskId,
+        toolCallId,
+        status: 'succeeded',
+        ...(isBrowserJobPending(result) ? {} : { result: result ?? null }),
+      });
+      if (!persisted)
+        return { kind: 'failed', error: 'tool success could not be persisted; retry suppressed' };
       return { kind: 'executed', result };
     } catch (err) {
+      if (providerCompleted) {
+        if (reserved?.ok)
+          await this.costRepository
+            .reconcile(reserved.reservationId, {
+              usd: reserved.estimatedUsd,
+              quantity: reserved.quantity,
+              unit: reserved.unit,
+              unitPriceUsd: reserved.unitPriceUsd,
+              toolCallId,
+              description: `${reserved.description} (persistence outcome unknown)`,
+            })
+            .catch(() => {});
+        return {
+          kind: 'failed',
+          error: 'provider completed but outcome persistence failed; retry suppressed',
+        };
+      }
       if (isAmbiguousTwilioDeliveryError(err) || isAmbiguousGoogleMutationError(err)) {
         const result = {
           deliveryStatus: 'unknown',
@@ -359,28 +357,43 @@ export class ToolDispatcher {
           note: 'The provider may have accepted this mutation; do not retry automatically.',
         };
         if (reserved?.ok) {
-          await reconcileReservation(this.db, reserved.reservationId, {
-            usd: reserved.estimatedUsd,
-            quantity: reserved.quantity,
-            unit: reserved.unit,
-            unitPriceUsd: reserved.unitPriceUsd,
-            toolCallId,
-            description: `${reserved.description} (delivery outcome unknown)`,
-          }).catch((error) =>
-            console.error('ambiguous approved tool cost reconciliation failed', error),
-          );
+          await this.costRepository
+            .reconcile(reserved.reservationId, {
+              usd: reserved.estimatedUsd,
+              quantity: reserved.quantity,
+              unit: reserved.unit,
+              unitPriceUsd: reserved.unitPriceUsd,
+              toolCallId,
+              description: `${reserved.description} (delivery outcome unknown)`,
+            })
+            .catch((error) =>
+              console.error('ambiguous approved tool cost reconciliation failed', error),
+            );
         }
-        await this.db
-          .update(toolCalls)
-          .set({ status: 'succeeded', result, finishedAt: sql`now()` })
-          .where(eq(toolCalls.id, toolCallId));
+        const persisted = await this.executionRepository.outcome({
+          agentId: ctx.agentId,
+          taskId: ctx.taskId,
+          toolCallId,
+          status: 'succeeded',
+          result,
+        });
+        if (!persisted)
+          return {
+            kind: 'failed',
+            error: 'ambiguous delivery state could not be persisted; retry suppressed',
+          };
         return { kind: 'executed', result };
       }
-      if (reserved?.ok) await releaseReservation(this.db, reserved.reservationId).catch(() => {});
-      await this.db
-        .update(toolCalls)
-        .set({ status: 'failed', error: String(err).slice(0, 2000), finishedAt: sql`now()` })
-        .where(eq(toolCalls.id, toolCallId));
+      if (reserved?.ok) await this.costRepository.release(reserved.reservationId).catch(() => {});
+      const persisted = await this.executionRepository.outcome({
+        agentId: ctx.agentId,
+        taskId: ctx.taskId,
+        toolCallId,
+        status: 'failed',
+        error: String(err).slice(0, 2000),
+      });
+      if (!persisted)
+        return { kind: 'failed', error: 'tool failure could not be persisted; retry suppressed' };
       return { kind: 'failed', error: String(err).slice(0, 500) };
     }
   }
@@ -400,9 +413,7 @@ export class ToolDispatcher {
     if (emails.length === 0 && phones.length === 0) return [];
     const verifiedEmails = new Set((ctx.knownAddresses?.emails ?? []).map(normalizeEmail));
     const verifiedPhones = new Set((ctx.knownAddresses?.phones ?? []).map(normalizePhone));
-    const rows = await this.db
-      .select({ emails: contacts.emails, phones: contacts.phones })
-      .from(contacts);
+    const rows = await this.executionRepository.contacts();
     for (const row of rows) {
       for (const e of row.emails) verifiedEmails.add(normalizeEmail(e));
       for (const p of row.phones) verifiedPhones.add(normalizePhone(p));
@@ -452,11 +463,12 @@ export class ToolDispatcher {
           reason: 'mission.update is available only inside a mission work session',
         };
       }
-      const [parent] = await this.db
-        .select({ type: tasks.type })
-        .from(tasks)
-        .where(eq(tasks.id, input.task.parentTaskId));
-      if (parent?.type !== 'mission') {
+      if (
+        !(await this.executionRepository.parentIsMission(
+          input.task.agentId,
+          input.task.parentTaskId,
+        ))
+      ) {
         return {
           kind: 'rejected',
           reason: 'mission.update requires a mission as its parent task',
@@ -476,12 +488,10 @@ export class ToolDispatcher {
         typeof input.args.goalId === 'string' ? (input.args.goalId as string) : null;
       let boundGoalId = input.task.goalId ?? null;
       if (!boundGoalId && input.task.conversationId) {
-        const [conversation] = await this.db
-          .select({ metadata: conversations.metadata })
-          .from(conversations)
-          .where(eq(conversations.id, input.task.conversationId));
-        const metaGoalId = (conversation?.metadata as { goalId?: unknown } | null)?.goalId;
-        if (typeof metaGoalId === 'string') boundGoalId = metaGoalId;
+        boundGoalId = await this.executionRepository.conversationGoalId(
+          input.task.agentId,
+          input.task.conversationId,
+        );
       }
       if (!argGoalId || !boundGoalId || argGoalId !== boundGoalId) {
         return {
@@ -492,14 +502,10 @@ export class ToolDispatcher {
       }
       const unattended = input.task.type !== 'chat_turn' && input.task.type !== 'sms_turn';
       if (unattended) {
-        const prior = await this.db
-          .select({
-            toolName: toolCalls.toolName,
-            status: toolCalls.status,
-            result: toolCalls.result,
-          })
-          .from(toolCalls)
-          .where(eq(toolCalls.taskId, input.task.id));
+        const prior = await this.executionRepository.goalWorkEvidence(
+          input.task.agentId,
+          input.task.id,
+        );
         if (!prior.some(isGoalWorkEvidence)) {
           return {
             kind: 'rejected',
@@ -572,7 +578,7 @@ export class ToolDispatcher {
     }
 
     // Policy match (templates only; unknown templates fail closed)
-    const policyMatch = await matchPolicies(this.db, {
+    const policyMatch = await matchPolicies(this.policyRepository, {
       agentId: input.task.agentId,
       toolName: input.toolName,
       args,
@@ -613,7 +619,8 @@ export class ToolDispatcher {
     // result URL. This never permits a model-built query, a new destination,
     // a private-data lookup, or an outward mutation. URL/redirect SSRF checks
     // and explicit policy denies still apply in their existing layers.
-    const sourceRead = privilegedTaint && (await authorizedPublicSourceRead(this.db, input, args));
+    const sourceRead =
+      privilegedTaint && (await authorizedPublicSourceRead(this.executionRepository, input, args));
     const taintNeedsApproval =
       privilegedTaint &&
       !sourceRead &&
@@ -694,36 +701,30 @@ export class ToolDispatcher {
     }
 
     // Rate limit (autonomous executions only — approvals are human-gated anyway)
-    if (!(await underRateLimit(this.db, `tool:${input.toolName}`))) {
+    if (
+      !(await this.executionRepository.underRateLimit(`tool:${input.toolName}`, input.toolName))
+    ) {
       return { kind: 'rejected', reason: `rate limit exceeded for ${input.toolName}` };
     }
 
     // Cache
     const key = cacheKey(input.toolName, args);
     if (tool.cacheTtlSeconds) {
-      const [hit] = await this.db
-        .select()
-        .from(toolCache)
-        .where(and(eq(toolCache.cacheKey, key), gte(toolCache.expiresAt, sql`now()`)));
+      const hit = await this.executionRepository.cacheGet(key);
       if (hit) {
-        const [row] = await this.db
-          .insert(toolCalls)
-          .values({
-            taskId: input.task.id,
-            step: input.step,
-            toolName: input.toolName,
-            args,
-            risk: tier,
-            status: 'succeeded',
-            result: hit.result,
-            decision: { ...decision, cached: true },
-            startedAt: sql`now()`,
-            finishedAt: sql`now()`,
-          })
-          .returning();
+        const row = await this.executionRepository.cached({
+          taskId: input.task.id,
+          agentId: input.task.agentId,
+          step: input.step,
+          toolName: input.toolName,
+          args,
+          idempotencyKey: null,
+          result: hit.result,
+          decision: { ...decision, cached: true },
+        });
         return {
           kind: 'executed',
-          toolCallId: (row as NonNullable<typeof row>).id,
+          toolCallId: row.id,
           result: hit.result,
           cached: true,
         };
@@ -741,10 +742,11 @@ export class ToolDispatcher {
   ): Promise<ToolReservation | null> {
     const estimate = registered.tool.estimateCost?.(args);
     if (!estimate) return null;
-    const rate = await getRate(this.db, estimate.rateKey);
+    const rate = await this.costRepository.getRate(estimate.rateKey);
+    if (!rate) return null;
     const estimatedUsd = estimate.quantity * rate.unitPriceUsd;
     if (estimatedUsd <= 0) return null;
-    const reservation = await reserveCost(this.db, {
+    const reservation = await this.costRepository.reserve({
       source: estimate.source,
       estimatedUsd,
       taskId,
@@ -772,7 +774,7 @@ export class ToolDispatcher {
     const summary =
       registered.tool.approvalSummary?.(args) ?? approvalFallbackSummary(input.toolName, args);
 
-    const parked = await createApproval(this.db, {
+    const parked = await createApproval(this.approvalRepository, {
       taskId: input.task.id,
       step: input.step,
       toolName: input.toolName,
@@ -795,10 +797,11 @@ export class ToolDispatcher {
     // Crash-retry protection: if this exact side effect already succeeded,
     // return the recorded result instead of executing again.
     if (idempotencyKey) {
-      const [prior] = await this.db
-        .select()
-        .from(toolCalls)
-        .where(eq(toolCalls.idempotencyKey, idempotencyKey));
+      const prior = await this.executionRepository.findIdempotent(
+        input.task.agentId,
+        input.task.id,
+        idempotencyKey,
+      );
       if (prior?.status === 'succeeded') {
         return { kind: 'executed', toolCallId: prior.id, result: prior.result, cached: false };
       }
@@ -821,30 +824,22 @@ export class ToolDispatcher {
     }
     if (reserved?.ok) decision.reservationId = reserved.reservationId;
 
-    const [row] = await this.db
-      .insert(toolCalls)
-      .values({
-        taskId: input.task.id,
-        step: input.step,
-        toolName: input.toolName,
-        args,
-        risk: 'autonomous',
-        status: 'executing',
-        idempotencyKey,
-        decision,
-        startedAt: sql`now()`,
-      })
-      .onConflictDoNothing({
-        target: toolCalls.idempotencyKey,
-        where: sql`${toolCalls.idempotencyKey} IS NOT NULL`,
-      })
-      .returning();
+    const row = await this.executionRepository.start({
+      agentId: input.task.agentId,
+      taskId: input.task.id,
+      step: input.step,
+      toolName: input.toolName,
+      args,
+      idempotencyKey: idempotencyKey ?? null,
+      decision,
+    });
     if (!row) {
       // lost an idempotency race to a concurrent executor
-      if (reserved?.ok) await releaseReservation(this.db, reserved.reservationId).catch(() => {});
+      if (reserved?.ok) await this.costRepository.release(reserved.reservationId).catch(() => {});
       return { kind: 'rejected', reason: 'identical call already in flight' };
     }
 
+    let providerCompleted = false;
     try {
       // The span brackets only the provider call itself — risk gating, budget
       // reservation, and ledger writes are the dispatcher's own fast work.
@@ -862,46 +857,61 @@ export class ToolDispatcher {
             this.executionContext(input.ctx, row.id, input.toolName, input.modelToolCallId),
           ),
       );
-      await this.db
-        .update(toolCalls)
-        .set({
-          status: 'succeeded',
-          ...(isBrowserJobPending(result) ? {} : { result: result ?? null }),
-          finishedAt: sql`now()`,
-        })
-        .where(eq(toolCalls.id, row.id));
-
+      providerCompleted = true;
       if (reserved?.ok && !isBrowserJobPending(result)) {
-        await reconcileReservation(this.db, reserved.reservationId, {
-          usd: reserved.estimatedUsd,
-          quantity: reserved.quantity,
-          unit: reserved.unit,
-          unitPriceUsd: reserved.unitPriceUsd,
-          toolCallId: row.id,
-          description: reserved.description,
-        }).catch((error) => console.error('tool cost reconciliation failed', error));
+        await this.costRepository
+          .reconcile(reserved.reservationId, {
+            usd: reserved.estimatedUsd,
+            quantity: reserved.quantity,
+            unit: reserved.unit,
+            unitPriceUsd: reserved.unitPriceUsd,
+            toolCallId: row.id,
+            description: reserved.description,
+          })
+          .catch(() => {});
       }
+      const persisted = await this.executionRepository.outcome({
+        agentId: input.task.agentId,
+        taskId: input.task.id,
+        toolCallId: row.id,
+        status: 'succeeded',
+        fromStatus: 'executing',
+        ...(isBrowserJobPending(result) ? {} : { result: result ?? null }),
+      });
+      if (!persisted)
+        return {
+          kind: 'rejected',
+          reason: 'tool success could not be persisted; retry suppressed',
+        };
 
       if (registered.tool.cacheTtlSeconds) {
-        await this.db
-          .insert(toolCache)
-          .values({
-            cacheKey: cacheKey(input.toolName, args),
-            toolName: input.toolName,
-            result: (result ?? null) as Record<string, unknown> | null,
-            expiresAt: sql`now() + interval '${sql.raw(String(registered.tool.cacheTtlSeconds))} seconds'`,
-          })
-          .onConflictDoUpdate({
-            target: toolCache.cacheKey,
-            set: {
-              result: (result ?? null) as Record<string, unknown> | null,
-              expiresAt: sql`now() + interval '${sql.raw(String(registered.tool.cacheTtlSeconds))} seconds'`,
-            },
-          });
+        await this.executionRepository.cachePut({
+          cacheKey: cacheKey(input.toolName, args),
+          toolName: input.toolName,
+          result: result ?? null,
+          expiresAt: new Date(Date.now() + registered.tool.cacheTtlSeconds * 1000),
+        });
       }
 
       return { kind: 'executed', toolCallId: row.id, result, cached: false };
     } catch (err) {
+      if (providerCompleted) {
+        if (reserved?.ok)
+          await this.costRepository
+            .reconcile(reserved.reservationId, {
+              usd: reserved.estimatedUsd,
+              quantity: reserved.quantity,
+              unit: reserved.unit,
+              unitPriceUsd: reserved.unitPriceUsd,
+              toolCallId: row.id,
+              description: `${reserved.description} (persistence outcome unknown)`,
+            })
+            .catch(() => {});
+        return {
+          kind: 'rejected',
+          reason: 'provider completed but outcome persistence failed; retry suppressed',
+        };
+      }
       if (isAmbiguousTwilioDeliveryError(err) || isAmbiguousGoogleMutationError(err)) {
         const result = {
           deliveryStatus: 'unknown',
@@ -909,31 +919,51 @@ export class ToolDispatcher {
           note: 'The provider may have accepted this mutation; do not retry automatically.',
         };
         if (reserved?.ok) {
-          await reconcileReservation(this.db, reserved.reservationId, {
-            usd: reserved.estimatedUsd,
-            quantity: reserved.quantity,
-            unit: reserved.unit,
-            unitPriceUsd: reserved.unitPriceUsd,
-            toolCallId: row.id,
-            description: `${reserved.description} (delivery outcome unknown)`,
-          }).catch((error) => console.error('ambiguous tool cost reconciliation failed', error));
+          await this.costRepository
+            .reconcile(reserved.reservationId, {
+              usd: reserved.estimatedUsd,
+              quantity: reserved.quantity,
+              unit: reserved.unit,
+              unitPriceUsd: reserved.unitPriceUsd,
+              toolCallId: row.id,
+              description: `${reserved.description} (delivery outcome unknown)`,
+            })
+            .catch((error) => console.error('ambiguous tool cost reconciliation failed', error));
         }
-        await this.db
-          .update(toolCalls)
-          .set({ status: 'succeeded', result, finishedAt: sql`now()` })
-          .where(eq(toolCalls.id, row.id));
+        const persisted = await this.executionRepository.outcome({
+          agentId: input.task.agentId,
+          taskId: input.task.id,
+          toolCallId: row.id,
+          status: 'succeeded',
+          fromStatus: 'executing',
+          result,
+        });
+        if (!persisted)
+          return {
+            kind: 'rejected',
+            reason: 'ambiguous delivery state could not be persisted; retry suppressed',
+          };
         return { kind: 'executed', toolCallId: row.id, result, cached: false };
       }
 
       // A definitive rejection means the reserved work never happened.
       const reservationId = (decision as Record<string, unknown>).reservationId;
       if (typeof reservationId === 'string') {
-        await releaseReservation(this.db, reservationId).catch(() => {});
+        await this.costRepository.release(reservationId).catch(() => {});
       }
-      await this.db
-        .update(toolCalls)
-        .set({ status: 'failed', error: String(err).slice(0, 2000), finishedAt: sql`now()` })
-        .where(eq(toolCalls.id, row.id));
+      const persisted = await this.executionRepository.outcome({
+        agentId: input.task.agentId,
+        taskId: input.task.id,
+        toolCallId: row.id,
+        status: 'failed',
+        fromStatus: 'executing',
+        error: String(err).slice(0, 2000),
+      });
+      if (!persisted)
+        return {
+          kind: 'rejected',
+          reason: 'tool failure could not be persisted; retry suppressed',
+        };
       return { kind: 'rejected', reason: `execution failed: ${String(err).slice(0, 500)}` };
     }
   }

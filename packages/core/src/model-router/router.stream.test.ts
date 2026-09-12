@@ -72,7 +72,10 @@ describe('ModelRouter streaming finalization', () => {
     };
     const error = new Error('provider stream failed');
     await options.onError({ error });
-    expect(stubs.releaseReservation).toHaveBeenCalledWith({} as Db, 'reservation-1');
+    expect(stubs.releaseReservation).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'cost-repository' }),
+      'reservation-1',
+    );
     expect(onError).toHaveBeenCalledWith(error);
   });
 
@@ -162,7 +165,10 @@ describe('ModelRouter streaming finalization', () => {
       throw new Error('setup failed');
     });
     await expect(router.stream('draft', { prompt: 'hello' })).rejects.toThrow('setup failed');
-    expect(stubs.releaseReservation).toHaveBeenCalledWith({} as Db, 'reservation-1');
+    expect(stubs.releaseReservation).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'cost-repository' }),
+      'reservation-1',
+    );
   });
 
   it('gives a thinking model reasoning headroom on top of the visible budget', async () => {

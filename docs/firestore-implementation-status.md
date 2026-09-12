@@ -1,6 +1,6 @@
 # Firestore migration implementation status
 
-Updated 2026-09-12. This tracks the implementation batches of the [migration and consumer-install plan](firestore-consumer-install-plan.md). **The complete migration and single-click installer are not finished.** The current application and deployments continue to require PostgreSQL and the existing model/authentication configuration. Production release of the adapter foundation applies the additive PostgreSQL lease-token migration; it does not move production data into Firestore.
+Updated 2026-09-12. This tracks the implementation batches of the [migration and consumer-install plan](firestore-consumer-install-plan.md). **The complete migration and single-click installer are not finished.** The current application and deployments continue to require PostgreSQL and the existing owner authentication. Model-provider selection is now configurable; the deployed provider has not changed. Production release of the adapter foundation applies the additive PostgreSQL lease-token migration; it does not move production data into Firestore.
 
 ## Implemented
 
@@ -86,15 +86,15 @@ The consumer Terraform foundation now permits explicit creation of `(default)` i
 | P1 | Partial | Complete command contracts and remove remaining SDK imports from business logic; select adapters at composition roots |
 | P2 | Partial | Chat reads/cursors, remaining approval decision lookups, external-delivery fences, and Firestore application/dispatcher composition |
 | P3 | Pending | All remaining domain/module queries, graph/recall, imports, erasure/export, and operational parity across all current table families |
-| P4–P6 | Pending | Google models and metering, embedding migration, bounded scheduling, passkeys/recovery and per-device pairing |
-| P7–P8 | Partial | Terraform foundation, pure preview, local state persistence/resume and archive hashing implemented; actual bootstrap/build/deployment orchestration, owner onboarding and optional Workspace wizard pending |
-| P9–P11 | Pending | Consistent export/import and migration rehearsal; update/restore/uninstall; fresh-account pilot and release checks |
+| P4–P6 | Partial | Vertex configuration and portable model metering implemented; live feasibility, embedding migration, passkeys/recovery and device pairing remain |
+| P7–P8 | Partial | Authenticated foundation provisioning implemented; runtime build/deployment, owner onboarding and optional Workspace wizard pending |
+| P9–P11 | Partial | Limited snapshot/import rehearsal implemented; full coverage, activation, update/restore/uninstall and fresh-account pilot remain |
 
 Do not advertise an install button or enable `DATABASE_DRIVER=firestore` until the relevant runtime and installation gates pass. The Firestore package intentionally does not pretend to implement arbitrary Drizzle queries or a complete application database.
 
 The approve-and-remember lookup now uses an owner-scoped persistence contract on PostgreSQL and Firestore. Both adapters validate the task/tool linkage, and policy creation checks that the rule belongs to the linked task owner and tool. Mixed or malformed recipient lists cannot silently create a standing email rule. The application keeps its existing PostgreSQL entry point and also accepts the portable repository.
 
-The next bounded offline work is the approved-call reads and transitions in `packages/tools/src/dispatcher.ts`. Those contracts need PostgreSQL and Firestore parity before the hardcoded composition in `apps/agent/src/deps.ts` and `apps/web/lib/server.ts` can select a Firestore runtime. Emulator composition can be tested before local Google authentication is restored; authenticated IAM, queue, model, and fresh-account installation checks remain separate.
+Approved-call reads and transitions now have portable adapters, described below. Remaining application and built-in tool queries still prevent `apps/agent/src/deps.ts` and `apps/web/lib/server.ts` from selecting a complete Firestore runtime. Emulator composition can be tested before local Google authentication is restored; authenticated IAM, queue, model, and fresh-account installation checks remain separate.
 
 ## PostgreSQL release maintenance
 
@@ -134,3 +134,15 @@ git diff --check
 ```
 
 The custom test-database URL is a local verification detail, not a new application default. Docker's local database was unresponsive, so verification used a separate PostgreSQL 17 cluster on loopback port 55432. Java 21, PostgreSQL 17, and pgvector were installed locally for these checks. The existing application database and environment files were preserved. The build explicitly passes safe authentication flags through Turbo because this checkout's web `.env.local` enables development authentication.
+
+## Router, tool execution, installer, and migration follow-up
+
+Model routing now has PostgreSQL and Firestore repositories for catalog/role selection, owner-scoped task and conversation reads, and model-call/audit telemetry. Web and agent configuration can explicitly select Vertex. The default remains PostgreSQL plus OpenRouter. Emulator tests compose the actual router with a fake model; authenticated model access and quality checks remain separate.
+
+Tool execution now has adapters for approved-call claim/outcome, idempotency, cached results, contacts, rate checks, owner message context, and goal/search authorization evidence. Firestore query bounds fail explicitly rather than returning partial authorization evidence. The existing dispatcher retains PostgreSQL defaults; injected Firestore repositories are exercised in an emulator composition test. Built-in tools and the complete executor still have SQL dependencies.
+
+`pnpm consumer:install` now orchestrates authenticated customer foundation provisioning from the verified release archive. It checks project/API/database state, bootstraps the customer's private Terraform-state bucket, runs the isolated Terraform foundation, verifies resource outputs, and persists progress through `provisioned`. It deliberately returns `runtimeReady: false`; no Cloud Run application or working install button is produced yet. See [foundation provisioning](consumer-install-preview.md#authenticated-foundation-provisioning).
+
+`pnpm workspace:export` and `pnpm workspace:import` provide a consistent PostgreSQL snapshot and an explicit, checksummed Firestore import for a limited table subset. Resumption verifies already-written records, and import progress commits with each batch. Imported tasks and schedules remain paused behind a migration marker. Memory imports are blocked until embedding provenance is defined. This is a rehearsal tool, not a complete backup, production cutover, or activation command. See [workspace migration rehearsal](workspace-migration.md).
+
+Remaining substantial work includes the other domain repositories and Firestore application composition, embedding-space migration and recall, owner onboarding/recovery, runtime build/deployment and IAM checks, external delivery fencing, backup/restore/update/uninstall, and a fresh-customer install pilot. Google authentication is not the only remaining dependency.

@@ -69,7 +69,7 @@ import {
   uploadImport,
 } from '@assistant/application';
 import { loadConfig, repoRoot } from '@assistant/config';
-import { ModelRouter } from '@assistant/core/model-router';
+import { createConfiguredModelProvider, ModelRouter } from '@assistant/core/model-router';
 import { createDb, type Db } from '@assistant/db';
 import { inspectMcpConnection } from '@assistant/tools/mcp';
 import {
@@ -101,7 +101,13 @@ export function getDb(): Db {
 }
 
 export function getRouter(): ModelRouter {
-  globalCache.__assistantRouter ??= new ModelRouter(getDb(), loadConfig().OPENROUTER_API_KEY);
+  const config = loadConfig();
+  globalCache.__assistantRouter ??= new ModelRouter(
+    getDb(),
+    config.OPENROUTER_API_KEY,
+    config.LLM_AUDIT_CAPTURE,
+    createConfiguredModelProvider(config),
+  );
   return globalCache.__assistantRouter;
 }
 

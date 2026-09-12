@@ -9,6 +9,7 @@ import type {
 } from './installation-manifest.js';
 import {
   createInstallationManifest,
+  installationStages,
   serializeInstallationManifest,
   validateInstallationManifest,
 } from './installation-manifest.js';
@@ -142,6 +143,90 @@ export async function persistInstallationManifest(
     if (error instanceof Error && error.message.startsWith('Installation state ')) throw error;
     const detail = error instanceof Error ? error.message : 'write failed';
     throw stateError(path, `write failed: ${detail}`);
+  } finally {
+    if (temporaryPath) await unlink(temporaryPath).catch(() => undefined);
+    await lock.close();
+    await unlink(lockPath).catch(() => undefined);
+  }
+}
+
+/** Persist a verified cloud-stage transition with the same atomic guarantees. */
+export async function persistInstallationProgress(
+  path: string,
+  manifest: InstallationManifest,
+  expected: InstallationManifest | null,
+): Promise<InstallationManifest> {
+  const next = validateInstallationManifest(manifest);
+  if (next.status !== 'active') throw stateError(path, 'cloud progress must remain active');
+  const parent = dirname(path);
+  await mkdir(parent, { recursive: true });
+  const lockPath = `${path}.lock`;
+  let lock: FileHandle;
+  try {
+    lock = await open(lockPath, 'wx', 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw stateError(path, 'is being updated by another local writer');
+    }
+    throw stateError(
+      path,
+      `cannot acquire update lock: ${error instanceof Error ? error.message : 'lock failed'}`,
+    );
+  }
+  let temporaryPath: string | undefined;
+  try {
+    const current = await readPersistedInstallation(path);
+    if (!current) {
+      if (expected !== null) throw stateError(path, 'conflict: persisted state is missing');
+      if (
+        next.stage.current !== 'authorized' ||
+        next.stage.completed.join('\0') !== 'previewed\0authorized'
+      ) {
+        throw stateError(path, 'first cloud progress must advance previewed to authorized');
+      }
+    } else {
+      if (current.status !== 'active')
+        throw stateError(path, 'cannot advance an invalidated installation');
+      if (
+        expected === null ||
+        canonicalState(current) !== canonicalState(validateInstallationManifest(expected))
+      ) {
+        throw stateError(path, 'conflict: persisted state changed since it was read');
+      }
+      if (
+        !sameJson(current.identity, next.identity) ||
+        !sameJson(current.selection, next.selection)
+      ) {
+        throw stateError(path, 'refusing to change immutable installation identity or selection');
+      }
+      const currentIndex = installationStages.indexOf(current.stage.current);
+      const nextIndex = installationStages.indexOf(next.stage.current);
+      if (
+        nextIndex !== currentIndex + 1 ||
+        next.stage.completed.length !== current.stage.completed.length + 1 ||
+        next.stage.completed.slice(0, -1).join('\0') !== current.stage.completed.join('\0')
+      ) {
+        throw stateError(path, 'cloud progress must advance to the immediate next stage');
+      }
+    }
+    temporaryPath = join(parent, `.${basename(path) || 'installation'}.${randomUUID()}.tmp`);
+    const temporary = await open(temporaryPath, 'wx', 0o600);
+    try {
+      await temporary.writeFile(canonicalState(next), 'utf8');
+      await temporary.sync();
+    } finally {
+      await temporary.close();
+    }
+    await rename(temporaryPath, path);
+    temporaryPath = undefined;
+    await syncDirectory(parent);
+    return next;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Installation state ')) throw error;
+    throw stateError(
+      path,
+      `write failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+    );
   } finally {
     if (temporaryPath) await unlink(temporaryPath).catch(() => undefined);
     await lock.close();

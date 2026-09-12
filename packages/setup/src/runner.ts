@@ -21,8 +21,23 @@ export interface CommandRunner {
 export const systemRunner: CommandRunner = {
   async run(command, args) {
     try {
+      const env = { ...process.env };
+      if (command === 'terraform') {
+        for (const key of Object.keys(env)) {
+          if (
+            key === 'TF_CLI_ARGS' ||
+            key.startsWith('TF_CLI_ARGS_') ||
+            key.startsWith('TF_VAR_') ||
+            key === 'TF_DATA_DIR' ||
+            key === 'TF_CLI_CONFIG_FILE' ||
+            key === 'TERRAFORM_CONFIG'
+          )
+            delete env[key];
+        }
+      }
       const { stdout, stderr } = await execFileAsync(command, [...args], {
         maxBuffer: 8 * 1024 * 1024,
+        env,
       });
       return { ok: true, stdout: stdout.trim(), stderr: stderr.trim() };
     } catch (error) {

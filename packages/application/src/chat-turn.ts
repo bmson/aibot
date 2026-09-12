@@ -1,4 +1,4 @@
-import type { Config } from '@assistant/config';
+import { type Config, modelProviderConfigProblems } from '@assistant/config';
 import {
   BACKGROUND_NOTICE_MARKER,
   backgroundNoticeIds,
@@ -187,11 +187,11 @@ export async function handleChatTurn(
   dependencies: { config: Config; db: Db; router: ModelRouter },
 ): Promise<Response> {
   const { config, db, router } = dependencies;
-  if (!config.OPENROUTER_API_KEY) {
+  const providerProblems = modelProviderConfigProblems(config);
+  if (providerProblems.length > 0) {
     return Response.json(
       {
-        error:
-          'The model gateway is not configured on this server — add OPENROUTER_API_KEY to its environment.',
+        error: `The model provider is not configured on this server: ${providerProblems.join('; ')}`,
         code: 'not_configured',
       },
       { status: 503 },

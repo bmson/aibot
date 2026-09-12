@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./validation-admin": "./src/validation-admin.ts"
+    "./validation-admin": "./src/validation-admin.ts",
+    "./workspace-migration": "./src/workspace-migration.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
