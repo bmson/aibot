@@ -57,9 +57,12 @@ describe('isolated live-validation resource lifecycle', () => {
     ).rejects.toThrow('validation failed');
     const create = calls.create.mock.calls[0]?.[0];
     expect(create.databaseId).toMatch(/^assistant-validation-[a-f0-9]{16}$/);
-    expect(calls.remove).toHaveBeenCalledWith({
-      name: `projects/test-project/databases/${create.databaseId}`,
-    }, { timeout: 10_000 });
+    expect(calls.remove).toHaveBeenCalledWith(
+      {
+        name: `projects/test-project/databases/${create.databaseId}`,
+      },
+      { timeout: 10_000 },
+    );
     expect(calls.close).toHaveBeenCalledOnce();
   });
   it('does not adopt or delete a database after rejected creation', async () => {
