@@ -21,7 +21,10 @@
   --surface-sunken: #e3ede6; /* Tonal wells and receipts */
   --edge: #d3e1d7;
   --content-strong: #15201a; /* Ink */
-  --content-muted: #5e7266;
+  /* Darkened from #5e7266, which measured 4.37:1 on --surface-sunken at 12px
+     and so failed WCAG AA for small text on one of its own surfaces. This
+     clears 4.5:1 there and on every lighter surface. */
+  --content-muted: #5a6d62;
   --accent: #217a4b; /* Deep leaf green */
   --accent-hover: #1a613c;
   /* The accent as it must look on paper, kept separately so the chat can
@@ -80,7 +83,7 @@
      own glyph (selectClass in lib/ui.tsx). A data URI per theme because a
      background image can't read currentColor; the strokes are the two
      --content-muted values. */
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235e7266' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235a6d62' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 .dark {
   /* A soft green-charcoal, not OLED-black: the conversation is the point, and

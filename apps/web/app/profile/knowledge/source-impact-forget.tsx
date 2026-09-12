@@ -54,7 +54,7 @@ export function SourceImpactForget({ memoryId }: { memoryId: string }) {
   if (impact) {
     return (
       <div
-        className="basis-full rounded-xl border border-danger/30 bg-danger/5 p-3"
+        className="basis-full rounded-xl border border-red-300/60 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/20"
         aria-live="polite"
       >
         <p className="text-sm font-semibold text-strong">Forget this source knowledge?</p>
@@ -85,7 +85,7 @@ export function SourceImpactForget({ memoryId }: { memoryId: string }) {
             Cancel
           </button>
         </div>
-        {error ? <p className="mt-2 text-xs text-danger">{error}</p> : null}
+        {error ? <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p> : null}
       </div>
     );
   }
@@ -98,7 +98,7 @@ export function SourceImpactForget({ memoryId }: { memoryId: string }) {
         ) : null}
         {action === 'preview' ? 'Checking impact…' : 'Forget…'}
       </button>
-      {error ? <p className="basis-full text-xs text-danger">{error}</p> : null}
+      {error ? <p className="basis-full text-xs text-red-600 dark:text-red-400">{error}</p> : null}
     </>
   );
 }

@@ -252,11 +252,14 @@ export function KnowledgeMap({
           <div
             className="relative min-w-0 overflow-hidden rounded-2xl border border-edge bg-sunken/20"
             role="application"
-            aria-label="Knowledge map. Drag to pan, pinch or scroll to zoom, and select an item to move in on its connections."
+            aria-label={`Knowledge map: ${nodes.length} connected items across ${snapshot.components.length} groups. Drag to pan, pinch or scroll to zoom, and select an item to move in on its connections.`}
             // biome-ignore lint/a11y/noNoninteractiveTabindex: the application role owns keyboard pan and zoom as the drag alternative.
             tabIndex={0}
             onKeyDown={(event) => {
-              if (event.target !== event.currentTarget) return;
+              // Deliberately not gated on event.target: keydown bubbles from a
+              // focused node, so gating on the container meant every shortcut
+              // died the moment someone tabbed onto the graph. Typing in the
+              // search field below is outside this element and unaffected.
               const keys = ['+', '=', '-', '0', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
               if (keys.includes(event.key)) event.preventDefault();
               if (event.key === '+' || event.key === '=') zoomCentre(1.25);
@@ -269,11 +272,12 @@ export function KnowledgeMap({
               if (event.key === 'ArrowDown') setViewport((v) => ({ ...v, y: v.y - step }));
             }}
           >
+            {/* No role="img" here: that flattens the subtree, and the nodes
+                inside are focusable buttons. The wrapping role="application"
+                carries the name and the counts. */}
             <svg
               viewBox={`0 0 ${W} ${H}`}
               className="h-auto w-full touch-none select-none"
-              role="img"
-              aria-label={`${nodes.length} connected knowledge items across ${snapshot.components.length} groups`}
               onWheel={(event) => {
                 // Trackpad and wheel both arrive here; anchoring on the pointer
                 // is what makes zoom feel like moving in on a thing rather than
@@ -348,6 +352,9 @@ export function KnowledgeMap({
                 suppressClick.current = true;
               }}
             >
+              {/* A <title> names the graphic without role="img"'s flattening,
+                  so the node buttons below stay in the accessibility tree. */}
+              <title>{`Knowledge map: ${nodes.length} items, ${snapshot.edges.length} connections`}</title>
               <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
                 {edgeMarks}
                 {nodeMarks}

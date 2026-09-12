@@ -494,7 +494,11 @@ export default async function KnowledgePage({
             <input type="hidden" name="view" value="library" />
             <input type="hidden" name="state" value={state} />
             <label className="relative md:col-span-2">
-              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
+              <span className="sr-only">Search source memories</span>
+              <Search
+                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"
+                aria-hidden="true"
+              />
               <input
                 name="q"
                 defaultValue={query}
@@ -645,10 +649,11 @@ export default async function KnowledgePage({
             <input
               name="q"
               defaultValue={query}
+              aria-label="Find a connected item"
               placeholder="Find a connected item"
               className={`${inputClass} md:col-span-2`}
             />
-            <select name="kind" defaultValue={kind} className={selectClass}>
+            <select name="kind" defaultValue={kind} aria-label="Item type" className={selectClass}>
               <option value="">All item types</option>
               {['person', 'organization', 'project', 'place', 'event', 'date', 'topic'].map(
                 (value) => (
@@ -658,7 +663,12 @@ export default async function KnowledgePage({
                 ),
               )}
             </select>
-            <select name="family" defaultValue={family} className={selectClass}>
+            <select
+              name="family"
+              defaultValue={family}
+              aria-label="Relationship"
+              className={selectClass}
+            >
               <option value="">All relationships</option>
               {families.map((value) => (
                 <option key={value} value={value}>
@@ -670,6 +680,7 @@ export default async function KnowledgePage({
               <select
                 name="review"
                 defaultValue={params.review ?? 'all'}
+                aria-label="Review state"
                 className={`${selectClass} min-w-0 flex-1`}
               >
                 <option value="all">Any review state</option>
