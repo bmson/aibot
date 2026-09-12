@@ -290,6 +290,9 @@ struct MemoryView: View {
                 Label("Open People", systemImage: "person.2")
                     .font(.caption.weight(.semibold))
                     .labelStyle(.titleAndIcon)
+                    // The design system puts a 44pt floor on every other
+                    // control; caption-sized content alone falls well under it.
+                    .frame(minHeight: 44)
             }
             .buttonStyle(.borderless)
         }
@@ -341,7 +344,7 @@ struct MemoryView: View {
                     perform(fact, action: "reject")
                 }
             }
-            .disabled(pendingFactID != nil)
+            .disabled(isBusy(fact))
         }
         .assistantCard(
             in: colorScheme,
@@ -381,7 +384,7 @@ struct MemoryView: View {
                 }
             }
             .font(.subheadline)
-            .disabled(pendingFactID != nil)
+            .disabled(isBusy(fact))
         }
         .assistantCard(in: colorScheme)
     }
@@ -437,6 +440,14 @@ struct MemoryView: View {
     private func prominenceLabel(_ fact: WorkspaceMemoryFact) -> String {
         if fact.pinned { return "Always" }
         return fact.importance <= 1 ? "Minor" : "Relevant"
+    }
+
+    /// True only while an action on THIS fact is in flight. pendingFactID
+    /// carries "action:id" so actionLabel can spin the one button that was
+    /// pressed; gating .disabled on `!= nil` froze every other fact's buttons
+    /// as well — the same defect already fixed per-row in the library screen.
+    private func isBusy(_ fact: WorkspaceMemoryFact) -> Bool {
+        pendingFactID?.hasSuffix(":\(fact.id)") ?? false
     }
 
     private func perform(_ fact: WorkspaceMemoryFact, action: String, prominence: String? = nil) {
@@ -762,6 +773,7 @@ struct OccasionEditor: View {
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var kind = "birthday"
     @State private var label = ""
     @State private var month = ""
@@ -805,7 +817,9 @@ struct OccasionEditor: View {
                 LabeledContent("Notes") { TextField("Gift ideas", text: $notes, axis: .vertical).multilineTextAlignment(.trailing) }
             }
             .disabled(isSaving)
-            if let failure { Section { Text(failure).foregroundStyle(.red) } }
+            if let failure {
+                Section { Text(failure).foregroundStyle(AssistantTheme.errorInk(for: colorScheme)) }
+            }
         }
         .interactiveDismissDisabled(isSaving)
         .navigationTitle(occasion == nil ? "Add occasion" : "Edit occasion")

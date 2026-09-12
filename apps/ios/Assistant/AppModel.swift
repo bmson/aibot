@@ -1312,7 +1312,11 @@ final class AppModel: ObservableObject {
         errorMessage = nil
         do {
             try await client.deletePerson(id: id)
-            personProfiles.removeValue(forKey: id)
+            // Not just this person's profile: personCards[id] kept a full card
+            // for someone who no longer exists, and its owning screen only
+            // reloads when the entry is absent, so it never refetched.
+            invalidatePersonCaches()
+            await loadPeople()
             await refreshWorkspace(reportFailure: false)
             return true
         } catch {
@@ -1403,13 +1407,20 @@ final class AppModel: ObservableObject {
     func invalidatePersonCaches() {
         personCards.removeAll()
         personProfiles.removeAll()
+        // The directory is a cache too: a deleted, merged or re-related person
+        // changes who is listed and how. Leaving peopleLoaded true meant People
+        // kept showing the old list until the owner happened to pull to refresh.
+        peopleLoaded = false
     }
 
     func mergePerson(id: String, targetId: String) async -> Bool {
         guard let client else { return false }
         do {
             try await client.mergePerson(id: id, targetId: targetId)
-            personProfiles.removeValue(forKey: id)
+            // Both sides change: the merged-away person disappears and the
+            // target gains their facts, so neither cached card is still true.
+            invalidatePersonCaches()
+            await loadPeople()
             await refreshWorkspace(reportFailure: false)
             return true
         } catch {

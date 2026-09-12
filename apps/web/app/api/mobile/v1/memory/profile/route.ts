@@ -30,6 +30,15 @@ export async function POST(request: Request): Promise<Response> {
     signature?: unknown;
   } | null;
   const text = (value: unknown) => (typeof value === 'string' ? value : '');
+  /**
+   * GET hands back `dos`/`donts` as arrays, so a client that reads the profile,
+   * edits it and posts it back sends arrays too. The application layer wants
+   * the newline-separated form the web textarea produces, and coercing with
+   * `text()` alone turned every array into '' — silently erasing both lists
+   * while description and signature saved fine. Accept either shape.
+   */
+  const lines = (value: unknown) =>
+    Array.isArray(value) ? value.map(text).join('\n') : text(value);
 
   try {
     switch (body?.action) {
@@ -46,8 +55,8 @@ export async function POST(request: Request): Promise<Response> {
       case 'voice-profile': {
         const result = await updateVoiceProfile(getDb(), {
           description: text(body.description),
-          dos: text(body.dos),
-          donts: text(body.donts),
+          dos: lines(body.dos),
+          donts: lines(body.donts),
           signature: text(body.signature),
         });
         if (result.error) return mobileJson({ error: result.error }, { status: 400 });

@@ -1012,7 +1012,9 @@ struct PersonProfileResponse: Codable, Sendable {
     let mergeOptions: [PersonMergeOption]
 }
 
-struct PersonProfileContact: Codable, Sendable {
+// Identifiable because MemoryView presents the person editor with
+// .sheet(item:), which requires it — an `id` field alone does not satisfy it.
+struct PersonProfileContact: Codable, Sendable, Identifiable {
     let id: String
     let name: String
     let aliases: [String]
