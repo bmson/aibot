@@ -329,29 +329,47 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     /// the graph and still learn nothing about how any two of them relate, or
     /// which claims are unconfirmed. Bounded because an announcement that
     /// recites forty edges is its own kind of unusable.
-    private func connectionSummary(for id: String) -> String {
-        let names = Dictionary(nodes.map { ($0.id, $0.label) }, uniquingKeysWith: { first, _ in first })
-        let described = links.filter { $0.contains(id) }.prefix(6).compactMap { link -> String? in
+    ///
+    /// The name and link lookups are passed in rather than rebuilt: this is
+    /// called once per node from `refreshAccessibility`, which itself runs on
+    /// every pinch frame, and deriving them here made that O(nodes × links)
+    /// many times a second.
+    private func connectionSummary(
+        for id: String,
+        names: [String: String],
+        linksByID: [String: [GraphLink]]
+    ) -> String {
+        let touching = linksByID[id] ?? []
+        let described = touching.prefix(6).compactMap { link -> String? in
             guard let otherID = link.other(than: id), let other = names[otherID] else { return nil }
             let relation = edgeLabels[link] ?? "connected"
             let status = unreviewed.contains(link) ? "needs review" : "confirmed"
             return "\(relation) \(other), \(status)"
         }
         guard !described.isEmpty else { return "No recorded connections" }
-        let total = links.filter { $0.contains(id) }.count
-        let more = total > described.count ? ", and \(total - described.count) more" : ""
+        let more = touching.count > described.count
+            ? ", and \(touching.count - described.count) more"
+            : ""
         return described.joined(separator: "; ") + more
     }
 
     private func refreshAccessibility() {
         let positions = points()
+        let names = Dictionary(nodes.map { ($0.id, $0.label) }, uniquingKeysWith: { first, _ in first })
+        var linksByID: [String: [GraphLink]] = [:]
+        for link in links {
+            linksByID[link.a, default: []].append(link)
+            // A link whose ends are equal would otherwise be counted twice for
+            // that node, inflating the "and N more" tail.
+            if link.b != link.a { linksByID[link.b, default: []].append(link) }
+        }
         accessibilityElements = nodes.compactMap { node -> UIAccessibilityElement? in
             guard let position = positions[node.id], !focusOnly || selectedID == nil || neighbors.contains(node.id) else { return nil }
             let point = viewport.screen(position, size: bounds.size)
             guard bounds.contains(point) else { return nil }
             let element = GraphAccessibleNode(accessibilityContainer: self)
             element.accessibilityLabel = node.label
-            element.accessibilityValue = "\(node.kind.capitalized). \(connectionSummary(for: node.id))"
+            element.accessibilityValue = "\(node.kind.capitalized). \(connectionSummary(for: node.id, names: names, linksByID: linksByID))"
             element.accessibilityHint = "Select to view connections"
             element.accessibilityTraits = node.id == selectedID ? [.button, .selected] : [.button]
             element.accessibilityFrameInContainerSpace = CGRect(x: point.x - 22, y: point.y - 22, width: 44, height: 44)

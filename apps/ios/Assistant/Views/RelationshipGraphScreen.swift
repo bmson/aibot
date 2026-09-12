@@ -184,7 +184,17 @@ struct RelationshipGraphScreen: View {
                 if let id { selectedID = id }
             }.accessibilityIdentifier("assistant.relationship.graph")
             if hasLoaded && visible.nodes.isEmpty { AssistantEmptyState("No items to show", systemImage: "point.3.connected.trianglepath.dotted", description: "Try showing all items.") }
-            if loading { AssistantLoadingState(title: "Loading connections").padding(12).background(.regularMaterial, in: Capsule()).allowsHitTesting(false) }
+            // Deliberately NOT AssistantLoadingState: that is a full-area state
+            // (maxWidth .infinity, minHeight 190), and this is a transient pill
+            // floating over the canvas. Routing it through the shared component
+            // stretched the capsule across the whole graph — and `loading` is
+            // set on every expand, so it covered the thing it was reporting on.
+            if loading {
+                ProgressView("Loading connections…")
+                    .padding(12)
+                    .background(.regularMaterial, in: Capsule())
+                    .allowsHitTesting(false)
+            }
         }.background(AssistantTheme.canvas(for: colorScheme))
     }
 
