@@ -182,7 +182,11 @@ export default async function ProfilePage() {
               aria-hidden="true"
             />
             Awaiting your review
-            <CountBadge tone="amber">{quarantined.length}</CountBadge>
+            {/* The health tile above counts every held memory; this list is
+                capped at 100 by the query. Counting the capped array made the
+                two disagree on the same page once the backlog passed the cap,
+                and understated how much was actually waiting. */}
+            <CountBadge tone="amber">{memoryHealth.awaitingReview}</CountBadge>
           </h2>
           <p className="mt-1 text-xs text-muted">
             These came from unverified sources. The assistant will not use them until you approve
@@ -193,12 +197,12 @@ export default async function ProfilePage() {
               <FactRow key={m.id} fact={toFactView(m, now)} quarantine />
             ))}
           </div>
-          {quarantined.length > QUARANTINE_PREVIEW ? (
+          {memoryHealth.awaitingReview > QUARANTINE_PREVIEW ? (
             <Link
               href="/profile/knowledge?view=library&state=review"
               className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-accent"
             >
-              Review all {quarantined.length}
+              Review all {memoryHealth.awaitingReview.toLocaleString()}
               <ArrowRight className="size-3" aria-hidden="true" />
             </Link>
           ) : null}
