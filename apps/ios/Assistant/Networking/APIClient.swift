@@ -651,6 +651,20 @@ struct APIClient: Sendable {
         return try await perform(makeRequest(url: url), as: MemoryLibraryResponse.self)
     }
 
+    func commitments() async throws -> CommitmentsResponse {
+        try await get("api/mobile/v1/memory/commitments")
+    }
+
+    func updateCommitment(_ mutation: CommitmentMutation) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/commitments")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(mutation)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     func voiceProfile() async throws -> VoiceProfileResponse {
         try await get("api/mobile/v1/memory/profile")
     }

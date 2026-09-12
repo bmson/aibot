@@ -124,6 +124,14 @@ struct MemoryView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            // Open loops sit on the web memory desk; this is the phone's way in.
+            NavigationLink {
+                CommitmentsScreen()
+            } label: {
+                Label("Open loops", systemImage: "clock.arrow.circlepath")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
             NavigationLink {
                 MemoryDataScreen()
             } label: {

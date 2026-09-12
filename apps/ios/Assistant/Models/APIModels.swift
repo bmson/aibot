@@ -1244,6 +1244,31 @@ struct MemoryLibraryQuery: Equatable, Sendable {
     }
 }
 
+/// An open loop the assistant is tracking — a promise made, a question left
+/// hanging. The memory desk has always shown these on the web.
+struct Commitment: Codable, Sendable, Identifiable {
+    let id: String
+    let kind: String
+    let title: String
+    let details: String
+    let nextAction: String
+    /// ISO-8601, or nil when the loop has no deadline.
+    let dueAt: String?
+    let status: String
+}
+
+struct CommitmentsResponse: Codable, Sendable {
+    let commitments: [Commitment]
+}
+
+struct CommitmentMutation: Encodable, Sendable {
+    let action: String
+    let id: String
+    var title: String? = nil
+    var details: String? = nil
+    var nextAction: String? = nil
+}
+
 struct VoiceProfileMutation: Encodable, Sendable {
     var action = "voice-profile"
     let description: String

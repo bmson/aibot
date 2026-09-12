@@ -1234,6 +1234,30 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Open loops the assistant is tracking. Returns nil only on failure, so an
+    /// empty list stays distinguishable from an unreachable server.
+    func commitments() async -> [Commitment]? {
+        guard let client else { return nil }
+        do {
+            return try await client.commitments().commitments
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
+    func updateCommitment(_ mutation: CommitmentMutation) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateCommitment(mutation)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
     func voiceProfile() async -> VoiceProfileResponse? {
         guard let client else { return nil }
         do {
