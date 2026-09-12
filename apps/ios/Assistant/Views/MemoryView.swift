@@ -118,6 +118,13 @@ struct MemoryView: View {
             }
             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
             NavigationLink {
+                MemoryLibraryScreen()
+            } label: {
+                Label("Browse the whole library", systemImage: "books.vertical")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            NavigationLink {
                 MemoryDataScreen()
             } label: {
                 Label("Your data", systemImage: "arrow.down.circle")

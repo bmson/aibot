@@ -1224,6 +1224,16 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func memoryLibrary(_ query: MemoryLibraryQuery) async -> MemoryLibraryResponse? {
+        guard let client else { return nil }
+        do {
+            return try await client.memoryLibrary(query)
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
     func voiceProfile() async -> VoiceProfileResponse? {
         guard let client else { return nil }
         do {

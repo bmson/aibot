@@ -1155,6 +1155,64 @@ struct VoiceProfileResponse: Codable, Sendable {
     let voiceProfile: VoiceProfile
 }
 
+/// One row of the memory library, already worded by the server.
+struct MemoryLibraryRow: Codable, Identifiable, Sendable {
+    let id: String
+    let content: String
+    let domain: String
+    let ownerConfirmed: Bool
+    let pinned: Bool
+    let importance: Int
+    let organized: Bool
+    let originTrust: String
+    let subjectLabel: String
+    let connectionCount: Int
+    let projectionStatus: String
+    let createdAt: String
+}
+
+struct MemoryLibrarySubject: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let label: String
+    let trust: String
+}
+
+struct MemoryLibraryResponse: Codable, Sendable {
+    let rows: [MemoryLibraryRow]
+    let total: Int
+    let page: Int
+    let totalPages: Int
+    let subjects: [MemoryLibrarySubject]
+    let sources: [String]
+
+    static let empty = Self(rows: [], total: 0, page: 1, totalPages: 1, subjects: [], sources: [])
+}
+
+/// What the library is being asked for. Mirrors the web query string exactly so
+/// the two clients page and filter the same way.
+struct MemoryLibraryQuery: Equatable, Sendable {
+    var state = "in-use"
+    var filter = "all"
+    var search = ""
+    var domain = ""
+    var subjectId = ""
+    var connectivity = "all"
+    var page = 1
+
+    var items: [URLQueryItem] {
+        var items = [
+            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "filter", value: filter),
+            URLQueryItem(name: "connectivity", value: connectivity),
+            URLQueryItem(name: "page", value: String(page)),
+        ]
+        if !search.isEmpty { items.append(.init(name: "q", value: search)) }
+        if !domain.isEmpty { items.append(.init(name: "domain", value: domain)) }
+        if !subjectId.isEmpty { items.append(.init(name: "subjectId", value: subjectId)) }
+        return items
+    }
+}
+
 struct VoiceProfileMutation: Encodable, Sendable {
     var action = "voice-profile"
     let description: String

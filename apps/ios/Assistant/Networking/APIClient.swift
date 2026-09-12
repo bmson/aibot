@@ -641,6 +641,16 @@ struct APIClient: Sendable {
         try await postWorkspaceAction(path: "memory/profile", action: action)
     }
 
+    func memoryLibrary(_ query: MemoryLibraryQuery) async throws -> MemoryLibraryResponse {
+        var components = URLComponents(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/library"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = query.items
+        guard let url = components?.url else { throw APIError.invalidServerURL }
+        return try await perform(makeRequest(url: url), as: MemoryLibraryResponse.self)
+    }
+
     func voiceProfile() async throws -> VoiceProfileResponse {
         try await get("api/mobile/v1/memory/profile")
     }
