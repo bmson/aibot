@@ -16,6 +16,8 @@ struct MemoryLibraryScreen: View {
     @State private var response = MemoryLibraryResponse.empty
     @State private var loading = false
     @State private var loaded = false
+    @State private var pendingRowID: String?
+    @State private var correctingRow: MemoryLibraryRow?
 
     /// The domains the extractor assigns. Fixed rather than derived so the
     /// picker does not change shape as the library fills up.
@@ -59,6 +61,9 @@ struct MemoryLibraryScreen: View {
         .onSubmit(of: .search) { apply { $0.search = search } }
         .refreshable { await load() }
         .task { if !loaded { await load() } }
+        .sheet(item: $correctingRow, onDismiss: { Task { await load() } }) { row in
+            NavigationStack { MemoryEditor(row: row) }
+        }
     }
 
     private var filters: some View {
@@ -94,6 +99,20 @@ struct MemoryLibraryScreen: View {
                     }
                 }
             }
+            Picker("Age", selection: ageBinding) {
+                Text("Any age").tag("")
+                Text("Last 30 days").tag("30")
+                Text("Last 90 days").tag("90")
+                Text("Last year").tag("365")
+            }
+            if !response.sources.isEmpty {
+                Picker("Source", selection: sourceBinding) {
+                    Text("Any source").tag("")
+                    ForEach(response.sources, id: \.self) { source in
+                        Text(source.sentenceCaseIdentifier).tag(source)
+                    }
+                }
+            }
         }
         .assistantPanel(in: colorScheme)
     }
@@ -121,9 +140,68 @@ struct MemoryLibraryScreen: View {
                         : "\(row.connectionCount) connections"
                 )
             }
+            actions(row)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .assistantCard(in: colorScheme)
+    }
+
+    @ViewBuilder
+    private func actions(_ row: MemoryLibraryRow) -> some View {
+        AssistantFlowLayout(spacing: 9) {
+            if query.state == "review" {
+                Button("Approve", systemImage: "checkmark") { perform(row, action: "approve") }
+                    .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
+                AssistantConfirmationButton("Reject", systemImage: "xmark", compact: true) {
+                    await act(row, action: "reject")
+                }
+            } else {
+                if !row.ownerConfirmed {
+                    Button("Confirm", systemImage: "checkmark.seal") {
+                        perform(row, action: "confirm")
+                    }
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
+                }
+                Menu {
+                    Section("In conversations") {
+                        Button("Always in profile") { perform(row, action: "prominence", prominence: "always") }
+                        Button("When relevant") { perform(row, action: "prominence", prominence: "auto") }
+                        // Web hides this for a fact about someone else, which
+                        // never auto-surfaces anyway; an empty subject is the
+                        // owner's own fact.
+                        if row.subjectLabel.isEmpty {
+                            Button("Minor detail") { perform(row, action: "prominence", prominence: "minor") }
+                        }
+                    }
+                    Button("Correct", systemImage: "pencil") { correctingRow = row }
+                } label: {
+                    Label("Manage", systemImage: "ellipsis.circle")
+                }
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
+                AssistantConfirmationButton(
+                    "Forget",
+                    hint: "Removes this fact and prevents relearning it from the same source text.",
+                    compact: true
+                ) {
+                    await act(row, action: "forget")
+                }
+            }
+        }
+        .font(.subheadline)
+        .disabled(pendingRowID == row.id)
+    }
+
+    private func perform(_ row: MemoryLibraryRow, action: String, prominence: String? = nil) {
+        Task { await act(row, action: action, prominence: prominence) }
+    }
+
+    /// Acting on a row changes what the current page contains, so the list is
+    /// reloaded rather than left showing a row that no longer qualifies.
+    private func act(_ row: MemoryLibraryRow, action: String, prominence: String? = nil) async {
+        pendingRowID = row.id
+        _ = await model.updateMemory(id: row.id, action: action, prominence: prominence)
+        pendingRowID = nil
+        await load()
     }
 
     private func memoryTag(_ text: String) -> some View {
@@ -170,6 +248,8 @@ struct MemoryLibraryScreen: View {
     private var filterBinding: Binding<String> { binding(\.filter) }
     private var connectivityBinding: Binding<String> { binding(\.connectivity) }
     private var subjectBinding: Binding<String> { binding(\.subjectId) }
+    private var ageBinding: Binding<String> { binding(\.ageDays) }
+    private var sourceBinding: Binding<String> { binding(\.source) }
 
     private func apply(_ change: (inout MemoryLibraryQuery) -> Void) {
         var next = query

@@ -906,9 +906,10 @@ struct PersonEditor: View {
     }
 }
 
-private struct MemoryEditor: View {
-    let ownerContactId: String
-    let fact: WorkspaceMemoryFact?
+struct MemoryEditor: View {
+    private let ownerContactId: String
+    /// The fact being corrected; nil creates a new one.
+    private let factId: String?
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -920,20 +921,31 @@ private struct MemoryEditor: View {
 
     init(ownerContactId: String, fact: WorkspaceMemoryFact?) {
         self.ownerContactId = ownerContactId
-        self.fact = fact
+        factId = fact?.id
         _content = State(initialValue: fact?.content ?? "")
         _domain = State(initialValue: fact?.domain ?? "other")
         _importance = State(initialValue: fact?.importance ?? 3)
         _pinned = State(initialValue: fact?.pinned ?? false)
     }
 
+    /// Correcting a row from the library, which carries the same fields under a
+    /// different type. Creation never starts here, so no owner contact is needed.
+    init(row: MemoryLibraryRow) {
+        ownerContactId = ""
+        factId = row.id
+        _content = State(initialValue: row.content)
+        _domain = State(initialValue: row.domain.isEmpty ? "other" : row.domain)
+        _importance = State(initialValue: row.importance)
+        _pinned = State(initialValue: row.pinned)
+    }
+
     var body: some View {
         AssistantForm {
-            Section(fact == nil ? "New fact" : "Correction") {
+            Section(factId == nil ? "New fact" : "Correction") {
                 TextField("Something durable the assistant should remember", text: $content, axis: .vertical)
                     .lineLimit(3...8)
             }
-            if fact == nil {
+            if factId == nil {
                 Section("How it should be used") {
                     Picker("Topic", selection: $domain) {
                         ForEach(["identity", "work", "home", "relationships", "preferences", "health", "other"], id: \.self) { value in
@@ -951,7 +963,7 @@ private struct MemoryEditor: View {
                 }
             }
         }
-        .navigationTitle(fact == nil ? "Add memory" : "Correct memory")
+        .navigationTitle(factId == nil ? "Add memory" : "Correct memory")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -968,8 +980,8 @@ private struct MemoryEditor: View {
         isSaving = true
         Task {
             let succeeded: Bool
-            if let fact {
-                succeeded = await model.correctMemory(id: fact.id, content: content)
+            if let factId {
+                succeeded = await model.correctMemory(id: factId, content: content)
             } else {
                 succeeded = await model.createMemory(MemoryMutation(
                     content: content,

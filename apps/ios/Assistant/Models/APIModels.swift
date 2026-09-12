@@ -1156,7 +1156,7 @@ struct VoiceProfileResponse: Codable, Sendable {
 }
 
 /// One row of the memory library, already worded by the server.
-struct MemoryLibraryRow: Codable, Identifiable, Sendable {
+struct MemoryLibraryRow: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let content: String
     let domain: String
@@ -1196,6 +1196,9 @@ struct MemoryLibraryQuery: Equatable, Sendable {
     var search = ""
     var domain = ""
     var subjectId = ""
+    var source = ""
+    /// "" for any age, otherwise the window in days the web library offers.
+    var ageDays = ""
     var connectivity = "all"
     var page = 1
 
@@ -1209,6 +1212,8 @@ struct MemoryLibraryQuery: Equatable, Sendable {
         if !search.isEmpty { items.append(.init(name: "q", value: search)) }
         if !domain.isEmpty { items.append(.init(name: "domain", value: domain)) }
         if !subjectId.isEmpty { items.append(.init(name: "subjectId", value: subjectId)) }
+        if !source.isEmpty { items.append(.init(name: "source", value: source)) }
+        if !ageDays.isEmpty { items.append(.init(name: "ageDays", value: ageDays)) }
         return items
     }
 }
