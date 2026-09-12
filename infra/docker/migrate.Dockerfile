@@ -18,6 +18,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
 COPY packages/config ./packages/config
 COPY packages/persistence ./packages/persistence
 COPY packages/db ./packages/db
+COPY infra/docker/database-admin.sh ./infra/docker/database-admin.sh
 RUN chown -R node:node /app
 # Runtime uses pnpm via corepack, never npm. Strip the base image's bundled npm
 # so its vendored deps (tar/sigstore/brace-expansion/picomatch, all HIGH/

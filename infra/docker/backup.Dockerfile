@@ -18,8 +18,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && rm -f /usr/local/bin/gosu
 
+COPY infra/docker/database-admin.sh /usr/local/bin/database-admin.sh
 COPY infra/docker/backup.sh /usr/local/bin/assistant-backup
-RUN chmod 0555 /usr/local/bin/assistant-backup
+RUN chmod 0555 /usr/local/bin/database-admin.sh /usr/local/bin/assistant-backup
 
 USER postgres
 ENTRYPOINT ["/usr/local/bin/assistant-backup"]

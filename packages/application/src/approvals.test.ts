@@ -22,6 +22,25 @@ describe('rememberedApprovalPolicy', () => {
     ).toBeNull();
   });
 
+  it('rejects recipient arrays containing malformed extra entries', () => {
+    expect(
+      rememberedApprovalPolicy('agent-id', 'gmail.send', {
+        to: ['friend@example.com', null],
+      }),
+    ).toBeNull();
+    expect(
+      rememberedApprovalPolicy('agent-id', 'gmail.send', {
+        to: ['', 'friend@example.com'],
+      }),
+    ).toBeNull();
+  });
+
+  it('trims the sole recipient before creating the rule', () => {
+    expect(
+      rememberedApprovalPolicy('agent-id', 'gmail.send', { to: ['  Friend@Example.com  '] }),
+    ).toMatchObject({ match: { recipient: 'friend@example.com' } });
+  });
+
   it('never creates the rule for another tool', () => {
     expect(
       rememberedApprovalPolicy('agent-id', 'sms.send', { to: ['friend@example.com'] }),

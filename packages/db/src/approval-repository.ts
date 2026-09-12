@@ -9,6 +9,7 @@ import type {
   ApprovalWake,
   CreateApprovalInput,
   CreatedApproval,
+  RememberableApproval,
   ResolveApprovalInput,
 } from '@assistant/persistence';
 import {
@@ -122,6 +123,28 @@ export async function listApprovalInbox(
     pending,
     resolved: resolved.map(({ taskType, ...approval }) => ({ approval, taskType })),
   };
+}
+
+export async function getRememberableApproval(
+  db: Db,
+  agentId: string,
+  approvalId: string,
+): Promise<RememberableApproval | null> {
+  const [row] = await db
+    .select({ approval: approvals, toolName: toolCalls.toolName })
+    .from(approvals)
+    .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
+    .innerJoin(tasks, eq(approvals.taskId, tasks.id))
+    .where(
+      and(
+        eq(approvals.id, approvalId),
+        eq(approvals.status, 'pending'),
+        eq(tasks.agentId, agentId),
+        eq(toolCalls.taskId, approvals.taskId),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
 }
 
 /** Atomically create the approval, its gated tool call, and their link. */
@@ -250,6 +273,27 @@ export async function resolveApproval(
     : and(eq(approvals.shortCode, input.shortCode as string), eq(approvals.status, 'pending'));
 
   const resolution = await db.transaction(async (tx) => {
+    if (input.policy && input.via === 'web') {
+      const [pending] = await tx
+        .select({ taskId: approvals.taskId, toolCallId: approvals.toolCallId })
+        .from(approvals)
+        .where(matcher)
+        .limit(1);
+      if (!pending) return null;
+      const [linked] = await tx
+        .select({ agentId: tasks.agentId, toolName: toolCalls.toolName })
+        .from(toolCalls)
+        .innerJoin(tasks, eq(toolCalls.taskId, tasks.id))
+        .where(and(eq(toolCalls.id, pending.toolCallId), eq(toolCalls.taskId, pending.taskId)))
+        .limit(1);
+      if (
+        !linked ||
+        input.policy.agentId !== linked.agentId ||
+        input.policy.toolName !== linked.toolName
+      ) {
+        throw new Error('Approval policy must match the task owner and tool');
+      }
+    }
     const [resolved] = await tx
       .update(approvals)
       .set({
@@ -481,6 +525,7 @@ export function createPostgresApprovalRepository(db: Db): ApprovalRepository {
   return {
     kind: 'approval-repository',
     create: (input) => createApproval(db, input),
+    getRememberable: (agentId, approvalId) => getRememberableApproval(db, agentId, approvalId),
     listInbox: (agentId, options) => listApprovalInbox(db, agentId, options),
     listStalledNotices: (options) => listStalledNotices(db, options),
     markNotified: (approvalIds, channels) => markApprovalNotified(db, approvalIds, channels),

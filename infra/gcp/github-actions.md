@@ -12,6 +12,20 @@ GitHub Actions, then runs the migration and Cloud Run rollout. It uses GitHub's
 OIDC token and Google Workload Identity Federation, not a downloadable
 service-account key.
 
+Database maintenance uses a direct connection when `DATABASE_URL` names a
+recognized Neon pooler endpoint. The backup image and `@assistant/db reconcile`
+share this conversion; application services keep their original connection.
+Credentials, database name, and URL options are preserved. This avoids relying
+on session state across pooled transactions during `pg_dump`, migrations, and
+identity repair. Other PostgreSQL hosts are unchanged.
+
+A failed migration remains a release gate. The release script prints the exact
+execution's status and up to 50 recent error log entries. Missing logging
+permissions cannot turn that failure into a success. For a separate read-only
+catalog check, run `pnpm --filter @assistant/db diagnose-schema` in an environment
+with the intended database configuration. It prints schema and migration-journal
+metadata, not credentials or application rows; it never repairs the database.
+
 ## One-time Google Cloud setup
 
 Set the project and `owner/repository` below before running the setup as a

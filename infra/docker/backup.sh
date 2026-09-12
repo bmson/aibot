@@ -6,12 +6,16 @@ set -euo pipefail
 : "${BACKUP_WORKSPACE_ID:?BACKUP_WORKSPACE_ID is required}"
 : "${BACKUP_RELEASE:?BACKUP_RELEASE is required}"
 
+source /usr/local/bin/database-admin.sh
+
 backup_file="/tmp/assistant-${BACKUP_RELEASE}.dump"
 object_name="workspace/${BACKUP_WORKSPACE_ID}/backups/pre-migration/${BACKUP_RELEASE}.dump"
 encoded_object="${object_name//\//%2F}"
 
 echo "Creating a consistent pre-migration PostgreSQL backup"
-pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl --file="$backup_file"
+direct_database_url="$(database_admin_direct_url "$DATABASE_URL")"
+database_admin_run_url "$direct_database_url" pg_dump --dbname="$direct_database_url" \
+  --format=custom --no-owner --no-acl --file="$backup_file"
 
 token="$(
   curl --fail --silent --show-error \
