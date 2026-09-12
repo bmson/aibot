@@ -174,9 +174,17 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
       <section className="mt-8">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <SectionHeading title="Relationships" count={relations.length} />
-          {dossier.entity ? (
-            <AddKnowledgeRelation selected={dossier.entity} vocabulary={PREDICATE_VOCABULARY} />
-          ) : null}
+          {/* Always offered, including for a contact the graph has never heard
+              of: `dossier.entity` is null until a fact about them has been
+              extracted, so gating on it hid this button on exactly the page a
+              just-added person lands on — while the empty state below told them
+              to use it. With no entity yet the name is pre-typed instead of
+              prefilled, and saving creates the entity against this contact. */}
+          <AddKnowledgeRelation
+            selected={dossier.entity}
+            subjectLabel={contact.name}
+            vocabulary={PREDICATE_VOCABULARY}
+          />
         </div>
         {relations.length === 0 ? (
           <EmptyState>

@@ -104,7 +104,7 @@ function Branch({
             />
             <span className="break-words">{node.label}</span>
           </button>
-          <p className="mt-1 text-xs leading-5 text-muted">{sentence}</p>
+          <p className="mt-1 text-xs leading-5 break-words text-muted">{sentence}</p>
           {edge.validFrom || edge.validUntil ? (
             <p className="text-xs text-muted">
               {edge.validFrom ?? 'Unknown start'} to {edge.validUntil ?? 'present'}
