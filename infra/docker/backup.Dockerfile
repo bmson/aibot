@@ -13,7 +13,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && apt-get install -y --only-upgrade \
     bsdutils libblkid1 liblastlog2-2 libmount1 libsmartcols1 libuuid1 login mount util-linux \
-    libssl3t64 openssl openssl-provider-legacy \
+    libssl3t64 openssl openssl-provider-legacy libpcre2-8-0 \
   && rm -rf /var/lib/apt/lists/* \
   && rm -f /usr/local/bin/gosu
 

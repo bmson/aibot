@@ -9,6 +9,7 @@ WORKDIR /app
 RUN corepack enable \
   && apt-get update \
   && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng poppler-utils \
+  && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
