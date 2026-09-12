@@ -373,8 +373,8 @@ export function KnowledgeMap({
               </button>
               <button
                 type="button"
-                aria-label="Show everything"
-                title="Show everything"
+                aria-label="Fit the whole graph"
+                title="Fit the whole graph"
                 className={btnSm.outline}
                 onClick={showEverything}
               >
