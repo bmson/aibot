@@ -683,13 +683,13 @@ struct PersonDetailsView: View {
                     // Dates the extractor already found in this person's facts
                     // but that are not recurring reminders yet. The endpoint
                     // has always sent them; web offers the same one-tap save.
-                    if !visibleSuggestions.isEmpty {
+                    if !visibleSuggestions(profile).isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Found in saved facts — save any of these as a recurring reminder:")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             AssistantFlowLayout(spacing: 8) {
-                                ForEach(visibleSuggestions) { suggestion in
+                                ForEach(visibleSuggestions(profile)) { suggestion in
                                     Button {
                                         save(suggestion)
                                     } label: {
@@ -782,7 +782,9 @@ struct PersonDetailsView: View {
         }
     }
 
-    private var visibleSuggestions: [PersonOccasionSuggestion] {
+    private func visibleSuggestions(
+        _ profile: PersonProfileResponse
+    ) -> [PersonOccasionSuggestion] {
         (profile.occasionSuggestions ?? []).filter { !savedSuggestions.contains($0.id) }
     }
 
