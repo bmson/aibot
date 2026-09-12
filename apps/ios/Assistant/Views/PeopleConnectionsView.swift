@@ -88,7 +88,7 @@ struct PeopleConnectionsExplorer: View {
           Button("Try again") { Task { await load(id) } }
             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
         } else {
-          ProgressView("Loading connections…")
+          AssistantLoadingState(title: "Loading connections")
             .frame(maxWidth: .infinity, minHeight: 180)
         }
       } else {
@@ -280,7 +280,10 @@ struct PeopleConnectionMap: View {
           Spacer()
           Button("Next") { page = min(pageCount - 1, currentPage + 1) }
             .disabled(currentPage == pageCount - 1)
-        }.font(.subheadline).frame(minHeight: 44)
+        }
+        .font(.subheadline)
+        .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
+        .frame(minHeight: 44)
       }
     }
     .onChange(of: card.id) { _, _ in page = 0 }
@@ -451,7 +454,7 @@ struct PersonConnectionOutline: View {
           Divider()
         }
       } else {
-        ProgressView("Loading connections…")
+        AssistantLoadingState(title: "Loading connections")
         Button("Try again") { Task { await model.loadPersonCard(id: personId) } }
       }
       if let failure { Text(failure).font(.caption).foregroundStyle(.red) }

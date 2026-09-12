@@ -92,7 +92,12 @@ struct RelationshipGraphScreen: View {
         .sheet(isPresented: $showBrowser) { itemBrowser }
         .sheet(item: $connecting) { node in
             NavigationStack {
-                GraphConnectSheet(source: node, graph: graph) { await expand(node.id); notice = "Connection saved"; connecting = nil }
+                GraphConnectSheet(source: node, graph: graph) {
+                    await expand(node.id)
+                    model.invalidatePersonCaches()
+                    notice = "Connection saved"
+                    connecting = nil
+                }
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { connecting = nil } } }
             }
         }
@@ -100,7 +105,12 @@ struct RelationshipGraphScreen: View {
             NavigationStack {
                 GraphGroupsSheet(graph: graph, focus: { node in
                     open(node.id); showGroups = false
-                }, saved: { id in await expand(id); open(id); showGroups = false })
+                }, saved: { id in
+                    await expand(id)
+                    model.invalidatePersonCaches()
+                    open(id)
+                    showGroups = false
+                })
             }
         }
         .sheet(isPresented: $showConnections) {
@@ -110,8 +120,12 @@ struct RelationshipGraphScreen: View {
                         showConnections = false; open(id); Task { await expand(id) }
                     }, removed: { id in
                         graph.edges.removeAll { $0.id == id }; page = min(page, pageCount - 1)
+                        model.invalidatePersonCaches()
                         if let personID { Task { await model.refreshPersonEvidence(id: personID) } }
-                    }, refresh: { await expand(selected.id) })
+                    }, refresh: {
+                        await expand(selected.id)
+                        model.invalidatePersonCaches()
+                    })
                 }
             }
         }
@@ -128,7 +142,7 @@ struct RelationshipGraphScreen: View {
                         .buttonStyle(AssistantActionButtonStyle(kind: .secondary)).padding(.top, 6)
                 }.padding(.vertical, 8)
             }
-            if loading { ProgressView("Loading connections…") }
+            if loading { AssistantLoadingState(title: "Loading connections") }
             if let failure { Section { Text(failure); Button("Retry") { Task { await load() } } } }
             Section("Starting points") {
                 ForEach(Array(graph.groups.flatMap { Array($0.nodes.prefix(3)) }.prefix(12))) { node in
@@ -169,8 +183,8 @@ struct RelationshipGraphScreen: View {
                 // Blank taps leave the selection and control height stable.
                 if let id { selectedID = id }
             }.accessibilityIdentifier("assistant.relationship.graph")
-            if hasLoaded && visible.nodes.isEmpty { ContentUnavailableView("No items to show", systemImage: "point.3.connected.trianglepath.dotted", description: Text("Try showing all items.")) }
-            if loading { ProgressView("Loading connections…").padding(12).background(.regularMaterial, in: Capsule()).allowsHitTesting(false) }
+            if hasLoaded && visible.nodes.isEmpty { AssistantEmptyState("No items to show", systemImage: "point.3.connected.trianglepath.dotted", description: "Try showing all items.") }
+            if loading { AssistantLoadingState(title: "Loading connections").padding(12).background(.regularMaterial, in: Capsule()).allowsHitTesting(false) }
         }.background(AssistantTheme.canvas(for: colorScheme))
     }
 
@@ -194,7 +208,7 @@ struct RelationshipGraphScreen: View {
                         Button("Previous connections", systemImage: "chevron.left") { changePage(-1) }.disabled(page == 0)
                         Button("Next connections", systemImage: "chevron.right") { changePage(1) }.disabled(page >= pageCount - 1)
                     }
-                }.font(.caption).labelStyle(.iconOnly).buttonStyle(.bordered) }
+                }.font(.caption).labelStyle(.iconOnly).buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true)) }
             } else {
                 Text("Full map overview").font(.headline)
                 Text("\(visible.nodes.count) items. Select one, then open its map.").font(.caption).foregroundStyle(.secondary)

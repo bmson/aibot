@@ -1393,6 +1393,18 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Drop the cached person cards and profiles.
+    ///
+    /// Editing the graph changes what a person's page says about them, but the
+    /// graph screen only ever updated its own canvas — so returning to a
+    /// profile showed a relationship list that predated the edit until the
+    /// owner happened to pull to refresh. Clearing the cache makes the next
+    /// view of any person reload.
+    func invalidatePersonCaches() {
+        personCards.removeAll()
+        personProfiles.removeAll()
+    }
+
     func mergePerson(id: String, targetId: String) async -> Bool {
         guard let client else { return false }
         do {

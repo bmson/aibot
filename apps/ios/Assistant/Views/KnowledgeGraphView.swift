@@ -103,7 +103,8 @@ struct KnowledgeGraphView: View {
                                     .lineLimit(2)
                                     .foregroundStyle(tint)
                                     .padding(.horizontal, 8)
-                                    .frame(width: nodeWidth, height: 44)
+                                    .frame(width: nodeWidth)
+                                    .frame(minHeight: 44)
                                     .background(AssistantTheme.canvas(for: colorScheme),
                                                 in: RoundedRectangle(cornerRadius: 12))
                             }
@@ -169,6 +170,7 @@ struct KnowledgeGraphView: View {
                         }.disabled(currentPage == pageCount - 1 || loading)
                     }
                     .font(.subheadline)
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("assistant.knowledge.map.pages")
                 }
@@ -189,7 +191,8 @@ struct KnowledgeGraphView: View {
                 .opacity(0.75)
         }
         .padding(.horizontal, 8)
-        .frame(width: width, height: 100)
+        .frame(width: width)
+        .frame(minHeight: 100)
         .foregroundStyle(focused ? AssistantTheme.stageStrong : AssistantTheme.ink(for: colorScheme))
         .background(focused ? AssistantTheme.accent : AssistantTheme.raised(for: colorScheme),
                     in: RoundedRectangle(cornerRadius: 20, style: .continuous))

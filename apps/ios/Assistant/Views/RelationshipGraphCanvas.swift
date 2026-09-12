@@ -28,6 +28,18 @@ struct GraphCanvasCommand: Equatable {
 
 /// UIKit owns gestures and drawing so dragging does not rebuild SwiftUI's view tree.
 final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
+    /// Canvas labels are drawn into a CGContext, so they get none of SwiftUI's
+    /// Dynamic Type scaling for free. Scaling them by hand is what keeps this
+    /// screen legible for someone who has turned the system text size up —
+    /// every other screen in the app already grows with it.
+    ///
+    /// Capped because the layout reserves fixed room for a label: past roughly
+    /// double, text would collide with neighbouring nodes rather than help.
+    static func scaledFont(_ size: CGFloat, weight: UIFont.Weight = .regular) -> UIFont {
+        let base = UIFont.systemFont(ofSize: size, weight: weight)
+        return UIFontMetrics(forTextStyle: .caption1).scaledFont(for: base, maximumPointSize: size * 2)
+    }
+
     private(set) var layout = RelationshipGraphLayout()
     private(set) var viewport = GraphViewport()
     private var nodes: [RelationshipGraphNode] = []
@@ -249,7 +261,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             }
             if centeredID != nil, let label = edgeLabels[link] {
                 let text = label as NSString
-                let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11), .foregroundColor: ink.withAlphaComponent(0.75)]
+                let attributes: [NSAttributedString.Key: Any] = [.font: Self.scaledFont(11), .foregroundColor: ink.withAlphaComponent(0.75)]
                 let size = text.size(withAttributes: attributes)
                 let box = CGRect(x: (start.x + end.x - min(105, size.width)) / 2, y: (start.y + end.y - size.height) / 2,
                                  width: min(105, size.width), height: size.height)
@@ -282,7 +294,13 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             context.fillEllipse(in: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
             guard centeredID != nil || selected || neighbors.contains(node.id) || (selectedID == nil && (viewport.scale > 0.5 || nodes.count < 35)) else { continue }
             let text = node.label as NSString
-            let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: selected || centeredID != nil ? 14 : 11, weight: selected ? .semibold : .regular), .foregroundColor: ink.withAlphaComponent(relevant ? 1 : 0.4)]
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: Self.scaledFont(
+                    selected || centeredID != nil ? 14 : 11,
+                    weight: selected ? .semibold : .regular
+                ),
+                .foregroundColor: ink.withAlphaComponent(relevant ? 1 : 0.4),
+            ]
             let measured = text.size(withAttributes: attributes)
             let width = max(1, min(centeredID == nil ? 150 : 125, measured.width))
             let labelHeight = centeredID == nil ? measured.height : min(2, ceil(measured.width / width)) * measured.height
@@ -304,6 +322,27 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     static func tint(for kind: String) -> UIColor {
         switch kind { case "place": .systemTeal; case "organization": .systemIndigo; case "project": .systemOrange; default: .systemPink }
     }
+    /// How this node connects, in words.
+    ///
+    /// The canvas draws a relationship as a line and its review status as a
+    /// dash pattern, so without this a VoiceOver user could hear every name on
+    /// the graph and still learn nothing about how any two of them relate, or
+    /// which claims are unconfirmed. Bounded because an announcement that
+    /// recites forty edges is its own kind of unusable.
+    private func connectionSummary(for id: String) -> String {
+        let names = Dictionary(nodes.map { ($0.id, $0.label) }, uniquingKeysWith: { first, _ in first })
+        let described = links.filter { $0.contains(id) }.prefix(6).compactMap { link -> String? in
+            guard let otherID = link.other(than: id), let other = names[otherID] else { return nil }
+            let relation = edgeLabels[link] ?? "connected"
+            let status = unreviewed.contains(link) ? "needs review" : "confirmed"
+            return "\(relation) \(other), \(status)"
+        }
+        guard !described.isEmpty else { return "No recorded connections" }
+        let total = links.filter { $0.contains(id) }.count
+        let more = total > described.count ? ", and \(total - described.count) more" : ""
+        return described.joined(separator: "; ") + more
+    }
+
     private func refreshAccessibility() {
         let positions = points()
         accessibilityElements = nodes.compactMap { node -> UIAccessibilityElement? in
@@ -312,7 +351,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             guard bounds.contains(point) else { return nil }
             let element = GraphAccessibleNode(accessibilityContainer: self)
             element.accessibilityLabel = node.label
-            element.accessibilityValue = node.kind.capitalized
+            element.accessibilityValue = "\(node.kind.capitalized). \(connectionSummary(for: node.id))"
             element.accessibilityHint = "Select to view connections"
             element.accessibilityTraits = node.id == selectedID ? [.button, .selected] : [.button]
             element.accessibilityFrameInContainerSpace = CGRect(x: point.x - 22, y: point.y - 22, width: 44, height: 44)

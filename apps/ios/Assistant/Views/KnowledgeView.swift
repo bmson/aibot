@@ -159,7 +159,7 @@ struct KnowledgeView: View {
             itemBrowser(overview)
         } else {
             if loading {
-                ProgressView().frame(maxWidth: .infinity, minHeight: 220)
+                AssistantLoadingState(title: "Loading knowledge")
             } else {
                 AssistantEmptyState(
                     "Knowledge is unavailable", systemImage: "arrow.clockwise",
@@ -182,7 +182,7 @@ struct KnowledgeView: View {
             } else if let cleanup {
                 ForEach(cleanup.findings) { finding in cleanupCard(finding) }
             } else {
-                ProgressView().frame(maxWidth: .infinity, minHeight: 180)
+                AssistantLoadingState(title: "Loading connections")
             }
         }
     }
