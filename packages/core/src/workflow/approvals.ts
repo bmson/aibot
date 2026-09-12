@@ -1,21 +1,23 @@
-import {
-  approvals,
-  createPostgresApprovalRepository,
-  type Db,
-  type TaskRow,
-  tasks,
-  toolCalls,
-} from '@assistant/db';
+import { createPostgresApprovalRepository, type Db, type TaskRow } from '@assistant/db';
 import type {
   ApprovalRepository,
+  CreateApprovalInput,
+  MessageRepository,
   ResolveApprovalInput,
   ResolveApprovalResult,
 } from '@assistant/persistence';
-import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 import { persistMessage } from '../chat.js';
 import { getQueueNotifier } from '../queue.js';
 
 export type { ResolveApprovalInput, ResolveApprovalResult } from '@assistant/persistence';
+
+export function createApproval(store: Db | ApprovalRepository, input: CreateApprovalInput) {
+  const repository =
+    'kind' in store && store.kind === 'approval-repository'
+      ? (store as ApprovalRepository)
+      : createPostgresApprovalRepository(store as Db);
+  return repository.create(input);
+}
 
 /**
  * Resolve a pending approval. Idempotent: the status-guarded UPDATE means a
@@ -57,21 +59,24 @@ export function deliveredChannels(input: {
  * by a worker that crashed — or whose conversation write failed — between the
  * park commit and the notices; renotifyStalledApprovals() re-emits those.
  *
- * Callers pass the full set they know landed (see deliveredChannels): this
- * replaces the column rather than appending to it, so a partial stamp must
- * never drop a leg an earlier attempt already delivered.
+ * Each stamp adds delivered channels atomically, preserving earlier successes.
  */
 export async function markApprovalsNotified(
-  db: Db,
+  store: Db | ApprovalRepository,
   approvalIds: string[],
   channels: string[],
 ): Promise<void> {
-  // No leg landed — leave the row untouched so the sweep still selects it.
   if (approvalIds.length === 0 || channels.length === 0) return;
-  await db
-    .update(approvals)
-    .set({ notifiedChannels: channels })
-    .where(and(inArray(approvals.id, approvalIds), eq(approvals.status, 'pending')));
+  const repository =
+    'kind' in store && store.kind === 'approval-repository'
+      ? (store as ApprovalRepository)
+      : createPostgresApprovalRepository(store as Db);
+  await repository.markNotified(approvalIds, channels);
+}
+
+export interface ApprovalNoticeStore {
+  approvals: ApprovalRepository;
+  messages: MessageRepository;
 }
 
 /**
@@ -82,65 +87,40 @@ export async function markApprovalsNotified(
  * At-least-once safe: a concurrent stamp just makes the next sweep skip it.
  */
 export async function renotifyStalledApprovals(
-  db: Db,
+  store: Db | ApprovalNoticeStore,
   notifyApproval?: (
     task: TaskRow,
     notices: Array<{ taskId: string; shortCode: string; summary: string; toolName?: string }>,
   ) => Promise<void>,
   opts: { olderThanMinutes?: number; batch?: number } = {},
 ): Promise<number> {
-  const olderThanMinutes = opts.olderThanMinutes ?? 5;
-  const rows = await db
-    .select({ approval: approvals, task: tasks, toolName: toolCalls.toolName })
-    .from(approvals)
-    .innerJoin(tasks, eq(approvals.taskId, tasks.id))
-    .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
-    .where(
-      and(
-        eq(approvals.status, 'pending'),
-        // Missing the conversation leg, not merely un-notified: an approval
-        // whose owner ping landed but whose chat card did not is exactly the
-        // row this sweep has to repair, and it carries a non-empty array.
-        sql`NOT ('conversation' = ANY(${approvals.notifiedChannels}))`,
-        lte(approvals.requestedAt, sql`now() - make_interval(mins => ${olderThanMinutes})`),
-        eq(tasks.status, 'waiting_approval'),
-      ),
-    )
-    .limit(opts.batch ?? 50);
-  if (rows.length === 0) return 0;
-
-  const byTask = new Map<
-    string,
-    { task: TaskRow; notices: Array<(typeof rows)[number]['approval'] & { toolName: string }> }
-  >();
-  for (const row of rows) {
-    const entry = byTask.get(row.task.id) ?? { task: row.task, notices: [] };
-    entry.notices.push({ ...row.approval, toolName: row.toolName });
-    byTask.set(row.task.id, entry);
-  }
+  const portable = 'approvals' in store;
+  const repository = portable ? store.approvals : createPostgresApprovalRepository(store);
+  const messages = portable ? store.messages : store;
+  const groups = await repository.listStalledNotices(opts);
 
   let renotified = 0;
-  for (const { task, notices } of byTask.values()) {
+  for (const { task, notices } of groups) {
     try {
-      // Repair only the legs actually missing. A row reaches this sweep having
-      // already texted the owner whenever the conversation write was the half
-      // that failed — re-sending would bill and buzz them twice for one
-      // approval, so the owner ping is skipped once it is stamped.
-      const ownerAlreadyNotified = notices.every((approval) =>
-        approval.notifiedChannels.includes('owner'),
+      const missingOwner = notices.filter(
+        (approval) => !approval.notifiedChannels.includes('owner'),
       );
-      let ownerNotified = ownerAlreadyNotified;
-      if (notifyApproval && !ownerAlreadyNotified) {
+      if (notifyApproval && missingOwner.length > 0) {
         await notifyApproval(
           task,
-          notices.map((approval) => ({
+          missingOwner.map((approval) => ({
             taskId: task.id,
             shortCode: approval.shortCode,
             summary: approval.summary,
             toolName: approval.toolName,
           })),
         );
-        ownerNotified = true;
+        // Persist this successful leg before attempting the conversation write.
+        // A failed chat write must not make the next repair send the owner ping again.
+        await repository.markNotified(
+          missingOwner.map((approval) => approval.id),
+          ['owner'],
+        );
       }
       if (task.conversationId) {
         const text = [
@@ -148,7 +128,7 @@ export async function renotifyStalledApprovals(
           ...notices.map((approval) => `- **[${approval.shortCode}]** ${approval.summary}`),
           "Approve or deny it on the Approvals page — I'll pick up from there.",
         ].join('\n');
-        await persistMessage(db, {
+        await persistMessage(messages, {
           conversationId: task.conversationId,
           taskId: task.id,
           role: 'assistant',
@@ -164,18 +144,15 @@ export async function renotifyStalledApprovals(
           text,
         });
       }
-      // Reaching here means every leg attempted above succeeded — a throw from
-      // either one skips the stamp and leaves the row for the next sweep. A
-      // task with no conversation owes no card, so its conversation leg counts
-      // as settled rather than re-selecting the row on every future sweep.
-      await markApprovalsNotified(
-        db,
+      // No conversation means no chat card is owed. Otherwise the append above
+      // succeeded. Union this leg with any already-stamped owner delivery.
+      await repository.markNotified(
         notices.map((approval) => approval.id),
-        deliveredChannels({ ownerNotified, conversationNotified: true }),
+        ['conversation'],
       );
       renotified += notices.length;
     } catch (err) {
-      // Leave the rows unstamped — the next sweep retries this task's notices.
+      // Preserve any successful leg; the next sweep retries the remaining delivery.
       console.error('approval re-notification failed', { taskId: task.id }, err);
     }
   }

@@ -1,7 +1,12 @@
+import { randomInt } from 'node:crypto';
 import type {
+  ApprovalNoticeGroup,
+  ApprovalNoticeQuery,
   ApprovalRepository,
   ApprovalResolution,
   ApprovalWake,
+  CreateApprovalInput,
+  CreatedApproval,
   ResolveApprovalInput,
 } from '@assistant/persistence';
 import { approvalIsResolved, approvalSweepBatch, parkedApprovalIds } from '@assistant/persistence';
@@ -10,10 +15,147 @@ import type { Db } from './client.js';
 import { approvalPolicies, approvals, maintenanceCursors, tasks, toolCalls } from './schema.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CODE_SUFFIX_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 
 function validateApprovalTime(now: Date): void {
   if (!(now instanceof Date) || !Number.isFinite(now.getTime()))
     throw new Error('Invalid approval time');
+}
+
+function approvalNoticeAgeMinutes(value: number): number {
+  if (!Number.isFinite(value) || value < 0 || value > 365 * 24 * 60)
+    throw new Error('Invalid approval notice age');
+  return value;
+}
+
+function randomCodeSuffix(): string {
+  const pick = () => CODE_SUFFIX_ALPHABET.charAt(randomInt(CODE_SUFFIX_ALPHABET.length));
+  return pick() + pick();
+}
+
+async function nextShortCode(db: Db): Promise<string> {
+  const [row] = await db
+    .select({
+      next: sql<number>`coalesce(max(substring(${approvals.shortCode} from '^A([0-9]+)')::bigint), 0) + 1`,
+    })
+    .from(approvals);
+  const next = Number(row?.next ?? 1);
+  if (!Number.isSafeInteger(next) || next < 1)
+    throw new Error('Invalid approval short code sequence');
+  return `A${next}${randomCodeSuffix()}`;
+}
+
+/** Atomically create the approval, its gated tool call, and their link. */
+export async function createApproval(db: Db, input: CreateApprovalInput): Promise<CreatedApproval> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('assistant:approval-codes'))`);
+    const shortCode = await nextShortCode(tx as unknown as Db);
+    const [toolCall] = await tx
+      .insert(toolCalls)
+      .values({
+        taskId: input.taskId,
+        step: input.step,
+        toolName: input.toolName,
+        args: input.args,
+        risk: 'approval',
+        status: 'awaiting_approval',
+        decision: input.decision,
+      })
+      .returning({ id: toolCalls.id });
+    if (!toolCall) throw new Error('failed to insert tool_call');
+
+    const [approval] = await tx
+      .insert(approvals)
+      .values({
+        taskId: input.taskId,
+        toolCallId: toolCall.id,
+        shortCode,
+        summary: input.summary,
+        payload: input.args,
+        expiresAt: sql`now() + interval '24 hours'`,
+      })
+      .returning({ id: approvals.id, summary: approvals.summary, shortCode: approvals.shortCode });
+    if (!approval) throw new Error('failed to insert approval');
+
+    const [linked] = await tx
+      .update(toolCalls)
+      .set({ approvalId: approval.id })
+      .where(eq(toolCalls.id, toolCall.id))
+      .returning({ id: toolCalls.id });
+    if (!linked) throw new Error('failed to link approval');
+
+    return {
+      toolCallId: toolCall.id,
+      approvalId: approval.id,
+      shortCode: approval.shortCode,
+      summary: approval.summary,
+    };
+  });
+}
+
+/** Find old pending approvals missing their conversation delivery leg. */
+export async function listStalledNotices(
+  db: Db,
+  options: ApprovalNoticeQuery = {},
+): Promise<ApprovalNoticeGroup[]> {
+  const limit = approvalSweepBatch(options.batch ?? 50);
+  const olderThanMinutes = approvalNoticeAgeMinutes(options.olderThanMinutes ?? 5);
+  const now = options.now ?? new Date();
+  validateApprovalTime(now);
+  const cutoff = new Date(now.getTime() - olderThanMinutes * 60_000);
+  const rows = await db
+    .select({ approval: approvals, task: tasks, toolName: toolCalls.toolName })
+    .from(approvals)
+    .innerJoin(tasks, eq(approvals.taskId, tasks.id))
+    .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
+    .where(
+      and(
+        eq(approvals.status, 'pending'),
+        sql`NOT ('conversation' = ANY(${approvals.notifiedChannels}))`,
+        lte(approvals.requestedAt, cutoff),
+        eq(tasks.status, 'waiting_approval'),
+      ),
+    )
+    .orderBy(asc(approvals.requestedAt), asc(approvals.id))
+    .limit(limit);
+
+  const byTask = new Map<string, ApprovalNoticeGroup>();
+  for (const row of rows) {
+    const group = byTask.get(row.task.id) ?? { task: row.task, notices: [] };
+    group.notices.push({ ...row.approval, toolName: row.toolName });
+    byTask.set(row.task.id, group);
+  }
+  return [...byTask.values()];
+}
+
+/** Atomically union successful notification channels without dropping prior legs. */
+export async function markApprovalNotified(
+  db: Db,
+  approvalIds: string[],
+  channels: string[],
+): Promise<void> {
+  if (approvalIds.length === 0 || channels.length === 0) return;
+  const uniqueChannels = [...new Set(channels)];
+  const requested = sql`ARRAY[${sql.join(
+    uniqueChannels.map((channel) => sql`${channel}`),
+    sql`, `,
+  )}]::text[]`;
+  await db
+    .update(approvals)
+    .set({
+      notifiedChannels: sql`(
+        SELECT array_agg(
+          value
+          ORDER BY CASE value WHEN 'owner' THEN 0 WHEN 'conversation' THEN 1 ELSE 2 END, first_ord
+        )
+        FROM (
+          SELECT value, min(ord) AS first_ord
+          FROM unnest(${approvals.notifiedChannels} || ${requested}) WITH ORDINALITY AS item(value, ord)
+          GROUP BY value
+        ) AS merged
+      )`,
+    })
+    .where(and(inArray(approvals.id, approvalIds), eq(approvals.status, 'pending')));
 }
 
 export async function resolveApproval(
@@ -259,6 +401,9 @@ export async function resumeResolvedApprovals(
 export function createPostgresApprovalRepository(db: Db): ApprovalRepository {
   return {
     kind: 'approval-repository',
+    create: (input) => createApproval(db, input),
+    listStalledNotices: (options) => listStalledNotices(db, options),
+    markNotified: (approvalIds, channels) => markApprovalNotified(db, approvalIds, channels),
     resolve: (input) => resolveApproval(db, input),
     expireStale: (batch, now) => expireStaleApprovals(db, batch, now),
     resumeResolved: (batch, now) => resumeResolvedApprovals(db, batch, now),

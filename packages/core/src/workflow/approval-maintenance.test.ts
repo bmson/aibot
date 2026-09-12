@@ -21,6 +21,11 @@ function repository(wakes: ApprovalWake[]): {
   return {
     repo: {
       kind: 'approval-repository',
+      create: async () => {
+        throw new Error('unused');
+      },
+      listStalledNotices: async () => [],
+      markNotified: async () => {},
       resolve: unusedResolve,
       expireStale,
       resumeResolved,

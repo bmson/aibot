@@ -1,14 +1,19 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
 import {
+  type ApprovalNoticeGroup,
+  type ApprovalNoticeQuery,
   type ApprovalRepository,
   type ApprovalResolution,
   type ApprovalWake,
   approvalIsResolved,
   approvalSweepBatch,
+  type CreateApprovalInput,
+  type CreatedApproval,
   parkedApprovalIds,
   type Records,
   type ResolveApprovalInput,
 } from '@assistant/persistence';
+import { Timestamp } from '@google-cloud/firestore';
 import { createWakeIntent } from './outbox.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
@@ -29,9 +34,263 @@ function policyId(policy: NonNullable<ResolveApprovalInput['policy']>) {
     .digest('hex');
 }
 
+const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
+const CODE_SUFFIX_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const APPROVAL_NOTICE_CURSOR = 'approval-notices-cursor';
+
+function randomCodeSuffix(): string {
+  const pick = () => CODE_SUFFIX_ALPHABET.charAt(randomInt(CODE_SUFFIX_ALPHABET.length));
+  return pick() + pick();
+}
+
+function approvalNoticeBatch(batch: number | undefined): number {
+  const value = batch ?? 50;
+  if (!Number.isInteger(value) || value < 1 || value > 200)
+    throw new Error('Invalid approval notice batch');
+  return value;
+}
+
+function approvalNoticeAge(minutes: number | undefined): number {
+  const value = minutes ?? 5;
+  if (!Number.isFinite(value) || value < 0 || value > 365 * 24 * 60)
+    throw new Error('Invalid approval notice age');
+  return value;
+}
+
+function validDate(value: Date | undefined, message: string): Date {
+  const date = value ?? new Date();
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) throw new Error(message);
+  return date;
+}
+
 export class FirestoreApprovalRepository implements ApprovalRepository {
   readonly kind = 'approval-repository' as const;
   constructor(readonly store: InstallationStore) {}
+
+  async create(input: CreateApprovalInput): Promise<CreatedApproval> {
+    const toolCallId = randomUUID();
+    const approvalId = randomUUID();
+    const suffix = randomCodeSuffix();
+    const now = validDate(this.store.now(), 'Invalid approval time');
+    const expiresAt = new Date(now.getTime() + APPROVAL_TTL_MS);
+    const taskRef = this.store.doc('tasks', input.taskId);
+    const toolRef = this.store.doc('toolCalls', toolCallId);
+    const approvalRef = this.store.doc('approvals', approvalId);
+    const counterRef = this.store.doc('coordination', 'approval-codes');
+
+    return this.store.db.runTransaction(async (tx) => {
+      const [task, counter] = await tx.getAll(taskRef, counterRef);
+      if (!task?.exists || task.get('id') !== input.taskId)
+        throw new Error('Approval task does not exist or has mismatched identity');
+
+      let nextNumber: number;
+      if (!counter?.exists) {
+        const historical = await tx.get(this.store.collection('approvals').limit(1));
+        if (historical.size > 0)
+          throw new Error('Missing approval code counter; initialize its verified high-water mark');
+        nextNumber = 1;
+      } else {
+        nextNumber = counter.get('next');
+        if (!Number.isSafeInteger(nextNumber) || nextNumber < 1)
+          throw new Error('Invalid approval code counter');
+      }
+      if (!Number.isSafeInteger(nextNumber + 1)) throw new Error('Approval code counter exhausted');
+
+      const shortCode = `A${nextNumber}${suffix}`;
+      const collision = await tx.get(
+        this.store.collection('approvals').where('shortCode', '==', shortCode).limit(1),
+      );
+      if (collision.size > 0) throw new Error('Approval code collision');
+
+      tx.set(counterRef, { next: nextNumber + 1, updatedAt: now });
+      tx.create(
+        toolRef,
+        encodeRecord({
+          id: toolCallId,
+          taskId: input.taskId,
+          step: input.step,
+          toolName: input.toolName,
+          args: input.args,
+          risk: 'approval',
+          status: 'awaiting_approval',
+          startedAt: null,
+          idempotencyKey: null,
+          result: null,
+          error: null,
+          approvalId,
+          decision: input.decision,
+          finishedAt: null,
+          createdAt: now,
+        }),
+      );
+      tx.create(
+        approvalRef,
+        encodeRecord({
+          id: approvalId,
+          taskId: input.taskId,
+          toolCallId,
+          shortCode,
+          summary: input.summary,
+          payload: input.args,
+          resolutionPayload: null,
+          status: 'pending',
+          requestedAt: now,
+          resolvedAt: null,
+          resolvedVia: null,
+          expiresAt,
+          notifiedChannels: [],
+          createdPolicyId: null,
+        }),
+      );
+      return { toolCallId, approvalId, shortCode, summary: input.summary };
+    });
+  }
+
+  async listStalledNotices(options: ApprovalNoticeQuery = {}): Promise<ApprovalNoticeGroup[]> {
+    const batch = approvalNoticeBatch(options.batch);
+    const ageMinutes = approvalNoticeAge(options.olderThanMinutes);
+    const now = validDate(options.now ?? this.store.now(), 'Invalid approval notice time');
+    const cutoff = new Date(now.getTime() - ageMinutes * 60_000);
+    const cursorRef = this.store.doc('coordination', APPROVAL_NOTICE_CURSOR);
+    const candidates = await this.store.db.runTransaction(async (tx) => {
+      const cursorSnapshot = await tx.get(cursorRef);
+      const rawCursor = cursorSnapshot.exists ? cursorSnapshot.get('cursor') : null;
+      let cursor: { requestedAt: Timestamp; id: string } | null = null;
+      if (rawCursor !== null) {
+        const requestedAt = (rawCursor as { requestedAt?: unknown })?.requestedAt;
+        const id = (rawCursor as { id?: unknown })?.id;
+        if (!(requestedAt instanceof Timestamp) || typeof id !== 'string' || id.length === 0)
+          throw new Error('Invalid approval notice cursor');
+        cursor = { requestedAt, id };
+      }
+      const baseQuery = this.store
+        .collection('approvals')
+        .where('status', '==', 'pending')
+        .where('requestedAt', '<=', cutoff)
+        .orderBy('requestedAt', 'asc')
+        .orderBy('id', 'asc');
+      const query = cursor ? baseQuery.startAfter(cursor.requestedAt, cursor.id) : baseQuery;
+      let page = await tx.get(query.limit(batch));
+      if (page.empty && cursor !== null) page = await tx.get(baseQuery.limit(batch));
+      const last = page.docs.at(-1);
+      const requestedAt = last?.get('requestedAt');
+      const id = last?.get('id');
+      if (page.size === batch && (!(requestedAt instanceof Timestamp) || typeof id !== 'string')) {
+        throw new Error('Invalid approval notice candidate');
+      }
+      tx.set(cursorRef, {
+        cursor: page.size === batch && last ? { requestedAt, id } : null,
+        updatedAt: now,
+      });
+      return page.docs;
+    });
+
+    const groups: ApprovalNoticeGroup[] = [];
+    const byTask = new Map<string, ApprovalNoticeGroup>();
+    for (const candidate of candidates) {
+      const current = await this.store.db.runTransaction(async (tx) => {
+        const approvalSnapshot = await tx.get(candidate.ref);
+        if (!approvalSnapshot.exists) return null;
+        const approval = decodeRecord<Records['approvals']>(approvalSnapshot.data());
+        const notifiedChannels = Array.isArray(approval.notifiedChannels)
+          ? approval.notifiedChannels.filter(
+              (channel): channel is string => typeof channel === 'string',
+            )
+          : [];
+        if (
+          approvalSnapshot.get('status') !== 'pending' ||
+          !(approval.requestedAt instanceof Date) ||
+          approval.requestedAt > cutoff ||
+          notifiedChannels.includes('conversation')
+        )
+          return null;
+        try {
+          if (
+            typeof approval.id !== 'string' ||
+            documentKey(approval.id) !== approvalSnapshot.ref.id
+          )
+            return null;
+        } catch {
+          return null;
+        }
+        const taskRef = this.store.doc('tasks', approval.taskId);
+        const toolRef = this.store.doc('toolCalls', approval.toolCallId);
+        const [taskSnapshot, toolSnapshot] = await tx.getAll(taskRef, toolRef);
+        if (!taskSnapshot?.exists || !toolSnapshot?.exists) return null;
+        const task = decodeRecord<Records['tasks']>(taskSnapshot.data());
+        const tool = decodeRecord<Records['toolCalls']>(toolSnapshot.data());
+        if (
+          task.id !== approval.taskId ||
+          task.status !== 'waiting_approval' ||
+          tool.id !== approval.toolCallId ||
+          tool.taskId !== approval.taskId ||
+          typeof tool.toolName !== 'string'
+        )
+          return null;
+        try {
+          if (documentKey(task.id) !== taskRef.id) return null;
+        } catch {
+          return null;
+        }
+        return {
+          approval: { ...approval, notifiedChannels },
+          task,
+          toolName: tool.toolName,
+        };
+      });
+      if (!current) continue;
+      const { approval, task, toolName } = current;
+      let group = byTask.get(task.id);
+      if (!group) {
+        group = { task, notices: [] };
+        byTask.set(task.id, group);
+        groups.push(group);
+      }
+      group.notices.push({ ...approval, toolName });
+    }
+    return groups;
+  }
+
+  async markNotified(approvalIds: string[], channels: string[]): Promise<void> {
+    const ids = [...new Set(approvalIds)];
+    const requested = [...new Set(channels)].filter(
+      (channel): channel is string => typeof channel === 'string' && channel.length > 0,
+    );
+    if (ids.length === 0 || requested.length === 0) return;
+    for (let start = 0; start < ids.length; start += 200) {
+      const chunk = ids.slice(start, start + 200);
+      await this.store.db.runTransaction(async (tx) => {
+        const refs = chunk.map((id) => this.store.doc('approvals', id));
+        const snapshots = await tx.getAll(...refs);
+        for (const [index, snapshot] of snapshots.entries()) {
+          if (!snapshot?.exists || snapshot.get('status') !== 'pending') continue;
+          const existing = snapshot.get('notifiedChannels');
+          const current = Array.isArray(existing)
+            ? [
+                ...new Set(
+                  existing.filter((channel): channel is string => typeof channel === 'string'),
+                ),
+              ]
+            : [];
+          const all = new Set([...current, ...requested]);
+          const known = [
+            ...(all.has('owner') ? ['owner'] : []),
+            ...(all.has('conversation') ? ['conversation'] : []),
+          ];
+          const other = [...all].filter(
+            (channel) => channel !== 'owner' && channel !== 'conversation',
+          );
+          const next = [...known, ...other];
+          const ref = refs[index];
+          if (
+            ref &&
+            (next.length !== current.length || next.some((channel, i) => channel !== current[i]))
+          )
+            tx.update(ref, { notifiedChannels: next });
+        }
+      });
+    }
+  }
 
   async resolve(input: ResolveApprovalInput): Promise<ApprovalResolution> {
     if (!input.approvalId && !input.shortCode)

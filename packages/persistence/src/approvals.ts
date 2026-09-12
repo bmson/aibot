@@ -1,3 +1,5 @@
+import type { Records } from './records.js';
+
 export interface ResolveApprovalInput {
   approvalId?: string;
   /** SMS path: "YES A7" → shortCode A7. Only matches pending approvals. */
@@ -30,6 +32,12 @@ export type ApprovalResolution = ResolveApprovalResult & {
 };
 export interface ApprovalRepository {
   readonly kind: 'approval-repository';
+  /** Commit the gated tool call and approval together; task parking is a separate lease-fenced command. */
+  create(input: CreateApprovalInput): Promise<CreatedApproval>;
+  /** A bounded scan may return no eligible notices while its durable cursor still has more pages. */
+  listStalledNotices(options?: ApprovalNoticeQuery): Promise<ApprovalNoticeGroup[]>;
+  /** Atomically union delivered channels; never remove an earlier successful delivery. */
+  markNotified(approvalIds: string[], channels: string[]): Promise<void>;
   resolve(input: ResolveApprovalInput): Promise<ApprovalResolution>;
   /** Each expired approval, tool denial and eligible task wake commit atomically. */
   expireStale(batch?: number, now?: Date): Promise<ApprovalWake[]>;
@@ -65,4 +73,31 @@ export function parkedApprovalIds(state: unknown): string[] | null {
 
 export function approvalIsResolved(status: unknown): boolean {
   return status === 'approved' || status === 'denied' || status === 'expired';
+}
+
+export interface CreateApprovalInput {
+  taskId: string;
+  step: number;
+  toolName: string;
+  args: Record<string, unknown>;
+  decision: Record<string, unknown>;
+  summary: string;
+}
+
+export interface CreatedApproval {
+  toolCallId: string;
+  approvalId: string;
+  shortCode: string;
+  summary: string;
+}
+
+export interface ApprovalNoticeQuery {
+  batch?: number;
+  olderThanMinutes?: number;
+  now?: Date;
+}
+
+export interface ApprovalNoticeGroup {
+  task: Records['tasks'];
+  notices: Array<Records['approvals'] & { toolName: string }>;
 }

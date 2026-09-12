@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import {
+  createApproval,
   expireStaleApprovals,
+  markApprovalsNotified,
+  renotifyStalledApprovals,
   resumeResolvedApprovalTasks,
 } from '@assistant/core/workflow/approvals';
 import {
   FirestoreApprovalRepository,
+  FirestoreMessageRepository,
   FirestoreTaskRepository,
   type InstallationStore,
 } from '@assistant/firestore';
@@ -16,36 +20,49 @@ export async function firestoreApprovalSmoke(store: InstallationStore) {
   const tasks = new FirestoreTaskRepository(store);
   const now = new Date();
   const agentId = randomUUID();
+  const conversationId = randomUUID();
+  await store.doc('conversations', conversationId).set({
+    id: conversationId,
+    agentId,
+    createdAt: now,
+    updatedAt: now,
+    title: 'Approval smoke',
+    archivedAt: null,
+    channel: 'chat',
+    trust: 'owner',
+    modelOverride: null,
+    isPrimary: false,
+    metadata: {},
+    lastReadAt: null,
+  });
   async function fixture() {
     const { task } = await tasks.createTask({
       agentId,
+      conversationId,
       type: 'scheduled',
       trust: 'assistant',
       trigger: { source: 'schedule', payload: {} },
     });
     const lease = await tasks.claim(task.id, task.queueGeneration);
     assert.ok(lease);
-    const approvalId = randomUUID();
-    const toolCallId = randomUUID();
-    await store.doc('toolCalls', toolCallId).set({
-      id: toolCallId,
+    const { approvalId, toolCallId } = await createApproval(repository, {
       taskId: task.id,
+      step: 0,
       toolName: 'synthetic.action',
-      status: 'awaiting_approval',
+      args: {},
+      decision: { source: 'synthetic' },
+      summary: 'Synthetic approval',
     });
-    await store.doc('approvals', approvalId).set({
-      id: approvalId,
-      taskId: task.id,
-      toolCallId,
-      status: 'pending',
-      requestedAt: new Date(now.getTime() - 60_000),
-      expiresAt: new Date(now.getTime() - 1_000),
-      shortCode: randomUUID(),
-    });
+    await store
+      .doc('approvals', approvalId)
+      .update({ requestedAt: new Date(now.getTime() - 600_000) });
     return { task, lease, approvalId, toolCallId };
   }
 
   const expired = await fixture();
+  await store
+    .doc('approvals', expired.approvalId)
+    .update({ expiresAt: new Date(now.getTime() - 1_000) });
   assert.equal(
     await tasks.parkForApproval(expired.lease, { phase: 'execute' }, [
       { approvalId: expired.approvalId, toolCallId: expired.toolCallId },
@@ -95,7 +112,53 @@ export async function firestoreApprovalSmoke(store: InstallationStore) {
         .length,
       1,
     );
+  const notice = await fixture();
+  const extra = await createApproval(repository, {
+    taskId: notice.task.id,
+    step: 1,
+    toolName: 'synthetic.second',
+    args: {},
+    decision: { source: 'synthetic' },
+    summary: 'Second synthetic approval',
+  });
+  await store
+    .doc('approvals', extra.approvalId)
+    .update({ requestedAt: new Date(now.getTime() - 600_000) });
+  assert.equal(
+    await tasks.parkForApproval(notice.lease, { phase: 'execute' }, [
+      { approvalId: notice.approvalId, toolCallId: notice.toolCallId },
+      { approvalId: extra.approvalId, toolCallId: extra.toolCallId },
+    ]),
+    true,
+  );
+  await markApprovalsNotified(repository, [notice.approvalId], ['owner']);
+  const pinged: string[] = [];
+  const noticeStore = { approvals: repository, messages: new FirestoreMessageRepository(store) };
+  assert.equal(
+    await renotifyStalledApprovals(noticeStore, async (_task, notices) => {
+      pinged.push(...notices.map((row) => row.shortCode));
+    }),
+    2,
+  );
+  assert.deepEqual(pinged, [extra.shortCode]);
+  for (const approvalId of [notice.approvalId, extra.approvalId]) {
+    assert.deepEqual((await store.doc('approvals', approvalId).get()).get('notifiedChannels'), [
+      'owner',
+      'conversation',
+    ]);
+  }
+  assert.equal(
+    await renotifyStalledApprovals(noticeStore, async () => {
+      throw new Error('Already delivered');
+    }),
+    0,
+  );
+  const cards = await store.collection('messages').where('taskId', '==', notice.task.id).get();
+  assert.equal(cards.size, 1);
+  assert.equal(cards.docs[0]?.get('parts').length, 2);
   return {
+    approvalCreation: 'passed',
+    notificationRepair: 'passed',
     approvalExpiry: 'passed',
     preParkRecovery: 'passed',
     generationFences: 'passed',
