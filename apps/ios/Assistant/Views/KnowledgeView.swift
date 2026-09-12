@@ -767,6 +767,11 @@ private struct KnowledgeItemEditor: View {
     @State private var label: String
     @State private var kind: String
     @State private var mergeTargetId = ""
+    @State private var mergeTargetLabel = ""
+    @State private var mergeSearch = ""
+    @State private var mergeResults: [KnowledgeEntity] = []
+    @State private var searchTask: Task<Void, Never>?
+    @State private var searching = false
     @State private var saving = false
 
     init(
@@ -791,21 +796,70 @@ private struct KnowledgeItemEditor: View {
                     ) { Text($0.sentenceCaseIdentifier).tag($0) }
                 }
             }
-            if !duplicates.isEmpty {
-                Section("Merge duplicate") {
-                    Picker("Keep this item separate", selection: $mergeTargetId) {
-                        Text("Keep separate").tag("")
-                        ForEach(duplicates) { duplicate in
-                            Text(duplicate.label.replacingOccurrences(of: "_", with: " ")).tag(
-                                duplicate.targetId)
+            // Not gated on duplicates any more. The server only flags likely
+            // duplicates, so an item it had not paired could not be merged from
+            // the phone at all, while the web form has always searched the whole
+            // graph. Suggestions stay as one-tap shortcuts when they exist.
+            Section("Merge into another item") {
+                if mergeTargetId.isEmpty {
+                    ForEach(duplicates) { duplicate in
+                        Button {
+                            mergeTargetId = duplicate.targetId
+                            mergeTargetLabel = duplicate.label.replacingOccurrences(
+                                of: "_", with: " ")
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(duplicate.label.replacingOccurrences(of: "_", with: " "))
+                                Text("Suggested — \(duplicate.reason)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .buttonStyle(.plain)
+                        .frame(minHeight: 44)
                     }
-                    Text(
-                        "Merging keeps its source-backed connections and uses the selected item as the surviving record."
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    TextField("Search every item", text: $mergeSearch)
+                        .autocorrectionDisabled()
+                        .onChange(of: mergeSearch) { _, value in scheduleSearch(value) }
+                    if searching {
+                        Text("Searching…").font(.caption).foregroundStyle(.secondary)
+                    } else if !mergeResults.isEmpty {
+                        ForEach(mergeResults) { entity in
+                            Button {
+                                mergeTargetId = entity.id
+                                mergeTargetLabel = entity.displayLabel
+                                mergeSearch = ""
+                                mergeResults = []
+                            } label: {
+                                HStack {
+                                    Text(entity.displayLabel)
+                                    Spacer(minLength: 8)
+                                    Text(entity.kind.sentenceCaseIdentifier)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                            .frame(minHeight: 44)
+                        }
+                    } else if mergeSearch.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 {
+                        Text("No other items match.").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    LabeledContent("Merging into", value: mergeTargetLabel)
+                    Button("Keep separate") {
+                        mergeTargetId = ""
+                        mergeTargetLabel = ""
+                    }
+                    .frame(minHeight: 44)
                 }
+                Text(
+                    "Merging keeps its source-backed connections and uses the selected item as the surviving record."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             }
         }
         .navigationTitle("Edit item")
@@ -814,6 +868,28 @@ private struct KnowledgeItemEditor: View {
             ToolbarItem(placement: .confirmationAction) {
                 Button(saving ? "Saving…" : "Save") { save() }.disabled(saving || label.isEmpty)
             }
+        }
+    }
+
+    /// Debounced, and cancelling: without cancellation a slower earlier query
+    /// could land after a later one and replace the results actually typed for.
+    private func scheduleSearch(_ query: String) {
+        searchTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else {
+            mergeResults = []
+            searching = false
+            return
+        }
+        searching = true
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            let result = await model.knowledge(query: trimmed)
+            guard !Task.isCancelled else { return }
+            // Never offer the item as its own merge target.
+            mergeResults = (result?.entities ?? []).filter { $0.id != item.id }
+            searching = false
         }
     }
 
