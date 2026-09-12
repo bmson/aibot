@@ -31,3 +31,9 @@ VERTEX_LOCATION=us-central1
 This configuration permits chat without an OpenRouter key. It does not convert existing OpenRouter model IDs, change deployed settings, or migrate stored embeddings. The existing production deployment script still targets its OpenRouter configuration; consumer service deployment is unfinished.
 
 The router now accepts a `ModelRoutingRepository`. PostgreSQL remains the application default. The Firestore adapter checks task/conversation ownership, loads catalog roles and models, and persists model-call and audit records using the same budget repository. Emulator composition exercises the real router with a fake model, including spend reconciliation and refusal of foreign tasks before model execution. This validates storage integration without making paid model requests.
+
+## Authenticated feasibility checkpoint
+
+On 2026-09-12, the adapter passed live text, structured JSON, tool-schema generation, streaming, and 1536-dimensional embedding checks using customer-project ADC in `bmson-assistant` / `us-central1`. The text fixture used `vertex:gemini-2.5-flash-lite` and embeddings used `vertex:gemini-embedding-001`; these are test identities, not automatically selected production defaults. Synthetic inputs were used, and no generated external tool action was executed.
+
+The Google embedding endpoint accepts one input per request for `gemini-embedding-001`, so the adapter now exposes that limit to the SDK batch splitter. A two-input batch passed both the actual SDK unit test and the live service check, producing two finite 1536-dimensional vectors. See [Google's embedding request limits](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/embeddings/get-text-embeddings). Model lifecycle, configured cost rates, runtime-service-account IAM, stored embedding provenance, quality parity, and complete application activation still require separate checks.

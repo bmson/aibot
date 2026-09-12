@@ -163,6 +163,42 @@ describe('injected model providers', () => {
     expect(() => vertex.assertModelId('google/gemini-3.8-flash')).toThrow('vertex-qualified');
   });
 
+  it('caps gemini-embedding-001 at one input so SDK batching makes single-input requests', async () => {
+    const calls: string[][] = [];
+    const rawModel = {
+      modelId: 'gemini-embedding-001',
+      specificationVersion: 'v4',
+      provider: 'vertex',
+      maxEmbeddingsPerCall: 250,
+      supportsParallelCalls: false,
+      doEmbed: async ({ values }: { values: string[] }) => {
+        calls.push(values);
+        return {
+          embeddings: values.map(() => new Array(1_536).fill(0.01)),
+          usage: { tokens: values.length },
+        };
+      },
+    } as unknown as EmbeddingModel & { maxEmbeddingsPerCall?: number };
+    stubs.createVertex.mockReturnValue({
+      languageModel: vi.fn(),
+      embeddingModel: vi.fn(() => rawModel),
+    });
+    const { createVertexModelProvider } = await import('./provider.js');
+    const vertex = createVertexModelProvider({
+      project: 'assistant-prod',
+      location: 'us-central1',
+    });
+    const model = vertex.textEmbeddingModel('vertex:gemini-embedding-001') as EmbeddingModel & {
+      maxEmbeddingsPerCall: number;
+      doEmbed: (input: { values: string[] }) => Promise<{ embeddings: number[][] }>;
+    };
+    const actual = await vi.importActual<typeof import('ai')>('ai');
+    const { embeddings } = await actual.embedMany({ model, values: ['first', 'second'] });
+    expect(calls).toEqual([['first'], ['second']]);
+    expect(embeddings).toHaveLength(2);
+    expect(embeddings.every((value) => value.length === 1_536)).toBe(true);
+  });
+
   it('validates explicit project and location formats while allowing global', async () => {
     const { createVertexModelProvider } = await import('./provider.js');
     expect(() => createVertexModelProvider({ project: 'short', location: 'us-central1' })).toThrow(
