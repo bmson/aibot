@@ -1,4 +1,4 @@
-import { createHash, randomInt } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { outboundEmailAllowed } from '@assistant/config';
 import {
   activeAutonomyGrant,
@@ -11,6 +11,7 @@ import {
   reserveCost,
   withSpan,
 } from '@assistant/core';
+import { createApproval } from '@assistant/core/workflow/approvals';
 import { detectLiveLookup } from '@assistant/core/workflow/live-lookup';
 import type { Db, TaskRow } from '@assistant/db';
 import {
@@ -125,8 +126,6 @@ export type DispatchOutcome =
   /** Pre-flight reservation failed — the executor parks the task as waiting_budget. */
   | { kind: 'budget_blocked'; reason: string; resumeAt: Date };
 
-const APPROVAL_TTL_HOURS = 24;
-
 /** Tools whose recipient must be provenance-checked before an autonomous send. */
 const RECIPIENT_TOOLS = new Set([
   'gmail.send',
@@ -170,33 +169,6 @@ function cacheKey(toolName: string, args: Record<string, unknown>): string {
   return createHash('sha256')
     .update(`${toolName}:${JSON.stringify(args)}`)
     .digest('hex');
-}
-
-/** Confusable-free (no I/O) alphabet for the unguessable code suffix. */
-const CODE_SUFFIX_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-
-/** Two random letters so a monotonic code cannot be enumerated by a spoofed SMS. */
-function randomCodeSuffix(): string {
-  const pick = () => CODE_SUFFIX_ALPHABET.charAt(randomInt(CODE_SUFFIX_ALPHABET.length));
-  return pick() + pick();
-}
-
-/**
- * Human code across all historical approvals: a monotonic number (unique by
- * construction, so a delayed SMS can never match a later, unrelated approval
- * after its original code was resolved) plus two random letters so the code is
- * not enumerable — a spoofed inbound SMS cannot guess the next pending code.
- * The numeric part is extracted with a regex capture so codes that already
- * carry a letter suffix still advance the counter. Call only while holding the
- * approval-code advisory lock.
- */
-async function nextShortCode(db: Db): Promise<string> {
-  const [row] = await db
-    .select({
-      next: sql<number>`coalesce(max(substring(${approvals.shortCode} from '^A([0-9]+)')::bigint), 0) + 1`,
-    })
-    .from(approvals);
-  return `A${Number(row?.next ?? 1)}${randomCodeSuffix()}`;
 }
 
 async function underRateLimit(db: Db, scope: string): Promise<boolean> {
@@ -800,50 +772,15 @@ export class ToolDispatcher {
     const summary =
       registered.tool.approvalSummary?.(args) ?? approvalFallbackSummary(input.toolName, args);
 
-    const parked = await this.db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('assistant:approval-codes'))`);
-      const shortCode = await nextShortCode(tx as unknown as Db);
-      const [toolCall] = await tx
-        .insert(toolCalls)
-        .values({
-          taskId: input.task.id,
-          step: input.step,
-          toolName: input.toolName,
-          args,
-          risk: 'approval',
-          status: 'awaiting_approval',
-          decision,
-        })
-        .returning();
-      if (!toolCall) throw new Error('failed to insert tool_call');
-      const [approval] = await tx
-        .insert(approvals)
-        .values({
-          taskId: input.task.id,
-          toolCallId: toolCall.id,
-          shortCode,
-          summary,
-          payload: args,
-          expiresAt: sql`now() + interval '${sql.raw(String(APPROVAL_TTL_HOURS))} hours'`,
-        })
-        .returning();
-      if (!approval) throw new Error('failed to insert approval');
-      const [linked] = await tx
-        .update(toolCalls)
-        .set({ approvalId: approval.id })
-        .where(eq(toolCalls.id, toolCall.id))
-        .returning({ id: toolCalls.id });
-      if (!linked) throw new Error('failed to link approval');
-      return { toolCall: { ...toolCall, approvalId: approval.id }, approval };
-    });
-
-    return {
-      kind: 'awaiting_approval',
-      toolCallId: parked.toolCall.id,
-      approvalId: parked.approval.id,
-      shortCode: parked.approval.shortCode,
+    const parked = await createApproval(this.db, {
+      taskId: input.task.id,
+      step: input.step,
+      toolName: input.toolName,
+      args,
+      decision,
       summary,
-    };
+    });
+    return { kind: 'awaiting_approval', ...parked };
   }
 
   private async execute(opts: {

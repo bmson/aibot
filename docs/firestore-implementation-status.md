@@ -42,7 +42,17 @@ Approval expiry and recovery now share PostgreSQL and Firestore command contract
 
 Both adapters persist a bounded scan cursor so an early page of tasks still awaiting a decision cannot starve later resolved work. PostgreSQL migration `0072_approval_recovery_cursor.sql` adds the operational cursor table and must run before the updated runtime. Firestore uses an installation coordination document. Cursors can safely restart after an import; they contain no user decisions. The new Firestore indexes cover approval expiry and parked-task scanning.
 
-The shared synthetic smoke test recreates an approval decision arriving before the executor parks, verifies exactly one recovery wake, and exercises expiry and stale-generation rejection. Emulator CI and the isolated real-cloud harness use this same smoke. Approval creation, notice repair/delivery, and remaining management reads still require PostgreSQL; this batch does not enable the Firestore application profile or migrate the live workspace.
+The shared synthetic smoke test recreates an approval decision arriving before the executor parks, verifies exactly one recovery wake, and exercises expiry and stale-generation rejection. Emulator CI and the isolated real-cloud harness use this same smoke. At that checkpoint, approval creation and notice repair still required PostgreSQL. The follow-up below moves those commands behind adapters; application composition and remaining management reads still require PostgreSQL.
+
+## Approval creation and notice follow-up
+
+The dispatcher now delegates atomic approval creation to the persistence adapter: the gated tool call, approval, and cross-reference commit together with a 24-hour approval window. PostgreSQL preserves its historical code allocator; Firestore uses an installation-owned transactional counter and the same human-readable code format. Firestore can initialize a counter for an empty approval collection. An import containing historical approvals must initialize `coordination/approval-codes.next` to one greater than the verified historical numeric maximum before creation is enabled; absent metadata fails closed instead of reusing old SMS codes.
+
+Notification repair uses approval and message repositories. Delivered channels accumulate atomically, so a later partial stamp cannot erase a successful delivery. A mixed group sends the owner only the approvals missing that delivery, and stamps the successful owner leg before attempting the chat write. A subsequent chat failure therefore retains that success for the next repair attempt. Actual outbound calls stay outside database transactions. Delivery remains at least once across process failure between an external provider accepting a notice and its local stamp; the remaining external-delivery fencing work is still required.
+
+Firestore scans a bounded page of old pending approvals and uses a durable cursor to move past already-notified or otherwise ineligible rows. It then checks the linked task and tool records before returning grouped notices. PostgreSQL filters those joins directly. A page may produce no notices while Firestore's cursor continues through the backlog. The shared synthetic smoke now creates approvals through the adapter and repairs a mixed delivery group into real Firestore chat cards using a fake outbound callback.
+
+This does not make the whole tool dispatcher or application Firestore-ready. Approval management reads, policy lookups, the remaining tool-call execution queries, and full application composition are still PostgreSQL-bound. No SQL migration or live workspace cutover is required for this batch.
 
 ## Remaining delivery gates
 
@@ -50,7 +60,7 @@ The shared synthetic smoke test recreates an approval decision arriving before t
 |---|---|---|
 | P0 | Partial | Runtime-service-account IAM, live queue delivery and representative cost checks; remaining domain indexes; actual Cloud Shell authorization flow; Google-model and passkey feasibility |
 | P1 | Partial | Complete command contracts and remove remaining SDK imports from business logic; select adapters at composition roots |
-| P2 | Partial | Chat reads/cursors, approval creation/notice delivery, external-delivery fences, reminder management reads, and Firestore application/dispatcher composition |
+| P2 | Partial | Chat reads/cursors, approval management/policy reads, external-delivery fences, reminder management reads, and Firestore application/dispatcher composition |
 | P3 | Pending | All remaining domain/module queries, graph/recall, imports, erasure/export, and operational parity across all current table families |
 | P4–P6 | Pending | Google models and metering, embedding migration, bounded scheduling, passkeys/recovery and per-device pairing |
 | P7–P8 | Pending | Customer-owned Terraform/build pipeline, resumable install manifest/bootstrap, owner onboarding, optional Workspace wizard |
@@ -73,6 +83,8 @@ The harness now builds indexes concurrently, waits for every operation before cl
 Schedule follow-up (2026-09-12): all 239 files / 2,198 tests passed in the final PostgreSQL/emulator suite, including the shared scheduling contract and composed reminder smoke test. The dedicated emulator command also passed (62 tests before the final recurring-reminder regression was added). A repeated run exposed an incorrect recurring-versus-one-time test fixture, which was corrected, and an emulator transaction-lifecycle error in the existing budget race test; restarting the emulator cleared that error, and no production retry workaround was added. Lint/architecture checks, typecheck, production build, and whitespace checks passed. Live validation stopped before database creation because Google required a fresh reauthentication (`invalid_rapt`); the new schedule indexes and workload remain unverified on real Firestore until that rerun succeeds. Earlier real-cloud task validation above remains a separate result.
 
 Approval maintenance follow-up (2026-09-12): all 244 files / 2,217 tests passed with PostgreSQL and the Firestore emulator. The dedicated emulator command passed 15 files / 73 tests. Lint/architecture checks, typecheck, production build, whitespace checks, and the non-mutating cloud validation preview passed. The new approval and scheduling workloads still await real-cloud validation after Google reauthentication; no live database migration or runtime switch was performed.
+
+Approval creation/notice follow-up (2026-09-12): all 247 files / 2,231 tests passed with PostgreSQL and the Firestore emulator; the dedicated emulator command passed 16 files / 79 tests. The existing dispatcher and notification integration tests passed (39 tests), along with the portable wrapper tests. Lint/architecture checks, typecheck, safe production build, dependency audit, whitespace checks, and the non-mutating validation preview passed. The preview includes the new notice index (11 validation indexes total). Real-cloud notice/index validation remains deferred pending Google reauthentication; no production database switch or data import was performed.
 
 ```sh
 pnpm lint

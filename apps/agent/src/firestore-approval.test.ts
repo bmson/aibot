@@ -24,9 +24,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore approval mainte
     vi.unstubAllEnvs();
   });
 
-  it('rehearses approval expiry and pre-park recovery', async () => {
+  it('rehearses approval creation, notices, expiry and pre-park recovery', async () => {
     const report = await firestoreApprovalSmoke(store);
     expect(report).toMatchObject({
+      approvalCreation: 'passed',
+      notificationRepair: 'passed',
       approvalExpiry: 'passed',
       preParkRecovery: 'passed',
       generationFences: 'passed',
