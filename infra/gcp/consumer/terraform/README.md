@@ -48,7 +48,7 @@ The default consumer path creates `(default)` in a fresh customer-owned project.
 
 Google currently grants free quota only to the eligible default database; named databases are usage-billed. The free quota does not cover all features or the rest of the application. See [Firestore pricing](https://cloud.google.com/firestore/pricing?hl=en). The named-only isolation rule in the real-cloud validation harness is separate and remains unchanged. Choose a Firestore location that is compatible with the customer's region and selected Google model endpoints; the database location is a durable choice.
 
-The Google provider constraint permits compatible 8.x releases. The committed `.terraform.lock.hcl` records the provider version validated for this foundation; refresh that lock file deliberately when upgrading the provider.
+The Google provider constraint permits compatible 8.x releases. The committed `.terraform.lock.hcl` records the provider version and package checksums validated for local Apple Silicon and Linux CI/Cloud Shell. Refresh both platform checksums deliberately when upgrading: `terraform providers lock -platform=darwin_arm64 -platform=linux_amd64`. Read-only initialization must be followed by successful validation on the target platform.
 
 This is a foundation only. Cloud Run images and services are deliberately absent until the runtime profile, verified image digests, authentication, queues, secrets, and installation manifest are ready.
 
