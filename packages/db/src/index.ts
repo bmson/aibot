@@ -5,6 +5,7 @@ export * from './entities.js';
 export { createPostgresMessageRepository } from './message-repository.js';
 export * from './model-config.js';
 export { createPostgresReminderRepository } from './reminder-repository.js';
+export { createPostgresScheduleRepository } from './schedule-repository.js';
 export * from './schema.js';
 export { createPostgresTaskLeaseRepository } from './task-lease-repository.js';
 

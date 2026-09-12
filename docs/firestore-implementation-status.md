@@ -1,6 +1,6 @@
 # Firestore migration implementation status
 
-Updated 2026-09-10. This tracks the implementation batches of the [migration and consumer-install plan](firestore-consumer-install-plan.md). **The complete migration and single-click installer are not finished.** The current application and deployments continue to require PostgreSQL and the existing model/authentication configuration. Production release of the adapter foundation applies the additive PostgreSQL lease-token migration; it does not move production data into Firestore.
+Updated 2026-09-12. This tracks the implementation batches of the [migration and consumer-install plan](firestore-consumer-install-plan.md). **The complete migration and single-click installer are not finished.** The current application and deployments continue to require PostgreSQL and the existing model/authentication configuration. Production release of the adapter foundation applies the additive PostgreSQL lease-token migration; it does not move production data into Firestore.
 
 ## Implemented
 
@@ -26,7 +26,15 @@ The durable dispatcher awaits Cloud Tasks acceptance before acknowledging an out
 
 The Firestore outbox and Cloud Tasks transport are integrated and exercised together in an emulator test. **The scheduled Firestore dispatcher and application composition are not enabled in production**: the rest of the executor and application still require PostgreSQL. No additional SQL migration is required for this batch.
 
-`pnpm firestore:validate --project PROJECT` previews an isolated real-cloud validation run; `--run` creates a fresh `assistant-validation-*` database, waits for task/outbox indexes, executes synthetic task/concurrency/recovery checks, records Query Explain metrics, and deletes that database in cleanup. It never adopts `(default)` or a caller-supplied database. This is validation tooling, not the consumer installer. Google Cloud login/ADC must be available before a live run. The run does not prove production runtime-service-account IAM, live Cloud Tasks OIDC delivery, full-workload pricing, or the remaining Firestore domains.
+`pnpm firestore:validate --project PROJECT` previews an isolated real-cloud validation run; `--run` creates a fresh `assistant-validation-*` database, waits for task/outbox/schedule indexes, executes synthetic task/schedule/concurrency/recovery checks, records Query Explain metrics, and deletes that database in cleanup. It never adopts `(default)` or a caller-supplied database. This is validation tooling, not the consumer installer. Google Cloud login/ADC must be available before a live run. The run does not prove production runtime-service-account IAM, live Cloud Tasks OIDC delivery, full-workload pricing, or the remaining Firestore domains.
+
+## Schedule firing follow-up
+
+Schedule creation, bounded due queries, initialization, and occurrence commits now share a PostgreSQL/Firestore repository. Creating a task and advancing or disabling its schedule are atomic; Firestore includes the event uniqueness record and outbox intent in that transaction. Both adapters recheck the complete schedule snapshot and cancellation state, so stale sweeps cannot fire edited or cancelled reminders. PostgreSQL uses the same advisory lock as reminder cancellation and delivery.
+
+The current PostgreSQL scheduler, early morning brief, and reminder creation tools use this seam. One-time reminders retain their exact first firing time and remain deliverable after their schedule is disabled. Firestore delivery binds the occurrence ID to the persisted task event and payload before committing the in-app message. Shared adapter tests cover concurrent creation/firing, cancellation races, stale edits, initialization, transaction rollback, owner isolation, and early-versus-due races. The portable runner also has a synthetic Firestore smoke test shared between emulator CI and isolated cloud validation.
+
+This does not yet port the reminder list/cancel lookup tools, goal synchronization/policy queries, or complete executor composition. A goal schedule without a goal preparation adapter explicitly rejects the portable sweep rather than authorizing unchecked work. Firestore runtime activation remains gated on those domains. Future imports must preserve schedule IDs, backfill task `scheduleId` and `occurrenceId` from validated event provenance, and reject ambiguous legacy schedule names. `ensure` can adopt a unique legacy schedule and creates a transactional `scheduleNames` uniqueness record scoped to its agent. The new schedule index orders by `enabled`, `nextRunAt`, and `id`. There is no additional SQL migration for this batch.
 
 ## Remaining delivery gates
 
@@ -34,7 +42,7 @@ The Firestore outbox and Cloud Tasks transport are integrated and exercised toge
 |---|---|---|
 | P0 | Partial | Runtime-service-account IAM, live queue delivery and representative cost checks; remaining domain indexes; actual Cloud Shell authorization flow; Google-model and passkey feasibility |
 | P1 | Partial | Complete command contracts and remove remaining SDK imports from business logic; select adapters at composition roots |
-| P2 | Partial | Schedule commands, chat reads/cursors, approval sweeps, external-delivery fences, and Firestore application/dispatcher composition |
+| P2 | Partial | Chat reads/cursors, approval sweeps, external-delivery fences, reminder management reads, and Firestore application/dispatcher composition |
 | P3 | Pending | All remaining domain/module queries, graph/recall, imports, erasure/export, and operational parity across all 63 table families |
 | P4–P6 | Pending | Google models and metering, embedding migration, bounded scheduling, passkeys/recovery and per-device pairing |
 | P7–P8 | Pending | Customer-owned Terraform/build pipeline, resumable install manifest/bootstrap, owner onboarding, optional Workspace wizard |
@@ -53,6 +61,8 @@ Task-creation/dispatch follow-up: all 231 test files / 2,073 tests passed with P
 Real-cloud follow-up (2026-09-10): refreshed credentials cleared that blocker, and the Firestore API was enabled in `bmson-assistant`. The first live workload exposed a missing `(runAfter, status, updatedAt)` index for the due-query's null wake-time branch; the failed run's temporary database was deleted. After adding that index alongside the scheduled-work index, the synthetic workload and Query Explain passed on a fresh Standard/Native Firestore database. This covers task creation, event deduplication, rate-limit contention, generation fencing, sleep/wake recovery, cancellation, and outbox transactions under the supplied administrative credentials. It does not prove runtime-service-account permissions, real Cloud Tasks transport/OIDC, production-workload costs, or other database domains. Production remains on PostgreSQL.
 
 The harness now builds indexes concurrently, waits for every operation before cleanup even on failure, and reports validation outcomes before waiting for database deletion. All 231 test files / 2,075 tests passed locally, including six resource-lifecycle tests. Typecheck, lint/architecture checks, production build, and whitespace checks passed.
+
+Schedule follow-up (2026-09-12): the PostgreSQL/emulator suite passed, including the shared scheduling contract and composed reminder smoke test. Lint/architecture checks, typecheck, production build, and whitespace checks passed. Live validation stopped before database creation because Google required a fresh reauthentication (`invalid_rapt`); the new schedule indexes and workload remain unverified on real Firestore until that rerun succeeds. Earlier real-cloud task validation above remains a separate result.
 
 ```sh
 pnpm lint

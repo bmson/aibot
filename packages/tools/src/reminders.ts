@@ -119,27 +119,24 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
             throw new Error('one-time reminder must be in the future');
           }
           const cron = cronForInstant(firesAt, agent.timezone);
-          const [row] = await ctx.db
-            .insert(schedules)
-            .values({
-              agentId: ctx.agentId,
-              name: `${REMINDER_PREFIX}${randomUUID()}`,
-              cron,
-              nextRunAt: firesAt,
-              taskTemplate: {
-                type: 'scheduled',
-                job: 'reminder.notify',
-                maxSteps: 3,
-                budgetUsdLimit: '0.05',
-                reminderKind: 'once',
-                reminderText: args.text,
-                timezone: agent.timezone,
-                instruction: `Reminder for the owner: ${args.text}\n\nCall owner.notify once with exactly this reminder text, then finish. Do nothing else.`,
-                ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
-              },
-            })
-            .returning();
-          if (!row) throw new Error('reminder creation failed');
+          const row = await upsertSchedule(ctx.db, {
+            agentId: ctx.agentId,
+            name: `${REMINDER_PREFIX}${randomUUID()}`,
+            cron,
+            timezone: agent.timezone,
+            nextRunAt: firesAt,
+            taskTemplate: {
+              type: 'scheduled',
+              job: 'reminder.notify',
+              maxSteps: 3,
+              budgetUsdLimit: '0.05',
+              reminderKind: 'once',
+              reminderText: args.text,
+              timezone: agent.timezone,
+              instruction: `Reminder for the owner: ${args.text}\n\nCall owner.notify once with exactly this reminder text, then finish. Do nothing else.`,
+              ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
+            },
+          });
           return {
             reminderId: row.id,
             kind: 'once' as const,
@@ -162,6 +159,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
             maxSteps: 3,
             budgetUsdLimit: '0.05',
             reminderKind: 'recurring',
+            timezone: agent.timezone,
             reminderText: args.text,
             instruction: `Reminder for the owner: ${args.text}\n\nCall owner.notify once with exactly this reminder text, then finish. Do nothing else.`,
             // Fire back into the originating chat when there is one.

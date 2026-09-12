@@ -28,17 +28,24 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore reminder delive
       id: 'reminder',
       agentId: 'agent',
       name: 'reminder:test',
-      enabled: false,
-      taskTemplate: { reminderKind: 'once' },
+      enabled: true,
+      taskTemplate: { reminderKind: 'recurring' },
     });
-    await store.doc('tasks', 'task').set(
-      taskFixture({
+    await store.doc('tasks', 'task').set({
+      ...taskFixture({
         id: 'task',
         agentId: 'agent',
         conversationId: 'conversation',
         reminderId: 'reminder',
       }),
-    );
+      externalEventId: 'schedule:reminder:one',
+      trigger: {
+        payload: {
+          scheduleId: 'reminder',
+          occurrenceId: 'schedule:reminder:one',
+        },
+      },
+    });
     const claimed = await new FirestoreTaskLeaseRepository(store).claim('task');
     if (!claimed) throw new Error('Fixture claim failed');
     lease = claimed;
@@ -50,7 +57,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore reminder delive
     reminders.deliver({
       agentId: 'agent',
       reminderId: 'reminder',
-      occurrenceId: 'one',
+      occurrenceId: 'schedule:reminder:one',
       lease,
       message,
     });
@@ -72,6 +79,18 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore reminder delive
     expect(results.filter(Boolean)).toHaveLength(1);
     expect((await store.collection('messages').get()).size).toBe(1);
   }, 20_000);
+  it('rejects a different occurrence on the same recurring task', async () => {
+    expect(
+      await reminders.deliver({
+        agentId: 'agent',
+        reminderId: 'reminder',
+        occurrenceId: 'schedule:reminder:two',
+        lease,
+        message,
+      }),
+    ).toBe(false);
+    expect((await store.collection('messages').get()).size).toBe(0);
+  });
   it('expired and replaced leases cannot deliver', async () => {
     now = new Date(now.getTime() + 11 * 60_000);
     expect(await deliver()).toBe(false);

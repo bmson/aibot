@@ -105,12 +105,16 @@ export class FirestoreReminderRepository implements ReminderRepository {
       const row = decodeRecord<Records['schedules']>(schedule.data());
       const lease = decodeRecord<TaskLease>(task.data());
       const now = this.store.now();
-      const trigger = lease.trigger as { payload?: { scheduleId?: string } } | null;
+      const trigger = lease.trigger as {
+        payload?: { scheduleId?: string; occurrenceId?: string };
+      } | null;
       if (
         row.agentId !== input.agentId ||
         conversation.data()?.agentId !== input.agentId ||
         lease.agentId !== input.agentId ||
         trigger?.payload?.scheduleId !== row.id ||
+        lease.externalEventId !== input.occurrenceId ||
+        trigger?.payload?.occurrenceId !== input.occurrenceId ||
         !row.name.startsWith(REMINDER_SCHEDULE_PREFIX)
       )
         return false;

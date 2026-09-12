@@ -18,6 +18,7 @@ const child = spawn(
     'packages/firestore',
     'packages/persistence',
     'apps/agent/src/firestore-dispatch.test.ts',
+    'apps/agent/src/firestore-schedule.test.ts',
     ...process.argv.slice(2),
   ],
   {
