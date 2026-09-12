@@ -34,6 +34,11 @@ resource "google_firestore_database" "consumer" {
 
   lifecycle {
     prevent_destroy = true
+
+    precondition {
+      condition     = var.firestore_database_id != "(default)" || var.create_default_database
+      error_message = "Creating (default) requires create_default_database=true after verifying that no default database already exists in the fresh customer project. Existing databases must not be imported or adopted."
+    }
   }
 
   depends_on = [google_project_service.required]
@@ -123,7 +128,7 @@ resource "google_service_account" "runtime" {
 }
 
 # Firestore IAM is project-scoped. The condition narrows the database role to
-# the named installation database without granting project administration or
+# the selected installation database without granting project administration or
 # service-account impersonation.
 resource "google_project_iam_member" "runtime_firestore" {
   project = var.project_id
@@ -131,7 +136,7 @@ resource "google_project_iam_member" "runtime_firestore" {
   member  = "serviceAccount:${google_service_account.runtime.email}"
 
   condition {
-    title       = "assistant_named_database"
+    title       = "assistant_installation_database"
     description = "Limit runtime datastore access to this installation database."
     expression  = "resource.name == \"projects/${var.project_id}/databases/${var.firestore_database_id}\""
   }

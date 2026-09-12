@@ -52,11 +52,14 @@ export default defineConfig({
       'apps/agent',
       parallel('packages/persistence'),
       {
-        ...parallel('packages/firestore'),
+        extends: true,
         test: {
           root: 'packages/firestore',
           env: { METADATA_SERVER_DETECTION: 'none' },
-          fileParallelism: true,
+          // The emulator shares a transaction lock manager across installation
+          // roots. Keep files serial while preserving each test's deliberate
+          // concurrent operations and their race assertions.
+          fileParallelism: false,
           testTimeout: 30_000,
           hookTimeout: 30_000,
         },

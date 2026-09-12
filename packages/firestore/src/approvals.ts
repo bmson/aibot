@@ -1,10 +1,13 @@
 import { createHash, randomInt, randomUUID } from 'node:crypto';
 import {
+  type ApprovalInbox,
+  type ApprovalInboxQuery,
   type ApprovalNoticeGroup,
   type ApprovalNoticeQuery,
   type ApprovalRepository,
   type ApprovalResolution,
   type ApprovalWake,
+  approvalInboxLimit,
   approvalIsResolved,
   approvalSweepBatch,
   type CreateApprovalInput,
@@ -12,8 +15,9 @@ import {
   parkedApprovalIds,
   type Records,
   type ResolveApprovalInput,
+  type ResolvedApprovalItem,
 } from '@assistant/persistence';
-import { Timestamp } from '@google-cloud/firestore';
+import { type QueryDocumentSnapshot, Timestamp } from '@google-cloud/firestore';
 import { createWakeIntent } from './outbox.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
@@ -37,6 +41,9 @@ function policyId(policy: NonNullable<ResolveApprovalInput['policy']>) {
 const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 const CODE_SUFFIX_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const APPROVAL_NOTICE_CURSOR = 'approval-notices-cursor';
+const INBOX_PENDING_LIMIT = 50;
+const INBOX_PAGE_SIZE = 100;
+const INBOX_SCAN_LIMIT = 1000;
 
 function randomCodeSuffix(): string {
   const pick = () => CODE_SUFFIX_ALPHABET.charAt(randomInt(CODE_SUFFIX_ALPHABET.length));
@@ -63,9 +70,218 @@ function validDate(value: Date | undefined, message: string): Date {
   return date;
 }
 
+function inboxDate(value: Date | undefined): Date {
+  return validDate(value, 'Invalid approval inbox time');
+}
+
+function historyOrder(left: ResolvedApprovalItem, right: ResolvedApprovalItem): number {
+  const leftTime = (left.approval.resolvedAt ?? left.approval.expiresAt).getTime();
+  const rightTime = (right.approval.resolvedAt ?? right.approval.expiresAt).getTime();
+  if (leftTime !== rightTime) return rightTime - leftTime;
+  return right.approval.id.localeCompare(left.approval.id);
+}
+
+function validPersistedDate(value: unknown): value is Date {
+  return value instanceof Date && Number.isFinite(value.getTime());
+}
+
+function validDocumentIdentifier(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  try {
+    documentKey(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function validApprovalDocument(
+  approval: Records['approvals'],
+  candidate: QueryDocumentSnapshot,
+): boolean {
+  return (
+    validDocumentIdentifier(approval.id) &&
+    validPersistedDate(approval.requestedAt) &&
+    documentKey(approval.id) === candidate.ref.id
+  );
+}
+
+async function ownedTask(
+  store: InstallationStore,
+  approval: Records['approvals'],
+  agentId: string,
+): Promise<Records['tasks'] | null> {
+  if (!validDocumentIdentifier(approval.taskId)) return null;
+  const snapshot = await store.doc('tasks', approval.taskId).get();
+  if (!snapshot.exists) return null;
+  const task = decodeRecord<Records['tasks']>(snapshot.data());
+  return task.id === approval.taskId && task.agentId === agentId && typeof task.type === 'string'
+    ? task
+    : null;
+}
+
+async function collectInboxCandidates<T>(
+  baseQuery: import('@google-cloud/firestore').Query,
+  target: number,
+  accept: (candidate: QueryDocumentSnapshot) => Promise<T | null>,
+  errorMessage: string,
+): Promise<T[]> {
+  const accepted: T[] = [];
+  let cursor: QueryDocumentSnapshot | undefined;
+  let scanned = 0;
+  for (;;) {
+    const page = await (cursor ? baseQuery.startAfter(cursor) : baseQuery)
+      .limit(INBOX_PAGE_SIZE)
+      .get();
+    scanned += page.size;
+    for (const candidate of page.docs) {
+      const item = await accept(candidate);
+      if (item !== null) accepted.push(item);
+      if (accepted.length >= target) return accepted;
+    }
+    if (page.size < INBOX_PAGE_SIZE) return accepted;
+    if (scanned >= INBOX_SCAN_LIMIT) throw new Error(errorMessage);
+    cursor = page.docs.at(-1);
+    if (!cursor) throw new Error(`${errorMessage}: cursor did not advance`);
+  }
+}
+
 export class FirestoreApprovalRepository implements ApprovalRepository {
   readonly kind = 'approval-repository' as const;
   constructor(readonly store: InstallationStore) {}
+
+  async listInbox(agentId: string, options: ApprovalInboxQuery = {}): Promise<ApprovalInbox> {
+    const recentLimit = approvalInboxLimit(options.recentLimit);
+    const now = inboxDate(options.now ?? this.store.now());
+    const pendingQuery = this.store
+      .collection('approvals')
+      .where('status', '==', 'pending')
+      .orderBy('requestedAt', 'asc')
+      .orderBy('id', 'asc');
+    const pending = await collectInboxCandidates(
+      pendingQuery,
+      INBOX_PENDING_LIMIT,
+      async (candidate) => {
+        const approval = decodeRecord<Records['approvals']>(candidate.data());
+        if (
+          !validApprovalDocument(approval, candidate) ||
+          approval.status !== 'pending' ||
+          !validPersistedDate(approval.expiresAt) ||
+          approval.expiresAt <= now ||
+          !validDocumentIdentifier(approval.toolCallId)
+        )
+          return null;
+        const task = await ownedTask(this.store, approval, agentId);
+        if (!task) return null;
+        const toolSnapshot = await this.store.doc('toolCalls', approval.toolCallId).get();
+        if (!toolSnapshot.exists) return null;
+        const tool = decodeRecord<Records['toolCalls']>(toolSnapshot.data());
+        if (
+          tool.id !== approval.toolCallId ||
+          tool.taskId !== approval.taskId ||
+          typeof task.trust !== 'string' ||
+          typeof tool.toolName !== 'string'
+        )
+          return null;
+        return {
+          approval,
+          taskType: task.type,
+          taskTrust: task.trust,
+          toolName: tool.toolName,
+          decision: tool.decision,
+        };
+      },
+      'Approval inbox pending scan exceeded its safety bound',
+    );
+
+    const terminalQuery = this.store
+      .collection('approvals')
+      .where('status', 'in', ['approved', 'denied', 'expired'])
+      .where('resolvedAt', '!=', null)
+      .orderBy('resolvedAt', 'desc')
+      .orderBy('id', 'desc');
+    const dated = await collectInboxCandidates(
+      terminalQuery,
+      recentLimit,
+      async (candidate) => this.resolvedInboxItem(candidate, agentId),
+      'Approval inbox resolved scan exceeded its safety bound',
+    );
+
+    const nullResolvedTerminalQuery = this.store
+      .collection('approvals')
+      .where('status', 'in', ['approved', 'denied', 'expired'])
+      .where('resolvedAt', '==', null)
+      .orderBy('expiresAt', 'desc')
+      .orderBy('id', 'desc');
+    const nullResolved = await collectInboxCandidates(
+      nullResolvedTerminalQuery,
+      recentLimit,
+      async (candidate) => this.resolvedInboxItem(candidate, agentId),
+      'Approval inbox unresolved terminal scan exceeded its safety bound',
+    );
+
+    const expiredPendingQuery = this.store
+      .collection('approvals')
+      .where('status', '==', 'pending')
+      .where('expiresAt', '<=', now)
+      .orderBy('expiresAt', 'desc')
+      .orderBy('id', 'desc');
+    const expired = await collectInboxCandidates(
+      expiredPendingQuery,
+      recentLimit,
+      async (candidate) => {
+        const approval = decodeRecord<Records['approvals']>(candidate.data());
+        if (
+          !validApprovalDocument(approval, candidate) ||
+          approval.status !== 'pending' ||
+          !validPersistedDate(approval.expiresAt) ||
+          approval.expiresAt > now
+        )
+          return null;
+        return this.resolvedInboxItem(candidate, agentId, true);
+      },
+      'Approval inbox expired scan exceeded its safety bound',
+    );
+
+    const resolved = [...dated, ...nullResolved, ...expired];
+    resolved.sort(historyOrder);
+    return { pending, resolved: resolved.slice(0, recentLimit) };
+  }
+
+  private async resolvedInboxItem(
+    candidate: QueryDocumentSnapshot,
+    agentId: string,
+    allowExpiredPending = false,
+  ): Promise<ResolvedApprovalItem | null> {
+    const approval = decodeRecord<Records['approvals']>(candidate.data());
+    if (
+      !validApprovalDocument(approval, candidate) ||
+      !(
+        approvalIsResolved(approval.status) ||
+        (allowExpiredPending && approval.status === 'pending')
+      ) ||
+      !validPersistedDate(approval.expiresAt) ||
+      (approval.resolvedAt !== null && !validPersistedDate(approval.resolvedAt))
+    )
+      return null;
+    const task = await ownedTask(this.store, approval, agentId);
+    if (!task) return null;
+    return {
+      approval: {
+        id: approval.id,
+        taskId: approval.taskId,
+        shortCode: approval.shortCode,
+        summary: approval.summary,
+        status: approval.status,
+        requestedAt: approval.requestedAt,
+        resolvedAt: approval.resolvedAt,
+        resolvedVia: approval.resolvedVia,
+        expiresAt: approval.expiresAt,
+        edited: approval.resolutionPayload != null,
+      },
+      taskType: task.type,
+    };
+  }
 
   async create(input: CreateApprovalInput): Promise<CreatedApproval> {
     const toolCallId = randomUUID();

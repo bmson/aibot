@@ -5,6 +5,8 @@ import {
   type TaskRow,
 } from '@assistant/db';
 import type {
+  ApprovalInbox,
+  ApprovalInboxQuery,
   ApprovalPolicyRepository,
   ApprovalRepository,
   CreateApprovalInput,
@@ -16,7 +18,15 @@ import type {
 import { persistMessage } from '../chat.js';
 import { getQueueNotifier } from '../queue.js';
 
-export type { ResolveApprovalInput, ResolveApprovalResult } from '@assistant/persistence';
+export type {
+  ApprovalInbox,
+  ApprovalInboxQuery,
+  ApprovalRepository,
+  PendingApprovalItem,
+  ResolveApprovalInput,
+  ResolveApprovalResult,
+  ResolvedApprovalItem,
+} from '@assistant/persistence';
 
 export function createApproval(store: Db | ApprovalRepository, input: CreateApprovalInput) {
   const repository =
@@ -24,6 +34,19 @@ export function createApproval(store: Db | ApprovalRepository, input: CreateAppr
       ? (store as ApprovalRepository)
       : createPostgresApprovalRepository(store as Db);
   return repository.create(input);
+}
+
+/** Read the owner-scoped approval screen through the selected persistence adapter. */
+export function listApprovalInbox(
+  store: Db | ApprovalRepository,
+  agentId: string,
+  options?: ApprovalInboxQuery,
+): Promise<ApprovalInbox> {
+  const repository =
+    'kind' in store && store.kind === 'approval-repository'
+      ? (store as ApprovalRepository)
+      : createPostgresApprovalRepository(store as Db);
+  return repository.listInbox(agentId, options);
 }
 
 /**

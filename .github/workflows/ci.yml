@@ -60,6 +60,18 @@ jobs:
       # The doctor validates the default configuration end to end, including
       # every module's declared readiness and production rules.
       - run: pnpm config:check
+      - name: Install Terraform for offline consumer checks
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.14.5
+          terraform_wrapper: false
+      - name: Validate consumer infrastructure without cloud credentials
+        working-directory: infra/gcp/consumer/terraform
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false -lockfile=readonly
+          terraform validate
+          terraform test
 
   verify:
     runs-on: ubuntu-latest

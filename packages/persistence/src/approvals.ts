@@ -30,10 +30,49 @@ export type ResolveApprovalResult =
 export type ApprovalResolution = ResolveApprovalResult & {
   wake?: { taskId: string; generation: number };
 };
+
+export interface ApprovalInboxQuery {
+  /** Recent history is ordered by resolvedAt, falling back to expiresAt, then id. */
+  recentLimit?: number;
+  now?: Date;
+}
+
+export interface PendingApprovalItem {
+  approval: Records['approvals'];
+  taskType: string;
+  taskTrust: string;
+  toolName: string;
+  decision: unknown;
+}
+
+/** Resolved history intentionally omits payloads and tool arguments. */
+export interface ResolvedApprovalItem {
+  approval: Pick<
+    Records['approvals'],
+    | 'id'
+    | 'taskId'
+    | 'shortCode'
+    | 'summary'
+    | 'status'
+    | 'requestedAt'
+    | 'resolvedAt'
+    | 'resolvedVia'
+    | 'expiresAt'
+  > & { edited: boolean };
+  taskType: string;
+}
+
+export interface ApprovalInbox {
+  pending: PendingApprovalItem[];
+  resolved: ResolvedApprovalItem[];
+}
+
 export interface ApprovalRepository {
   readonly kind: 'approval-repository';
   /** Commit the gated tool call and approval together; task parking is a separate lease-fenced command. */
   create(input: CreateApprovalInput): Promise<CreatedApproval>;
+  /** Owner-scoped bounded approval screen projection; resolved history excludes payloads. */
+  listInbox(agentId: string, options?: ApprovalInboxQuery): Promise<ApprovalInbox>;
   /** A bounded scan may return no eligible notices while its durable cursor still has more pages. */
   listStalledNotices(options?: ApprovalNoticeQuery): Promise<ApprovalNoticeGroup[]>;
   /** Atomically union delivered channels; never remove an earlier successful delivery. */
@@ -100,4 +139,10 @@ export interface ApprovalNoticeQuery {
 export interface ApprovalNoticeGroup {
   task: Records['tasks'];
   notices: Array<Records['approvals'] & { toolName: string }>;
+}
+
+export function approvalInboxLimit(limit = 20): number {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50)
+    throw new Error('Invalid approval inbox limit');
+  return limit;
 }

@@ -4,6 +4,8 @@
 
 This is a developer preview, not the finished single-click installer. The response always contains `mode: "preview-only"` and `runtimeGated: true`, plus the remaining implementation and live-validation gates.
 
+The response also contains `databaseCreationIntent`, which identifies the selected database and records a create-only, no-adoption intent. Its `absenceVerification.requiredBeforeProvisioning` value is `true` while `performed` remains `false`: a future authenticated provisioner must verify that the selected database is absent before attempting creation. This applies equally to `(default)` and named databases.
+
 ## Input
 
 Provide these fields in a local JSON file:
@@ -15,7 +17,7 @@ Provide these fields in a local JSON file:
 - `createdAt`: an ISO UTC timestamp, such as `2026-09-12T00:00:00.000Z`.
 - Optional `embeddingModel` and `embeddingDimension` record the planned embedding space. They do not verify model availability or migrate existing vectors.
 
-Use a named database (4–63 characters), an installation ID of 4–21 characters, and a standard Google region. The preview rejects `(default)` and UUID-like database IDs.
+Use `(default)` for a new eligible project or a valid named database (4–63 characters), an installation ID of 4–21 characters, and a standard Google region. A future creator must verify that `(default)` is absent before creating it and must never adopt an existing database; this offline preview performs neither check. UUID-like database IDs remain rejected.
 
 Use the exact source archive's digest and its full release commit. Validation checks syntax and identity consistency; it does not establish the source archive's authenticity or verify its contents against a remote release. Do not include credentials or environment variables. Unknown fields are rejected.
 
@@ -26,6 +28,27 @@ pnpm --silent install:plan --input install-input.json > install-preview.json
 ```
 
 The command does not create `install-input.json`. A caller must deliberately create that file from the intended installation choices. Reusing an identical input produces identical output.
+
+## Local state and archive verification
+
+The preview remains read-only. An explicit local-state command can persist a validated preview manifest after checking the selected source archive:
+
+```sh
+node --input-type=module -e "import fs from 'node:fs'; const preview = JSON.parse(fs.readFileSync('install-preview.json', 'utf8')); fs.writeFileSync('install-manifest.json', JSON.stringify(preview.manifest, null, 2));"
+pnpm install:state --write --state .assistant-install/manifest.json \
+  --manifest install-manifest.json --archive assistant-source.tar.gz
+```
+
+The archive is streamed for SHA-256 verification against `identity.release.archiveDigest`; it is never extracted or executed. The digest binds the bytes in the local regular file at verification time and does not prove Git provenance or prevent a later file replacement. The state file is written through a same-directory temporary file, fsynced, and atomically renamed. Directory fsync is best effort on supported filesystems, so this does not guarantee persistence across every power-loss scenario. A lock and expected-previous-manifest comparison prevent concurrent or stale overwrites. A leftover lock fails closed; after confirming no writer is active, remove the `.lock` file manually and retry. Use `--expected PATH` for a compare-and-swap retry with the same immutable identity and selection; preview reconfiguration has no implicit overwrite path.
+
+Resume is an explicit read operation:
+
+```sh
+pnpm install:state --resume --state .assistant-install/manifest.json \
+  --input install-input.json
+```
+
+Resume checks the immutable identity and selected modules/provider/embedding settings. It does not advance stages, call Google Cloud, execute source, or claim that a commit hash proves provenance. Cloud stages remain unverified until a future orchestrator performs and records them.
 
 ## Manifest and resume behavior
 

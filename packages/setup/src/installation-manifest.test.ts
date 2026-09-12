@@ -111,9 +111,9 @@ describe('installation manifest', () => {
     expect(() =>
       manifest({ identity: { ...identity, installationId: 'demo-installation-' } }),
     ).toThrow('identity.installationId');
-    expect(() => manifest({ identity: { ...identity, databaseId: '(default)' } })).toThrow(
-      'identity.databaseId',
-    );
+    expect(
+      manifest({ identity: { ...identity, databaseId: '(default)' } }).identity.databaseId,
+    ).toBe('(default)');
     expect(() =>
       manifest({ identity: { ...identity, databaseId: '123e4567-e89b-12d3-a456-426614174000' } }),
     ).toThrow('identity.databaseId');

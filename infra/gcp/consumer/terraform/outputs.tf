@@ -14,7 +14,7 @@ output "installation_id" {
 }
 
 output "firestore_database_name" {
-  description = "Named Firestore Native database resource name."
+  description = "Installation Firestore Native database resource name."
   value       = google_firestore_database.consumer.name
 }
 

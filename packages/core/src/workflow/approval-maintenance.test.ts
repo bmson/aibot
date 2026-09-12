@@ -24,6 +24,7 @@ function repository(wakes: ApprovalWake[]): {
       create: async () => {
         throw new Error('unused');
       },
+      listInbox: async () => ({ pending: [], resolved: [] }),
       listStalledNotices: async () => [],
       markNotified: async () => {},
       resolve: unusedResolve,
