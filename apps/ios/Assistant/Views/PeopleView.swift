@@ -188,6 +188,7 @@ struct PeopleView: View {
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
         }
         .assistantCard(
             in: colorScheme,
@@ -224,6 +225,7 @@ struct PeopleView: View {
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
         }
         .assistantCard(in: colorScheme)
     }
@@ -398,6 +400,7 @@ struct PersonRelationGroupCard: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .accessibilityHidden(true)
             }
         }
         .frame(minHeight: 44)
@@ -420,6 +423,7 @@ struct PersonRelationGroupCard: View {
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))
                             .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                            .accessibilityHidden(true)
                     }
                     .font(.caption)
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
@@ -439,6 +443,7 @@ struct PersonRelationGroupCard: View {
                                         Image(systemName: "chevron.right")
                                             .font(.caption.weight(.semibold))
                                             .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                            .accessibilityHidden(true)
                                     }
                                     .frame(minHeight: 44)
                                     .contentShape(Rectangle())

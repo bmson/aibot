@@ -171,7 +171,7 @@ struct RelationshipGraphScreen: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
             }.padding(.vertical, 4)
         }
     }
@@ -265,9 +265,9 @@ struct RelationshipGraphScreen: View {
                 HStack {
                     Text(moveNodes ? "Drag a node to reposition it" : "Drag to pan · pinch to zoom").font(.caption2).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
-                    Button("Zoom out", systemImage: "minus") { send(.zoomOut) }.labelStyle(.iconOnly).frame(width: 40, height: 40)
-                    Button("Fit graph", systemImage: "arrow.up.left.and.arrow.down.right") { send(.fit) }.labelStyle(.iconOnly).frame(width: 40, height: 40)
-                    Button("Zoom in", systemImage: "plus") { send(.zoomIn) }.labelStyle(.iconOnly).frame(width: 40, height: 40)
+                    Button("Zoom out", systemImage: "minus") { send(.zoomOut) }.labelStyle(.iconOnly).frame(width: 44, height: 44)
+                    Button("Fit graph", systemImage: "arrow.up.left.and.arrow.down.right") { send(.fit) }.labelStyle(.iconOnly).frame(width: 44, height: 44)
+                    Button("Zoom in", systemImage: "plus") { send(.zoomIn) }.labelStyle(.iconOnly).frame(width: 44, height: 44)
                 }
                 Text("Lines are recorded relationships; dashed lines need review.").font(.caption2).foregroundStyle(.secondary)
             }
@@ -357,7 +357,10 @@ private struct GraphConnectionsSheet: View {
     let refresh: () async -> Void
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var working = false
+    /// Names the edge being removed, not merely that one is: a single Bool here
+    /// disabled Edit and Remove on every connection in the list while any one
+    /// of them was in flight.
+    @State private var removingID: String?
     @State private var failure: String?
     @State private var correcting: KnowledgeRelation?
 
@@ -377,13 +380,13 @@ private struct GraphConnectionsSheet: View {
                         Button("Edit") { Task { correcting = await model.knowledgeRelation(id: edge.id); if correcting == nil { failure = "Couldn’t load this connection." } } }
                             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                         AssistantConfirmationButton("Remove", hint: "The original note and other claims stay saved.") {
-                            working = true
+                            removingID = edge.id
                             failure = nil
                             if await model.removeKnowledgeRelation(id: edge.id) { removed(edge.id) }
                             else { failure = "Couldn’t remove this connection. Try again." }
-                            working = false
+                            removingID = nil
                         }
-                    }.disabled(working)
+                    }.disabled(removingID == edge.id)
                 }
             }
             if let failure { Text(failure).foregroundStyle(.red) }

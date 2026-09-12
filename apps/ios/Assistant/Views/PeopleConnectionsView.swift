@@ -338,7 +338,7 @@ struct PeopleConnectionMap: View {
         HStack {
           Text("View evidence (\(branch.group.relations.count))")
           Spacer(minLength: 4)
-          Image(systemName: "chevron.right")
+          Image(systemName: "chevron.right").accessibilityHidden(true)
         }
         .font(.caption)
         .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
@@ -370,7 +370,9 @@ struct PersonConnectionOutline: View {
   @Environment(\.colorScheme) private var colorScheme
   @State private var expanded: Set<String> = []
   @State private var inspecting: PersonRelationSummary?
-  @State private var working = false
+  /// Names the relationship being removed. A single Bool disabled every branch's
+  /// View source and Remove while any one removal was in flight.
+  @State private var removingID: String?
   @State private var failure: String?
 
   private func refreshBranch() async {
@@ -399,7 +401,7 @@ struct PersonConnectionOutline: View {
                 } label: {
                   Image(systemName: "chevron.right")
                     .rotationEffect(.degrees(expanded.contains(branch.id) ? 90 : 0))
-                    .frame(width: 36, height: 44)
+                    .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(expanded.contains(branch.id) ? "Collapse" : "Expand") \(branch.group.representative.otherLabel)")
@@ -433,13 +435,13 @@ struct PersonConnectionOutline: View {
                         Button("View source") { inspecting = evidence }
                           .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                         AssistantConfirmationButton("Remove", hint: "The source note and other claims stay saved.") {
-                          working = true
+                          removingID = evidence.id
                           failure = nil
                           if await model.removeKnowledgeRelation(id: evidence.id) { await refreshBranch() }
                           else { failure = "Couldn’t remove this connection. Try again." }
-                          working = false
+                          removingID = nil
                         }
-                      }.font(.caption).frame(minHeight: 44).disabled(working)
+                      }.font(.caption).frame(minHeight: 44).disabled(removingID == evidence.id)
                     }
                   }
                 }.font(.caption).padding(.top, 4)

@@ -216,7 +216,14 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             viewport.scale = min(4, max(0.15, pinchStartScale * gesture.scale))
             viewport.offset = CGPoint(x: point.x - bounds.midX - pinchWorldAnchor.x * viewport.scale, y: point.y - bounds.midY - pinchWorldAnchor.y * viewport.scale)
         } else if gesture.state == .cancelled { viewport = originalViewport }
-        refreshAccessibility(); setNeedsDisplay()
+        // Accessibility frames follow the viewport, so they only need rebuilding
+        // once the gesture settles. Doing it per .changed frame re-derived the
+        // whole element tree on every touch-move; pan already defers this to
+        // endDrag, and this now matches.
+        if gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed {
+            refreshAccessibility()
+        }
+        setNeedsDisplay()
     }
 
     override func draw(_ rect: CGRect) {
