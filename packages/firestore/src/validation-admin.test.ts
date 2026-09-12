@@ -115,6 +115,18 @@ describe('isolated live-validation resource lifecycle', () => {
       progress.mock.calls.findIndex(([stage]) => stage === 'deleting_database'),
     );
   });
+  it('retries an aborted index creation while retaining cleanup ownership', async () => {
+    calls.index.mockRejectedValueOnce(
+      Object.assign(new Error('metadata contention'), { code: 10 }),
+    );
+    const validate = vi.fn(async () => true);
+    await expect(
+      withValidationDatabase({ ...input, indexes: [{ collectionGroup: 'tasks' }] }, validate),
+    ).resolves.toBe(true);
+    expect(calls.index).toHaveBeenCalledTimes(2);
+    expect(validate).toHaveBeenCalledOnce();
+    expect(calls.remove).toHaveBeenCalledOnce();
+  });
   it('reports a passed workload before waiting for database cleanup', async () => {
     const progress = vi.fn();
     await expect(
