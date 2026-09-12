@@ -505,6 +505,13 @@
       "when": 1789149389272,
       "tag": "0071_fair_excalibur",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1789237304953,
+      "tag": "0072_approval_recovery_cursor",
+      "breakpoints": true
     }
   ]
 }

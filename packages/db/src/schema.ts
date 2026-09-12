@@ -1395,6 +1395,13 @@ export const budgets = pgTable(
   ],
 );
 
+/** Resumable bounded maintenance scans; deleting a cursor safely restarts its scan. */
+export const maintenanceCursors = pgTable('maintenance_cursors', {
+  name: text('name').primaryKey(),
+  cursor: text('cursor'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ── Caching & rate limiting ──────────────────────────────────────────────────
 
 export const toolCache = pgTable(
