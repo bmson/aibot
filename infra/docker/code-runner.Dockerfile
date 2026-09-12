@@ -9,6 +9,7 @@ WORKDIR /app
 RUN corepack enable \
   && apt-get update \
   && apt-get install -y --no-install-recommends python3 python3-pip \
+  && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 \
   && rm -rf /var/lib/apt/lists/*
 
 # Data-analysis toolkit, installed at BUILD time (the runtime has no egress).
