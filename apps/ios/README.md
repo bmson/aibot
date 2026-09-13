@@ -27,6 +27,12 @@ The project targets iOS 26 and uses Apple Foundation Models for an optional
 on-device card-relevance pass on supported devices. It contains no third-party
 iOS dependencies.
 
+That pass runs once per reply and its verdict is held in
+`OnDeviceCardDecisions` for the life of the process, because a transcript row
+that scrolls out of view loses its own state. A card it produces summarizes the
+reply rather than standing in for it, so the prose keeps the detail a single
+value cannot carry — the route, and when to leave.
+
 ## System surfaces
 
 Long-running turns start a Live Activity automatically. Tool progress updates its Dynamic Island

@@ -18,7 +18,10 @@ struct MessageBubble: View {
     /// Inline approve/decline for pending approval cards — (approvalId, decision).
     let decideApproval: ((String, String) async -> Bool)?
 
-    @State private var onDeviceCardAnalysis: OnDeviceCardAnalysis?
+    /// Verdicts outlive the row: a lazy transcript unmounts a scrolled-away
+    /// message, and re-running the on-device pass on every return trip is
+    /// what made a formatted reply flicker back to raw prose.
+    private let cardDecisions = OnDeviceCardDecisions.shared
     @State private var decidingApproval = false
 
     @Environment(\.colorScheme) private var colorScheme
@@ -109,7 +112,6 @@ struct MessageBubble: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .task(id: "\(message.id)-\(isStreaming)") {
-            onDeviceCardAnalysis = nil
             guard message.role == .assistant,
                   !isStreaming,
                   message.noticeKind == nil,
@@ -118,10 +120,24 @@ struct MessageBubble: View {
                   message.parts.compactMap(MessageResponseCard.init(part:)).isEmpty,
                   let userPrompt,
                   MessageResponseCard.hasCardSignals(in: message.text) else { return }
+            guard cardDecisions.decision(id: message.id, text: message.text) == nil else { return }
             guard #available(iOS 26.0, *) else { return }
-            onDeviceCardAnalysis = await OnDeviceCardParser.analyze(
+            // A nil analysis is an unavailable model — assets still
+            // downloading, an unsupported locale, a busy session — not a
+            // verdict. Leaving it unrecorded lets a later pass try again.
+            guard let analysis = await OnDeviceCardParser.analyze(
                 request: userPrompt,
                 response: message.text
+            ) else { return }
+            let accepted = OnDeviceCardParser.accepts(
+                analysis,
+                request: userPrompt,
+                response: message.text
+            )
+            cardDecisions.record(
+                accepted ? .card(kind: OnDeviceCardParser.normalizedKind(analysis.cardKind)) : .noCard,
+                id: message.id,
+                text: message.text
             )
         }
     }
@@ -394,11 +410,9 @@ struct MessageBubble: View {
         let legacy = MessageResponseCard.inferredLegacy(from: message.text)
         guard legacy.isEmpty else { return legacy }
 
-        if #available(iOS 26.0, *),
-           let analysis = onDeviceCardAnalysis,
-           let userPrompt,
-           OnDeviceCardParser.accepts(analysis, request: userPrompt, response: message.text) {
-            return MessageResponseCard.inferred(from: message.text, cardKind: analysis.cardKind)
+        if let kind = cardDecisions.decision(id: message.id, text: message.text)?.cardKind {
+            let inferred = MessageResponseCard.inferred(from: message.text, cardKind: kind)
+            if !inferred.isEmpty { return inferred }
         }
 
         // The deterministic fallback is intentionally request-gated. This
@@ -413,7 +427,11 @@ struct MessageBubble: View {
     private var usesPrimaryCards: Bool {
         // Authored answer cards and local prose-to-card fallbacks avoid a
         // duplicate answer. Raw lookup results never replace the explanation.
-        message.role == .assistant && !responseCards.isEmpty && !message.hasSupportingResultCards
+        guard message.role == .assistant, !message.hasSupportingResultCards else { return false }
+        return MessageResponseCard.replacesProse(
+            responseCards,
+            authored: !message.parts.compactMap(MessageResponseCard.init(part:)).isEmpty
+        )
     }
 
     private func decisionCard(_ part: MessagePart) -> some View {
@@ -1424,6 +1442,23 @@ enum MessageResponseCard: Identifiable {
         return []
     }
 
+    /// Whether these cards stand in for the reply or merely head it.
+    ///
+    /// A card the server authored carries the answer, so the prose beside it
+    /// would repeat itself. A time estimate read out of prose is different: it
+    /// is one value lifted from an answer that also explains the distance, the
+    /// route, and when to leave. It summarizes the reply; it cannot replace it.
+    static func replacesProse(_ cards: [Self], authored: Bool) -> Bool {
+        guard !cards.isEmpty else { return false }
+        guard !authored else { return true }
+        return !cards.allSatisfy(\.isTimeEstimate)
+    }
+
+    var isTimeEstimate: Bool {
+        if case .duration = self { return true }
+        return false
+    }
+
     static func inferredLegacy(from text: String) -> [Self] {
         if let alert = inferredLegacyAlert(text) { return [alert] }
         if let agenda = inferredNumberedAgenda(text) { return [agenda] }
@@ -2143,17 +2178,97 @@ enum MessageResponseCard: Identifiable {
 
     private static func inferredDuration(_ text: String, lower: String) -> Self? {
         guard ["take", "takes", "estimate", "estimated", "roughly", "about"].contains(where: lower.contains) else { return nil }
-        let pattern = #"\b(?:about|around|roughly|approximately|estimated?\s*(?:at|time)?\s*(?:of)?|take[s]?\s*)?\s*(\d+(?:\.\d+)?)\s*(minutes?|mins?|hours?|hrs?|days?)\b"#
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let number = Range(match.range(at: 1), in: text),
-              let unit = Range(match.range(at: 2), in: text) else { return nil }
+        guard let span = durationSpan(in: text) else { return nil }
         return .duration(
             title: "Time estimate",
-            duration: "\(text[number]) \(text[unit])",
-            detail: "A practical planning estimate from this response.",
+            duration: span,
+            // The prose stays on screen under this card, so a sentence of
+            // generic reassurance would only take up room. The one line worth
+            // lifting is the instruction a bare number can't carry.
+            detail: departureNote(in: text),
             confidence: nil
         )
+    }
+
+    private static let durationUnit = #"(?:minutes?|mins?|hours?|hrs?|days?)"#
+
+    /// One quantity, including the compound form: "45 minutes", "1.5 hours",
+    /// "1 hour 15 minutes", "1 hour and 15 minutes".
+    private static let durationQuantity =
+        #"\d+(?:\.\d+)?\s*"# + durationUnit
+            + #"(?:\s*(?:and\s+)?\d+(?:\.\d+)?\s*"# + durationUnit + #")?"#
+
+    /// The estimate as the answer states it. An estimate is usually a range,
+    /// and taking only the first number turned "1 hour 15 minutes to 1 hour 30
+    /// minutes" into a flatly wrong "1 hour". The alternatives are ordered so
+    /// the fullest reading of the same position wins: a two-sided range first,
+    /// then a range sharing one unit, then a lone quantity.
+    private static func durationSpan(in text: String) -> String? {
+        let connector = #"\s*(?:to|through|–|—|-)\s*"#
+        let number = #"\d+(?:\.\d+)?"#
+        let pattern = "(?:(\(durationQuantity))\(connector)(\(durationQuantity))"
+            + "|(\(number))\(connector)(\(number))\\s*(\(durationUnit))"
+            + "|(\(durationQuantity)))"
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else {
+            return nil
+        }
+        func capture(_ index: Int) -> String? {
+            Range(match.range(at: index), in: text).map { String(text[$0]) }
+        }
+        if let low = capture(1), let high = capture(2) {
+            return "\(compactDuration(low)) – \(compactDuration(high))"
+        }
+        if let low = capture(3), let high = capture(4), let unit = capture(5) {
+            // A shared unit reads as one quantity — "45–60 min" — the way a
+            // temperature range does elsewhere in these cards.
+            return "\(low)–\(high) \(compactDuration(unit))"
+        }
+        return capture(6).map(compactDuration)
+    }
+
+    /// Card values are read at a glance, and "1 hour 15 minutes to 1 hour 30
+    /// minutes" spills over three lines at this type size. Units abbreviate;
+    /// the numbers the answer gave never change.
+    private static func compactDuration(_ value: String) -> String {
+        var compacted = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        for (pattern, replacement) in [
+            (#"\s+and\s+"#, " "),
+            (#"\b(?:hours?|hrs?)\b"#, "hr"),
+            (#"\b(?:minutes?|mins?)\b"#, "min"),
+            (#"\s+"#, " "),
+        ] {
+            compacted = compacted.replacingOccurrences(
+                of: pattern,
+                with: replacement,
+                options: [.regularExpression, .caseInsensitive]
+            )
+        }
+        return compacted.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// "Plan to head out around 2:45 PM" is the part of a travel-time answer
+    /// that gets acted on, so the card keeps it next to the estimate. The
+    /// answer's own hedge is preserved: "around" never becomes "by".
+    private static func departureNote(in text: String) -> String? {
+        let pattern = #"\b(?:leave|leaving|head\s+out|heading\s+out|depart|departing|set\s+off|get\s+going)\b"#
+            + #"[^.\r\n]{0,28}?\b(at|around|by|before)?\s*"#
+            + #"(\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let timeRange = Range(match.range(at: 2), in: text) else { return nil }
+        let qualifier = Range(match.range(at: 1), in: text)
+            .map { String(text[$0]).lowercased() }
+            // An unqualified time is the answer's own approximation, not a
+            // deadline it did not state.
+            ?? "around"
+        // "2:45 pm", "2:45 p.m." and "2:45PM" all belong on a card as "2:45 PM".
+        let time = String(text[timeRange])
+            .replacingOccurrences(of: #"(?i)\s*([ap])\.?m\.?"#, with: " $1m", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        return "Leave \(qualifier) \(time)"
     }
 }
 
