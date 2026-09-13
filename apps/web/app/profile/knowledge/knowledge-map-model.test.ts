@@ -141,7 +141,10 @@ describe('focus ring layout', () => {
 
   it('puts the item in hand at the centre of the canvas', () => {
     const layout = layoutFocusRing(
-      graph([hub, { ...hub, id: 'b', label: 'Analytical Engine', kind: 'project' }], [edgeTo('e1')]),
+      graph(
+        [hub, { ...hub, id: 'b', label: 'Analytical Engine', kind: 'project' }],
+        [edgeTo('e1')],
+      ),
       'hub',
     );
     expect(layout?.centre.x).toBe(GLOBAL_MAP_WIDTH / 2);
