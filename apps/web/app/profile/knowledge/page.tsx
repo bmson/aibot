@@ -679,8 +679,8 @@ export default async function KnowledgePage({
             <input
               name="q"
               defaultValue={query}
-              aria-label="Find a connected item"
-              placeholder="Find a connected item"
+              aria-label="Narrow the map to matching items"
+              placeholder="Narrow the map…"
               className={`${inputClass} md:col-span-2`}
             />
             <select name="kind" defaultValue={kind} aria-label="Item type" className={selectClass}>

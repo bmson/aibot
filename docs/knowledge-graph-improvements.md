@@ -89,3 +89,64 @@ Validation: 211 repository test files / 1,904 passing tests; 160 passing native 
 - Validation: 184 native tests passed, followed by four focused passing tests after the final accessibility refinement. Coverage includes 200-item paging without omissions, directed evidence preservation, pan-over-node behavior, cancellation, selection, evidence refresh, and viewport stability when controls change height. Repository lint and architecture checks passed with eight existing TypeScript non-null-assertion warnings; diff checks passed.
 - Hands-on simulator walkthrough used an isolated synthetic 80-item graph: reproduced the crowded overview and selection shift, then exercised named entry, neighbor selection, Open map, return navigation, paging, connection inspection, and zoom. Final light/dark and accessibility screenshots were inspected under `.artifacts/graph-usability-final/`. Simulator drag automation did not reliably perform a gesture; pan/cancellation were verified through native tests. The Mac locked before the final manual rerun. Physical-device touch and frame-rate validation remain unperformed.
 - This is a local iOS change and requires a new iOS build. No API, schema, production records, push, or deployment were changed.
+
+### Opening on a name rather than on the whole graph — September 13, 2026
+
+The map on both surfaces drew everything it had. At the scale a real graph reaches
+that is not a dense map but an unreadable one: two hundred names overlapping in one
+frame, no name legible, no way in, and — on web — an inspector pointed at whichever
+node the relaxation happened to emit first.
+
+- **Web opens on starting points.** Search, plus the best-connected items of each kind
+  with their connection counts, grouped and named. The whole-graph drawing is an
+  explicit choice, one button away. The relaxation no longer runs when the map opens;
+  it is computed when the overview is asked for.
+- **The focused view is its own drawing, not the overview zoomed in.** The item in hand
+  sits at the centre of an ellipse of up to twelve neighbours, ranked most-connected
+  first, with positions computed for exactly the items on screen — so no name can
+  collide with another. Each spoke carries the vocabulary's direction-free phrase, an
+  arrowhead in the recorded direction, and a count when more than one distinct claim
+  supports it. An incoming claim is never reworded from the centre's side. Below `md`
+  the same spokes render as a list: a 356px canvas cannot hold readable names.
+- **The web overview is readable.** Names are rationed by a collision pass — the
+  selection and the biggest hubs first, each placed only where it lands on empty canvas
+  — and drawn outside the panned group at a constant on-screen size, measured from the
+  rendered width, so zooming reveals more rather than shrinking what is there. The
+  canvas reports how many items in view are too crowded to name. A kind legend was added;
+  nothing had explained the colours.
+- **The iPhone focused map pages six, not four.** Four was never a readability limit: it
+  was the number of fixed corner slots the canvas had, and a fifth neighbour was drawn
+  on top of the first. Spokes now sit on an ellipse taller than it is wide, so each name
+  gets its own horizontal band. Direction arrows and relationship phrases claim their
+  space so a name is not drawn with an arrow through it, phrases moved two thirds of the
+  way out where the spokes have fanned apart, and a name on a focused map is never
+  dropped — if all four sides are contested it takes the least contested one.
+- **The iPhone overview names its hubs.** It previously named everything above one zoom
+  level and nothing below it, and a real graph never fits above that zoom, so it arrived
+  as two hundred anonymous dots. It now spends a ration of names on the most connected
+  items, slid back inside the canvas rather than clipped by its edge.
+- Two native drawing faults behind the above: dots and names were painted interleaved, so
+  the hub's name — placed first, being the most important — spent the rest of the pass
+  being covered by the dots drawn after it; and label backings were translucent, so the
+  lines the placement search cannot see about showed through as a stroke across the word.
+
+No storage migration, API change, extraction run, or new inferred relationship. Source-level
+review, evidence, correction, and removal are untouched. Delivery needs a web release and a
+new iOS build.
+
+Validation: 261 repository test files / 2,314 passing tests; `pnpm typecheck`, `pnpm lint`,
+architecture boundaries, and `git diff --check` pass. 197 native tests pass on the iOS 27
+simulator, including new coverage for ring separation (the old slot list wrapped with `% 4`,
+which that test fails) and for the overview naming its biggest hub (which fails against the
+old zoom gate). `scripts/visual-qa/knowledge-graph.ts` was updated to the new flow and passes
+against an isolated local `_test` database: starting points on arrival, no overview canvas
+until asked for, named spokes carrying their phrases, pan on the whole map, return to focus,
+and the ring absent at phone width with the spokes listed instead. Focused and overview
+native canvases were rendered and inspected in light and dark. Three repository tests failed
+under a non-UTC `ASSISTANT_TIMEZONE` in the local `.env` and pass at UTC; they are unrelated
+to this change. Touch gestures and frame rate on a physical iPhone remain unprofiled, and
+nothing was verified against the live account.
+
+The dev server's client bundle does not boot when addressed as `127.0.0.1` — the RSC payload
+never runs, so nothing hydrates — which is why the QA script now uses `localhost`, as
+`launch.json` already did. That is a pre-existing dev-server issue, not part of this change.
