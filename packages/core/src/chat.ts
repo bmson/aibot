@@ -656,6 +656,7 @@ export async function listMessages(
       .where(
         and(
           eq(messages.conversationId, conversationId),
+          isNull(messages.hiddenAt),
           or(
             sql`${messages.createdAt} > ${afterTimestamp}`,
             and(sql`${messages.createdAt} = ${afterTimestamp}`, gt(messages.id, after.id)),
@@ -675,7 +676,7 @@ export async function listMessages(
   const rows = await db
     .select(selection)
     .from(messages)
-    .where(eq(messages.conversationId, conversationId))
+    .where(and(eq(messages.conversationId, conversationId), isNull(messages.hiddenAt)))
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(limit);
   return rows.reverse();
@@ -693,8 +694,34 @@ export async function listMessagesByIds(db: Db, conversationId: string, ids: str
   return db
     .select()
     .from(messages)
-    .where(and(eq(messages.conversationId, conversationId), inArray(messages.id, ids)))
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        inArray(messages.id, ids),
+        isNull(messages.hiddenAt),
+      ),
+    )
     .orderBy(asc(messages.createdAt), asc(messages.id));
+}
+
+/**
+ * Hide one message from the log, or put it back. The row is kept — reads skip
+ * it — so a mistaken hide is recoverable and nothing referencing the message
+ * breaks. Scoped to the conversation, so an id arriving from a request can
+ * only reach messages the caller was already reading.
+ */
+export async function setMessageHidden(
+  db: Db,
+  conversationId: string,
+  messageId: string,
+  hidden: boolean,
+): Promise<boolean> {
+  const rows = await db
+    .update(messages)
+    .set({ hiddenAt: hidden ? new Date() : null })
+    .where(and(eq(messages.id, messageId), eq(messages.conversationId, conversationId)))
+    .returning({ id: messages.id });
+  return rows.length > 0;
 }
 
 export function persistMessage(store: Db | MessageRepository, input: AppendMessageInput) {

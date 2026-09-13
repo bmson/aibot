@@ -697,14 +697,20 @@ struct ChatView: View {
 
             }
             .overlay(alignment: .bottom) {
-                if showsJumpToLatest {
-                    jumpToLatestButton {
-                        jumpFeedback += 1
-                        jumpToLatest()
+                VStack(spacing: 10) {
+                    if showsJumpToLatest {
+                        jumpToLatestButton {
+                            jumpFeedback += 1
+                            jumpToLatest()
+                        }
+                        .transition(.opacity)
                     }
-                    .padding(.bottom, composerHeight + 12)
-                    .transition(.opacity)
+                    if let undo = model.hiddenMessageUndo {
+                        hiddenMessageUndoBar(undo)
+                            .transition(.opacity)
+                    }
                 }
+                .padding(.bottom, composerHeight + 12)
             }
             .allowsHitTesting(!menuOpen)
             // Match the visual modal state for assistive navigation: the
@@ -712,6 +718,10 @@ struct ChatView: View {
             // should not compete with the revealed destinations.
             .accessibilityHidden(menuOpen)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: showsJumpToLatest)
+            .animation(
+                reduceMotion ? nil : .easeOut(duration: 0.16),
+                value: model.hiddenMessageUndo
+            )
         }
     }
 
@@ -764,7 +774,12 @@ struct ChatView: View {
             openApprovals: { model.present(.approvals) },
             runForReal: model.isSending ? nil : { text in model.send(text, force: true) },
             retry: model.isSending ? nil : { text in model.send(text) },
-            decideApproval: { id, decision in await model.decideApproval(id: id, decision: decision) }
+            decideApproval: { id, decision in await model.decideApproval(id: id, decision: decision) },
+            // Only a row the server has stored can be taken out of the log; an
+            // echo of a turn still in flight has no id it would recognise.
+            hide: message.isDurableLogRow
+                ? { Task { await model.hideMessage(message) } }
+                : nil
         )
         .padding(.top, startsRun(at: index) ? 22 : 7)
         .transition(
@@ -1988,6 +2003,47 @@ struct ChatView: View {
             && !menuSurfaceRounded
             && !isAtBottom
             && !model.messages.isEmpty
+    }
+
+    /// The one way back from a hide. Quiet and short-lived on purpose: the
+    /// owner asked for a cleaner log, so the confirmation should not become the
+    /// next thing cluttering it. Neutral rather than green — this reports what
+    /// just happened; the pill above it is the control.
+    private func hiddenMessageUndoBar(_ undo: HiddenMessageUndo) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "eye.slash")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .accessibilityHidden(true)
+            Text("Message hidden")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+            Button {
+                Task { await model.undoHiddenMessage() }
+            } label: {
+                Text("Undo")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                    .frame(minHeight: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("assistant.chat.undo-hidden-message")
+            .accessibilityHint("Puts the hidden message back in the log.")
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 36)
+        .background(AssistantTheme.raised(for: colorScheme), in: Capsule())
+        .overlay {
+            Capsule().strokeBorder(
+                AssistantTheme.inkMuted(for: colorScheme)
+                    .opacity(colorSchemeContrast == .increased ? 0.5 : 0.22),
+                lineWidth: colorSchemeContrast == .increased ? 1.1 : 0.8
+            )
+        }
+        .shadow(color: Color(hex: 0x0C2D1B, alpha: 0.11), radius: 11, y: 5)
+        .accessibilityElement(children: .contain)
+        .id(undo.id)
     }
 
     private func jumpToLatestButton(action: @escaping () -> Void) -> some View {

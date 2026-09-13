@@ -519,6 +519,13 @@
       "when": 1789242037865,
       "tag": "0073_historical_approval_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1789318929796,
+      "tag": "0074_hidden_chat_messages",
+      "breakpoints": true
     }
   ]
 }

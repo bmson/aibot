@@ -249,6 +249,8 @@ export const messages = pgTable(
     channelMessageId: text('channel_message_id'),
     /** Populated async for semantic search over conversations. */
     embedding: vector('embedding', { dimensions: 1536 }),
+    /** Owner-hidden from the chat log. The row stays; reads skip it. */
+    hiddenAt: timestamp('hidden_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -261,6 +263,9 @@ export const messages = pgTable(
       .on(t.channelMessageId)
       .where(sql`${t.channelMessageId} IS NOT NULL`),
     index('messages_conversation_idx').on(t.conversationId, t.createdAt),
+    index('messages_conversation_visible_idx')
+      .on(t.conversationId, t.createdAt)
+      .where(sql`${t.hiddenAt} IS NULL`),
     index('messages_created_idx').on(t.createdAt),
     index('messages_task_created_idx')
       .on(t.taskId, t.createdAt)

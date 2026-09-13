@@ -12,7 +12,9 @@ import {
   finishTask,
   getAgent,
   listConversations,
+  listMessages,
   PROMPT_VERSION,
+  setMessageHidden,
 } from './chat.js';
 import { completeTask, findDueTasks } from './workflow/machine.js';
 
@@ -312,5 +314,63 @@ describe('direct chat task leases (integration)', () => {
 
     await db.delete(tasks).where(eq(tasks.id, task.id));
     await db.delete(conversations).where(eq(conversations.id, conversation.id));
+  });
+});
+
+describe('setMessageHidden', () => {
+  it('hides a message from listMessages and can put it back', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const agent = await getAgent(db);
+    const conversation = await ensureChatConversation(db, agent.id);
+    const [row] = await db
+      .insert(messages)
+      .values({
+        conversationId: conversation.id,
+        role: 'assistant',
+        origin: 'assistant',
+        parts: [{ type: 'text', text: 'a test message' }],
+        text: 'a test message',
+      })
+      .returning();
+    if (!row) throw new Error('failed to create message fixture');
+
+    expect(await setMessageHidden(db, conversation.id, row.id, true)).toBe(true);
+    // A message hidden for being wrong must stop steering the model, not just
+    // the owner-facing log — listMessages backs both.
+    expect((await listMessages(db, conversation.id)).some((m) => m.id === row.id)).toBe(false);
+
+    expect(await setMessageHidden(db, conversation.id, row.id, false)).toBe(true);
+    expect((await listMessages(db, conversation.id)).some((m) => m.id === row.id)).toBe(true);
+
+    await db.delete(messages).where(eq(messages.id, row.id));
+    await db.delete(conversations).where(eq(conversations.id, conversation.id));
+  });
+
+  it('reports false for a message id that is not in the given conversation', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const agent = await getAgent(db);
+    const conversationA = await ensureChatConversation(db, agent.id);
+    const conversationB = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, channel: 'chat', trust: 'owner', title: 'other chat' })
+      .returning()
+      .then((rows) => rows[0]);
+    if (!conversationB) throw new Error('failed to create second conversation fixture');
+    const [row] = await db
+      .insert(messages)
+      .values({
+        conversationId: conversationB.id,
+        role: 'assistant',
+        origin: 'assistant',
+        parts: [{ type: 'text', text: 'belongs to conversation B' }],
+        text: 'belongs to conversation B',
+      })
+      .returning();
+    if (!row) throw new Error('failed to create message fixture');
+
+    expect(await setMessageHidden(db, conversationA.id, row.id, true)).toBe(false);
+
+    await db.delete(messages).where(eq(messages.id, row.id));
+    await db.delete(conversations).where(eq(conversations.id, conversationB.id));
   });
 });

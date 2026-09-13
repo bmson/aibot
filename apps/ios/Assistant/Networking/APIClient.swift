@@ -238,6 +238,20 @@ struct APIClient: Sendable {
         _ = try await perform(request, as: OkPayload.self)
     }
 
+    /// Take one message out of the log, or put it back. The message is kept
+    /// server-side and only skipped on read, so this is recoverable and the
+    /// same decision reaches every surface the owner reads the thread on.
+    func setMessageHidden(conversationId: String, messageId: String, hidden: Bool) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL
+                .appending(path: "api/mobile/v1/chats/\(conversationId)/messages/\(messageId)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["action": hidden ? "hide" : "unhide"])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     func workspace() async throws -> WorkspaceResponse {
         try await get("api/mobile/v1/workspace")
     }

@@ -35,6 +35,15 @@ already thought of. A card whose `grounding` is `answer` was read out of the
 reply itself, so it heads the reply rather than replacing it and the prose
 keeps what one value cannot carry: the route, the caveats, when to leave.
 
+The log is the owner's to curate. Long-press any card in the conversation —
+a reply, a notice, a decision, a rich card — and **Hide from log** takes it
+out: the answer that was wrong, the one that ran three screens long, the
+afternoon of test prompts. The row is kept and skipped on read rather than
+deleted, so the decision reaches the web chat too, holds across reloads and
+devices, and can be undone from the bar that appears above the composer. A
+hidden message also leaves the history the model is given, because a reply
+hidden for being wrong should stop shaping the next one.
+
 ## System surfaces
 
 Long-running turns start a Live Activity automatically. Tool progress updates its Dynamic Island

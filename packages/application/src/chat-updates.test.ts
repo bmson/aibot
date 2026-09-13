@@ -2,7 +2,7 @@ import { encodeMessageCursor, getAgent } from '@assistant/core/chat';
 import { conversations, createDb, type Db, messages, tasks } from '@assistant/db';
 import { getTableColumns, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { getChatUpdates } from './chat.js';
+import { getChatUpdates, hideChatMessage, unhideChatMessage } from './chat.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -389,5 +389,51 @@ describe('superseding runtime rows an open client is already showing', () => {
     });
     expect(updates?.messages.map((message) => message.id)).toEqual([reply.id]);
     expect(updates?.superseded).toEqual([]);
+  });
+});
+
+describe('hideChatMessage / unhideChatMessage', () => {
+  const T0 = new Date('2026-09-01T09:00:00.000Z');
+  const at = (seconds: number) => new Date(T0.getTime() + seconds * 1000);
+
+  it('hides a message from the update poll and puts it back', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const conversationId = await newChat();
+    const seen = await post(conversationId, 'user', 'ignore this one', { createdAt: at(0) });
+    const junk = await post(conversationId, 'assistant', 'a wrong answer', { createdAt: at(1) });
+
+    expect(await hideChatMessage(db, conversationId, junk.id)).toBe(true);
+    const hidden = await getChatUpdates(db, {
+      conversationId,
+      cursor: encodeMessageCursor(seen),
+    });
+    // A wrong answer that stays in the update feed would keep steering the
+    // owner (and, via listMessages, the model) after they asked to hide it.
+    expect(hidden?.messages.map((message) => message.id)).toEqual([]);
+
+    expect(await unhideChatMessage(db, conversationId, junk.id)).toBe(true);
+    const restored = await getChatUpdates(db, {
+      conversationId,
+      cursor: encodeMessageCursor(seen),
+    });
+    expect(restored?.messages.map((message) => message.id)).toEqual([junk.id]);
+  });
+
+  it('reports false for a message id outside the chat, never touching it', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const conversationId = await newChat();
+    const otherConversationId = await newChat();
+    const outside = await post(otherConversationId, 'assistant', 'not yours', {
+      createdAt: at(0),
+    });
+
+    expect(await hideChatMessage(db, conversationId, outside.id)).toBe(false);
+  });
+
+  it('rejects a chat the caller does not own', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await expect(
+      hideChatMessage(db, '11111111-1111-4111-8111-111111111111', MISSING_ID),
+    ).rejects.toThrow('chat not found');
   });
 });

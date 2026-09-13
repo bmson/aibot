@@ -37,6 +37,7 @@ import {
   getSettingsOverview,
   getShellStatus,
   handleChatTurn,
+  hideChatMessage,
   isValidChatCursor,
   listActivity,
   listAnomalies,
@@ -63,6 +64,7 @@ import {
   snoozeOwnerCommitment,
   startWorkspaceImport,
   suspendAnomalyRecord,
+  unhideChatMessage,
   updateAssistantSettings,
   updateNotificationPrefs,
   uploadDocument,
@@ -265,6 +267,10 @@ function createApplication() {
       changeChatModel(db, conversationId, modelId),
     archiveChat: (conversationId: string) => archiveChatConversation(db, conversationId),
     restoreChat: (conversationId: string) => restoreChatConversation(db, conversationId),
+    hideChatMessage: (conversationId: string, messageId: string) =>
+      hideChatMessage(db, conversationId, messageId),
+    unhideChatMessage: (conversationId: string, messageId: string) =>
+      unhideChatMessage(db, conversationId, messageId),
     archiveInactiveChats: () => archiveInactiveChats(db),
     listChatHistory: (archived: boolean) => listChatHistory(db, archived),
     getChatConversation: (conversationId: string, input: { taskId?: string; cursor?: string }) =>
