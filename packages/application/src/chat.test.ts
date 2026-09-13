@@ -16,6 +16,7 @@ function row(id: string, text: string, parts: unknown[], createdAt: string): Mes
     origin: 'assistant',
     channelMessageId: null,
     embedding: null,
+    hiddenAt: null,
     createdAt: new Date(createdAt),
   };
 }

@@ -17,6 +17,10 @@ struct MessageBubble: View {
     let retry: ((String) -> Void)?
     /// Inline approve/decline for pending approval cards — (approvalId, decision).
     let decideApproval: ((String, String) async -> Bool)?
+    /// Take this card out of the log. Nil while the row is still in flight —
+    /// there is nothing for the server to hide until the turn has settled —
+    /// and nil wherever a bubble is rendered outside the log, as in snapshots.
+    var hide: (() -> Void)? = nil
 
     @State private var decidingApproval = false
 
@@ -31,7 +35,22 @@ struct MessageBubble: View {
     @ScaledMetric(relativeTo: .caption) private var answerContextPromptFontSize = 12.0
     // Tool-result cards support the answer; they must not hide its caveats.
 
+    @ViewBuilder
     var body: some View {
+        // The inner menus below cover the prose bubbles; this one catches every
+        // other card the stream can draw — decisions, receipts, rich cards — so
+        // a long press anywhere on a row offers the same thing. Attached only
+        // where there is something to offer, and on a condition that is fixed
+        // for the life of a row: a menu appearing mid-stream would rebuild the
+        // bubble underneath the reply it is still writing.
+        if hide != nil {
+            card.contextMenu { cardMenu(copyLabel: "Copy message") }
+        } else {
+            card
+        }
+    }
+
+    private var card: some View {
         // Bubbles are full-width cards like every other surface in the
         // stream: a one-word message gets the same width as a paragraph
         // rather than shrink-wrapping its text.
@@ -109,6 +128,26 @@ struct MessageBubble: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// One menu for every card in the log: take a copy of what it says, or take
+    /// it out of the log. Repeated at each bubble that owns its own menu, since
+    /// the innermost one is the only one a long press there will reach.
+    @ViewBuilder
+    private func cardMenu(copyLabel: String, copying text: String? = nil) -> some View {
+        let copyable = text ?? message.text
+        if !copyable.isEmpty {
+            Button {
+                UIPasteboard.general.string = copyable
+            } label: {
+                Label(copyLabel, systemImage: "doc.on.doc")
+            }
+        }
+        if let hide {
+            Button(role: .destructive, action: hide) {
+                Label("Hide from log", systemImage: "eye.slash")
+            }
+        }
+    }
+
     @ViewBuilder
     private var messageText: some View {
         if message.role == .assistant {
@@ -151,13 +190,7 @@ struct MessageBubble: View {
                             lineWidth: colorSchemeContrast == .increased ? 1.1 : 0.8
                         )
                 }
-                .contextMenu {
-                    Button {
-                        UIPasteboard.general.string = message.text
-                    } label: {
-                        Label("Copy message", systemImage: "doc.on.doc")
-                    }
-                }
+                .contextMenu { cardMenu(copyLabel: "Copy message") }
         }
     }
 
@@ -260,13 +293,7 @@ struct MessageBubble: View {
                 radius: 11,
                 y: 5
             )
-            .contextMenu {
-                Button {
-                    UIPasteboard.general.string = message.text
-                } label: {
-                    Label("Copy reply", systemImage: "doc.on.doc")
-                }
-            }
+            .contextMenu { cardMenu(copyLabel: "Copy reply") }
     }
 
     private var normalizedUserPrompt: String? {
@@ -761,13 +788,7 @@ struct MessageBubble: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(AssistantTheme.bubblePaper(for: colorScheme), in: shape)
         .overlay { shape.strokeBorder(presentation.tint.opacity(0.25), lineWidth: 0.9) }
-        .contextMenu {
-            Button {
-                UIPasteboard.general.string = text
-            } label: {
-                Label("Copy notice", systemImage: "doc.on.doc")
-            }
-        }
+        .contextMenu { cardMenu(copyLabel: "Copy notice", copying: text) }
     }
 }
 

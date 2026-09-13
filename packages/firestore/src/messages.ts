@@ -14,6 +14,7 @@ export function messageRecord(
     taskId: input.taskId ?? null,
     channelMessageId: input.channelMessageId ?? null,
     embedding: null,
+    hiddenAt: null,
   };
   // Leave room for Firestore's field-name/type overhead. Oversize content must go through
   // the forthcoming GCS payload adapter; never silently truncate or split a transaction.

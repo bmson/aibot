@@ -7,6 +7,7 @@ import {
   listMessages,
   listMessagesByIds,
   setConversationModel,
+  setMessageHidden,
 } from '@assistant/core/chat';
 import { compactChatMessageParts, stripBackgroundNoticeEcho } from '@assistant/core/chat-card';
 import {
@@ -632,6 +633,24 @@ export async function restoreChatConversation(db: Db, conversationId: string): P
     .update(conversations)
     .set({ archivedAt: null, updatedAt: new Date() })
     .where(and(eq(conversations.id, conversation.id), isNotNull(conversations.archivedAt)));
+}
+
+export async function hideChatMessage(
+  db: Db,
+  conversationId: string,
+  messageId: string,
+): Promise<boolean> {
+  await ownedChat(db, conversationId);
+  return setMessageHidden(db, conversationId, messageId, true);
+}
+
+export async function unhideChatMessage(
+  db: Db,
+  conversationId: string,
+  messageId: string,
+): Promise<boolean> {
+  await ownedChat(db, conversationId);
+  return setMessageHidden(db, conversationId, messageId, false);
 }
 
 export async function archiveInactiveChats(db: Db, olderThanDays = 30): Promise<number> {

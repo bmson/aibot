@@ -1,0 +1,2 @@
+ALTER TABLE "messages" ADD COLUMN "hidden_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "messages_conversation_visible_idx" ON "messages" USING btree ("conversation_id","created_at") WHERE "messages"."hidden_at" IS NULL;

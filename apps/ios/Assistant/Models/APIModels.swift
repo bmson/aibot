@@ -238,6 +238,13 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         return ISO8601DateFormatter.assistant.date(from: raw)
     }
 
+    /// A row the server has stored, as opposed to the echo of a turn still in
+    /// flight. Only these can be hidden from the log: the others have no id
+    /// the server would recognise, and they settle into durable rows anyway.
+    var isDurableLogRow: Bool {
+        !id.hasPrefix("local-") && !id.hasPrefix("stream-")
+    }
+
     var quickReplies: [String] {
         for part in parts.reversed() where part.type == "data-chips" {
             guard case let .object(object) = part.data,

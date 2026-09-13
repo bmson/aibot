@@ -90,6 +90,14 @@ struct AssistantErrorNotice: Equatable {
     }
 }
 
+/// A message just taken out of the log, and where to put it back. Held only
+/// while the undo bar is on screen; hiding is otherwise a quiet action.
+struct HiddenMessageUndo: Identifiable, Equatable {
+    let messageId: String
+    let conversationId: String
+    var id: String { messageId }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var navigationPath: [AssistantDestination] = []
@@ -140,6 +148,12 @@ final class AppModel: ObservableObject {
     /// server's answer. Re-running a request the server rejected on its merits
     /// would only reproduce the rejection, so those get no retry.
     @Published var errorRetry: RetryAction?
+    /// The one hidden message that can still be put back, offered by a bar
+    /// above the composer until it expires. Nil the rest of the time — hiding
+    /// is otherwise silent, which is the point of it.
+    @Published private(set) var hiddenMessageUndo: HiddenMessageUndo?
+    private var hiddenMessageUndoExpiry: Task<Void, Never>?
+    private static let hiddenMessageUndoSeconds: TimeInterval = 6
     /// Text of a turn that failed to send, handed back to the composer so the
     /// words are never lost to a network or server failure. ChatView consumes it.
     @Published private(set) var restorableDraft: String?
@@ -789,6 +803,8 @@ final class AppModel: ObservableObject {
     func openConversation(id: String) async -> Bool {
         guard let client else { return false }
         errorMessage = nil
+        // An undo offer belongs to the thread it was made in.
+        dismissHiddenMessageUndo()
         do {
             setActiveConversation(try await client.conversation(id: id))
             returnToChat()
@@ -850,6 +866,76 @@ final class AppModel: ObservableObject {
         } catch {
             reportError(error)
             return false
+        }
+    }
+
+    /// Take a message out of the log. The server keeps the row and skips it on
+    /// every read, so the log is the owner's to curate without losing history:
+    /// a reply that was wrong, a thread of tests, an answer three screens long.
+    /// Removed here first — the gesture should feel immediate — and put back if
+    /// the server refuses, which is the only way this can be wrong.
+    func hideMessage(_ message: ChatMessage) async {
+        guard let client, let conversationId, message.isDurableLogRow else { return }
+        guard let index = messages.firstIndex(where: { $0.id == message.id }) else { return }
+        let removed = messages.remove(at: index)
+        do {
+            try await client.setMessageHidden(
+                conversationId: conversationId,
+                messageId: message.id,
+                hidden: true
+            )
+            hiddenMessageUndo = HiddenMessageUndo(messageId: message.id, conversationId: conversationId)
+            scheduleHiddenMessageUndoExpiry()
+        } catch {
+            // The log is the record; a hide the server never took must not
+            // leave a hole in it. Back where it was, by id — an arriving poll
+            // may have moved the rows either side of it in the meantime.
+            if !messages.contains(where: { $0.id == removed.id }) {
+                messages.insert(removed, at: min(index, messages.count))
+                messages = logOrder.ordered(messages)
+            }
+            reportError(error)
+        }
+    }
+
+    /// Put the last hidden message back. The thread is re-read rather than
+    /// patched: the message belongs wherever the server says it does, and
+    /// anything that landed while the bar was on screen belongs there too.
+    func undoHiddenMessage() async {
+        guard let client, let undo = hiddenMessageUndo else { return }
+        hiddenMessageUndo = nil
+        hiddenMessageUndoExpiry?.cancel()
+        hiddenMessageUndoExpiry = nil
+        do {
+            try await client.setMessageHidden(
+                conversationId: undo.conversationId,
+                messageId: undo.messageId,
+                hidden: false
+            )
+            // A reload during a turn would throw away the stream in flight.
+            // The message is unhidden either way and returns on the next read.
+            guard !isSending, conversationId == undo.conversationId else { return }
+            setActiveConversation(try await client.conversation(id: undo.conversationId))
+        } catch {
+            reportError(error)
+        }
+    }
+
+    func dismissHiddenMessageUndo() {
+        hiddenMessageUndo = nil
+        hiddenMessageUndoExpiry?.cancel()
+        hiddenMessageUndoExpiry = nil
+    }
+
+    /// The offer is a courtesy for the tap that was a mistake, not a control
+    /// that lives in the chat. It goes away on its own.
+    private func scheduleHiddenMessageUndoExpiry() {
+        hiddenMessageUndoExpiry?.cancel()
+        let id = hiddenMessageUndo?.id
+        hiddenMessageUndoExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.hiddenMessageUndoSeconds))
+            guard !Task.isCancelled, let self, self.hiddenMessageUndo?.id == id else { return }
+            self.hiddenMessageUndo = nil
         }
     }
 

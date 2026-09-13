@@ -110,6 +110,7 @@ export interface Records {
     origin: string;
     channelMessageId: string | null;
     embedding: number[] | null;
+    hiddenAt: Date | null;
   };
   generatedCards: {
     id: string;
