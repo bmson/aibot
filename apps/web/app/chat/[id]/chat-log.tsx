@@ -51,7 +51,12 @@ import {
   stampLabel,
 } from './message-view';
 import { OffCourseCard } from './off-course-card';
-import { ResponseCards, rendersAllCards, responseCardPayloads } from './response-card';
+import {
+  cardsReplaceProse,
+  ResponseCards,
+  rendersAllCards,
+  responseCardPayloads,
+} from './response-card';
 
 interface ChatMessageRowProps {
   message: UIMessage;
@@ -157,10 +162,14 @@ const ChatMessageRow = memo(function ChatMessageRow({
   // Rich cards ARE the answer when every card on the message can
   // render here — showing the prose too would restate it. A kind
   // this surface can't render keeps the prose fallback instead
-  // (parity with the iOS bubble).
+  // (parity with the iOS bubble). So does a card read out of the
+  // reply itself, which summarizes an answer rather than being one.
   const cards = message.role === 'assistant' ? responseCardPayloads(parts) : [];
   const renderCards = cards.length > 0 && rendersAllCards(cards) && noticeKind === null;
-  const hasText = renderedTextParts.length > 0 && noticeKind === null && !renderCards;
+  const hasText =
+    renderedTextParts.length > 0 &&
+    noticeKind === null &&
+    !(renderCards && cardsReplaceProse(cards));
 
   // A "run" is a streak of turns from the same speaker. Handing
   // over gets a clear break; a follow-on from the same speaker

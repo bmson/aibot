@@ -23,15 +23,17 @@ Open findings on the visual and interaction layer are tracked in
 4. Connect to `http://localhost:3000`. With source development's explicit `AUTH_DEV_BYPASS=true`,
    the access-key field can remain empty.
 
-The project targets iOS 26 and uses Apple Foundation Models for an optional
-on-device card-relevance pass on supported devices. It contains no third-party
-iOS dependencies.
+The project targets iOS 26 and contains no third-party iOS dependencies.
 
-That pass runs once per reply and its verdict is held in
-`OnDeviceCardDecisions` for the life of the process, because a transcript row
-that scrolls out of view loses its own state. A card it produces summarizes the
-reply rather than standing in for it, so the prose keeps the detail a single
-value cannot carry — the route, and when to leave.
+Rich cards arrive composed. The runtime's card compiler picks the facts, the
+layout and the actions, checks every value verbatim against what it was
+grounded in, and sends the result as a `generated-card` part; the app reads
+that part and draws it. The phone does not read a reply and guess at a card —
+it used to, with four hand-written kinds and an on-device relevance pass to
+choose between them, and that could only ever produce a shape someone had
+already thought of. A card whose `grounding` is `answer` was read out of the
+reply itself, so it heads the reply rather than replacing it and the prose
+keeps what one value cannot carry: the route, the caveats, when to leave.
 
 ## System surfaces
 

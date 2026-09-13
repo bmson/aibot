@@ -39,7 +39,6 @@
 		B00000000000000000000077 /* Views/MemoryLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000077 /* Views/MemoryLibraryView.swift */; };
 		B00000000000000000000050 /* AssistantMarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000050 /* AssistantMarkdownTests.swift */; };
 		B00000000000000000000051 /* System/LocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000051 /* System/LocationManager.swift */; };
-		B00000000000000000000052 /* Components/OnDeviceCardParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000053 /* Components/OnDeviceCardParser.swift */; };
 		B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000054 /* Views/KnowledgeView.swift */; };
 		B00000000000000000000055 /* Models/PollingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000055 /* Models/PollingPolicy.swift */; };
 		B00000000000000000000056 /* Components/MermaidDiagramView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000056 /* Components/MermaidDiagramView.swift */; };
@@ -123,7 +122,6 @@
 		C00000000000000000000050 /* AssistantMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMarkdownTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000051 /* System/LocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/LocationManager.swift; sourceTree = "<group>"; };
 		C00000000000000000000052 /* Assistant.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Assistant.entitlements; sourceTree = "<group>"; };
-		C00000000000000000000053 /* Components/OnDeviceCardParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/OnDeviceCardParser.swift; sourceTree = "<group>"; };
 		C00000000000000000000054 /* Views/KnowledgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/KnowledgeView.swift; sourceTree = "<group>"; };
 		C00000000000000000000055 /* Models/PollingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/PollingPolicy.swift; sourceTree = "<group>"; };
 		C00000000000000000000056 /* Components/MermaidDiagramView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/MermaidDiagramView.swift; sourceTree = "<group>"; };
@@ -202,7 +200,6 @@
 				C00000000000000000000024 /* Components/ChatDashboard.swift */,
 				C00000000000000000000008 /* Components/StatusPill.swift */,
 				C00000000000000000000009 /* Components/MessageBubble.swift */,
-				C00000000000000000000053 /* Components/OnDeviceCardParser.swift */,
 				C00000000000000000000056 /* Components/MermaidDiagramView.swift */,
 				C0000000000000000000000A /* Views/RootView.swift */,
 				C00000000000000000000070 /* Views/SituationPacksView.swift */,
@@ -399,7 +396,6 @@
 				B0000000000000000000001B /* Components/ChatDashboard.swift in Sources */,
 				B00000000000000000000008 /* Components/StatusPill.swift in Sources */,
 				B00000000000000000000009 /* Components/MessageBubble.swift in Sources */,
-				B00000000000000000000052 /* Components/OnDeviceCardParser.swift in Sources */,
 				B0000000000000000000000A /* Views/RootView.swift in Sources */,
 				B00000000000000000000070 /* Views/SituationPacksView.swift in Sources */,
 				B0000000000000000000000B /* Views/ChatView.swift in Sources */,
