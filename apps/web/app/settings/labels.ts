@@ -8,6 +8,7 @@ export const scheduleLabels: Record<string, string> = {
   'tomorrow-check': 'Evening look at tomorrow',
   pulse: 'During-the-day pulse',
   'memory-extraction': 'Remember useful details from today',
+  'open-loop-sweep': 'Retire open loops nobody is working on',
   'memory-consolidation': 'Organize saved memory',
   'chat-segmentation': 'Organize conversation history',
 };

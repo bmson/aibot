@@ -44,6 +44,28 @@ const MAX_CONVERSATIONS = 20;
 const MAX_MESSAGES = 80;
 const MIN_CONFIDENCE = 0.85;
 
+const DAY_MS = 24 * 3600 * 1000;
+
+/**
+ * How long a loop may sit untouched before it leaves the desk. The windows
+ * differ because the kinds decay differently: a month of silence on a question
+ * or on someone else's reply is its own answer, while a decision is a record
+ * rather than a task and is worth keeping visible for a quarter.
+ */
+const STALE_AFTER_DAYS: Record<CommitmentKind, number> = {
+  question: 30,
+  waiting_on: 30,
+  promise: 45,
+  decision: 90,
+};
+
+/**
+ * A loop that named its own date and blew through it by a fortnight was not
+ * kept, whatever its kind — waiting out the idle window would only keep a dead
+ * commitment on the list for another month.
+ */
+const STALE_AFTER_DUE_DAYS = 14;
+
 function hashCommitment(kind: string, title: string, details: string): string {
   return createHash('sha256')
     .update(`${kind}\n${title.trim().toLowerCase()}\n${details.trim().toLowerCase()}`)
@@ -68,6 +90,8 @@ const EXTRACTION_SYSTEM = [
   'promise = an explicit future task or follow-up, but only when it is concrete.',
   'waiting_on = an explicit dependency on a person, reply, approval, document, or event.',
   'Do not extract pleasantries, vague intentions, hypothetical advice, or assistant promises that have no durable task, schedule, mission, watch, or approval behind them.',
+  'Every item must be a loop the OWNER still has to act on or decide. Work the assistant has already automated — anything a schedule, task, mission, or watch is carrying — is not a loop, however concrete it sounds.',
+  'Never extract the assistant describing its own background work, and never treat a job, schedule, or task name as a promise.',
   'If the owner clearly says an existing loop is done, cancelled, dismissed, or no longer needed, put its concise title in resolvedTitles. Otherwise leave resolvedTitles empty.',
   'Do not invent dates. dueAt must be an ISO timestamp only when the transcript states a concrete date/time.',
   'Use concise titles that make sense without the transcript. If there are no clear items, return an empty array.',
@@ -110,7 +134,13 @@ export async function extractCommitments(
       .select({ trust: conversations.trust })
       .from(conversations)
       .where(and(eq(conversations.id, conversationId), eq(conversations.agentId, opts.agentId)));
-    if (!conversation || !['owner', 'assistant'].includes(conversation.trust)) continue;
+    // Owner threads only. Assistant-trust conversations are the machinery
+    // talking to itself — scheduled runs, the Notifications thread, document
+    // processing — where a schedule named `daily-briefing` becomes a task
+    // title and reads back as "Complete daily-briefing", an open loop the
+    // owner never opened and cannot close. `renderOpenCommitments` already
+    // tells the model these come from owner conversations; this makes it true.
+    if (conversation?.trust !== 'owner') continue;
     const rows = await deps.db
       .select({ id: messages.id, role: messages.role, text: messages.text })
       .from(messages)
@@ -193,6 +223,12 @@ export async function extractCommitments(
       if (inserted.length) saved += 1;
       else {
         duplicates += 1;
+        // Deliberately no updatedAt: re-extraction is the assistant noticing the
+        // same loop again, not the owner touching it. Bumping the clock here
+        // meant any loop the nightly pass kept regenerating — recurring job
+        // names above all — reset its own idle window every night and could
+        // never go stale, which is exactly how the list filled up with loops
+        // nobody had thought about in months.
         await deps.db
           .update(commitments)
           .set({
@@ -202,7 +238,6 @@ export async function extractCommitments(
             nextAction: item.nextAction.trim(),
             dueAt: parseDueAt(item.dueAt),
             confidence: item.confidence.toFixed(2),
-            updatedAt: new Date(),
           })
           .where(
             and(
@@ -386,18 +421,36 @@ export async function correctCommitment(
   return rows.length === 1;
 }
 
-export async function markStaleCommitments(db: Db, agentId: string, before: Date): Promise<number> {
+/**
+ * Retire loops nobody has touched. `stale` rather than `dismissed`: the row
+ * stays for the record, but `listOpenCommitments` stops returning it, so it
+ * leaves both the memory desk and the chat recall context.
+ *
+ * A snoozed loop is only eligible once its snooze has run out — snoozing is the
+ * owner asking to be reminded later, not permission to forget.
+ */
+export async function markStaleCommitments(
+  db: Db,
+  agentId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  const idle = Object.entries(STALE_AFTER_DAYS).map(([kind, days]) =>
+    and(
+      eq(commitments.kind, kind),
+      lt(commitments.updatedAt, new Date(now.getTime() - days * DAY_MS)),
+    ),
+  );
   const rows = await db
     .update(commitments)
-    .set({ status: 'stale', updatedAt: new Date() })
+    .set({ status: 'stale', updatedAt: now })
     .where(
       and(
         eq(commitments.agentId, agentId),
         or(
           eq(commitments.status, 'open'),
-          and(eq(commitments.status, 'snoozed'), lt(commitments.snoozedUntil, sql`now()`)),
+          and(eq(commitments.status, 'snoozed'), lt(commitments.snoozedUntil, now)),
         ),
-        lt(commitments.updatedAt, before),
+        or(...idle, lt(commitments.dueAt, new Date(now.getTime() - STALE_AFTER_DUE_DAYS * DAY_MS))),
       ),
     )
     .returning({ id: commitments.id });

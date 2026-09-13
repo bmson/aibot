@@ -14,6 +14,7 @@ import {
   correctCommitment,
   dismissCommitment,
   extractCommitments,
+  markStaleCommitments,
   renderOpenCommitments,
   resolveCommitment,
   snoozeCommitment,
@@ -263,5 +264,242 @@ describe('commitment lifecycle', () => {
       .from(commitments)
       .where(eq(commitments.id, target.id));
     expect(unchanged).toEqual({ status: 'resolved', title, details: 'Original details' });
+  });
+});
+
+/**
+ * The sweep runs against its own agent so it cannot retire rows the lifecycle
+ * cases above are still asserting on, whatever order vitest picks.
+ */
+describe('retiring loops nobody is working on', () => {
+  const now = new Date('2026-09-13T12:00:00Z');
+  const daysAgo = (days: number) => new Date(now.getTime() - days * 24 * 3600 * 1000);
+  let sweepAgentId: string;
+  let sweepConversationId: string;
+
+  beforeAll(async () => {
+    if (!dbUp) return;
+    const [agent] = await db
+      .insert(agents)
+      .values({
+        name: 'Sweep Test',
+        email: `${MARKER}-sweep@example.com`,
+        workspacePrefix: `${MARKER}-sweep`,
+      })
+      .returning({ id: agents.id });
+    if (!agent) throw new Error('sweep test agent was not created');
+    sweepAgentId = agent.id;
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId: sweepAgentId, channel: 'chat', trust: 'owner', title: `${MARKER}-sweep` })
+      .returning({ id: conversations.id });
+    if (!conversation) throw new Error('sweep test conversation was not created');
+    sweepConversationId = conversation.id;
+  });
+
+  afterAll(async () => {
+    if (!dbUp) return;
+    // conversations.agent_id has no cascade, so the agent cannot go first.
+    await db.delete(messages).where(eq(messages.conversationId, sweepConversationId));
+    await db.delete(conversations).where(eq(conversations.id, sweepConversationId));
+    await db.delete(agents).where(eq(agents.id, sweepAgentId));
+  });
+
+  async function seed(
+    rows: Array<{
+      key: string;
+      kind: string;
+      idleDays: number;
+      status?: string;
+      snoozedUntil?: Date | null;
+      dueAt?: Date | null;
+    }>,
+  ) {
+    await db.delete(commitments).where(eq(commitments.agentId, sweepAgentId));
+    for (const item of rows) {
+      await db.insert(commitments).values({
+        agentId: sweepAgentId,
+        conversationId: sweepConversationId,
+        kind: item.kind,
+        title: `${MARKER} ${item.key}`,
+        status: item.status ?? 'open',
+        snoozedUntil: item.snoozedUntil ?? null,
+        dueAt: item.dueAt ?? null,
+        contentHash: `${MARKER}-${item.key}`,
+        updatedAt: daysAgo(item.idleDays),
+      });
+    }
+  }
+
+  async function statuses(): Promise<Record<string, string>> {
+    const rows = await db
+      .select({ title: commitments.title, status: commitments.status })
+      .from(commitments)
+      .where(eq(commitments.agentId, sweepAgentId));
+    return Object.fromEntries(rows.map((row) => [row.title.replace(`${MARKER} `, ''), row.status]));
+  }
+
+  it('retires each kind on its own window rather than one blanket cutoff', async () => {
+    if (!dbUp) return;
+    await seed([
+      { key: 'fresh-question', kind: 'question', idleDays: 10 },
+      { key: 'cold-question', kind: 'question', idleDays: 31 },
+      { key: 'waiting', kind: 'waiting_on', idleDays: 31 },
+      { key: 'promise-inside-window', kind: 'promise', idleDays: 31 },
+      { key: 'cold-promise', kind: 'promise', idleDays: 46 },
+      { key: 'decision-inside-window', kind: 'decision', idleDays: 46 },
+      { key: 'cold-decision', kind: 'decision', idleDays: 91 },
+    ]);
+
+    expect(await markStaleCommitments(db, sweepAgentId, now)).toBe(4);
+    expect(await statuses()).toEqual({
+      'fresh-question': 'open',
+      'cold-question': 'stale',
+      waiting: 'stale',
+      'promise-inside-window': 'open',
+      'cold-promise': 'stale',
+      'decision-inside-window': 'open',
+      'cold-decision': 'stale',
+    });
+  });
+
+  it('retires a loop that blew past its own due date, however recently touched', async () => {
+    if (!dbUp) return;
+    await seed([
+      { key: 'just-overdue', kind: 'promise', idleDays: 1, dueAt: daysAgo(13) },
+      { key: 'long-overdue', kind: 'promise', idleDays: 1, dueAt: daysAgo(15) },
+    ]);
+
+    expect(await markStaleCommitments(db, sweepAgentId, now)).toBe(1);
+    expect(await statuses()).toEqual({ 'just-overdue': 'open', 'long-overdue': 'stale' });
+  });
+
+  it('leaves a live snooze alone and retires one that has already run out', async () => {
+    if (!dbUp) return;
+    await seed([
+      {
+        key: 'snoozed-until-tomorrow',
+        kind: 'question',
+        idleDays: 60,
+        status: 'snoozed',
+        snoozedUntil: new Date(now.getTime() + 24 * 3600 * 1000),
+      },
+      {
+        key: 'snooze-expired',
+        kind: 'question',
+        idleDays: 60,
+        status: 'snoozed',
+        snoozedUntil: daysAgo(2),
+      },
+    ]);
+
+    expect(await markStaleCommitments(db, sweepAgentId, now)).toBe(1);
+    expect(await statuses()).toEqual({
+      'snoozed-until-tomorrow': 'snoozed',
+      'snooze-expired': 'stale',
+    });
+  });
+
+  it('never reopens a loop the owner already closed', async () => {
+    if (!dbUp) return;
+    await seed([
+      { key: 'resolved', kind: 'question', idleDays: 200, status: 'resolved' },
+      { key: 'dismissed', kind: 'question', idleDays: 200, status: 'dismissed' },
+    ]);
+
+    expect(await markStaleCommitments(db, sweepAgentId, now)).toBe(0);
+    expect(await statuses()).toEqual({ resolved: 'resolved', dismissed: 'dismissed' });
+  });
+
+  it('does not let re-extraction of the same loop reset its idle clock', async () => {
+    if (!dbUp) return;
+    await db.delete(commitments).where(eq(commitments.agentId, sweepAgentId));
+    await db.insert(messages).values({
+      conversationId: sweepConversationId,
+      role: 'user',
+      origin: 'owner',
+      parts: [],
+      text: `${MARKER}: the nightly pass keeps noticing this one.`,
+    });
+    const regenerated = {
+      kind: 'question' as const,
+      title: `${MARKER} a loop the nightly pass keeps regenerating`,
+      details: '',
+      nextAction: 'first reading',
+      dueAt: '',
+      confidence: 0.95,
+    };
+    extractedCommitments = [regenerated];
+    resolvedTitles = [];
+    await extractCommitments({ db, router: fakeRouter }, { agentId: sweepAgentId });
+
+    const stale = daysAgo(45);
+    await db
+      .update(commitments)
+      .set({ updatedAt: stale })
+      .where(eq(commitments.agentId, sweepAgentId));
+
+    // Same loop, newer detail: the row learns the detail, the clock does not move.
+    extractedCommitments = [{ ...regenerated, nextAction: 'second reading' }];
+    await extractCommitments({ db, router: fakeRouter }, { agentId: sweepAgentId });
+
+    const [row] = await db
+      .select({ nextAction: commitments.nextAction, updatedAt: commitments.updatedAt })
+      .from(commitments)
+      .where(eq(commitments.agentId, sweepAgentId));
+    expect(row?.nextAction).toBe('second reading');
+    expect(row?.updatedAt.getTime()).toBe(stale.getTime());
+    expect(await markStaleCommitments(db, sweepAgentId, now)).toBe(1);
+
+    extractedCommitments = [];
+  });
+});
+
+describe('what extraction is allowed to see', () => {
+  it('ignores the assistant talking to itself in a machinery thread', async () => {
+    if (!dbUp) return;
+    // Scheduled runs, the Notifications thread and document processing all get
+    // trust 'assistant'. A schedule named daily-briefing becomes a task title
+    // there, and used to come back as the owner's promise to complete it.
+    const [machinery] = await db
+      .insert(conversations)
+      .values({
+        agentId,
+        channel: 'chat',
+        trust: 'assistant',
+        title: `${MARKER}-machinery`,
+      })
+      .returning({ id: conversations.id });
+    if (!machinery) throw new Error('machinery conversation was not created');
+    await db.insert(messages).values({
+      conversationId: machinery.id,
+      role: 'assistant',
+      origin: 'assistant',
+      parts: [],
+      text: `${MARKER}: running the daily-briefing schedule and preparing the owner's morning brief.`,
+    });
+    extractedCommitments = [
+      {
+        kind: 'question',
+        title: `${MARKER} Complete daily-briefing`,
+        details: '',
+        nextAction: '',
+        dueAt: '',
+        confidence: 0.95,
+      },
+    ];
+    resolvedTitles = [];
+
+    await extractCommitments({ db, router: fakeRouter }, { agentId });
+
+    const rows = await db
+      .select({ conversationId: commitments.conversationId })
+      .from(commitments)
+      .where(and(eq(commitments.agentId, agentId), eq(commitments.conversationId, machinery.id)));
+    expect(rows).toEqual([]);
+
+    extractedCommitments = [];
+    await db.delete(messages).where(eq(messages.conversationId, machinery.id));
+    await db.delete(conversations).where(eq(conversations.id, machinery.id));
   });
 });

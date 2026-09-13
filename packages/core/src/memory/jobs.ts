@@ -46,6 +46,7 @@ export type CodeJobName =
   | 'reminder.notify'
   | 'briefing.compose'
   | 'memory.consolidate'
+  | 'memory.sweep_loops'
   | 'memory.graph_sync'
   | 'memory.graph_date_backfill'
   | 'chat.segment'
@@ -70,6 +71,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'reminder.notify',
   'briefing.compose',
   'memory.consolidate',
+  'memory.sweep_loops',
   'memory.graph_sync',
   'memory.graph_date_backfill',
   'chat.segment',
@@ -270,15 +272,19 @@ export async function runCodeJob(
       await deps.heartbeat?.();
       const r = await runMemoryExtraction(deps, { taskId: task.id });
       const loops = await extractCommitments(deps, { agentId: task.agentId, taskId: task.id });
-      await markStaleCommitments(
-        deps.db,
-        task.agentId,
-        new Date(Date.now() - 90 * 24 * 3600 * 1000),
-      );
       return {
         done: true,
         summary: `extraction: ${r.saved} saved (${r.quarantined} quarantined, ${r.contactsCreated} new people), ${r.duplicates} duplicate, ${r.tombstoned} tombstoned, ${r.occasionsSaved} occasion(s), from ${r.conversationsScanned} conversation(s); open loops ${loops.saved} saved (${loops.duplicates} duplicate)`,
       };
+    }
+    // Retiring old loops used to ride along with memory.extract. It is a single
+    // SQL update with no model call, and pinning it to a nightly job that does
+    // LLM work meant a throttled or over-budget extraction also silently
+    // stopped the cleanup. It runs on its own clock now, and more often, so a
+    // loop that ages out leaves the desk the same day rather than the next.
+    case 'memory.sweep_loops': {
+      const stale = await markStaleCommitments(deps.db, task.agentId);
+      return { done: true, summary: `open loops: ${stale} retired as stale` };
     }
     case 'email.extract': {
       await deps.heartbeat?.();

@@ -212,6 +212,14 @@ const scheduleSeed = [
     cron: '0 22 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'memory.extract' },
   },
+  // Open loops age out on their own schedule rather than riding along with the
+  // nightly extraction above: one SQL update, no model, so there is no reason
+  // for a throttled or over-budget extraction to stop the desk being cleared.
+  {
+    name: 'open-loop-sweep',
+    cron: '35 */6 * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.01', job: 'memory.sweep_loops' },
+  },
   // Forwarded mail is read into memory from its own ledger rather than by the
   // conversation sampling above, which sees at most 12 threads a night — a few
   // percent of a real inbox. Runs every four hours so the day's dates are
@@ -367,6 +375,7 @@ const scheduleSeed = [
 /** Schedules whose definition the seed owns — updated in place on re-seed (prod picks up changes on deploy). */
 const SEED_OWNED_SCHEDULES = new Set([
   'memory-extraction',
+  'open-loop-sweep',
   'memory-consolidation',
   'knowledge-graph-sync',
   'knowledge-graph-date-backfill',
