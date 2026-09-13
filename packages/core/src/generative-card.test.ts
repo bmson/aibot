@@ -103,6 +103,79 @@ describe('GenerativeCardSpecV1', () => {
     });
     expect(validateGroundedCard(missing, JSON.stringify(missing))).toBeNull();
   });
+
+  it('rejects a card whose own words are in a script the evidence never used', () => {
+    // The reminder card as it shipped: every value lifted correctly out of an
+    // English turn, under a title and labels nobody in the conversation could
+    // read.
+    const corpus =
+      'SOURCE_MESSAGE\nRemind me in 7 hours, that I need to charge the car before we drive to the game\n\nTOOL_1 scheduler.schedule_task\n{"scheduledFor":"2026-09-13T07:45:00-07:00","taskId":"ccc44ceb-36b9-450d-be1e-ee537a4bd59f"}';
+    const drifted = GenerativeCardSpecV1Schema.parse({
+      version: 1,
+      title: '车辆充电提醒',
+      icon: 'calendar',
+      accessibilityLabel: '车辆充电提醒',
+      sourceLabel: 'Task Scheduler',
+      facts: [
+        {
+          id: 'when',
+          label: '计划时间',
+          value: '2026-09-13T07:45:00-07:00',
+          source: 'scheduler.schedule_task',
+        },
+      ],
+      blocks: [{ type: 'facts', factIds: ['when'] }],
+    });
+    expect(validateGroundedCard(drifted, corpus)).toBeNull();
+    expect(
+      validateGroundedCard(
+        GenerativeCardSpecV1Schema.parse({
+          ...drifted,
+          title: 'Charge the car',
+          accessibilityLabel: 'Reminder to charge the car',
+          facts: [{ ...drifted.facts[0], label: 'Scheduled for' }],
+        }),
+        corpus,
+      ),
+    ).not.toBeNull();
+  });
+
+  it('keeps a card written in the script its owner wrote in', () => {
+    const corpus =
+      'SOURCE_MESSAGE\n七小时后提醒我，开车去球场之前要给车充电\n\nTOOL_1 scheduler.schedule_task\n{"scheduledFor":"2026-09-13T07:45:00-07:00"}';
+    const inOwnersScript = GenerativeCardSpecV1Schema.parse({
+      version: 1,
+      title: '车辆充电提醒',
+      icon: 'calendar',
+      accessibilityLabel: '车辆充电提醒',
+      sourceLabel: '任务计划',
+      facts: [
+        {
+          id: 'when',
+          label: '计划时间',
+          value: '2026-09-13T07:45:00-07:00',
+          source: 'scheduler.schedule_task',
+        },
+      ],
+      blocks: [{ type: 'facts', factIds: ['when'] }],
+    });
+    expect(validateGroundedCard(inOwnersScript, corpus)).toEqual(inOwnersScript);
+  });
+
+  it('does not mistake Latin diacritics for a script of their own', () => {
+    const corpus =
+      'SOURCE_MESSAGE\nWhen does the game start?\n\nTOOL_1 calendar.list\n{"title":"Leikur"}';
+    const accented = GenerativeCardSpecV1Schema.parse({
+      version: 1,
+      title: 'Brynjar’s leikur',
+      icon: 'sport',
+      accessibilityLabel: 'Leikur í dag',
+      sourceLabel: 'Dagatal',
+      facts: [{ id: 'title', label: 'Viðburður', value: 'Leikur', source: 'calendar.list' }],
+      blocks: [{ type: 'facts', factIds: ['title'] }],
+    });
+    expect(validateGroundedCard(accented, corpus)).toEqual(accented);
+  });
 });
 
 /** Captures the corpus the compiler builds, and whether it was consulted at all. */
