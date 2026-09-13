@@ -3,8 +3,8 @@ import { outboundEmailAllowed } from '@assistant/config';
 import {
   activeAutonomyGrant,
   autonomyFloorBlocks,
-  isBrowserJobPending,
   isGoalWorkEvidence,
+  isJobPending,
   withSpan,
 } from '@assistant/core';
 import { createApproval } from '@assistant/core/workflow/approvals';
@@ -224,7 +224,7 @@ export class ToolDispatcher {
     const loaded = await this.executionRepository.load(ctx.agentId, ctx.taskId, toolCallId);
     const call = loaded?.toolCall;
     if (!loaded || !call) return { kind: 'failed', error: 'tool call not found' };
-    if (isBrowserJobPending(call.result)) return { kind: 'executed', result: call.result };
+    if (isJobPending(call.result)) return { kind: 'executed', result: call.result };
     if (call.status === 'succeeded') return { kind: 'executed', result: call.result };
     if (call.status !== 'approved') {
       return { kind: 'failed', error: `tool call is ${call.status}, not approved` };
@@ -310,7 +310,7 @@ export class ToolDispatcher {
           ),
       );
       providerCompleted = true;
-      if (reserved?.ok && !isBrowserJobPending(result)) {
+      if (reserved?.ok && !isJobPending(result)) {
         await this.costRepository
           .reconcile(reserved.reservationId, {
             usd: reserved.estimatedUsd,
@@ -327,7 +327,7 @@ export class ToolDispatcher {
         taskId: ctx.taskId,
         toolCallId,
         status: 'succeeded',
-        ...(isBrowserJobPending(result) ? {} : { result: result ?? null }),
+        ...(isJobPending(result) ? {} : { result: result ?? null }),
       });
       if (!persisted)
         return { kind: 'failed', error: 'tool success could not be persisted; retry suppressed' };
@@ -858,7 +858,7 @@ export class ToolDispatcher {
           ),
       );
       providerCompleted = true;
-      if (reserved?.ok && !isBrowserJobPending(result)) {
+      if (reserved?.ok && !isJobPending(result)) {
         await this.costRepository
           .reconcile(reserved.reservationId, {
             usd: reserved.estimatedUsd,
@@ -876,7 +876,7 @@ export class ToolDispatcher {
         toolCallId: row.id,
         status: 'succeeded',
         fromStatus: 'executing',
-        ...(isBrowserJobPending(result) ? {} : { result: result ?? null }),
+        ...(isJobPending(result) ? {} : { result: result ?? null }),
       });
       if (!persisted)
         return {

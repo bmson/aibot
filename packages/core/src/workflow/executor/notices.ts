@@ -1,5 +1,6 @@
 import type { Db, TaskRow } from '@assistant/db';
 import { goals } from '@assistant/db';
+import type { MessageRepository } from '@assistant/persistence';
 import { eq, sql } from 'drizzle-orm';
 import { persistMessage } from '../../chat.js';
 import { compactChatMessageParts } from '../../chat-card.js';
@@ -63,7 +64,7 @@ export function noticeParts(kind: NoticeKind, extraParts: unknown[] = []): unkno
  * whether the owner has any chance of seeing this (used by the re-notify sweep).
  */
 export async function postConversationNotice(
-  db: Db,
+  db: Db | MessageRepository,
   task: TaskRow,
   text: string,
   extraParts: unknown[] = [],
@@ -105,7 +106,7 @@ export async function notifyOwnerAndConversation(
   // failure, a budget stall, a blocked goal — so the chat gets the marker that
   // renders it as a waiting-on-you card instead of another assistant reply.
   const conversationNotified = await postConversationNotice(
-    deps.db,
+    deps.persistence?.messages ?? deps.db,
     task,
     text,
     noticeParts('needs-attention', extraParts),
@@ -143,7 +144,7 @@ export async function notifyAttention(
     extraParts,
   );
   if (conversationNotified || ownerNotified) {
-    await markAttentionNotified(deps.db, task.id).catch((err) =>
+    await markAttentionNotified(deps.persistence?.tasks ?? deps.db, task.id).catch((err) =>
       console.error('attention stamp failed', err),
     );
   }

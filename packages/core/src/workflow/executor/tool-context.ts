@@ -1,12 +1,12 @@
 import type { Db } from '@assistant/db';
-import { toolCalls } from '@assistant/db';
+import { createPostgresExecutionJobRepository } from '@assistant/db';
+import type { ExecutionJobRepository } from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
-import { and, eq } from 'drizzle-orm';
 import { hashCallbackToken } from '../../browse.js';
 import { isForwardedIngest } from '../../email-provenance.js';
 import type { TaskState, Trust } from '../../events.js';
 import type { ProposedToolCall } from '../../model-router/router.js';
-import { checkpointTask, type TaskLease } from '../machine.js';
+import type { TaskLease } from '../machine.js';
 import type { ToolContextLike } from './types.js';
 import { compact, toolResultMessage } from './util.js';
 
@@ -86,8 +86,10 @@ export function createToolContext(args: {
   getWindow: () => ModelMessage[];
   getBrowserStageRemainder: () => ProposedToolCall[];
   browserStageSnapshots: BrowserStageSnapshots;
+  executionJobs?: ExecutionJobRepository;
 }): ToolContextLike {
   const { db, task, state, browserStageSnapshots } = args;
+  const executionJobs = args.executionJobs ?? createPostgresExecutionJobRepository(db);
   return {
     taskId: task.id,
     agentId: task.agentId,
@@ -141,23 +143,10 @@ export function createToolContext(args: {
         pendingJob,
         contextWindow,
       };
-      await db.transaction(async (tx) => {
-        const [staged] = await tx
-          .update(toolCalls)
-          .set({ result: stagedSentinel })
-          .where(
-            and(
-              eq(toolCalls.id, job.dbToolCallId),
-              eq(toolCalls.taskId, task.id),
-              eq(toolCalls.status, 'executing'),
-            ),
-          )
-          .returning({ id: toolCalls.id });
-        if (!staged) throw new Error('browser tool call could not be staged');
-        if (!(await checkpointTask(tx as unknown as Db, task, checkpointState))) {
-          throw new Error('task lease lost while staging browser job');
-        }
-      });
+      await executionJobs.stage(
+        { taskId: task.id, toolCallId: job.dbToolCallId, pending: stagedSentinel, checkpointState },
+        task,
+      );
       browserStageSnapshots.set(job.dbToolCallId, snapshot);
       state.pendingJob = pendingJob;
       state.contextWindow = contextWindow;
@@ -169,23 +158,18 @@ export function createToolContext(args: {
         pendingJob: snapshot?.pendingJob ?? null,
         contextWindow: snapshot?.contextWindow ?? state.contextWindow,
       };
-      await db.transaction(async (tx) => {
-        const [cleared] = await tx
-          .update(toolCalls)
-          .set({ result: null })
-          .where(
-            and(
-              eq(toolCalls.id, job.dbToolCallId),
-              eq(toolCalls.taskId, task.id),
-              eq(toolCalls.status, 'executing'),
-            ),
-          )
-          .returning({ id: toolCalls.id });
-        if (!cleared) throw new Error('staged browser tool call could not be cleared');
-        if (!(await checkpointTask(tx as unknown as Db, task, checkpointState))) {
-          throw new Error('task lease lost while clearing browser job');
-        }
-      });
+      await executionJobs.clear(
+        {
+          taskId: task.id,
+          toolCallId: job.dbToolCallId,
+          pending: {
+            ...job.pending,
+            callbackToken: hashCallbackToken(job.pending.callbackToken),
+          },
+          checkpointState,
+        },
+        task,
+      );
       state.pendingJob = checkpointState.pendingJob;
       state.contextWindow = checkpointState.contextWindow;
       browserStageSnapshots.delete(job.dbToolCallId);

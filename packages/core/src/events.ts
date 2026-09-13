@@ -155,6 +155,8 @@ export const TaskStateSchema = z.object({
    * task. Nullish: old checkpoints simply have no watermark and none is applied.
    */
   seenConversationAt: z.string().nullish(),
+  /** Stable tie-breaker when multiple owner messages share the same timestamp. */
+  seenConversationId: z.string().nullish(),
   /**
    * Loop-health counters for the response_checks record written at finalize:
    * steps served by a fallback model, and forced retries after a step that was

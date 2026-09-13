@@ -1,8 +1,11 @@
 import { loadConfig } from '@assistant/config';
-import type { Db, TaskRow } from '@assistant/db';
-import { messages, responseChecks, tasks, toolCalls } from '@assistant/db';
+import { createPostgresExecutionEvidenceRepository, type Db, type TaskRow } from '@assistant/db';
+import type {
+  ExecutionEvidenceRecord,
+  ExecutionEvidenceRepository,
+  MessageRepository,
+} from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
-import { and, eq, inArray, ne } from 'drizzle-orm';
 import {
   assistantMessageParts,
   getOrCreateNotificationsConversation,
@@ -55,16 +58,19 @@ import { compact, latestUserText } from './util.js';
 export const SCHEDULE_DIRECTIVE =
   '\nThis turn defers work to the future. Before you finish, call task.schedule with a concrete time and a self-contained instruction (or mission.update if this belongs to a mission). Do not promise to continue, watch, or keep updating anything unless that call succeeded — if you cannot schedule it, say so plainly and do the part you can do now.';
 
-const EVIDENCE_COLUMNS = {
-  toolName: toolCalls.toolName,
-  status: toolCalls.status,
-  args: toolCalls.args,
-  result: toolCalls.result,
-  error: toolCalls.error,
-  // Not read by the response contract — it is what puts the step trail on an
-  // answer card in the order the work actually happened.
-  step: toolCalls.step,
-} as const;
+function executionEvidence(deps: ExecutorDeps): ExecutionEvidenceRepository {
+  return deps.persistence?.executionEvidence ?? createPostgresExecutionEvidenceRepository(deps.db);
+}
+
+function actionEvidence(
+  rows: readonly ExecutionEvidenceRecord[],
+  fromCurrentTask?: boolean,
+): ActionEvidence[] {
+  return rows.map((row) => ({
+    ...row,
+    ...(fromCurrentTask === undefined ? {} : { fromCurrentTask }),
+  }));
+}
 
 export async function stopForUnsavedGoalProgress(
   deps: ExecutorDeps,
@@ -103,6 +109,8 @@ export async function stopForUnsavedGoalProgress(
  * Notifications thread so the owner always sees the result on the dashboard.
  */
 async function persistFinalConversationOnce(
+  evidence: ExecutionEvidenceRepository,
+  messageRepository: MessageRepository | undefined,
   db: Db,
   task: TaskRow,
   text: string,
@@ -121,28 +129,24 @@ async function persistFinalConversationOnce(
     const title = task.title?.trim() || 'Scheduled task';
     body = `**${title}**\n\n${text}`;
   }
-  const [existing] = await db
-    .select({ id: messages.id })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.taskId, task.id),
-        eq(messages.role, 'assistant'),
-        eq(messages.origin, 'assistant'),
-        eq(messages.text, body),
-      ),
-    )
-    .limit(1);
+  const existing = await evidence.finalMessageExists({
+    agentId: task.agentId,
+    taskId: task.id,
+    conversationId,
+    text: body,
+  });
   // A duplicate from an earlier attempt still means an owner-visible copy exists.
   if (existing) return true;
-  await persistMessage(db, {
+  const message: Parameters<MessageRepository['append']>[0] = {
     conversationId,
     taskId: task.id,
     role: 'assistant',
     origin: 'assistant',
     parts: assistantMessageParts(body, recall, { contractNotice, cues, responseCards }),
     text: body,
-  });
+  };
+  if (messageRepository) await messageRepository.append(message);
+  else await persistMessage(db, message);
   return true;
 }
 
@@ -153,9 +157,12 @@ export async function finalizePendingResponse(
   pending: PendingFinal,
   checkpointState?: TaskState,
 ): Promise<ExecuteResult> {
-  if (!(await renewTaskLease(deps.db, task))) return LOST_LEASE;
+  if (!(await renewTaskLease(deps.persistence?.tasks ?? deps.db, task))) return LOST_LEASE;
   const recallSources = (checkpointState ?? taskState(task)).recall ?? undefined;
+  const evidence = executionEvidence(deps);
   const conversationDelivered = await persistFinalConversationOnce(
+    evidence,
+    deps.persistence?.messages,
     deps.db,
     task,
     pending.text,
@@ -173,8 +180,8 @@ export async function finalizePendingResponse(
     pending.deliveryAttempted = true;
     const state = checkpointState ?? taskState(task);
     state.pendingFinal = pending;
-    if (!(await checkpointTask(deps.db, task, state))) return LOST_LEASE;
-    if (!(await renewTaskLease(deps.db, task))) return LOST_LEASE;
+    if (!(await checkpointTask(deps.persistence?.tasks ?? deps.db, task, state))) return LOST_LEASE;
+    if (!(await renewTaskLease(deps.persistence?.tasks ?? deps.db, task))) return LOST_LEASE;
     try {
       await deps.deliverFinal(task, pending.text);
     } catch (error) {
@@ -182,7 +189,8 @@ export async function finalizePendingResponse(
       // failures are normalized by channel adapters and do not throw.
       pending.deliveryAttempted = false;
       state.pendingFinal = pending;
-      if (!(await checkpointTask(deps.db, task, state))) return LOST_LEASE;
+      if (!(await checkpointTask(deps.persistence?.tasks ?? deps.db, task, state)))
+        return LOST_LEASE;
       throw error;
     }
   }
@@ -192,8 +200,8 @@ export async function finalizePendingResponse(
   // page instead of closing it out as a completed run.
   const completed =
     pending.terminalStatus === 'needs_attention'
-      ? await markTaskNeedsAttention(deps.db, task, pending.progress)
-      : await completeTask(deps.db, task, {
+      ? await markTaskNeedsAttention(deps.persistence?.tasks ?? deps.db, task, pending.progress)
+      : await completeTask(deps.persistence?.tasks ?? deps.db, task, {
           status: pending.terminalStatus,
           progress: pending.progress,
         });
@@ -203,15 +211,19 @@ export async function finalizePendingResponse(
   // exists to measure (step-cap exhaustion, forced-no-tool, budget stalls),
   // not just successful prose finals. Best-effort: a metrics write must never
   // fail a completed task.
-  await recordQualitySignals(deps.db, task, checkpointState ?? taskState(task), pending).catch(
-    (error) => console.error('quality signal record failed', error),
-  );
+  await recordQualitySignals(
+    evidence,
+    deps.db,
+    task,
+    checkpointState ?? taskState(task),
+    pending,
+  ).catch((error) => console.error('quality signal record failed', error));
   // A needs_attention final that reached an owner-visible thread (the task's own
   // conversation or the Notifications sink) is already notified — stamp it so the
   // re-notify sweep leaves it alone. If it delivered nowhere, leave it unstamped
   // so the sweep keeps trying.
   if (pending.terminalStatus === 'needs_attention' && conversationDelivered) {
-    await markAttentionNotified(deps.db, task.id).catch((err) =>
+    await markAttentionNotified(deps.persistence?.tasks ?? deps.db, task.id).catch((err) =>
       console.error('attention stamp failed', err),
     );
   }
@@ -226,7 +238,7 @@ export async function stageFinalResponse(
   window: ModelMessage[],
   pending: PendingFinal,
 ): Promise<ExecuteResult> {
-  await refreshRequestChecklist(deps.db, task.id, state);
+  await refreshRequestChecklist(executionEvidence(deps), task, state);
   if (state.requestChecklist?.items.some((item) => item.status !== 'completed')) {
     // A partial success is not the whole request. This is also applied to
     // non-model terminal paths, and checkpointed before channel delivery.
@@ -243,7 +255,7 @@ export async function stageFinalResponse(
   }
   state.pendingFinal = pending;
   state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-  if (!(await checkpointTask(deps.db, task, state))) return LOST_LEASE;
+  if (!(await checkpointTask(deps.persistence?.tasks ?? deps.db, task, state))) return LOST_LEASE;
   return finalizePendingResponse(deps, task, pending, state);
 }
 
@@ -256,6 +268,7 @@ export async function stageFinalResponse(
  * recommended forever. Best-effort — a metrics write must never fail a final.
  */
 async function recordQualitySignals(
+  evidence: ExecutionEvidenceRepository,
   db: Db,
   task: TaskRow,
   state: TaskState,
@@ -264,9 +277,9 @@ async function recordQualitySignals(
   // The unique task_id + do-nothing makes the row idempotent across delivery
   // retries and resumes; `.returning()` tells us whether THIS call was the one
   // that inserted it.
-  const inserted = await db
-    .insert(responseChecks)
-    .values({
+  const inserted = await evidence.recordResponseCheck({
+    agentId: task.agentId,
+    check: {
       taskId: task.id,
       promptVersion: PROMPT_VERSION,
       plannerVersion: PLANNER_VERSION,
@@ -277,15 +290,14 @@ async function recordQualitySignals(
       outputVerificationAttempted: pending.outputVerificationAttempted ?? false,
       outputVerificationRevised: pending.outputVerificationRevised ?? false,
       outputVerificationUnavailable: pending.outputVerificationUnavailable ?? false,
-    })
-    .onConflictDoNothing({ target: responseChecks.taskId })
-    .returning({ taskId: responseChecks.taskId });
+    },
+  });
   // recordSkillOutcome increments success/failure counters — NOT idempotent —
   // so run it only on the fresh insert. terminalStatus is now the ACTUAL final
   // status (this is called after completion), so a failed/needs_attention run
   // finally records a failure, which is what lets the three-strikes skill
   // deprecation fire instead of a bad skill being recommended forever.
-  if (inserted.length > 0 && state.usedSkillIds.length > 0) {
+  if (inserted && state.usedSkillIds.length > 0) {
     const success = pending.terminalStatus === 'done';
     await Promise.all(state.usedSkillIds.map((id) => recordSkillOutcome(db, id, success)));
   }
@@ -327,21 +339,16 @@ export async function stageModelFinalResponse(
   // survive only into a dashboard chat_turn's persisted parts, below.
   const strippedFinal = stripCueTags(pending.text);
   pending.text = strippedFinal.text;
-  const rows = await deps.db
-    .select(EVIDENCE_COLUMNS)
-    .from(toolCalls)
-    .where(eq(toolCalls.taskId, task.id));
+  const evidenceRepository = executionEvidence(deps);
+  const rows = await evidenceRepository.taskEvidence({ agentId: task.agentId, taskId: task.id });
   const priorRows = task.conversationId
-    ? await deps.db
-        .select(EVIDENCE_COLUMNS)
-        .from(toolCalls)
-        .innerJoin(tasks, eq(toolCalls.taskId, tasks.id))
-        .where(and(eq(tasks.conversationId, task.conversationId), ne(toolCalls.taskId, task.id)))
+    ? await evidenceRepository.conversationEvidence({
+        agentId: task.agentId,
+        conversationId: task.conversationId,
+        excludeTaskId: task.id,
+      })
     : [];
-  const evidence: ActionEvidence[] = [
-    ...priorRows.map((row) => ({ ...row, fromCurrentTask: false })),
-    ...rows,
-  ];
+  const evidence: ActionEvidence[] = [...actionEvidence(priorRows, false), ...actionEvidence(rows)];
   // owner.notify already persisted this scheduled reminder. Reuse its exact
   // delivered text so a paraphrase or "Done" cannot create a second message.
   if (task.type === 'scheduled' && rows.length === 1) {
@@ -657,17 +664,13 @@ export async function maybeEnqueueKnownSenderReply(
   // If the triage model already drafted or sent a reply of its own, a reply path
   // exists — do not propose a second one. (gmail.send parks for approval before
   // it could reach this finalization, but a resumed-and-sent call leaves a row.)
-  const [outbound] = await deps.db
-    .select({ id: toolCalls.id })
-    .from(toolCalls)
-    .where(
-      and(
-        eq(toolCalls.taskId, task.id),
-        inArray(toolCalls.toolName, ['gmail.send', 'gmail.create_draft']),
-      ),
-    )
-    .limit(1);
-  if (outbound) return;
+  if (
+    await executionEvidence(deps).hasOutboundReply({
+      agentId: task.agentId,
+      taskId: task.id,
+    })
+  )
+    return;
 
   const replySubject = /^re:/i.test(subject) ? subject : `Re: ${subject || '(no subject)'}`;
   const instruction = [
@@ -681,7 +684,7 @@ export async function maybeEnqueueKnownSenderReply(
     reply,
   ].join('\n');
 
-  await enqueueTask(deps.db, {
+  await enqueueTask(deps.persistence?.tasks ?? deps.db, {
     event: {
       source: 'internal',
       externalEventId: `known-sender-reply:${task.id}`,

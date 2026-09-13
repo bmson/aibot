@@ -1,6 +1,5 @@
-import { toolCalls } from '@assistant/db';
+import { createPostgresExecutionEvidenceRepository } from '@assistant/db';
 import type { ModelMessage } from 'ai';
-import { eq } from 'drizzle-orm';
 import { hashCallbackToken } from '../../browse.js';
 import { buildSystemPrompt, PROMPT_VERSION } from '../../chat.js';
 import { isJobPending } from '../../code-exec.js';
@@ -214,6 +213,8 @@ export function latestCurrentTaskAssistantText(window: ModelMessage[]): string {
 
 export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<ExecuteResult> {
   const { deps, db, router, dispatcher, task, agent, state, ctx, artifactIntent } = rc;
+  const evidence =
+    deps.persistence?.executionEvidence ?? createPostgresExecutionEvidenceRepository(db);
   const lease = task;
   // One clock for the whole run: the system prompt embeds it, and a per-step
   // timestamp would break the cacheable prompt prefix on every minute boundary.
@@ -442,31 +443,14 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // could ping-pong until the step budget ran out.
   let readAnswerAttempted = false;
   while (state.step < bookkeepingStepCap) {
-    await refreshRequestChecklist(db, task.id, state);
+    await refreshRequestChecklist(evidence, task, state);
     const goalToolEvidence = isUnattendedGoalSession(task)
-      ? await db
-          .select({
-            toolName: toolCalls.toolName,
-            status: toolCalls.status,
-            result: toolCalls.result,
-            step: toolCalls.step,
-          })
-          .from(toolCalls)
-          .where(eq(toolCalls.taskId, task.id))
+      ? await evidence.taskEvidence({ agentId: task.agentId, taskId: task.id })
       : [];
     const mustRecordGoalProgress = needsGoalProgressUpdate(goalToolEvidence);
     const readToolEvidence: ReadToolEvidence[] =
       readRequest || situationRequest || liveLookup || birthdaySaves.length > 0
-        ? await db
-            .select({
-              toolName: toolCalls.toolName,
-              status: toolCalls.status,
-              args: toolCalls.args,
-              result: toolCalls.result,
-              error: toolCalls.error,
-            })
-            .from(toolCalls)
-            .where(eq(toolCalls.taskId, task.id))
+        ? await evidence.taskEvidence({ agentId: task.agentId, taskId: task.id })
         : [];
     const forcedLiveLookup =
       liveLookup && !readRequest
@@ -778,7 +762,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         forceFallback: useForcedToolFallback && Boolean(forcedArtifact),
         critical,
       });
-      if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+      if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
     }
 
     // toolChoice 'none' already asks for this; dropping the calls outright is
@@ -819,7 +803,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         forceFallback: useForcedToolFallback,
         critical,
       });
-      if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+      if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
 
       if (stepResult.ok && needsArtifactToolRetry(forcedArtifact, stepResult.toolCalls)) {
         const text = artifactRoutingFailure(forcedArtifact);
@@ -859,7 +843,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         forceFallback: useForcedToolFallback,
         critical,
       });
-      if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+      if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
     }
 
     // A 'required' tool choice is advisory for some providers. If a step we forced
@@ -888,7 +872,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         forceFallback: useForcedToolFallback,
         critical,
       });
-      if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+      if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
     }
 
     // The must-act retry above is another model boundary, so apply the same
@@ -918,14 +902,14 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         // resets (checkpointed at this step boundary, never killed mid-step)
         state.contextWindow = compact(rc.window) as unknown as TaskState['contextWindow'];
         const parked = await parkForBudget(
-          db,
+          deps.persistence?.tasks ?? db,
           lease,
           state,
           budgetResumeAt(stepResult.decision.reason),
         );
         if (!parked) return LOST_LEASE;
         await postConversationNotice(
-          db,
+          deps.persistence?.messages ?? db,
           task,
           `I'm pausing here — ${stepResult.decision.reason}. This resumes automatically when the budget resets; you can also raise the caps on the Costs page.`,
           noticeParts('parked'),
@@ -934,7 +918,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       }
       // task budget exhausted — surface to the owner on the dashboard
       const marked = await markTaskNeedsAttention(
-        db,
+        deps.persistence?.tasks ?? db,
         lease,
         `budget: ${stepResult.decision.reason}`,
       );
@@ -1066,7 +1050,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           );
           continue;
         }
-        if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+        if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
         rc.browserStageRemainder = stepResult.toolCalls.slice(toolIndex + 1);
         const outcome = await dispatcher.dispatch({
           task,
@@ -1123,10 +1107,15 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             }),
           );
           state.contextWindow = compact(rc.window) as unknown as TaskState['contextWindow'];
-          const parked = await parkForBudget(db, lease, state, outcome.resumeAt);
+          const parked = await parkForBudget(
+            deps.persistence?.tasks ?? db,
+            lease,
+            state,
+            outcome.resumeAt,
+          );
           if (!parked) return LOST_LEASE;
           await postConversationNotice(
-            db,
+            deps.persistence?.messages ?? db,
             task,
             `I'm pausing here — this action doesn't fit the remaining budget (${outcome.reason}). The task resumes automatically when the budget resets; you can also raise the caps on the Costs page.`,
             noticeParts('parked'),
@@ -1175,10 +1164,15 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
 
       rc.window = compact(rc.window);
       state.contextWindow = rc.window as unknown as TaskState['contextWindow'];
-      await refreshRequestChecklist(db, task.id, state);
+      await refreshRequestChecklist(evidence, task, state);
 
       if (pendingApprovals.length > 0) {
-        const parked = await parkForApproval(db, lease, state, pendingApprovals);
+        const parked = await parkForApproval(
+          deps.persistence?.tasks ?? db,
+          lease,
+          state,
+          pendingApprovals,
+        );
         if (!parked) return LOST_LEASE;
         // The conversation must not go silent while parked — tell the owner
         // exactly what is waiting and where to approve it.
@@ -1190,7 +1184,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         // for seconds while the card naming what was waiting did not exist
         // yet — it stopped polling and the card only appeared on a reload.
         const conversationNotified = await postConversationNotice(
-          db,
+          deps.persistence?.messages ?? db,
           task,
           [
             'This needs your approval before I act:',
@@ -1215,7 +1209,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             });
         }
         await markApprovalsNotified(
-          db,
+          deps.persistence?.approvals ?? db,
           approvalNotices.map((notice) => notice.approvalId),
           deliveredChannels({ ownerNotified, conversationNotified }),
         );
@@ -1226,12 +1220,17 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       }
 
       if (state.pendingJob) {
-        const slept = await sleepTask(db, lease, state, new Date(state.pendingJob.timeoutAt));
+        const slept = await sleepTask(
+          deps.persistence?.tasks ?? db,
+          lease,
+          state,
+          new Date(state.pendingJob.timeoutAt),
+        );
         if (!slept) return LOST_LEASE;
         return { outcome: 'sleeping', detail: 'browser job running' };
       }
 
-      if (!(await checkpointTask(db, lease, state))) return LOST_LEASE;
+      if (!(await checkpointTask(deps.persistence?.tasks ?? db, lease, state))) return LOST_LEASE;
       continue;
     }
 
@@ -1282,7 +1281,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         content: stepResult.text || 'The request still has unfinished outcomes.',
       });
       state.contextWindow = compact(rc.window) as unknown as TaskState['contextWindow'];
-      if (!(await checkpointTask(db, lease, state))) return LOST_LEASE;
+      if (!(await checkpointTask(deps.persistence?.tasks ?? db, lease, state))) return LOST_LEASE;
       continue;
     }
 
@@ -1333,16 +1332,10 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // never replace it with generic progress prose or ask the owner to choose a
   // provider. Goal sessions retain their stricter progress-persistence path.
   if (readRequest && !isUnattendedGoalSession(task)) {
-    const readToolEvidence = await db
-      .select({
-        toolName: toolCalls.toolName,
-        status: toolCalls.status,
-        args: toolCalls.args,
-        result: toolCalls.result,
-        error: toolCalls.error,
-      })
-      .from(toolCalls)
-      .where(eq(toolCalls.taskId, task.id));
+    const readToolEvidence = await evidence.taskEvidence({
+      agentId: task.agentId,
+      taskId: task.id,
+    });
     const checked = enforcePersonalReadResponse(
       readRequest,
       readToolEvidence.map((row) => ({ ...row, result: row.result })),
@@ -1361,26 +1354,13 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
 
   // max steps exhausted
   const stuck = `stopped after ${task.maxSteps} steps without finishing`;
-  const completedEvidence = await db
-    .select({
-      toolName: toolCalls.toolName,
-      status: toolCalls.status,
-      args: toolCalls.args,
-      result: toolCalls.result,
-    })
-    .from(toolCalls)
-    .where(eq(toolCalls.taskId, task.id));
+  const completedEvidence = await evidence.taskEvidence({ agentId: task.agentId, taskId: task.id });
   const stuckMessage = stepLimitResponse(task.maxSteps, completedEvidence);
   if (isUnattendedGoalSession(task)) {
-    const goalToolEvidence = await db
-      .select({
-        toolName: toolCalls.toolName,
-        status: toolCalls.status,
-        result: toolCalls.result,
-        step: toolCalls.step,
-      })
-      .from(toolCalls)
-      .where(eq(toolCalls.taskId, task.id));
+    const goalToolEvidence = await evidence.taskEvidence({
+      agentId: task.agentId,
+      taskId: task.id,
+    });
     if (needsGoalProgressUpdate(goalToolEvidence)) {
       return stopForUnsavedGoalProgress(
         deps,

@@ -1,7 +1,10 @@
 import type { AgentRow, Db } from '@assistant/db';
-import { approvals, tasks, toolCalls } from '@assistant/db';
+import {
+  createPostgresExecutionContextRepository,
+  createPostgresExecutionJobRepository,
+} from '@assistant/db';
+import type { CostRepository } from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
-import { eq, inArray } from 'drizzle-orm';
 import { hashCallbackToken } from '../../browse.js';
 import { PROMPT_VERSION } from '../../chat.js';
 import { isJobPending } from '../../code-exec.js';
@@ -71,17 +74,17 @@ export interface RunContext {
  * reconciles once; crash-retries no-op.
  */
 async function settleJobReservation(
-  db: Db,
+  store: Db | CostRepository,
   row: { decision: unknown; startedAt: Date | null; id: string },
 ): Promise<void> {
   const reservationId = (row.decision as { reservationId?: unknown } | null)?.reservationId;
   if (typeof reservationId !== 'string') return;
   try {
-    const rate = await getRate(db, 'cloud_run_job_sec');
+    const rate = await getRate(store, 'cloud_run_job_sec');
     const elapsedSeconds = row.startedAt
       ? Math.max(1, Math.round((Date.now() - row.startedAt.getTime()) / 1000))
       : 60;
-    await reconcileReservation(db, reservationId, {
+    await reconcileReservation(store, reservationId, {
       usd: elapsedSeconds * rate.unitPriceUsd,
       quantity: elapsedSeconds,
       unit: rate.unit,
@@ -113,17 +116,20 @@ export async function runCodeJobPhase(
         notifyOwner: deps.notifyOwner,
         jobUnavailable: deps.jobUnavailable,
         heartbeat: async () => {
-          if (!(await renewTaskLease(db, lease))) throw new Error('task lease lost');
+          if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease)))
+            throw new Error('task lease lost');
         },
       },
       job,
       task,
     );
-    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+    if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
     if (!outcome.done) {
-      const [fresh] = await db.select().from(tasks).where(eq(tasks.id, task.id));
+      const fresh = await (
+        deps.persistence?.executionContext ?? createPostgresExecutionContextRepository(db)
+      ).getTask(task.agentId, task.id);
       const slept = await sleepTask(
-        db,
+        deps.persistence?.tasks ?? db,
         lease,
         taskState(fresh ?? task),
         outcome.runAfter ?? new Date(Date.now() + 5000),
@@ -131,7 +137,7 @@ export async function runCodeJobPhase(
       if (!slept) return LOST_LEASE;
       return { outcome: 'sleeping', detail: outcome.summary.slice(0, 200) };
     }
-    const completed = await completeTask(db, lease, {
+    const completed = await completeTask(deps.persistence?.tasks ?? db, lease, {
       status: 'done',
       progress: outcome.summary.slice(0, 500),
     });
@@ -174,29 +180,19 @@ export async function resumePendingJob(rc: RunContext): Promise<void> {
     // window where a late callback commits the real result between our read and
     // a timeout write that would otherwise clobber it. The timeout failure is
     // written only while the sentinel is still present; a real result wins.
-    const settled = await db.transaction(async (tx) => {
-      await tx.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, task.id)).for('update');
-      const [row] = await tx.select().from(toolCalls).where(eq(toolCalls.id, pending.dbToolCallId));
-      if (row && !isJobPending(row.result)) {
-        return { kind: 'result' as const, row };
-      }
-      const timedOut = Date.now() >= new Date(pending.timeoutAt).getTime();
-      if (row && !timedOut) return { kind: 'still_pending' as const };
-      const failure = {
-        ok: false,
-        error: 'the background job never reported back (timed out) — treat this attempt as failed',
-      };
-      if (row) {
-        await tx
-          .update(toolCalls)
-          .set({ status: 'failed', result: failure, error: failure.error, finishedAt: new Date() })
-          .where(eq(toolCalls.id, row.id));
-      }
-      return { kind: 'timeout' as const, row: row ?? null, failure };
-    });
+    const settled = await (
+      rc.deps.persistence?.executionJobs ?? createPostgresExecutionJobRepository(db)
+    ).settle(
+      {
+        taskId: task.id,
+        toolCallId: pending.dbToolCallId,
+        timeoutAt: new Date(pending.timeoutAt),
+      },
+      task,
+    );
 
     if (settled.kind === 'result') {
-      replaceToolResultMessage(window, pending.toolCallId, pending.toolName, settled.row.result, {
+      replaceToolResultMessage(window, pending.toolCallId, pending.toolName, settled.result, {
         dbToolCallId: pending.dbToolCallId,
       });
       if (dispatcher.resultIsUntrusted(pending.toolName)) {
@@ -205,9 +201,17 @@ export async function resumePendingJob(rc: RunContext): Promise<void> {
       }
       state.completedToolCallIds.push(pending.dbToolCallId);
       state.pendingJob = null;
-      await settleJobReservation(db, settled.row);
+      await settleJobReservation(rc.deps.persistence?.costs ?? db, {
+        id: settled.id,
+        startedAt: settled.startedAt,
+        decision: settled.decision,
+      });
     } else if (settled.kind === 'timeout') {
-      if (settled.row) await settleJobReservation(db, settled.row);
+      await settleJobReservation(rc.deps.persistence?.costs ?? db, {
+        id: settled.id,
+        startedAt: settled.startedAt,
+        decision: settled.decision,
+      });
       replaceToolResultMessage(window, pending.toolCallId, pending.toolName, settled.failure);
       state.completedToolCallIds.push(pending.dbToolCallId);
       state.pendingJob = null;
@@ -219,18 +223,16 @@ export async function resumePendingJob(rc: RunContext): Promise<void> {
 
 /** Settle pending approvals. Returns a terminal result when the task parks/sleeps, else null. */
 export async function resumePendingApprovals(rc: RunContext): Promise<ExecuteResult | null> {
-  const { db, task, state, window, dispatcher, ctx } = rc;
+  const { deps, db, task, state, window, dispatcher, ctx } = rc;
   const lease = task;
   if (state.pendingApprovals.length > 0) {
-    const rows = await db
-      .select()
-      .from(approvals)
-      .where(
-        inArray(
-          approvals.id,
-          state.pendingApprovals.map((p) => p.approvalId),
-        ),
-      );
+    const rows = await (
+      deps.persistence?.executionJobs ?? createPostgresExecutionJobRepository(db)
+    ).listPendingApprovals(
+      task.agentId,
+      task.id,
+      state.pendingApprovals.map((pending) => pending.approvalId),
+    );
     const byId = new Map(rows.map((r) => [r.id, r]));
     const stillPending: typeof state.pendingApprovals = [];
 
@@ -247,7 +249,11 @@ export async function resumePendingApprovals(rc: RunContext): Promise<ExecuteRes
         continue;
       }
       const approval = byId.get(pending.approvalId);
-      if (!approval || approval.status === 'pending') {
+      if (
+        !approval ||
+        approval.toolCallId !== pending.dbToolCallId ||
+        approval.status === 'pending'
+      ) {
         stillPending.push(pending);
         continue;
       }
@@ -258,17 +264,22 @@ export async function resumePendingApprovals(rc: RunContext): Promise<ExecuteRes
           stillPending.push(pending);
           continue;
         }
-        if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+        if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
         const outcome = await dispatcher.executeApproved(pending.dbToolCallId, ctx);
         if (outcome.kind === 'budget_blocked') {
           // Keep this approved call (and every unprocessed call) in the
           // checkpoint. Approval grants permission, not unlimited spend.
           state.pendingApprovals = [...stillPending, ...state.pendingApprovals.slice(i)];
           state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-          const parked = await parkForBudget(db, lease, state, outcome.resumeAt);
+          const parked = await parkForBudget(
+            deps.persistence?.tasks ?? db,
+            lease,
+            state,
+            outcome.resumeAt,
+          );
           if (!parked) return LOST_LEASE;
           await postConversationNotice(
-            db,
+            deps.persistence?.messages ?? db,
             task,
             `I'm pausing here — the approved action doesn't fit the remaining budget (${outcome.reason}). It resumes automatically when the budget resets.`,
             noticeParts('parked'),
@@ -312,7 +323,12 @@ export async function resumePendingApprovals(rc: RunContext): Promise<ExecuteRes
 
     if (stillPending.length > 0) {
       state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-      const parked = await parkForApproval(db, lease, state, stillPending);
+      const parked = await parkForApproval(
+        deps.persistence?.tasks ?? db,
+        lease,
+        state,
+        stillPending,
+      );
       if (!parked) return LOST_LEASE;
       return { outcome: 'parked', detail: 'still waiting on approvals' };
     }
@@ -339,16 +355,21 @@ export async function runDirectDocumentRead(rc: RunContext): Promise<ExecuteResu
         model: 'direct-document-router',
       },
     });
-    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+    if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
 
     if (outcome.kind === 'budget_blocked') {
       state.contextWindow = compact(window) as unknown as TaskState['contextWindow'];
-      const parked = await parkForBudget(db, lease, state, outcome.resumeAt);
+      const parked = await parkForBudget(
+        deps.persistence?.tasks ?? db,
+        lease,
+        state,
+        outcome.resumeAt,
+      );
       if (!parked) return LOST_LEASE;
       return { outcome: 'parked', detail: outcome.reason };
     }
     if (outcome.kind === 'awaiting_approval') {
-      const parked = await parkForApproval(db, lease, state, [
+      const parked = await parkForApproval(deps.persistence?.tasks ?? db, lease, state, [
         {
           approvalId: outcome.approvalId,
           dbToolCallId: outcome.toolCallId,
@@ -361,7 +382,7 @@ export async function runDirectDocumentRead(rc: RunContext): Promise<ExecuteResu
       // waiting_approval, so any delay between the two lets the chat poller see
       // a parked task whose approval card does not exist yet and stop listening.
       const conversationNotified = await postConversationNotice(
-        db,
+        deps.persistence?.messages ?? db,
         task,
         `I need your approval before reading the shared Google Doc: ${outcome.summary}`,
         [
@@ -391,7 +412,7 @@ export async function runDirectDocumentRead(rc: RunContext): Promise<ExecuteResu
           });
       }
       await markApprovalsNotified(
-        db,
+        deps.persistence?.approvals ?? db,
         [outcome.approvalId],
         deliveredChannels({ ownerNotified, conversationNotified }),
       );
@@ -434,7 +455,7 @@ export async function runPlanPhase(rc: RunContext): Promise<ExecuteResult | { pl
     plan = await planTask({ db, router }, task, agent, window, {
       tainted: state.untrustedContext === true,
     });
-    if (!(await renewTaskLease(db, lease))) return LOST_LEASE;
+    if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
     // A forwarded or quoting owner email is tainted, and the planner often
     // summarizes it as a 'reply' instead of acting on the instruction inside the
     // forward — the recurring "forwarded action request does nothing" bug. Coerce

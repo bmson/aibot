@@ -25,7 +25,8 @@
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.7",
     "jose": "^6.2.11",
-    "zod": "^4.5.4"
+    "zod": "^4.5.4",
+    "@assistant/persistence": "workspace:*"
   },
   "devDependencies": {
     "@assistant/firestore": "workspace:*",

@@ -87,6 +87,9 @@ importers:
       '@assistant/modules':
         specifier: workspace:*
         version: link:../../packages/modules
+      '@assistant/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
       '@assistant/tools':
         specifier: workspace:*
         version: link:../../packages/tools
