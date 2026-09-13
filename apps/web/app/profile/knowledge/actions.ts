@@ -24,6 +24,24 @@ import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import { getDb, getRouter } from '@/lib/server';
 
+/**
+ * Saving a connection has to embed its source note first, so an unreachable
+ * embedding provider throws out of the action. useActionState has no state to
+ * show for a thrown action, so the owner used to get a dead Save button and no
+ * message at all. Turn it into the error the form already knows how to render,
+ * and keep the real cause in the server log.
+ */
+async function reportable<T extends { error?: string | null }>(
+  work: () => Promise<T>,
+): Promise<T | { error: string }> {
+  try {
+    return await work();
+  } catch (cause) {
+    console.error('[knowledge] owner relation write failed', cause);
+    return { error: 'That could not be saved right now. Check the connection and try again.' };
+  }
+}
+
 function revalidateKnowledgeGraph(): void {
   revalidatePath('/profile');
   revalidatePath('/profile/knowledge');
@@ -149,16 +167,19 @@ export async function addKnowledgeRelation(
   await requireOwner();
   const subjectId = String(formData.get('subjectId') ?? '');
   const objectId = String(formData.get('objectId') ?? '');
-  const result = await addOwnerKnowledgeGraphFact(getDb(), getRouter(), {
-    subjectLabel: String(formData.get('subjectLabel') ?? ''),
-    subjectKind: String(formData.get('subjectKind') ?? ''),
-    subjectId: subjectId || undefined,
-    predicate: String(formData.get('predicate') ?? ''),
-    objectLabel: String(formData.get('objectLabel') ?? ''),
-    objectKind: String(formData.get('objectKind') ?? ''),
-    objectId: objectId || undefined,
-    note: String(formData.get('note') ?? ''),
-  });
+  const result = await reportable(() =>
+    addOwnerKnowledgeGraphFact(getDb(), getRouter(), {
+      subjectLabel: String(formData.get('subjectLabel') ?? ''),
+      subjectKind: String(formData.get('subjectKind') ?? ''),
+      subjectId: subjectId || undefined,
+      subjectContactId: String(formData.get('subjectContactId') ?? '') || undefined,
+      predicate: String(formData.get('predicate') ?? ''),
+      objectLabel: String(formData.get('objectLabel') ?? ''),
+      objectKind: String(formData.get('objectKind') ?? ''),
+      objectId: objectId || undefined,
+      note: String(formData.get('note') ?? ''),
+    }),
+  );
   if (result.error) return { error: result.error, success: null };
   revalidateKnowledgeGraph();
   return { error: null, success: 'Relationship saved with your note as its source.' };
@@ -170,16 +191,18 @@ export async function correctKnowledgeRelation(
   formData: FormData,
 ): Promise<AddKnowledgeRelationState> {
   await requireOwner();
-  const result = await correctKnowledgeGraphRelation(getDb(), getRouter(), relationId, {
-    subjectLabel: String(formData.get('subjectLabel') ?? ''),
-    subjectKind: String(formData.get('subjectKind') ?? ''),
-    subjectId: String(formData.get('subjectId') ?? '') || undefined,
-    predicate: String(formData.get('predicate') ?? ''),
-    objectLabel: String(formData.get('objectLabel') ?? ''),
-    objectKind: String(formData.get('objectKind') ?? ''),
-    objectId: String(formData.get('objectId') ?? '') || undefined,
-    note: String(formData.get('note') ?? ''),
-  });
+  const result = await reportable(() =>
+    correctKnowledgeGraphRelation(getDb(), getRouter(), relationId, {
+      subjectLabel: String(formData.get('subjectLabel') ?? ''),
+      subjectKind: String(formData.get('subjectKind') ?? ''),
+      subjectId: String(formData.get('subjectId') ?? '') || undefined,
+      predicate: String(formData.get('predicate') ?? ''),
+      objectLabel: String(formData.get('objectLabel') ?? ''),
+      objectKind: String(formData.get('objectKind') ?? ''),
+      objectId: String(formData.get('objectId') ?? '') || undefined,
+      note: String(formData.get('note') ?? ''),
+    }),
+  );
   if (result.error) return { error: result.error, success: null };
   revalidateKnowledgeGraph();
   return {

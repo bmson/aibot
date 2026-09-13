@@ -8,8 +8,8 @@ import {
 } from '@assistant/application/people-presentation';
 import { CalendarDays, MapPin, Search } from 'lucide-react';
 import Link from 'next/link';
+import { AddPerson } from '@/app/people/add-person';
 import { PersonAvatar } from '@/app/people/person-avatar';
-import { AddPerson } from '@/app/profile/add-person';
 import { requireOwner } from '@/auth';
 import { getDb } from '@/lib/server';
 import {
@@ -95,15 +95,11 @@ export default async function PeoplePage({
 
       <section className="mt-8">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold tracking-[-0.025em]">
-              {query ? `Matching “${query}”` : 'Everyone'}
-            </h2>
-            <p className="mt-1 text-sm leading-5 text-muted">
-              {everyone.length} {everyone.length === 1 ? 'person' : 'people'}
-              {query ? ` · ${people.length} shown` : ''}
-            </p>
-          </div>
+          <SectionHeading
+            title={query ? `Matching “${query}”` : 'Everyone'}
+            count={everyone.length}
+            hint={query ? `${people.length} shown` : undefined}
+          />
           <AddPerson />
         </div>
 

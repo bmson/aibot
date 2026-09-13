@@ -80,6 +80,7 @@ const dangerOutlineButton = btnSm.dangerOutline;
 export function FactRow({ fact, quarantine = false }: { fact: FactView; quarantine?: boolean }) {
   const [editing, setEditing] = useState(false);
   const [confirmingForget, setConfirmingForget] = useState(false);
+  const [confirmingReject, setConfirmingReject] = useState(false);
   const [draft, setDraft] = useState(fact.content);
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -205,15 +206,41 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
               {pendingAction === 'approve' ? pendingIcon : null}
               {pendingAction === 'approve' ? 'Approving…' : 'Approve'}
             </button>
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => runAction('reject', () => rejectQuarantined(fact.id))}
-              className={dangerOutlineButton}
-            >
-              {pendingAction === 'reject' ? pendingIcon : null}
-              {pendingAction === 'reject' ? 'Rejecting…' : 'Reject'}
-            </button>
+            {/* Rejecting tombstones and deletes the memory for good — the same
+                irreversible outcome as Forget, which asks twice a few lines
+                below. It sits immediately beside Approve in a queue the owner
+                skims, so a single misdirected click destroyed a memory with no
+                undo. It now asks the same second time Forget does. */}
+            {confirmingReject ? (
+              <>
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => runAction('reject', () => rejectQuarantined(fact.id))}
+                  className={btnSm.danger}
+                >
+                  {pendingAction === 'reject' ? pendingIcon : null}
+                  {pendingAction === 'reject' ? 'Rejecting…' : 'Really reject'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingReject(false)}
+                  className={outlineButton}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => setConfirmingReject(true)}
+                className={dangerOutlineButton}
+                title="Deletes the memory and tombstones it so it can never be re-extracted"
+              >
+                Reject
+              </button>
+            )}
           </>
         ) : (
           <>

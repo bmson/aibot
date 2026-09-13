@@ -1070,7 +1070,13 @@ export async function syncKnowledgeGraph(
 }
 
 export interface OwnerGraphFactInput {
-  subject: { label: string; kind: GraphEntityKind; id?: string };
+  /**
+   * `contactId` pins whose fact this is when the subject is typed rather than
+   * picked. A label alone is ambiguous — `contactForLabel` matches names *and*
+   * aliases across every contact, and falls back to a prefix match — so a page
+   * offering a specific person had no way to say which one it meant.
+   */
+  subject: { label: string; kind: GraphEntityKind; id?: string; contactId?: string };
   predicate: string;
   object: { label: string; kind: GraphEntityKind; id?: string };
   /** Owner-written evidence note — never hidden behind an inferred edge. */
@@ -1181,11 +1187,19 @@ export async function createOwnerKnowledgeGraphFact(
   const [embedding] = await deps.router.embed([content]);
   if (!embedding) return { error: 'The source could not be prepared for recall.' };
 
+  // Resolution for a pinned subject sees only that contact, so it can bind to
+  // that person or to nobody — never to a namesake or an alias holder. An
+  // id-resolved endpoint already carries its own contact and ignores this.
+  const pinnedContact = input.subject.contactId
+    ? people.find((row) => row.id === input.subject.contactId)
+    : undefined;
+  const subjectPeople = pinnedContact ? [pinnedContact] : people;
+
   const subjectContact =
     'contactId' in subjectRow && subjectRow.contactId
       ? { id: subjectRow.contactId, name: subject.label, aliases: [] }
       : subject.kind === 'person'
-        ? contactForLabel(people, subject.label)
+        ? contactForLabel(subjectPeople, subject.label)
         : undefined;
 
   /**
@@ -1224,7 +1238,7 @@ export async function createOwnerKnowledgeGraphFact(
       const graphSubject =
         'canonicalKey' in subjectRow
           ? { id: subjectRow.id, key: subjectRow.canonicalKey }
-          : await upsertEntity(txDb, agentId, subject, people, context);
+          : await upsertEntity(txDb, agentId, subject, subjectPeople, context);
       const graphObject =
         'canonicalKey' in objectRow
           ? { id: objectRow.id, key: objectRow.canonicalKey }

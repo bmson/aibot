@@ -49,12 +49,6 @@ export function knowledgeConnections(snapshot: KnowledgeMapSnapshot, entityId: s
   );
 }
 
-/** Pointer deltas are CSS pixels, while an SVG viewBox uses logical units. */
-export function mapPanDelta(dx: number, dy: number, renderedWidth: number) {
-  const ratio = GLOBAL_MAP_WIDTH / Math.max(1, renderedWidth);
-  return { x: dx * ratio, y: dy * ratio };
-}
-
 const ITERATIONS = 140;
 /** Beyond ~340px apart the repulsion term is below a pixel of total travel. */
 const REPULSION_CUTOFF_SQUARED = 340 * 340;

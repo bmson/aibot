@@ -28,7 +28,7 @@ import {
 } from '@/app/profile/knowledge/actions';
 import { AddKnowledgeRelation } from '@/app/profile/knowledge/add-relation';
 import { EditKnowledgeEntity } from '@/app/profile/knowledge/entity-forms';
-import { GlobalKnowledgeMap } from '@/app/profile/knowledge/global-map';
+import { KnowledgeMap } from '@/app/profile/knowledge/knowledge-map';
 import { SourceImpactForget } from '@/app/profile/knowledge/source-impact-forget';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
@@ -37,6 +37,7 @@ import { getDb } from '@/lib/server';
 import {
   Badge,
   btn,
+  btnSm,
   cardShellClass,
   EmptyState,
   inputClass,
@@ -71,7 +72,11 @@ const CLEANUP_FOCI: Array<{
   {
     id: 'trust',
     label: 'Trust and review',
-    description: 'Decide what is ready to affect recall.',
+    // These are the library's held-for-review memories, not a second queue:
+    // approving one here is the same decision, on the same row. The scan caps
+    // at 100, so the library stays the place to work a longer backlog.
+    description:
+      'The same memories the library holds for review, with the connections waiting on you.',
     kinds: ['quarantined', 'unreviewed_connection'],
   },
   {
@@ -213,10 +218,13 @@ function CleanupGroup({
   title,
   description,
   findings,
+  fullQueue,
 }: {
   title: string;
   description: string;
   findings: KnowledgeCleanupFinding[];
+  /** Where the same items live in full, when this group is a sample of a longer queue. */
+  fullQueue?: { href: string; label: string };
 }) {
   const immediate = findings.slice(0, 6);
   const remaining = findings.slice(6);
@@ -226,6 +234,14 @@ function CleanupGroup({
         <div>
           <h3 className="text-base font-semibold text-strong">{title}</h3>
           <p className="mt-1 text-sm text-muted">{description}</p>
+          {fullQueue ? (
+            <Link
+              href={fullQueue.href}
+              className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-accent underline-offset-4 hover:underline"
+            >
+              {fullQueue.label}
+            </Link>
+          ) : null}
         </div>
         <Badge tone="neutral">{findingTotal(findings)}</Badge>
       </div>
@@ -410,7 +426,7 @@ export default async function KnowledgePage({
       </section>
 
       {view === 'library' && library && libraryFilters ? (
-        <section className="mt-7">
+        <section className="mt-8">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className={microLabelClass}>Source of truth</p>
@@ -478,8 +494,12 @@ export default async function KnowledgePage({
           >
             <input type="hidden" name="view" value="library" />
             <input type="hidden" name="state" value={state} />
-            <label className="relative md:col-span-2">
-              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
+            <label className="relative min-w-0 md:col-span-2">
+              <span className="sr-only">Search source memories</span>
+              <Search
+                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"
+                aria-hidden="true"
+              />
               <input
                 name="q"
                 defaultValue={query}
@@ -490,7 +510,7 @@ export default async function KnowledgePage({
             <select
               name="subject"
               defaultValue={params.subject ?? ''}
-              className={selectClass}
+              className={`${selectClass} w-full min-w-0`}
               aria-label="Subject"
             >
               <option value="">Everyone</option>
@@ -503,7 +523,7 @@ export default async function KnowledgePage({
             <select
               name="filter"
               defaultValue={filter}
-              className={selectClass}
+              className={`${selectClass} w-full min-w-0`}
               aria-label="Verification"
             >
               <option value="all">Any verification</option>
@@ -515,7 +535,7 @@ export default async function KnowledgePage({
                 Apply
               </button>
             </div>
-            <details className="md:col-span-4" open={advancedFiltersActive}>
+            <details className="min-w-0 md:col-span-4" open={advancedFiltersActive}>
               <summary className="cursor-pointer py-1 text-sm font-medium text-muted hover:text-strong">
                 {advancedFiltersActive ? 'Advanced filters are active' : 'More filters'}
               </summary>
@@ -523,7 +543,7 @@ export default async function KnowledgePage({
                 <select
                   name="domain"
                   defaultValue={params.domain ?? ''}
-                  className={selectClass}
+                  className={`${selectClass} w-full min-w-0`}
                   aria-label="Domain"
                 >
                   <option value="">Every domain</option>
@@ -544,7 +564,7 @@ export default async function KnowledgePage({
                 <select
                   name="age"
                   defaultValue={params.age ?? ''}
-                  className={selectClass}
+                  className={`${selectClass} w-full min-w-0`}
                   aria-label="Age"
                 >
                   <option value="">Any age</option>
@@ -555,7 +575,7 @@ export default async function KnowledgePage({
                 <select
                   name="connectivity"
                   defaultValue={connectivity}
-                  className={selectClass}
+                  className={`${selectClass} w-full min-w-0`}
                   aria-label="Graph connectivity"
                 >
                   <option value="all">Any connection status</option>
@@ -603,11 +623,40 @@ export default async function KnowledgePage({
           {library.rows.length === 0 ? (
             <EmptyState>No memories match these filters.</EmptyState>
           ) : null}
+          {/* The query has always returned page/totalPages and libraryHref has
+              always accepted a page, but nothing rendered a control: the header
+              counted every match while only the first page could ever be read,
+              so anything past it was unreachable. The phone's library already
+              pages; this is the same ability on the web. */}
+          {library.totalPages > 1 ? (
+            <nav
+              aria-label="Memory library pages"
+              className="mt-5 flex flex-wrap items-center justify-between gap-3"
+            >
+              {library.page > 1 ? (
+                <Link href={libraryHref({ page: library.page - 1 })} className={btnSm.outline}>
+                  Previous
+                </Link>
+              ) : (
+                <span />
+              )}
+              <p className="text-sm text-muted" aria-live="polite">
+                Page {library.page.toLocaleString()} of {library.totalPages.toLocaleString()}
+              </p>
+              {library.page < library.totalPages ? (
+                <Link href={libraryHref({ page: library.page + 1 })} className={btnSm.outline}>
+                  Next
+                </Link>
+              ) : (
+                <span />
+              )}
+            </nav>
+          ) : null}
         </section>
       ) : null}
 
       {view === 'map' && map ? (
-        <section className="mt-7">
+        <section className="mt-8">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className={microLabelClass}>Overview and focus</p>
@@ -630,10 +679,11 @@ export default async function KnowledgePage({
             <input
               name="q"
               defaultValue={query}
+              aria-label="Find a connected item"
               placeholder="Find a connected item"
               className={`${inputClass} md:col-span-2`}
             />
-            <select name="kind" defaultValue={kind} className={selectClass}>
+            <select name="kind" defaultValue={kind} aria-label="Item type" className={selectClass}>
               <option value="">All item types</option>
               {['person', 'organization', 'project', 'place', 'event', 'date', 'topic'].map(
                 (value) => (
@@ -643,7 +693,12 @@ export default async function KnowledgePage({
                 ),
               )}
             </select>
-            <select name="family" defaultValue={family} className={selectClass}>
+            <select
+              name="family"
+              defaultValue={family}
+              aria-label="Relationship"
+              className={selectClass}
+            >
               <option value="">All relationships</option>
               {families.map((value) => (
                 <option key={value} value={value}>
@@ -655,6 +710,7 @@ export default async function KnowledgePage({
               <select
                 name="review"
                 defaultValue={params.review ?? 'all'}
+                aria-label="Review state"
                 className={`${selectClass} min-w-0 flex-1`}
               >
                 <option value="all">Any review state</option>
@@ -704,7 +760,7 @@ export default async function KnowledgePage({
             </div>
           ) : (
             <div className="mt-5">
-              <GlobalKnowledgeMap
+              <KnowledgeMap
                 key={JSON.stringify([map.filters, params.entity])}
                 snapshot={map}
                 initialSelectedId={params.entity}
@@ -772,7 +828,7 @@ export default async function KnowledgePage({
       ) : null}
 
       {view === 'cleanup' ? (
-        <section className="mt-7 max-w-4xl">
+        <section className="mt-8 max-w-4xl">
           <div className="flex items-start gap-3">
             <span className="inline-flex size-10 items-center justify-center rounded-xl bg-accent/10 text-accent">
               <Sparkles className="size-5" />
@@ -817,6 +873,14 @@ export default async function KnowledgePage({
                   title={focus.label}
                   description={focus.description}
                   findings={focus.findings}
+                  fullQueue={
+                    focus.id === 'trust'
+                      ? {
+                          href: libraryHref({ state: 'review', filter: 'all' }),
+                          label: 'Work the full review queue in the library',
+                        }
+                      : undefined
+                  }
                 />
               ))
             ) : (

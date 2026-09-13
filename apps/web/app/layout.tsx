@@ -57,6 +57,10 @@ export async function generateMetadata(): Promise<Metadata> {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+  // NOTE: these two make browser pinch-zoom unavailable, which axe reports as a
+  // WCAG 1.4.4 failure on every page. They are kept because the iOS install
+  // contract asserts them (scripts/mobile-smoke.ts) — changing them is a
+  // product decision about the home-screen app feel, not a lint fix.
   maximumScale: 1,
   userScalable: false,
   // Lets the layout reach the physical edges of a notched phone, which is what

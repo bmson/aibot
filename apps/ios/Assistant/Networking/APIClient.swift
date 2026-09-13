@@ -641,6 +641,73 @@ struct APIClient: Sendable {
         try await postWorkspaceAction(path: "memory/profile", action: action)
     }
 
+    func memoryLibrary(_ query: MemoryLibraryQuery) async throws -> MemoryLibraryResponse {
+        var components = URLComponents(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/library"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = query.items
+        guard let url = components?.url else { throw APIError.invalidServerURL }
+        return try await perform(makeRequest(url: url), as: MemoryLibraryResponse.self)
+    }
+
+    func commitments() async throws -> CommitmentsResponse {
+        try await get("api/mobile/v1/memory/commitments")
+    }
+
+    func updateCommitment(_ mutation: CommitmentMutation) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/commitments")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(mutation)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func voiceProfile() async throws -> VoiceProfileResponse {
+        try await get("api/mobile/v1/memory/profile")
+    }
+
+    func updateVoiceProfile(_ profile: VoiceProfileMutation) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/profile")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(profile)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    /// Irreversible: drops saved facts, graph projections, voice samples, and
+    /// the learned voice profile. Chats, goals and people records survive.
+    func forgetLongTermMemory() async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/profile")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        // The server asks for the intent twice on this one action; every other
+        // action on that route is recoverable and this one is not.
+        request.httpBody = try JSONEncoder().encode([
+            "action": "forget-all",
+            "confirm": "forget-all",
+        ])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    /// The owner's memory export, as the raw JSON bytes the server sends, so it
+    /// can be written to a file and handed to the share sheet unmodified.
+    func memoryExport() async throws -> Data {
+        let request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/memory/export")
+        )
+        let (data, response) = try await load(request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        try await validate(http, data: data)
+        return data
+    }
+
     func createPerson(_ person: PersonMutation) async throws {
         var request = makeRequest(
             url: configuration.baseURL.appending(path: "api/mobile/v1/memory/people")

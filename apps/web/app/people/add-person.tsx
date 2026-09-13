@@ -34,7 +34,7 @@ export function AddPerson() {
             aliases: String(formData.get('aliases') ?? ''),
           });
           if (result.error) setError(result.error);
-          else if (result.contactId) router.push(`/profile/people/${result.contactId}`);
+          else if (result.contactId) router.push(`/people/${result.contactId}`);
           else {
             setOpen(false);
             router.refresh();
@@ -70,7 +70,15 @@ export function AddPerson() {
         <button type="submit" disabled={pending} className={btn.primary}>
           {pending ? 'Adding…' : 'Add person'}
         </button>
-        <button type="button" onClick={() => setOpen(false)} className={btn.outline}>
+        {/* Not cancellable mid-flight: the contact is already being created,
+            and letting the form close implied otherwise — then the resolved
+            request navigated to the new person seconds later. */}
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => setOpen(false)}
+          className={btn.outline}
+        >
           Cancel
         </button>
         {error ? <span className="text-xs text-red-600 dark:text-red-400">{error}</span> : null}

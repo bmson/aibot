@@ -122,6 +122,7 @@ function EndpointPicker({
   kind,
   onKindChange,
   prefill,
+  prefillQuery,
   placeholder,
   onValueChange,
 }: {
@@ -130,11 +131,18 @@ function EndpointPicker({
   kind: string;
   onKindChange: (kind: string) => void;
   prefill?: KnowledgeGraphEntityView | null;
+  /**
+   * A name to start typed in when there is no entity to prefill — the person
+   * page uses it so a contact the graph has never heard of still opens this
+   * form pointed at themselves. Submitting a label with no id resolves back to
+   * the matching contact, so this creates their entity rather than a namesake.
+   */
+  prefillQuery?: string;
   placeholder: string;
   onValueChange?: (value: { label: string; kind: string }) => void;
 }) {
   const [picked, setPicked] = useState<KnowledgeGraphEntityView | null>(prefill ?? null);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(prefill ? '' : (prefillQuery ?? ''));
   const [results, setResults] = useState<KnowledgeGraphEntityView[]>([]);
   const [searching, startSearch] = useTransition();
   // Guards against an earlier, slower search landing after a later one and
@@ -309,10 +317,20 @@ function connectionSentence(subject: string, predicate: string, object: string):
  */
 export function AddKnowledgeRelation({
   selected,
+  subjectLabel,
+  subjectContactId,
   vocabulary,
   correction,
 }: {
   selected: KnowledgeGraphEntityView | null;
+  /** Fallback name for the first endpoint when `selected` is null. */
+  subjectLabel?: string;
+  /**
+   * The contact that name belongs to. Without it the server resolves the typed
+   * label across every contact's names and aliases, so a page offering one
+   * specific person could have its fact bound to a namesake.
+   */
+  subjectContactId?: string;
   vocabulary: readonly PredicateSpec[];
   correction?: KnowledgeGraphRelationView;
 }) {
@@ -326,7 +344,7 @@ export function AddKnowledgeRelation({
   );
   const [objectKind, setObjectKind] = useState(correction?.object.kind ?? 'organization');
   const [subjectValue, setSubjectValue] = useState(
-    correction?.subject.label ?? selected?.label ?? '',
+    correction?.subject.label ?? selected?.label ?? subjectLabel ?? '',
   );
   const [objectValue, setObjectValue] = useState(correction?.object.label ?? '');
   const [predicate, setPredicate] = useState(correction?.predicate ?? '');
@@ -356,6 +374,11 @@ export function AddKnowledgeRelation({
   return (
     <Modal label={title} onClose={() => setOpen(false)}>
       <form action={formAction} className="grid gap-4">
+        {/* Only meaningful for a typed subject: an endpoint picked by id
+            carries its own contact and the server ignores this. */}
+        {subjectContactId && !correction && !selected ? (
+          <input type="hidden" name="subjectContactId" value={subjectContactId} />
+        ) : null}
         <div>
           <p className="font-display text-xl font-semibold text-strong">{title}</p>
           <p className="mt-1 text-sm leading-5 text-muted">
@@ -371,6 +394,7 @@ export function AddKnowledgeRelation({
             kind={subjectKind}
             onKindChange={setSubjectKind}
             prefill={correction?.subject ?? selected}
+            prefillQuery={subjectLabel}
             placeholder="Search or create…"
             onValueChange={(value) => setSubjectValue(value.label)}
           />

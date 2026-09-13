@@ -92,7 +92,12 @@ struct RelationshipGraphScreen: View {
         .sheet(isPresented: $showBrowser) { itemBrowser }
         .sheet(item: $connecting) { node in
             NavigationStack {
-                GraphConnectSheet(source: node, graph: graph) { await expand(node.id); notice = "Connection saved"; connecting = nil }
+                GraphConnectSheet(source: node, graph: graph) {
+                    await expand(node.id)
+                    model.invalidatePersonCaches()
+                    notice = "Connection saved"
+                    connecting = nil
+                }
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { connecting = nil } } }
             }
         }
@@ -100,7 +105,12 @@ struct RelationshipGraphScreen: View {
             NavigationStack {
                 GraphGroupsSheet(graph: graph, focus: { node in
                     open(node.id); showGroups = false
-                }, saved: { id in await expand(id); open(id); showGroups = false })
+                }, saved: { id in
+                    await expand(id)
+                    model.invalidatePersonCaches()
+                    open(id)
+                    showGroups = false
+                })
             }
         }
         .sheet(isPresented: $showConnections) {
@@ -110,8 +120,12 @@ struct RelationshipGraphScreen: View {
                         showConnections = false; open(id); Task { await expand(id) }
                     }, removed: { id in
                         graph.edges.removeAll { $0.id == id }; page = min(page, pageCount - 1)
+                        model.invalidatePersonCaches()
                         if let personID { Task { await model.refreshPersonEvidence(id: personID) } }
-                    }, refresh: { await expand(selected.id) })
+                    }, refresh: {
+                        await expand(selected.id)
+                        model.invalidatePersonCaches()
+                    })
                 }
             }
         }
@@ -128,7 +142,7 @@ struct RelationshipGraphScreen: View {
                         .buttonStyle(AssistantActionButtonStyle(kind: .secondary)).padding(.top, 6)
                 }.padding(.vertical, 8)
             }
-            if loading { ProgressView("Loading connections…") }
+            if loading { AssistantLoadingState(title: "Loading connections") }
             if let failure { Section { Text(failure); Button("Retry") { Task { await load() } } } }
             Section("Starting points") {
                 ForEach(Array(graph.groups.flatMap { Array($0.nodes.prefix(3)) }.prefix(12))) { node in
@@ -157,7 +171,7 @@ struct RelationshipGraphScreen: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
             }.padding(.vertical, 4)
         }
     }
@@ -169,8 +183,18 @@ struct RelationshipGraphScreen: View {
                 // Blank taps leave the selection and control height stable.
                 if let id { selectedID = id }
             }.accessibilityIdentifier("assistant.relationship.graph")
-            if hasLoaded && visible.nodes.isEmpty { ContentUnavailableView("No items to show", systemImage: "point.3.connected.trianglepath.dotted", description: Text("Try showing all items.")) }
-            if loading { ProgressView("Loading connections…").padding(12).background(.regularMaterial, in: Capsule()).allowsHitTesting(false) }
+            if hasLoaded && visible.nodes.isEmpty { AssistantEmptyState("No items to show", systemImage: "point.3.connected.trianglepath.dotted", description: "Try showing all items.") }
+            // Deliberately NOT AssistantLoadingState: that is a full-area state
+            // (maxWidth .infinity, minHeight 190), and this is a transient pill
+            // floating over the canvas. Routing it through the shared component
+            // stretched the capsule across the whole graph — and `loading` is
+            // set on every expand, so it covered the thing it was reporting on.
+            if loading {
+                ProgressView("Loading connections…")
+                    .padding(12)
+                    .background(.regularMaterial, in: Capsule())
+                    .allowsHitTesting(false)
+            }
         }.background(AssistantTheme.canvas(for: colorScheme))
     }
 
@@ -194,7 +218,7 @@ struct RelationshipGraphScreen: View {
                         Button("Previous connections", systemImage: "chevron.left") { changePage(-1) }.disabled(page == 0)
                         Button("Next connections", systemImage: "chevron.right") { changePage(1) }.disabled(page >= pageCount - 1)
                     }
-                }.font(.caption).labelStyle(.iconOnly).buttonStyle(.bordered) }
+                }.font(.caption).labelStyle(.iconOnly).buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true)) }
             } else {
                 Text("Full map overview").font(.headline)
                 Text("\(visible.nodes.count) items. Select one, then open its map.").font(.caption).foregroundStyle(.secondary)
@@ -241,9 +265,9 @@ struct RelationshipGraphScreen: View {
                 HStack {
                     Text(moveNodes ? "Drag a node to reposition it" : "Drag to pan · pinch to zoom").font(.caption2).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
-                    Button("Zoom out", systemImage: "minus") { send(.zoomOut) }.labelStyle(.iconOnly).frame(width: 40, height: 40)
-                    Button("Fit graph", systemImage: "arrow.up.left.and.arrow.down.right") { send(.fit) }.labelStyle(.iconOnly).frame(width: 40, height: 40)
-                    Button("Zoom in", systemImage: "plus") { send(.zoomIn) }.labelStyle(.iconOnly).frame(width: 40, height: 40)
+                    Button("Zoom out", systemImage: "minus") { send(.zoomOut) }.labelStyle(.iconOnly).frame(width: 44, height: 44)
+                    Button("Fit graph", systemImage: "arrow.up.left.and.arrow.down.right") { send(.fit) }.labelStyle(.iconOnly).frame(width: 44, height: 44)
+                    Button("Zoom in", systemImage: "plus") { send(.zoomIn) }.labelStyle(.iconOnly).frame(width: 44, height: 44)
                 }
                 Text("Lines are recorded relationships; dashed lines need review.").font(.caption2).foregroundStyle(.secondary)
             }
@@ -333,7 +357,10 @@ private struct GraphConnectionsSheet: View {
     let refresh: () async -> Void
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var working = false
+    /// Names the edge being removed, not merely that one is: a single Bool here
+    /// disabled Edit and Remove on every connection in the list while any one
+    /// of them was in flight.
+    @State private var removingID: String?
     @State private var failure: String?
     @State private var correcting: KnowledgeRelation?
 
@@ -353,13 +380,13 @@ private struct GraphConnectionsSheet: View {
                         Button("Edit") { Task { correcting = await model.knowledgeRelation(id: edge.id); if correcting == nil { failure = "Couldn’t load this connection." } } }
                             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                         AssistantConfirmationButton("Remove", hint: "The original note and other claims stay saved.") {
-                            working = true
+                            removingID = edge.id
                             failure = nil
                             if await model.removeKnowledgeRelation(id: edge.id) { removed(edge.id) }
                             else { failure = "Couldn’t remove this connection. Try again." }
-                            working = false
+                            removingID = nil
                         }
-                    }.disabled(working)
+                    }.disabled(removingID == edge.id)
                 }
             }
             if let failure { Text(failure).foregroundStyle(.red) }

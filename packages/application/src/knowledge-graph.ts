@@ -1205,6 +1205,8 @@ export async function addOwnerKnowledgeGraphFact(
     subjectLabel: string;
     subjectKind: string;
     subjectId?: string;
+    /** Pins a typed subject to a known contact; see OwnerGraphFactInput. */
+    subjectContactId?: string;
     predicate: string;
     objectLabel: string;
     objectKind: string;
@@ -1230,6 +1232,7 @@ export async function addOwnerKnowledgeGraphFact(
         label: input.subjectLabel,
         kind: isKind(input.subjectKind) ? input.subjectKind : 'topic',
         id: input.subjectId,
+        contactId: input.subjectContactId,
       },
       predicate: input.predicate,
       object: {

@@ -1010,9 +1010,35 @@ struct PersonProfileResponse: Codable, Sendable {
     let contact: PersonProfileContact
     let occasions: [PersonOccasion]
     let mergeOptions: [PersonMergeOption]
+    /// Dates already sitting in this person's saved facts that are not yet
+    /// recurring occasions. The endpoint has always sent these; leaving them
+    /// off this struct meant Codable dropped them and the phone could not
+    /// offer the one-tap save the web page does.
+    /// Optional, not a defaulted array: synthesized Codable throws on a missing
+    /// key rather than falling back to a default, so a server that ever omits
+    /// this would fail the whole profile fetch. Same reason MessagePart keeps
+    /// its newer fields optional.
+    var occasionSuggestions: [PersonOccasionSuggestion]?
+    /// Present only when another contact looks like the same person. Web shows
+    /// this as a "possible duplicate" hint beside the merge control.
+    var duplicate: PersonDuplicateHint?
 }
 
-struct PersonProfileContact: Codable, Sendable {
+struct PersonOccasionSuggestion: Codable, Sendable, Identifiable, Hashable {
+    let kind: String
+    let month: Int
+    let day: Int
+    var id: String { "\(kind)-\(month)-\(day)" }
+}
+
+struct PersonDuplicateHint: Codable, Sendable {
+    let targetId: String
+    let reason: String
+}
+
+// Identifiable because MemoryView presents the person editor with
+// .sheet(item:), which requires it — an `id` field alone does not satisfy it.
+struct PersonProfileContact: Codable, Sendable, Identifiable {
     let id: String
     let name: String
     let aliases: [String]
@@ -1136,6 +1162,123 @@ struct WorkspaceVoiceStats: Codable, Sendable {
     let total: Int
     let auto: Int
     let uploaded: Int
+}
+
+/// The distilled writing voice: what the assistant imitates when it drafts.
+/// `dos` and `donts` are lines on the wire and lines in the editor; the server
+/// splits and trims them, so nothing here needs to.
+struct VoiceProfile: Codable, Sendable {
+    var description: String
+    var dos: [String]
+    var donts: [String]
+    var signature: String
+
+    static let empty = Self(description: "", dos: [], donts: [], signature: "")
+}
+
+struct VoiceProfileResponse: Codable, Sendable {
+    let voiceStats: WorkspaceVoiceStats
+    let voiceProfile: VoiceProfile
+}
+
+/// One row of the memory library, already worded by the server.
+struct MemoryLibraryRow: Codable, Identifiable, Equatable, Sendable {
+    let id: String
+    let content: String
+    let domain: String
+    let ownerConfirmed: Bool
+    let pinned: Bool
+    let importance: Int
+    let organized: Bool
+    let originTrust: String
+    let subjectLabel: String
+    /// Whether this memory is the owner's own. The label cannot stand in for
+    /// it: an owner fact joins the owner's contact and so carries their name.
+    /// Optional so an older server stays decodable; defaulted at the use site.
+    var aboutOwner: Bool?
+    let connectionCount: Int
+    let projectionStatus: String
+    let createdAt: String
+}
+
+struct MemoryLibrarySubject: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let label: String
+    let trust: String
+}
+
+struct MemoryLibraryResponse: Codable, Sendable {
+    let rows: [MemoryLibraryRow]
+    let total: Int
+    let page: Int
+    let totalPages: Int
+    let subjects: [MemoryLibrarySubject]
+    let sources: [String]
+
+    static let empty = Self(rows: [], total: 0, page: 1, totalPages: 1, subjects: [], sources: [])
+}
+
+/// What the library is being asked for. Mirrors the web query string exactly so
+/// the two clients page and filter the same way.
+struct MemoryLibraryQuery: Equatable, Sendable {
+    var state = "in-use"
+    var filter = "all"
+    var search = ""
+    var domain = ""
+    var subjectId = ""
+    var source = ""
+    /// "" for any age, otherwise the window in days the web library offers.
+    var ageDays = ""
+    var connectivity = "all"
+    var page = 1
+
+    var items: [URLQueryItem] {
+        var items = [
+            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "filter", value: filter),
+            URLQueryItem(name: "connectivity", value: connectivity),
+            URLQueryItem(name: "page", value: String(page)),
+        ]
+        if !search.isEmpty { items.append(.init(name: "q", value: search)) }
+        if !domain.isEmpty { items.append(.init(name: "domain", value: domain)) }
+        if !subjectId.isEmpty { items.append(.init(name: "subjectId", value: subjectId)) }
+        if !source.isEmpty { items.append(.init(name: "source", value: source)) }
+        if !ageDays.isEmpty { items.append(.init(name: "ageDays", value: ageDays)) }
+        return items
+    }
+}
+
+/// An open loop the assistant is tracking — a promise made, a question left
+/// hanging. The memory desk has always shown these on the web.
+struct Commitment: Codable, Sendable, Identifiable {
+    let id: String
+    let kind: String
+    let title: String
+    let details: String
+    let nextAction: String
+    /// ISO-8601, or nil when the loop has no deadline.
+    let dueAt: String?
+    let status: String
+}
+
+struct CommitmentsResponse: Codable, Sendable {
+    let commitments: [Commitment]
+}
+
+struct CommitmentMutation: Encodable, Sendable {
+    let action: String
+    let id: String
+    var title: String? = nil
+    var details: String? = nil
+    var nextAction: String? = nil
+}
+
+struct VoiceProfileMutation: Encodable, Sendable {
+    var action = "voice-profile"
+    let description: String
+    let dos: String
+    let donts: String
+    let signature: String
 }
 
 struct WorkspaceMemoryOrganizer: Codable, Sendable {

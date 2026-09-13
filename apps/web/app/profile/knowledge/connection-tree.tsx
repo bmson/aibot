@@ -7,8 +7,25 @@ import { useEffect, useState } from 'react';
 import { entityKindLabel, entityKindPaint } from '@/lib/knowledge';
 import { btnSm, focusRing } from '@/lib/ui';
 import { loadConnectionSource, loadKnowledgeNeighborhood } from './actions';
-import type { ExplorerEdge } from './explorer-model';
 import { RemoveConnection } from './remove-connection';
+
+/**
+ * One relation as seen from the node currently in hand. Structurally identical
+ * to the application layer's KnowledgeGraphNeighborEdge; re-declared here so
+ * this module stays import-clean, since it is bundled into the client tree and
+ * a presentation component should not need a package import to describe its
+ * own input.
+ */
+export interface ExplorerEdge {
+  id: string;
+  predicate: string;
+  /** True when the centre entity is the subject of the relation. */
+  outbound: boolean;
+  reviewStatus: 'unreviewed' | 'confirmed' | 'rejected';
+  validFrom: string | null;
+  validUntil: string | null;
+  other: { id: string; label: string; kind: string };
+}
 
 type Node = ExplorerEdge['other'];
 
@@ -87,7 +104,7 @@ function Branch({
             />
             <span className="break-words">{node.label}</span>
           </button>
-          <p className="mt-1 text-xs leading-5 text-muted">{sentence}</p>
+          <p className="mt-1 text-xs leading-5 break-words text-muted">{sentence}</p>
           {edge.validFrom || edge.validUntil ? (
             <p className="text-xs text-muted">
               {edge.validFrom ?? 'Unknown start'} to {edge.validUntil ?? 'present'}

@@ -1224,12 +1224,55 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func savePerson(id: String? = nil, mutation: PersonMutation) async -> Bool {
+    func memoryLibrary(_ query: MemoryLibraryQuery) async -> MemoryLibraryResponse? {
+        guard let client else { return nil }
+        do {
+            return try await client.memoryLibrary(query)
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
+    /// Open loops the assistant is tracking. Returns nil only on failure, so an
+    /// empty list stays distinguishable from an unreachable server.
+    func commitments() async -> [Commitment]? {
+        guard let client else { return nil }
+        do {
+            return try await client.commitments().commitments
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
+    func updateCommitment(_ mutation: CommitmentMutation) async -> Bool {
         guard let client else { return false }
         errorMessage = nil
         do {
-            if let id { try await client.updatePerson(id: id, person: mutation) }
-            else { try await client.createPerson(mutation) }
+            try await client.updateCommitment(mutation)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
+    func voiceProfile() async -> VoiceProfileResponse? {
+        guard let client else { return nil }
+        do {
+            return try await client.voiceProfile()
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
+    func saveVoiceProfile(_ profile: VoiceProfileMutation) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateVoiceProfile(profile)
             await refreshWorkspace(reportFailure: false)
             return true
         } catch {
@@ -1238,11 +1281,73 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func deletePerson(_ person: WorkspacePerson) async -> Bool {
+    func forgetLongTermMemory() async -> Bool {
         guard let client else { return false }
         errorMessage = nil
         do {
-            try await client.deletePerson(id: person.id)
+            try await client.forgetLongTermMemory()
+            await refreshWorkspace(reportFailure: false)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
+    /// Writes the export to a temporary file and hands back its URL, because
+    /// the share sheet moves files rather than bytes. Named for the day it was
+    /// taken so a folder of them stays readable.
+    func exportMemoryFile() async -> URL? {
+        guard let client else { return nil }
+        errorMessage = nil
+        do {
+            let data = try await client.memoryExport()
+            let day = ISO8601DateFormatter.string(
+                from: Date(),
+                timeZone: .current,
+                formatOptions: [.withFullDate]
+            )
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("assistant-long-term-memory-\(day).json")
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
+    func savePerson(id: String? = nil, mutation: PersonMutation) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            if let id { try await client.updatePerson(id: id, person: mutation) }
+            else { try await client.createPerson(mutation) }
+            // Adding or renaming a person changes the directory and that
+            // person's card, neither of which refreshWorkspace touches. The
+            // People tab only reloads when peopleLoaded is false, so without
+            // this a just-added person stayed invisible there until a manual
+            // pull to refresh — and the first one left the tab reading empty.
+            invalidatePersonCaches()
+            await loadPeople()
+            await refreshWorkspace(reportFailure: false)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
+    func deletePerson(id: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.deletePerson(id: id)
+            // Not just this person's profile: personCards[id] kept a full card
+            // for someone who no longer exists, and its owning screen only
+            // reloads when the entry is absent, so it never refetched.
+            invalidatePersonCaches()
+            await loadPeople()
             await refreshWorkspace(reportFailure: false)
             return true
         } catch {
@@ -1323,11 +1428,30 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func mergePerson(_ person: WorkspacePerson, targetId: String) async -> Bool {
+    /// Drop the cached person cards and profiles.
+    ///
+    /// Editing the graph changes what a person's page says about them, but the
+    /// graph screen only ever updated its own canvas — so returning to a
+    /// profile showed a relationship list that predated the edit until the
+    /// owner happened to pull to refresh. Clearing the cache makes the next
+    /// view of any person reload.
+    func invalidatePersonCaches() {
+        personCards.removeAll()
+        personProfiles.removeAll()
+        // The directory is a cache too: a deleted, merged or re-related person
+        // changes who is listed and how. Leaving peopleLoaded true meant People
+        // kept showing the old list until the owner happened to pull to refresh.
+        peopleLoaded = false
+    }
+
+    func mergePerson(id: String, targetId: String) async -> Bool {
         guard let client else { return false }
         do {
-            try await client.mergePerson(id: person.id, targetId: targetId)
-            personProfiles.removeValue(forKey: person.id)
+            try await client.mergePerson(id: id, targetId: targetId)
+            // Both sides change: the merged-away person disappears and the
+            // target gains their facts, so neither cached card is still true.
+            invalidatePersonCaches()
+            await loadPeople()
             await refreshWorkspace(reportFailure: false)
             return true
         } catch {

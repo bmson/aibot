@@ -1,30 +1,41 @@
 'use client';
 
 import type { KnowledgeMapSnapshot } from '@assistant/application';
-import { Minus, Plus, RotateCcw } from 'lucide-react';
-import { useMemo, useRef, useState } from 'react';
+import { Maximize2, Minus, Plus } from 'lucide-react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   GLOBAL_MAP_HEIGHT,
   GLOBAL_MAP_WIDTH,
   knowledgeConnections,
   layoutKnowledgeMap,
-  mapPanDelta,
-} from '@/app/profile/knowledge/global-map-model';
+} from '@/app/profile/knowledge/knowledge-map-model';
+import {
+  frame,
+  screenDelta,
+  toViewPoint,
+  type Viewport,
+  zoomAt,
+} from '@/app/profile/knowledge/map-viewport';
 import { SourceImpactForget } from '@/app/profile/knowledge/source-impact-forget';
 import { entityKindLabel, entityKindPaint } from '@/lib/knowledge';
 import { btnSm, focusRing, inputClass } from '@/lib/ui';
 import { ConnectionTree } from './connection-tree';
 import { RemoveConnection } from './remove-connection';
 
-interface Viewport {
-  x: number;
-  y: number;
-  scale: number;
-}
+const W = GLOBAL_MAP_WIDTH;
+const H = GLOBAL_MAP_HEIGHT;
 
-const INITIAL_VIEWPORT: Viewport = { x: 0, y: 0, scale: 1 };
+/**
+ * Labels are the first thing to go when the map is showing shape rather than
+ * detail. Above this scale there is room to read them; below it the selected
+ * item and its neighbours keep theirs and everything else goes quiet.
+ */
+const LABEL_SCALE = 0.9;
 
-export function GlobalKnowledgeMap({
+/** A drag shorter than this is a click on a node, not a pan of the map. */
+const DRAG_SLOP = 5;
+
+export function KnowledgeMap({
   snapshot,
   initialSelectedId,
 }: {
@@ -34,23 +45,35 @@ export function GlobalKnowledgeMap({
   const nodes = useMemo(() => layoutKnowledgeMap(snapshot), [snapshot]);
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const [selectedId, setSelectedId] = useState(initialSelectedId ?? nodes[0]?.id ?? null);
+  // The inspector always needs something selected, so `selected` falls back to
+  // the first node. Dimming must not follow that fallback: at rest the whole
+  // graph is the point, and only a selection the owner actually made should
+  // quiet everything around it.
+  const [focused, setFocused] = useState(!!initialSelectedId);
   const [search, setSearch] = useState('');
-  const [view, setView] = useState<'map' | 'tree'>('map');
-  const [nearbyOnly, setNearbyOnly] = useState(false);
-  const [viewport, setViewport] = useState(INITIAL_VIEWPORT);
-  const drag = useRef<{
-    x: number;
-    y: number;
-    width: number;
-    moved: boolean;
-    viewport: Viewport;
-  } | null>(null);
+  const [view, setView] = useState<'map' | 'list'>('map');
+  const [viewport, setViewport] = useState<Viewport>(() => frame(nodes, W, H));
+
+  // Filters arrive as search params, so this component re-renders in place with
+  // a new snapshot rather than remounting. Re-framing on the new node set is
+  // what makes a filter feel like it did something; without it the map holds a
+  // viewport aimed at wherever the old graph happened to be.
+  const framedFor = useRef(nodes);
+  if (framedFor.current !== nodes) {
+    framedFor.current = nodes;
+    setViewport(frame(nodes, W, H));
+  }
+
+  const drag = useRef<{ x: number; y: number; width: number; viewport: Viewport } | null>(null);
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{ distance: number; viewport: Viewport } | null>(null);
   const suppressClick = useRef(false);
-  // Filters arrive as search params, so this component re-renders in place
-  // with a new snapshot rather than remounting. Falling back keeps the
-  // inspector populated; reading state alone left the whole panel blank
-  // whenever the previous selection filtered out.
+
+  // Falling back to the first node keeps the inspector populated; reading state
+  // alone left the whole panel blank whenever the previous selection filtered out.
   const selected = (selectedId ? nodeById.get(selectedId) : undefined) ?? nodes[0];
+  const activeId = selected?.id ?? null;
+
   const selectedEdges = useMemo(
     () =>
       selected
@@ -60,7 +83,6 @@ export function GlobalKnowledgeMap({
         : [],
     [snapshot.edges, selected],
   );
-  const activeId = selected?.id ?? null;
   const connections = useMemo(
     () => (selected ? knowledgeConnections(snapshot, selected.id) : []),
     [snapshot, selected],
@@ -69,11 +91,41 @@ export function GlobalKnowledgeMap({
     () => new Set(selectedEdges.flatMap((edge) => [edge.subjectId, edge.objectId])),
     [selectedEdges],
   );
-  const browseNodes = nodes.filter((node) =>
-    node.label.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
+
+  /** The whole graph, framed and undimmed. The map's home position. */
+  const showEverything = useCallback(() => {
+    setFocused(false);
+    setViewport(frame(nodes, W, H));
+  }, [nodes]);
+
+  /**
+   * Select an item and move in on it — the one gesture that takes the map from
+   * overview to detail. Framing the item *and its neighbours* rather than the
+   * item alone is what keeps the move legible: you arrive seeing what it is
+   * connected to, which is the thing you came to look at.
+   */
+  const moveIn = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      setFocused(true);
+      const node = nodeById.get(id);
+      if (!node) return;
+      const around = snapshot.edges
+        .filter((edge) => edge.subjectId === id || edge.objectId === id)
+        .flatMap((edge) => [nodeById.get(edge.subjectId), nodeById.get(edge.objectId)])
+        .filter((each): each is NonNullable<typeof each> => !!each);
+      setViewport(frame([node, ...around], W, H, { padding: 110, soloScale: 1.8 }));
+    },
+    [nodeById, snapshot.edges],
   );
-  // Panning fires setViewport on every pointer move, and only the wrapping
-  // <g> transform changes with it. Memoising the marks keeps a drag from
+
+  const zoomCentre = (factor: number) =>
+    setViewport((current) => zoomAt(current, factor, W / 2, H / 2));
+
+  const showLabels = viewport.scale >= LABEL_SCALE;
+
+  // Panning fires setViewport on every pointer move, and only the wrapping <g>
+  // transform changes with it. Memoising the marks keeps a drag from
   // re-reconciling every node and edge on the map, sixty times a second.
   const edgeMarks = useMemo(
     () =>
@@ -81,8 +133,7 @@ export function GlobalKnowledgeMap({
         const subject = nodeById.get(edge.subjectId);
         const object = nodeById.get(edge.objectId);
         if (!subject || !object) return null;
-        const active = activeId === subject.id || activeId === object.id;
-        if (nearbyOnly && !active) return null;
+        const active = focused && (activeId === subject.id || activeId === object.id);
         return (
           <line
             key={edge.id}
@@ -92,18 +143,19 @@ export function GlobalKnowledgeMap({
             y2={object.y}
             strokeWidth={active ? 2.6 : 1.2}
             className={active ? 'stroke-accent' : 'stroke-edge'}
-            opacity={activeId && !active ? 0.28 : 0.72}
+            opacity={focused && !active ? 0.2 : 0.7}
             strokeDasharray={edge.reviewStatus === 'unreviewed' ? '5 4' : undefined}
           />
         );
       }),
-    [snapshot.edges, nodeById, activeId, nearbyOnly],
+    [snapshot.edges, nodeById, activeId, focused],
   );
+
   const nodeMarks = useMemo(
     () =>
       nodes.map((node) => {
-        const isSelected = node.id === activeId;
-        if (nearbyOnly && !neighbors.has(node.id) && !isSelected) return null;
+        const isSelected = focused && node.id === activeId;
+        const isNeighbor = focused && neighbors.has(node.id);
         const radius = Math.min(15, 7 + Math.sqrt(node.degree) * 2);
         return (
           // biome-ignore lint/a11y/useSemanticElements: SVG cannot contain an HTML button; the group implements button keyboard semantics.
@@ -114,16 +166,17 @@ export function GlobalKnowledgeMap({
             aria-label={`${node.label}, ${entityKindLabel(node.kind)}, ${node.degree} connections`}
             aria-pressed={isSelected}
             className={`cursor-pointer ${focusRing}`}
+            opacity={focused && !isSelected && !isNeighbor ? 0.45 : 1}
             onClick={(event) => {
               event.stopPropagation();
               if (suppressClick.current) return;
-              setSelectedId(node.id);
+              moveIn(node.id);
             }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 // Space scrolls the page otherwise, jumping the map out of view.
                 event.preventDefault();
-                setSelectedId(node.id);
+                moveIn(node.id);
               }
             }}
           >
@@ -135,7 +188,7 @@ export function GlobalKnowledgeMap({
               className={entityKindPaint(node.kind).node}
               strokeWidth={isSelected ? 4 : 2}
             />
-            {(nodes.length <= 42 || isSelected || neighbors.has(node.id)) && (
+            {showLabels || isSelected || isNeighbor ? (
               <text
                 x={node.x}
                 y={node.y + radius + 14}
@@ -144,17 +197,12 @@ export function GlobalKnowledgeMap({
               >
                 {node.label.length > 22 ? `${node.label.slice(0, 21)}…` : node.label}
               </text>
-            )}
+            ) : null}
           </g>
         );
       }),
-    [nodes, activeId, nearbyOnly, neighbors],
+    [nodes, activeId, neighbors, showLabels, moveIn, focused],
   );
-  const zoom = (factor: number) =>
-    setViewport((current) => ({
-      ...current,
-      scale: Math.max(0.5, Math.min(2.8, current.scale * factor)),
-    }));
 
   if (nodes.length === 0) {
     return (
@@ -167,96 +215,123 @@ export function GlobalKnowledgeMap({
     );
   }
 
+  const browseNodes = nodes.filter((node) =>
+    node.label.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
+  );
+
   return (
     <div className="min-w-0">
-      <fieldset className="mb-4 flex flex-wrap items-center gap-2" aria-label="Connection view">
-        <button
-          type="button"
-          aria-pressed={view === 'map'}
-          className={btnSm.outline}
-          onClick={() => setView('map')}
-        >
-          Map
-        </button>
-        <button
-          type="button"
-          aria-pressed={view === 'tree'}
-          className={btnSm.outline}
-          onClick={() => setView('tree')}
-        >
-          Tree
-        </button>
-        <span className="text-xs text-muted">
-          {view === 'tree'
-            ? 'Explore all connections around the selected item, one branch at a time.'
-            : 'Select an item, then switch to Tree to follow its branches.'}
-        </span>
-      </fieldset>
-      {view === 'tree' && selected ? <ConnectionTree key={selected.id} root={selected} /> : null}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <fieldset className="flex flex-wrap items-center gap-2" aria-label="Connection view">
+          <button
+            type="button"
+            aria-pressed={view === 'map'}
+            className={`${btnSm.outline} ${view === 'map' ? 'border-accent bg-accent/10 text-accent' : ''}`}
+            onClick={() => setView('map')}
+          >
+            Map
+          </button>
+          <button
+            type="button"
+            aria-pressed={view === 'list'}
+            className={`${btnSm.outline} ${view === 'list' ? 'border-accent bg-accent/10 text-accent' : ''}`}
+            onClick={() => setView('list')}
+          >
+            List
+          </button>
+        </fieldset>
+        <p className="text-xs text-muted">Solid: confirmed · Dashed: needs review</p>
+      </div>
+
+      {view === 'list' && selected ? <ConnectionTree key={selected.id} root={selected} /> : null}
+
       <div
-        className={`${view === 'tree' ? 'hidden' : 'grid'} min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]`}
+        className={`${view === 'list' ? 'hidden' : 'grid'} min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]`}
       >
         <div className="min-w-0">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <label className="hidden min-h-11 items-center gap-2 text-sm text-muted md:flex">
-              <input
-                type="checkbox"
-                checked={nearbyOnly}
-                onChange={(event) => setNearbyOnly(event.target.checked)}
-              />
-              Only selected item and its connections
-            </label>
-            <p className="text-xs text-muted">Solid: confirmed · Dashed: needs review</p>
-          </div>
           <div
-            className="relative hidden min-w-0 overflow-hidden rounded-2xl border border-edge bg-sunken/20 md:block"
+            className="relative min-w-0 overflow-hidden rounded-2xl border border-edge bg-sunken/20"
             role="application"
-            aria-label="Knowledge overview map. Drag to pan, use plus and minus to zoom, and select a node to inspect its evidence."
+            aria-label={`Knowledge map: ${nodes.length} connected items across ${snapshot.components.length} groups. Drag to pan, pinch or scroll to zoom, and select an item to move in on its connections.`}
             // biome-ignore lint/a11y/noNoninteractiveTabindex: the application role owns keyboard pan and zoom as the drag alternative.
             tabIndex={0}
             onKeyDown={(event) => {
-              if (event.target !== event.currentTarget) return;
-              if (
-                ['+', '-', '0', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(
-                  event.key,
-                )
-              )
-                event.preventDefault();
-              if (event.key === '+') zoom(1.2);
-              if (event.key === '-') zoom(1 / 1.2);
-              if (event.key === '0') setViewport(INITIAL_VIEWPORT);
-              const delta = 42;
-              if (event.key === 'ArrowLeft') setViewport((v) => ({ ...v, x: v.x + delta }));
-              if (event.key === 'ArrowRight') setViewport((v) => ({ ...v, x: v.x - delta }));
-              if (event.key === 'ArrowUp') setViewport((v) => ({ ...v, y: v.y + delta }));
-              if (event.key === 'ArrowDown') setViewport((v) => ({ ...v, y: v.y - delta }));
+              // Deliberately not gated on event.target: keydown bubbles from a
+              // focused node, so gating on the container meant every shortcut
+              // died the moment someone tabbed onto the graph. Typing in the
+              // search field below is outside this element and unaffected.
+              const keys = ['+', '=', '-', '0', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+              if (keys.includes(event.key)) event.preventDefault();
+              if (event.key === '+' || event.key === '=') zoomCentre(1.25);
+              if (event.key === '-') zoomCentre(1 / 1.25);
+              if (event.key === '0') showEverything();
+              const step = 42;
+              if (event.key === 'ArrowLeft') setViewport((v) => ({ ...v, x: v.x + step }));
+              if (event.key === 'ArrowRight') setViewport((v) => ({ ...v, x: v.x - step }));
+              if (event.key === 'ArrowUp') setViewport((v) => ({ ...v, y: v.y + step }));
+              if (event.key === 'ArrowDown') setViewport((v) => ({ ...v, y: v.y - step }));
             }}
           >
+            {/* No role="img" here: that flattens the subtree, and the nodes
+                inside are focusable buttons. The wrapping role="application"
+                carries the name and the counts. */}
             <svg
-              viewBox={`0 0 ${GLOBAL_MAP_WIDTH} ${GLOBAL_MAP_HEIGHT}`}
+              viewBox={`0 0 ${W} ${H}`}
               className="h-auto w-full touch-none select-none"
-              role="img"
-              aria-label={`${nodes.length} connected knowledge items across ${snapshot.components.length} groups`}
+              onWheel={(event) => {
+                // Trackpad and wheel both arrive here; anchoring on the pointer
+                // is what makes zoom feel like moving in on a thing rather than
+                // rescaling a picture.
+                const rect = event.currentTarget.getBoundingClientRect();
+                const point = toViewPoint(event.clientX, event.clientY, rect, W, H);
+                const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+                setViewport((current) => zoomAt(current, factor, point.x, point.y));
+              }}
               onPointerDown={(event) => {
+                pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+                // Capture is deliberately NOT taken here. Capturing on pointerdown
+                // retargets the click that follows to this <svg>, so a node's own
+                // onClick never runs and selecting an item silently does nothing.
+                // It is taken below, once a gesture has actually begun.
+                if (pointers.current.size === 2) {
+                  const [a, b] = [...pointers.current.values()];
+                  pinch.current = { distance: Math.hypot(a.x - b.x, a.y - b.y), viewport };
+                  drag.current = null;
+                  return;
+                }
                 if (event.button !== 0) return;
                 suppressClick.current = false;
                 drag.current = {
                   x: event.clientX,
                   y: event.clientY,
                   width: event.currentTarget.getBoundingClientRect().width,
-                  moved: false,
                   viewport,
                 };
               }}
               onPointerMove={(event) => {
+                if (!pointers.current.has(event.pointerId)) return;
+                pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+                if (pinch.current && pointers.current.size === 2) {
+                  const [a, b] = [...pointers.current.values()];
+                  const distance = Math.hypot(a.x - b.x, a.y - b.y);
+                  if (pinch.current.distance <= 0) return;
+                  suppressClick.current = true;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const midpoint = toViewPoint((a.x + b.x) / 2, (a.y + b.y) / 2, rect, W, H);
+                  const factor = distance / pinch.current.distance;
+                  setViewport(zoomAt(pinch.current.viewport, factor, midpoint.x, midpoint.y));
+                  return;
+                }
+
                 if (!drag.current) return;
                 const dx = event.clientX - drag.current.x;
                 const dy = event.clientY - drag.current.y;
-                if (!drag.current.moved && Math.hypot(dx, dy) < 5) return;
-                drag.current.moved = true;
+                if (!suppressClick.current && Math.hypot(dx, dy) < DRAG_SLOP) return;
                 suppressClick.current = true;
                 event.currentTarget.setPointerCapture(event.pointerId);
-                const delta = mapPanDelta(dx, dy, drag.current.width);
+                const delta = screenDelta(dx, dy, drag.current.width, W);
                 setViewport({
                   ...drag.current.viewport,
                   x: drag.current.viewport.x + delta.x,
@@ -264,29 +339,32 @@ export function GlobalKnowledgeMap({
                 });
               }}
               onPointerUp={(event) => {
-                drag.current = null;
+                pointers.current.delete(event.pointerId);
+                if (pointers.current.size < 2) pinch.current = null;
+                if (pointers.current.size === 0) drag.current = null;
                 if (event.currentTarget.hasPointerCapture(event.pointerId))
                   event.currentTarget.releasePointerCapture(event.pointerId);
               }}
-              onPointerCancel={() => {
+              onPointerCancel={(event) => {
+                pointers.current.delete(event.pointerId);
+                pinch.current = null;
                 drag.current = null;
                 suppressClick.current = true;
               }}
-              onLostPointerCapture={() => {
-                drag.current = null;
-              }}
             >
+              <title>Knowledge map</title>
               <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`}>
                 {edgeMarks}
                 {nodeMarks}
               </g>
             </svg>
+
             <div className="absolute top-3 right-3 flex flex-col gap-1">
               <button
                 type="button"
                 aria-label="Zoom in"
                 className={btnSm.outline}
-                onClick={() => zoom(1.2)}
+                onClick={() => zoomCentre(1.25)}
               >
                 <Plus className="size-4" />
               </button>
@@ -294,20 +372,32 @@ export function GlobalKnowledgeMap({
                 type="button"
                 aria-label="Zoom out"
                 className={btnSm.outline}
-                onClick={() => zoom(1 / 1.2)}
+                onClick={() => zoomCentre(1 / 1.25)}
               >
                 <Minus className="size-4" />
               </button>
               <button
                 type="button"
-                aria-label="Reset map"
+                aria-label="Fit the whole graph"
+                title="Fit the whole graph"
                 className={btnSm.outline}
-                onClick={() => setViewport(INITIAL_VIEWPORT)}
+                onClick={showEverything}
               >
-                <RotateCcw className="size-4" />
+                <Maximize2 className="size-4" />
               </button>
             </div>
+
+            {focused ? (
+              <button
+                type="button"
+                onClick={showEverything}
+                className={`${btnSm.outline} absolute bottom-3 left-3 bg-raised`}
+              >
+                Show everything
+              </button>
+            ) : null}
           </div>
+
           <label className="mt-4 block text-sm font-medium text-strong">
             Find an item in this view
             <input
@@ -326,7 +416,7 @@ export function GlobalKnowledgeMap({
                 key={node.id}
                 type="button"
                 aria-pressed={node.id === activeId}
-                onClick={() => setSelectedId(node.id)}
+                onClick={() => moveIn(node.id)}
                 className={`${btnSm.outline} min-h-11 max-w-full ${node.id === activeId ? 'border-accent bg-accent/10 text-accent' : ''}`}
               >
                 <span
@@ -349,6 +439,15 @@ export function GlobalKnowledgeMap({
           className="min-w-0 rounded-2xl border border-edge bg-raised p-4 sm:p-5"
           aria-label="Selected knowledge item"
         >
+          {/* Moving in on an item rewrites this panel and moves the viewport,
+              neither of which announces itself. This says what was selected. */}
+          <p aria-live="polite" className="sr-only">
+            {selected
+              ? `${selected.label} selected, ${connections.length} ${
+                  connections.length === 1 ? 'connection' : 'connections'
+                }`
+              : ''}
+          </p>
           {selected ? (
             <>
               <p className="text-xs font-medium text-muted">{entityKindLabel(selected.kind)}</p>
@@ -391,7 +490,7 @@ export function GlobalKnowledgeMap({
                           <button
                             type="button"
                             className={`mt-1 min-h-11 text-sm text-accent underline-offset-4 hover:underline ${focusRing}`}
-                            onClick={() => setSelectedId(other.id)}
+                            onClick={() => moveIn(other.id)}
                           >
                             Explore {other.label}
                           </button>

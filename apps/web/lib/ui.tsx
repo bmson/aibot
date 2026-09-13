@@ -31,7 +31,9 @@ const btnVariants = {
   // sticker hovering over the page rather than a control set into it.
   primary: 'bg-accent text-on-accent hover:bg-accent-hover',
   danger: 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800',
-  success: 'bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800',
+  // emerald-600 gives white text only 3.65:1, under AA for the 12px label the
+  // small variant uses. emerald-700 clears it at 5.48:1 with the same hue.
+  success: 'bg-emerald-700 text-white hover:bg-emerald-800 active:bg-emerald-900',
 } as const;
 
 /**
@@ -332,7 +334,10 @@ export type BadgeTone = 'neutral' | 'muted' | 'accent' | 'green' | 'amber' | 're
 
 const pillTones: Record<BadgeTone, string> = {
   neutral: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300',
-  muted: 'bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-500',
+  // zinc-500 measured 4.40:1 on zinc-100 and 3.67:1 on zinc-900 — under AA for
+  // this pill's 12px text in both themes. One step in each direction clears it
+  // (7.0:1 and 6.9:1) and still reads as the quietest tone.
+  muted: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400',
   accent: 'bg-accent/10 text-accent',
   green: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
   amber: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',

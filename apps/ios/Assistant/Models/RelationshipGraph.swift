@@ -148,6 +148,15 @@ struct GraphLink: Hashable, Sendable {
     let a: String
     let b: String
     init(_ first: String, _ second: String) { a = min(first, second); b = max(first, second) }
+
+    func contains(_ id: String) -> Bool { a == id || b == id }
+
+    /// The end that is not `id`, or nil when the link does not touch it.
+    func other(than id: String) -> String? {
+        if a == id { return b }
+        if b == id { return a }
+        return nil
+    }
 }
 
 struct GraphViewport: Equatable {

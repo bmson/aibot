@@ -16,6 +16,7 @@ struct PeopleView: View {
     @State private var showsConnections = true
     @State private var activeMapID: String?
     @State private var showsVisualGraph = false
+    @State private var showsPersonCreator = false
 
     /// Birthdays inside this window get their own section at the top.
     private let comingUpWindowDays = 30
@@ -95,6 +96,18 @@ struct PeopleView: View {
             }
             .navigationTitle("People")
             .assistantSubmenuChrome()
+            // Adding someone used to mean switching to Memory; the web
+            // directory offers it right here.
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Add person", systemImage: "person.badge.plus") {
+                        showsPersonCreator = true
+                    }
+                }
+            }
+            .sheet(isPresented: $showsPersonCreator) {
+                NavigationStack { PersonEditor(person: nil) }
+            }
             .searchable(text: $query, prompt: "Name, relationship, or place")
             .contentMargins(.bottom, 72, for: .scrollContent)
             .refreshable {
@@ -175,6 +188,7 @@ struct PeopleView: View {
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
         }
         .assistantCard(
             in: colorScheme,
@@ -211,6 +225,7 @@ struct PeopleView: View {
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
         }
         .assistantCard(in: colorScheme)
     }
@@ -385,6 +400,7 @@ struct PersonRelationGroupCard: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .accessibilityHidden(true)
             }
         }
         .frame(minHeight: 44)
@@ -407,6 +423,7 @@ struct PersonRelationGroupCard: View {
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))
                             .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                            .accessibilityHidden(true)
                     }
                     .font(.caption)
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
@@ -426,6 +443,7 @@ struct PersonRelationGroupCard: View {
                                         Image(systemName: "chevron.right")
                                             .font(.caption.weight(.semibold))
                                             .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                            .accessibilityHidden(true)
                                     }
                                     .frame(minHeight: 44)
                                     .contentShape(Rectangle())
@@ -568,6 +586,7 @@ struct PersonCardScreen: View {
     @State private var inspectingEvidence: PersonRelationSummary?
     @State private var showsDates = false
     @State private var showsTree = false
+    @State private var showsManage = false
 
     private var card: PersonCard? { model.personCards[personId] }
 
@@ -587,6 +606,22 @@ struct PersonCardScreen: View {
         .navigationTitle(card?.name ?? "Person")
         .navigationBarTitleDisplayMode(.inline)
         .assistantSubmenuChrome()
+        // Renaming someone, fixing their relationship or merging a duplicate
+        // used to live only in Memory, so the directory could show you a person
+        // it gave you no way to correct.
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Manage", systemImage: "person.crop.circle") { showsManage = true }
+                    .disabled(card == nil)
+            }
+        }
+        .sheet(isPresented: $showsManage) {
+            if let card {
+                NavigationStack {
+                    PersonDetailsView(personId: personId, personName: card.name)
+                }
+            }
+        }
         .refreshable { await model.loadPersonCard(id: personId) }
         .task(id: card == nil) { if card == nil { await model.loadPersonCard(id: personId) } }
         .sheet(isPresented: $showsDates) {
@@ -721,8 +756,7 @@ struct PersonCardScreen: View {
             )
         }
 
-        // Editing lives in Memory, which already owns the person controls.
-        Text("\(card.factCount) saved \(card.factCount == 1 ? "fact" : "facts") · manage in Memory")
+        Text("\(card.factCount) saved \(card.factCount == 1 ? "fact" : "facts")")
             .font(.caption)
             .foregroundStyle(.secondary)
     }

@@ -5,8 +5,7 @@ import {
   GLOBAL_MAP_WIDTH,
   knowledgeConnections,
   layoutKnowledgeMap,
-  mapPanDelta,
-} from './global-map-model';
+} from './knowledge-map-model';
 
 const snapshot: KnowledgeMapSnapshot = {
   nodes: [
@@ -109,10 +108,5 @@ describe('knowledge connections', () => {
     if (!original) throw new Error('Missing fixture edge');
     const edge = { ...original, reviewStatus: 'unreviewed' as const };
     expect(knowledgeConnections({ ...snapshot, edges: [edge] }, 'a')[0]?.confirmed).toBe(false);
-  });
-
-  it('scales drag distances to SVG units at responsive widths', () => {
-    expect(mapPanDelta(100, 50, 500)).toEqual({ x: 200, y: 100 });
-    expect(mapPanDelta(100, 50, 1000)).toEqual({ x: 100, y: 50 });
   });
 });

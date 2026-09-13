@@ -19,6 +19,7 @@ struct MemoryView: View {
     @State private var managingPerson: WorkspacePerson?
     @State private var profileActionInFlight: String?
     @State private var showingVoiceImporter = false
+    @State private var showingVoiceProfile = false
     @State private var voiceRegister = "email_casual"
 
     var body: some View {
@@ -97,7 +98,10 @@ struct MemoryView: View {
             NavigationStack { MemoryEditor(ownerContactId: person.id, fact: nil) }
         }
         .sheet(item: $managingPerson) { person in
-            NavigationStack { PersonDetailsView(person: person) }
+            NavigationStack { PersonDetailsView(personId: person.id, personName: person.name) }
+        }
+        .sheet(isPresented: $showingVoiceProfile) {
+            NavigationStack { VoiceProfileEditor() }
         }
     }
 
@@ -110,6 +114,28 @@ struct MemoryView: View {
                 KnowledgeView()
             } label: {
                 Label("Connections and cleanup", systemImage: "point.3.connected.trianglepath.dotted")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            NavigationLink {
+                MemoryLibraryScreen()
+            } label: {
+                Label("Browse the whole library", systemImage: "books.vertical")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            // Open loops sit on the web memory desk; this is the phone's way in.
+            NavigationLink {
+                CommitmentsScreen()
+            } label: {
+                Label("Open loops", systemImage: "clock.arrow.circlepath")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            NavigationLink {
+                MemoryDataScreen()
+            } label: {
+                Label("Your data", systemImage: "arrow.down.circle")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
@@ -226,6 +252,10 @@ struct MemoryView: View {
                             showingVoiceImporter = true
                         }
                         .buttonStyle(AssistantActionButtonStyle(kind: .primary))
+                        Button("Edit voice", systemImage: "pencil") {
+                            showingVoiceProfile = true
+                        }
+                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                         if voice.auto + voice.uploaded > 0 {
                             AssistantConfirmationButton("Clear") {
                                 updateProfile(action: "purge-voice")
@@ -268,6 +298,9 @@ struct MemoryView: View {
                 Label("Open People", systemImage: "person.2")
                     .font(.caption.weight(.semibold))
                     .labelStyle(.titleAndIcon)
+                    // The design system puts a 44pt floor on every other
+                    // control; caption-sized content alone falls well under it.
+                    .frame(minHeight: 44)
             }
             .buttonStyle(.borderless)
         }
@@ -294,7 +327,7 @@ struct MemoryView: View {
                     .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
                 AssistantConfirmationButton("Delete", hint: "Deletes this person and their saved facts.") {
                     profileActionInFlight = person.id
-                    _ = await model.deletePerson(person)
+                    _ = await model.deletePerson(id: person.id)
                     profileActionInFlight = nil
                 }
                 .disabled(profileActionInFlight != nil)
@@ -319,7 +352,7 @@ struct MemoryView: View {
                     perform(fact, action: "reject")
                 }
             }
-            .disabled(pendingFactID != nil)
+            .disabled(isBusy(fact))
         }
         .assistantCard(
             in: colorScheme,
@@ -359,7 +392,7 @@ struct MemoryView: View {
                 }
             }
             .font(.subheadline)
-            .disabled(pendingFactID != nil)
+            .disabled(isBusy(fact))
         }
         .assistantCard(in: colorScheme)
     }
@@ -415,6 +448,14 @@ struct MemoryView: View {
     private func prominenceLabel(_ fact: WorkspaceMemoryFact) -> String {
         if fact.pinned { return "Always" }
         return fact.importance <= 1 ? "Minor" : "Relevant"
+    }
+
+    /// True only while an action on THIS fact is in flight. pendingFactID
+    /// carries "action:id" so actionLabel can spin the one button that was
+    /// pressed; gating .disabled on `!= nil` froze every other fact's buttons
+    /// as well — the same defect already fixed per-row in the library screen.
+    private func isBusy(_ fact: WorkspaceMemoryFact) -> Bool {
+        pendingFactID?.hasSuffix(":\(fact.id)") ?? false
     }
 
     private func perform(_ fact: WorkspaceMemoryFact, action: String, prominence: String? = nil) {
@@ -567,17 +608,27 @@ struct MemoryOrganizerPanel: View {
     }
 }
 
-private struct PersonDetailsView: View {
-    let person: WorkspacePerson
+/// Everything you can change about one person: relationship, aliases, their
+/// dates, merging a duplicate away. Reached from Memory and from the People
+/// directory, which is why it takes an id rather than a workspace row — People
+/// has a PersonCard in hand, not the same struct Memory does.
+struct PersonDetailsView: View {
+    let personId: String
+    let personName: String
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showingOccasionEditor = false
     @State private var editingOccasion: PersonOccasion?
+    /// Suggestions already saved in this sitting. The profile only reloads on
+    /// the next fetch, so without this a just-saved date stays on offer.
+    @State private var savedSuggestions: Set<String> = []
+    @State private var editingContact: PersonProfileContact?
     @State private var mergeTarget = ""
     @State private var isWorking = false
 
-    private var profile: PersonProfileResponse? { model.personProfiles[person.id] }
+    private var profile: PersonProfileResponse? { model.personProfiles[personId] }
 
     var body: some View {
         AssistantForm {
@@ -588,6 +639,9 @@ private struct PersonDetailsView: View {
                         : profile.contact.relationship)
                     if !profile.contact.aliases.isEmpty {
                         LabeledContent("Aliases", value: profile.contact.aliases.joined(separator: ", "))
+                    }
+                    Button("Edit name and relationship", systemImage: "pencil") {
+                        editingContact = profile.contact
                     }
                 }
 
@@ -626,6 +680,28 @@ private struct PersonDetailsView: View {
                     Button("Add occasion", systemImage: "calendar.badge.plus") {
                         showingOccasionEditor = true
                     }
+                    // Dates the extractor already found in this person's facts
+                    // but that are not recurring reminders yet. The endpoint
+                    // has always sent them; web offers the same one-tap save.
+                    if !visibleSuggestions(profile).isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Found in saved facts — save any of these as a recurring reminder:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            AssistantFlowLayout(spacing: 8) {
+                                ForEach(visibleSuggestions(profile)) { suggestion in
+                                    Button {
+                                        save(suggestion)
+                                    } label: {
+                                        Text("+ \(suggestionLabel(suggestion))")
+                                            .font(.caption)
+                                    }
+                                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
+                                    .disabled(isWorking)
+                                }
+                            }
+                        }
+                    }
                 } header: {
                     Text("Important dates")
                 }
@@ -642,7 +718,7 @@ private struct PersonDetailsView: View {
                             guard !mergeTarget.isEmpty else { return }
                             isWorking = true
                             Task {
-                                let merged = await model.mergePerson(person, targetId: mergeTarget)
+                                let merged = await model.mergePerson(id: personId, targetId: mergeTarget)
                                 isWorking = false
                                 if merged { dismiss() }
                             }
@@ -650,28 +726,93 @@ private struct PersonDetailsView: View {
                         .id(mergeTarget)
                         .disabled(isWorking || mergeTarget.isEmpty)
                     } header: {
-                        Text("Merge")
+                        // Web badges this as "possible duplicate" with the
+                        // reason; without it the phone gave no clue why these
+                        // merge options were being offered at all.
+                        if let duplicate = profile.duplicate {
+                            Label("Possible duplicate — \(duplicate.reason)", systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(AssistantTheme.warning(for: colorScheme))
+                        } else {
+                            Text("Merge")
+                        }
                     } footer: {
                         Text("Moves every saved fact onto the selected person and removes this duplicate.")
                     }
+                }
+
+                Section {
+                    AssistantConfirmationButton(
+                        "Delete \(personName)",
+                        confirmationTitle: "Delete for good",
+                        hint: "Removes this person and every fact saved about them.",
+                        fillsWidth: true
+                    ) {
+                        isWorking = true
+                        let deleted = await model.deletePerson(id: personId)
+                        isWorking = false
+                        if deleted { dismiss() }
+                    }
+                    .disabled(isWorking)
+                } header: {
+                    Text("Remove")
+                } footer: {
+                    Text("This cannot be undone.")
                 }
             } else {
                 ProgressView().frame(maxWidth: .infinity)
             }
         }
-        .navigationTitle(person.name)
+        .navigationTitle(personName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { dismiss() }
             }
         }
-        .task { await model.loadPersonProfile(id: person.id) }
+        .task { await model.loadPersonProfile(id: personId) }
         .sheet(isPresented: $showingOccasionEditor) {
-            NavigationStack { OccasionEditor(personId: person.id) }
+            NavigationStack { OccasionEditor(personId: personId) }
         }
         .sheet(item: $editingOccasion) { occasion in
-            NavigationStack { OccasionEditor(personId: person.id, occasion: occasion) }
+            NavigationStack { OccasionEditor(personId: personId, occasion: occasion) }
+        }
+        .sheet(item: $editingContact) { contact in
+            NavigationStack { PersonEditor(contact: contact) }
+        }
+    }
+
+    private func visibleSuggestions(
+        _ profile: PersonProfileResponse
+    ) -> [PersonOccasionSuggestion] {
+        (profile.occasionSuggestions ?? []).filter { !savedSuggestions.contains($0.id) }
+    }
+
+    private func suggestionLabel(_ suggestion: PersonOccasionSuggestion) -> String {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("MMMMd")
+        let date = Calendar.current.date(from: DateComponents(year: 2024, month: suggestion.month, day: suggestion.day))
+        let day = date.map(formatter.string(from:)) ?? "\(suggestion.month)/\(suggestion.day)"
+        return "\(day) · \(suggestion.kind)"
+    }
+
+    private func save(_ suggestion: PersonOccasionSuggestion) {
+        isWorking = true
+        Task {
+            let saved = await model.addOccasion(
+                personId: personId,
+                mutation: OccasionMutation(
+                    kind: suggestion.kind,
+                    label: "",
+                    month: String(suggestion.month),
+                    day: String(suggestion.day),
+                    year: "",
+                    leadDays: "7",
+                    notes: ""
+                )
+            )
+            isWorking = false
+            if saved { savedSuggestions.insert(suggestion.id) }
         }
     }
 
@@ -686,7 +827,7 @@ private struct PersonDetailsView: View {
         isWorking = true
         Task {
             _ = await model.reviewOccasion(
-                personId: person.id,
+                personId: personId,
                 occasion: occasion,
                 verdict: verdict
             )
@@ -697,7 +838,7 @@ private struct PersonDetailsView: View {
     private func delete(_ occasion: PersonOccasion) {
         isWorking = true
         Task {
-            _ = await model.deleteOccasion(personId: person.id, occasion: occasion)
+            _ = await model.deleteOccasion(personId: personId, occasion: occasion)
             isWorking = false
         }
     }
@@ -709,6 +850,7 @@ struct OccasionEditor: View {
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var kind = "birthday"
     @State private var label = ""
     @State private var month = ""
@@ -752,7 +894,9 @@ struct OccasionEditor: View {
                 LabeledContent("Notes") { TextField("Gift ideas", text: $notes, axis: .vertical).multilineTextAlignment(.trailing) }
             }
             .disabled(isSaving)
-            if let failure { Section { Text(failure).foregroundStyle(.red) } }
+            if let failure {
+                Section { Text(failure).foregroundStyle(AssistantTheme.errorInk(for: colorScheme)) }
+            }
         }
         .interactiveDismissDisabled(isSaving)
         .navigationTitle(occasion == nil ? "Add occasion" : "Edit occasion")
@@ -791,8 +935,9 @@ struct OccasionEditor: View {
     }
 }
 
-private struct PersonEditor: View {
-    let person: WorkspacePerson?
+struct PersonEditor: View {
+    /// The id being edited; nil creates a new person.
+    private let personId: String?
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -802,10 +947,19 @@ private struct PersonEditor: View {
     @State private var isSaving = false
 
     init(person: WorkspacePerson?) {
-        self.person = person
+        personId = person?.id
         _name = State(initialValue: person?.name ?? "")
         _relationship = State(initialValue: person?.relationship ?? "")
         _aliases = State(initialValue: person?.aliases.joined(separator: ", ") ?? "")
+    }
+
+    /// The same editor from a loaded profile, which is what the People
+    /// directory has rather than a workspace row.
+    init(contact: PersonProfileContact) {
+        personId = contact.id
+        _name = State(initialValue: contact.name)
+        _relationship = State(initialValue: contact.relationship)
+        _aliases = State(initialValue: contact.aliases.joined(separator: ", "))
     }
 
     var body: some View {
@@ -817,7 +971,7 @@ private struct PersonEditor: View {
                     .lineLimit(2...5)
             }
         }
-        .navigationTitle(person == nil ? "Add person" : "Edit person")
+        .navigationTitle(personId == nil ? "Add person" : "Edit person")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -834,7 +988,7 @@ private struct PersonEditor: View {
         isSaving = true
         Task {
             let saved = await model.savePerson(
-                id: person?.id,
+                id: personId,
                 mutation: .init(name: name, relationship: relationship, aliases: aliases)
             )
             isSaving = false
@@ -843,9 +997,10 @@ private struct PersonEditor: View {
     }
 }
 
-private struct MemoryEditor: View {
-    let ownerContactId: String
-    let fact: WorkspaceMemoryFact?
+struct MemoryEditor: View {
+    private let ownerContactId: String
+    /// The fact being corrected; nil creates a new one.
+    private let factId: String?
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -857,20 +1012,31 @@ private struct MemoryEditor: View {
 
     init(ownerContactId: String, fact: WorkspaceMemoryFact?) {
         self.ownerContactId = ownerContactId
-        self.fact = fact
+        factId = fact?.id
         _content = State(initialValue: fact?.content ?? "")
         _domain = State(initialValue: fact?.domain ?? "other")
         _importance = State(initialValue: fact?.importance ?? 3)
         _pinned = State(initialValue: fact?.pinned ?? false)
     }
 
+    /// Correcting a row from the library, which carries the same fields under a
+    /// different type. Creation never starts here, so no owner contact is needed.
+    init(row: MemoryLibraryRow) {
+        ownerContactId = ""
+        factId = row.id
+        _content = State(initialValue: row.content)
+        _domain = State(initialValue: row.domain.isEmpty ? "other" : row.domain)
+        _importance = State(initialValue: row.importance)
+        _pinned = State(initialValue: row.pinned)
+    }
+
     var body: some View {
         AssistantForm {
-            Section(fact == nil ? "New fact" : "Correction") {
+            Section(factId == nil ? "New fact" : "Correction") {
                 TextField("Something durable the assistant should remember", text: $content, axis: .vertical)
                     .lineLimit(3...8)
             }
-            if fact == nil {
+            if factId == nil {
                 Section("How it should be used") {
                     Picker("Topic", selection: $domain) {
                         ForEach(["identity", "work", "home", "relationships", "preferences", "health", "other"], id: \.self) { value in
@@ -888,7 +1054,7 @@ private struct MemoryEditor: View {
                 }
             }
         }
-        .navigationTitle(fact == nil ? "Add memory" : "Correct memory")
+        .navigationTitle(factId == nil ? "Add memory" : "Correct memory")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -905,8 +1071,8 @@ private struct MemoryEditor: View {
         isSaving = true
         Task {
             let succeeded: Bool
-            if let fact {
-                succeeded = await model.correctMemory(id: fact.id, content: content)
+            if let factId {
+                succeeded = await model.correctMemory(id: factId, content: content)
             } else {
                 succeeded = await model.createMemory(MemoryMutation(
                     content: content,

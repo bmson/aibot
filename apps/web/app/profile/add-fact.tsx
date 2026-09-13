@@ -34,8 +34,11 @@ export function AddFact({
 
   if (!open) {
     return (
-      <button type="button" onClick={() => setOpen(true)} className={btnSm.outline}>
-        <Plus className="size-3.5" aria-hidden="true" />
+      // btnBase is shrink-0 with no max-width, so a long subject name makes the
+      // button wider than the viewport rather than wrapping. max-w-full lets
+      // btnBase's whitespace-normal actually do its job.
+      <button type="button" onClick={() => setOpen(true)} className={`${btnSm.outline} max-w-full`}>
+        <Plus className="size-3.5 shrink-0" aria-hidden="true" />
         Add a fact about {subjectLabel}
       </button>
     );

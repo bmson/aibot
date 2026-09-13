@@ -24,7 +24,7 @@ export function RelationshipList({ relations, now }: { relations: PersonRelation
         const body = (
           <>
             <PersonAvatar name={relation.otherLabel} size="sm" />
-            <span className="min-w-0 flex-1 text-sm leading-6 text-pretty text-strong">
+            <span className="min-w-0 flex-1 text-sm leading-6 text-pretty break-words text-strong">
               {relation.sentence}
             </span>
             {span ? <span className="shrink-0 text-xs text-muted">{span}</span> : null}
@@ -76,7 +76,7 @@ export function ConnectionList({
         const span = relationSpanLabel(connection.validFrom, connection.validUntil, now);
         return (
           <li key={connection.id} className={rowClass}>
-            <span className="min-w-0 flex-1 text-sm leading-6 text-pretty text-strong">
+            <span className="min-w-0 flex-1 text-sm leading-6 text-pretty break-words text-strong">
               {connection.sentence}
             </span>
             {span ? <span className="shrink-0 text-xs text-muted">{span}</span> : null}

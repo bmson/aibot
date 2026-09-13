@@ -1,3 +1,4 @@
+import { PREDICATE_VOCABULARY } from '@assistant/application';
 import { getPersonDossier } from '@assistant/application/people';
 import {
   eventDateLabel,
@@ -6,16 +7,16 @@ import {
 } from '@assistant/application/people-presentation';
 import type { MemorySnapshot } from '@assistant/application/profile';
 import { Handshake, MapPin, Sparkles } from 'lucide-react';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { MergeControl } from '@/app/people/merge-control';
+import { OccasionsPanel } from '@/app/people/occasions-panel';
 import { PersonAvatar } from '@/app/people/person-avatar';
+import { DeletePerson, PersonControls } from '@/app/people/person-controls';
 import { ConnectionList, RelationshipList } from '@/app/people/relationship-list';
 import { AddFact } from '@/app/profile/add-fact';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
+import { AddKnowledgeRelation } from '@/app/profile/knowledge/add-relation';
 import { ConnectionTree } from '@/app/profile/knowledge/connection-tree';
-import { MergeControl } from '@/app/profile/merge-control';
-import { OccasionsPanel } from '@/app/profile/occasions-panel';
-import { DeletePerson, PersonControls } from '@/app/profile/person-controls';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
 import { getDb } from '@/lib/server';
@@ -24,7 +25,6 @@ import {
   EmptyState,
   InfoGrid,
   InfoItem,
-  labelClass,
   MetaLine,
   PageHeader,
   PageShell,
@@ -167,33 +167,43 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
         </section>
       ) : null}
 
-      <details className="mt-6">
-        <summary className={summaryClass}>Recorded relationships and places</summary>
-        {/* Relationships to other people — the section this page exists for. */}
-        <section className="mt-8">
+      {/* Relationships to other people — the section this page exists for, so
+          it is on the page rather than behind a disclosure, and adding one
+          happens here instead of sending the owner to the knowledge graph to
+          look this person up again. */}
+      <section className="mt-8">
+        <div className="flex flex-wrap items-end justify-between gap-3">
           <SectionHeading title="Relationships" count={relations.length} />
-          {relations.length === 0 ? (
-            <EmptyState>
-              No connections to other people are recorded yet. They are extracted from what you tell
-              the assistant, and you can add one by hand in the{' '}
-              <Link href="/profile/knowledge?view=map" className="text-accent underline">
-                knowledge graph
-              </Link>
-              .
-            </EmptyState>
-          ) : (
-            <RelationshipList relations={relations} now={now} />
-          )}
-        </section>
+          {/* Always offered, including for a contact the graph has never heard
+              of: `dossier.entity` is null until a fact about them has been
+              extracted, so gating on it hid this button on exactly the page a
+              just-added person lands on — while the empty state below told them
+              to use it. With no entity yet the name is pre-typed instead of
+              prefilled, and saving creates the entity against this contact. */}
+          <AddKnowledgeRelation
+            selected={dossier.entity}
+            subjectLabel={contact.name}
+            subjectContactId={contact.id}
+            vocabulary={PREDICATE_VOCABULARY}
+          />
+        </div>
+        {relations.length === 0 ? (
+          <EmptyState>
+            No connections to other people are recorded yet. They are picked up from what you tell
+            the assistant, or you can add one above.
+          </EmptyState>
+        ) : (
+          <RelationshipList relations={relations} now={now} />
+        )}
+      </section>
 
-        {/* Everything else the graph knows: employers, places, events. */}
-        {connections.length > 0 ? (
-          <section className="mt-8">
-            <SectionHeading title="Also connected" count={connections.length} />
-            <ConnectionList connections={connections} now={now} />
-          </section>
-        ) : null}
-      </details>
+      {/* Everything else the graph knows: employers, places, events. */}
+      {connections.length > 0 ? (
+        <section className="mt-8">
+          <SectionHeading title="Also connected" count={connections.length} />
+          <ConnectionList connections={connections} now={now} />
+        </section>
+      ) : null}
 
       {/* What happened, most recent first. */}
       <section className="mt-8">
@@ -283,33 +293,32 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
       {/* Editing lives below the reading material, not above it: this page is
           about the person first and a record to maintain second. */}
       <Panel className="mt-8">
-        <details>
+        <SectionHeading title={`Manage ${contact.name}`} />
+        <p className="mt-2 max-w-[62ch] text-sm leading-5 text-muted">
+          How the assistant recognises {contact.name}. Adding a relationship marks them as known, so
+          their content is no longer treated as unverified.
+        </p>
+        <PersonControls
+          contactId={contact.id}
+          initialName={contact.name}
+          initialAliases={contact.aliases}
+          initialRelationship={contact.relationship}
+        />
+        {/* Merge and delete stay behind a disclosure — not to tidy them away,
+            but because they are the two controls on this page you cannot undo,
+            and they should not sit one mis-click from the name field. */}
+        <details className="mt-6 border-t border-edge pt-4">
           <summary className={summaryClass}>
-            Manage this person
-            <span className="text-xs font-normal text-muted">
-              Name, aliases, relationship, merge, delete
-            </span>
+            Merge or remove
+            <span className="text-xs font-normal text-muted">Irreversible</span>
           </summary>
-          <p className="mt-3 max-w-[62ch] text-sm leading-5 text-muted">
-            How the assistant recognises {contact.name}. Adding a relationship marks them as known,
-            so their content is no longer treated as unverified.
+          <p className="mt-2 max-w-[62ch] text-xs text-muted">
+            Merging moves every fact onto the person you pick and retires this entry. Deleting
+            removes {contact.name} and their facts for good.
           </p>
-          <PersonControls
-            contactId={contact.id}
-            initialName={contact.name}
-            initialAliases={contact.aliases}
-            initialRelationship={contact.relationship}
-          />
-          <div className="mt-6 border-t border-edge pt-4">
-            <p className={labelClass}>Merge or remove</p>
-            <p className="mt-1 max-w-[62ch] text-xs text-muted">
-              Merging moves every fact onto the person you pick and retires this entry. Deleting
-              removes {contact.name} and their facts for good.
-            </p>
-            <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-              <MergeControl contactId={contact.id} options={mergeOptions} suggested={duplicate} />
-              <DeletePerson contactId={contact.id} name={contact.name} returnTo="/people" />
-            </div>
+          <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+            <MergeControl contactId={contact.id} options={mergeOptions} suggested={duplicate} />
+            <DeletePerson contactId={contact.id} name={contact.name} returnTo="/people" />
           </div>
         </details>
       </Panel>

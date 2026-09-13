@@ -114,6 +114,7 @@ export function VoiceSamplesPanel({
               <input
                 type="file"
                 name="file"
+                aria-label="Sent messages file"
                 required
                 accept=".mbox,.txt,.json,.md,text/plain,application/json"
                 className={fileInputClass}
