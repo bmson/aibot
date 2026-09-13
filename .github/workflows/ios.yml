@@ -12,19 +12,20 @@ permissions:
 # in no image and no compose service; its build result should gate the app, not
 # production.
 #
-# To make this a hard merge gate, add "Build and test the iOS app" to the
-# branch's required status checks. Note the interaction with the path filter
-# below: a required check that never runs blocks a PR forever, so if you make
-# it required, drop `paths:` and let the job run (and exit fast) everywhere.
+# "Build and test the iOS app" is a required status check, which is why the
+# pull_request trigger below carries no `paths:` filter: a required check that
+# never runs leaves a pull request blocked forever.
+#
+# Running on every pull request must not mean booting a macOS runner on every
+# pull request — those minutes bill at ten times Linux. So the path test moved
+# from the trigger into a cheap Linux job, and the macOS job is skipped when a
+# pull request touches no iOS file. A skipped job satisfies a required check,
+# where an absent one does not.
 on:
   pull_request:
-    paths:
-      - 'apps/ios/**'
-      - '.github/workflows/ios.yml'
-  # Every branch, not just main: the path filter already keeps this off the
-  # runner for server-only work, and a Swift change is worth checking before it
-  # reaches a pull request. macOS minutes bill at ten times Linux, so the filter
-  # is what makes this affordable — keep it.
+  # Every branch, not just main: a Swift change is worth checking before it
+  # reaches a pull request. Pushes are not gated by branch protection, so this
+  # trigger keeps its filter — nothing is waiting on a check that never appears.
   push:
     paths:
       - 'apps/ios/**'
@@ -32,8 +33,41 @@ on:
   workflow_dispatch:
 
 jobs:
+  changes:
+    name: Detect iOS changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ios: ${{ steps.filter.outputs.ios }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # The diff needs both ends of the pull request, which the default
+          # shallow fetch does not carry.
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # Only a pull request can arrive here without an iOS change; the push
+          # and dispatch triggers already imply one.
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$BASE_SHA" HEAD \
+              | grep -Eq '^(apps/ios/|\.github/workflows/ios\.yml$)'; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ios=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build and test the iOS app
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
     runs-on: macos-latest
     timeout-minutes: 40
     steps:
