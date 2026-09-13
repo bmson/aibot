@@ -15,6 +15,16 @@ const WAKEABLE = [
 const TERMINAL = ['done', 'failed', 'cancelled'] as const;
 const MAX_ATTEMPTS = 8;
 const MAX_RECLAIMS = 8;
+
+export async function persistPlan(db: Db, task: TaskLease, plan: unknown): Promise<boolean> {
+  const [updated] = await db
+    .update(tasks)
+    .set({ plan, updatedAt: sql`now()` })
+    .where(and(activeLease(task), eq(tasks.agentId, task.agentId)))
+    .returning({ id: tasks.id });
+  return Boolean(updated);
+}
+
 export async function parkForApproval(
   db: Db,
   task: TaskLease,
@@ -307,6 +317,7 @@ export function createPostgresTaskRepository(db: Db): TaskRepository {
   return {
     ...createPostgresTaskLeaseRepository(db),
     createTask: (input) => createTask(db, input),
+    persistPlan: (task, plan) => persistPlan(db, task, plan),
     parkForApproval: (...args) => parkForApproval(db, ...args),
     parkForBudget: (...args) => parkForBudget(db, ...args),
     sleepTask: (...args) => sleepTask(db, ...args),

@@ -65,6 +65,7 @@
     "@assistant/setup": "workspace:*",
     "@assistant/tools": "workspace:*",
     "@biomejs/biome": "^2.5.12",
+    "@google-cloud/firestore": "^9.0.1",
     "@types/node": "^26.4.1",
     "drizzle-orm": "^0.45.2",
     "playwright": "^1.63.0",

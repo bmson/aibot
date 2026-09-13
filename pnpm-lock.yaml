@@ -45,6 +45,9 @@ importers:
       '@biomejs/biome':
         specifier: ^2.5.12
         version: 2.5.12
+      '@google-cloud/firestore':
+        specifier: ^9.0.1
+        version: 9.0.1
       '@types/node':
         specifier: ^26.4.1
         version: 26.5.0

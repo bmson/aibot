@@ -6,6 +6,7 @@ import {
   withValidationDatabase,
 } from '@assistant/firestore/validation-admin';
 import { firestoreApprovalSmoke } from './firestore-approval-smoke.js';
+import { firestoreChatSmoke } from './firestore-chat-smoke.js';
 import { firestoreExecutorSmoke } from './firestore-executor-smoke.js';
 import { firestoreRuntimeSmoke } from './firestore-runtime-smoke.js';
 import { firestoreScheduleSmoke } from './firestore-schedule-smoke.js';
@@ -32,6 +33,9 @@ const indexes = spec.indexes.filter((index) =>
     'approvalPolicies',
     'toolCalls',
     'messages',
+    'skills',
+    'locationPings',
+    'commitments',
   ].includes(index.collectionGroup),
 );
 const input = {
@@ -68,6 +72,7 @@ if (!values.run) {
     approvals: await firestoreApprovalSmoke(store),
     runtime: await firestoreRuntimeSmoke(store),
     executor: await firestoreExecutorSmoke(store),
+    chat: await firestoreChatSmoke(store),
   }));
   console.log(JSON.stringify({ stage: 'complete', ...report }, null, 2));
 }

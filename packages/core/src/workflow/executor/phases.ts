@@ -454,6 +454,8 @@ export async function runPlanPhase(rc: RunContext): Promise<ExecuteResult | { pl
   if (!plan && !artifactIntent) {
     plan = await planTask({ db, router }, task, agent, window, {
       tainted: state.untrustedContext === true,
+      repository: deps.persistence?.tasks,
+      lease,
     });
     if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
     // A forwarded or quoting owner email is tainted, and the planner often

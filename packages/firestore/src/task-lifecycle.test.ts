@@ -56,5 +56,23 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect((await store.doc('tasks', 'task').get()).get('status')).toBe('needs_attention');
       expect((await store.collection('outbox').get()).size).toBe(0);
     });
+    it('persists plans only for the current owner lease', async () => {
+      const first = await repo.claim('task');
+      if (!first) throw new Error('Missing initial lease');
+
+      // Reclaim the task so the first worker's token is stale.
+      await store.doc('tasks', 'task').update({ lockedUntil: new Date(0) });
+      const replacement = await repo.claim('task');
+      if (!replacement) throw new Error('Missing replacement lease');
+
+      expect(await repo.persistPlan(first, { stale: true })).toBe(false);
+      expect(
+        await repo.persistPlan({ ...replacement, agentId: 'foreign-agent' }, { foreign: true }),
+      ).toBe(false);
+      expect(await repo.persistPlan(replacement, { steps: ['current'] })).toBe(true);
+      expect((await store.doc('tasks', 'task').get()).get('plan')).toEqual({
+        steps: ['current'],
+      });
+    });
   },
 );

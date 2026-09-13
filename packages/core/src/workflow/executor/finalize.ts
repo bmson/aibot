@@ -4,6 +4,7 @@ import type {
   ExecutionEvidenceRecord,
   ExecutionEvidenceRepository,
   MessageRepository,
+  SkillContextRepository,
 } from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
 import {
@@ -217,6 +218,7 @@ export async function finalizePendingResponse(
     task,
     checkpointState ?? taskState(task),
     pending,
+    deps.persistence?.skills,
   ).catch((error) => console.error('quality signal record failed', error));
   // A needs_attention final that reached an owner-visible thread (the task's own
   // conversation or the Notifications sink) is already notified — stamp it so the
@@ -273,6 +275,7 @@ async function recordQualitySignals(
   task: TaskRow,
   state: TaskState,
   pending: PendingFinal,
+  skills?: SkillContextRepository,
 ): Promise<void> {
   // The unique task_id + do-nothing makes the row idempotent across delivery
   // retries and resumes; `.returning()` tells us whether THIS call was the one
@@ -299,7 +302,9 @@ async function recordQualitySignals(
   // deprecation fire instead of a bad skill being recommended forever.
   if (inserted && state.usedSkillIds.length > 0) {
     const success = pending.terminalStatus === 'done';
-    await Promise.all(state.usedSkillIds.map((id) => recordSkillOutcome(db, id, success)));
+    await Promise.all(
+      state.usedSkillIds.map((id) => recordSkillOutcome(skills ?? db, id, success, task.agentId)),
+    );
   }
 }
 

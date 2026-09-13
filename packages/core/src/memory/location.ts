@@ -1,5 +1,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { type Db, type LocationPingRow, locationPings } from '@assistant/db';
+import {
+  isOwnerContextRepository,
+  type OwnerContextRepository,
+  type OwnerLocationPing,
+} from '@assistant/persistence';
 import { and, desc, eq, gte, inArray, lt, lte } from 'drizzle-orm';
 import { z } from 'zod';
 
@@ -87,35 +92,39 @@ export async function recordLocationPing(
 
 /** The most recent ping within the retention window, or null if none is fresh. */
 export async function latestLocation(
-  db: Db,
+  store: Db | OwnerContextRepository,
   agentId: string,
   withinDays: number,
   /** Narrow to one ingest source (tests scope to their own rows this way). */
   source?: string,
   now = new Date(),
-): Promise<LocationPingRow | null> {
+): Promise<OwnerLocationPing | null> {
   const cutoff = new Date(
     now.getTime() - Math.min(withinDays * 24 * 3600 * 1000, LOCATION_CONTEXT_MAX_AGE_MS),
   );
-  const [row] = await db
-    .select()
-    .from(locationPings)
-    .where(
-      and(
-        eq(locationPings.agentId, agentId),
-        gte(locationPings.capturedAt, cutoff),
-        lte(locationPings.capturedAt, now),
-        source ? eq(locationPings.source, source) : undefined,
-      ),
-    )
-    .orderBy(desc(locationPings.capturedAt))
-    .limit(1);
+  const row = isOwnerContextRepository(store)
+    ? await store.getLatestLocation({ agentId, notBefore: cutoff, notAfter: now, source })
+    : (
+        await store
+          .select()
+          .from(locationPings)
+          .where(
+            and(
+              eq(locationPings.agentId, agentId),
+              gte(locationPings.capturedAt, cutoff),
+              lte(locationPings.capturedAt, now),
+              source ? eq(locationPings.source, source) : undefined,
+            ),
+          )
+          .orderBy(desc(locationPings.capturedAt))
+          .limit(1)
+      )[0];
   // Do not fall back to an older, more precise fix when the newest observation
   // is uncertain: that can silently put a traveling owner back in another city.
   return row && locationContextUsable(row, now) ? row : null;
 }
 
-export function locationContextUsable(ping: LocationPingRow, now = new Date()): boolean {
+export function locationContextUsable(ping: OwnerLocationPing, now = new Date()): boolean {
   const age = now.getTime() - ping.capturedAt.getTime();
   return (
     Number.isFinite(age) &&
@@ -161,7 +170,7 @@ function ago(from: Date, now: Date): string {
  * Returns undefined when there is no fresh ping.
  */
 export function formatLocationLine(
-  ping: LocationPingRow | null,
+  ping: OwnerLocationPing | null,
   now = new Date(),
 ): string | undefined {
   if (!ping || !locationContextUsable(ping, now)) return undefined;

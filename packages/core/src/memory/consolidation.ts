@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { contacts, type Db, isTombstoned, memories, ownerCard } from '@assistant/db';
+import { isOwnerContextRepository, type OwnerContextRepository } from '@assistant/persistence';
 import { and, eq, gt, inArray, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
@@ -594,7 +595,17 @@ export async function compileOwnerCard(db: Db): Promise<string> {
 }
 
 /** The compiled card for prompt injection ('' when never compiled). */
-export async function getOwnerCard(db: Db): Promise<string> {
-  const [row] = await db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1);
+export function getOwnerCard(db: Db): Promise<string>;
+export function getOwnerCard(repository: OwnerContextRepository, agentId: string): Promise<string>;
+export function getOwnerCard(store: Db | OwnerContextRepository, agentId?: string): Promise<string>;
+export async function getOwnerCard(
+  store: Db | OwnerContextRepository,
+  agentId?: string,
+): Promise<string> {
+  if (isOwnerContextRepository(store)) {
+    if (!agentId) throw new Error('Owner card repository reads require an agent ID');
+    return (await store.getOwnerCard(agentId))?.content ?? '';
+  }
+  const [row] = await store.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1);
   return row?.content ?? '';
 }

@@ -8,6 +8,8 @@ import { createPostgresExecutionEvidenceRepository } from './execution-evidence-
 import { createPostgresExecutionJobRepository } from './execution-jobs-repository.js';
 import { createPostgresMessageRepository } from './message-repository.js';
 import { createPostgresModelRoutingRepository } from './model-routing-repository.js';
+import { createPostgresOwnerContextRepository } from './owner-context-repository.js';
+import { createPostgresSkillContextRepository } from './skill-context-repository.js';
 import { createPostgresTaskRepository } from './task-lifecycle-repository.js';
 import { createPostgresToolExecutionRepository } from './tool-execution-repository.js';
 
@@ -24,5 +26,7 @@ export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence
     executionContext: createPostgresExecutionContextRepository(db),
     executionJobs: createPostgresExecutionJobRepository(db),
     executionEvidence: createPostgresExecutionEvidenceRepository(db),
+    ownerContext: createPostgresOwnerContextRepository(db),
+    skills: createPostgresSkillContextRepository(db),
   };
 }
