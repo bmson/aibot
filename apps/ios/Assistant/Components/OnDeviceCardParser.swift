@@ -1,5 +1,6 @@
 import Foundation
 import FoundationModels
+import Observation
 
 /// The small, typed decision produced by Apple's on-device foundation model.
 /// It decides relevance only; card facts still come from the response text and
@@ -148,5 +149,72 @@ enum OnDeviceCardParser {
         default:
             return false
         }
+    }
+}
+
+/// What the on-device pass concluded for one reply: the card kind that earned
+/// its place, or nothing.
+enum OnDeviceCardDecision: Equatable, Sendable {
+    case noCard
+    case card(kind: String)
+
+    var cardKind: String? {
+        if case let .card(kind) = self { return kind }
+        return nil
+    }
+}
+
+/// The on-device pass takes a few seconds, and a chat row that scrolls out of
+/// view loses its `@State`. With the verdict living only in the row, every
+/// return trip re-ran the model and the reply flickered back to raw prose
+/// first. Decisions live here instead, for as long as the app is running.
+///
+/// Keys carry the reply text as well as its id, so a restreamed or corrected
+/// reply is analysed afresh while a re-mounted row reuses what was decided.
+@MainActor
+@Observable
+final class OnDeviceCardDecisions {
+    static let shared = OnDeviceCardDecisions()
+
+    /// The verdict, not the model's raw analysis: `accepts` is applied once,
+    /// when the decision is taken, rather than on every body evaluation.
+    private var decisions: [Key: OnDeviceCardDecision] = [:]
+    /// Insertion order, so a long-running session drops its oldest replies
+    /// instead of growing without limit.
+    private var arrivals: [Key] = []
+    private let capacity: Int
+
+    init(capacity: Int = 240) {
+        self.capacity = max(1, capacity)
+    }
+
+    /// Nil means "not decided yet" — the caller should run the model.
+    func decision(id: String, text: String) -> OnDeviceCardDecision? {
+        decisions[Key(id: id, text: text)]
+    }
+
+    func record(_ decision: OnDeviceCardDecision, id: String, text: String) {
+        let key = Key(id: id, text: text)
+        if decisions.updateValue(decision, forKey: key) == nil {
+            arrivals.append(key)
+        }
+        while arrivals.count > capacity, let oldest = arrivals.first {
+            arrivals.removeFirst()
+            decisions.removeValue(forKey: oldest)
+        }
+    }
+
+    /// Test seam. The shared store is deliberately never cleared in the app:
+    /// a decision that survives the session is the whole point.
+    func reset() {
+        decisions.removeAll()
+        arrivals.removeAll()
+    }
+
+    var count: Int { decisions.count }
+
+    private struct Key: Hashable {
+        let id: String
+        let text: String
     }
 }

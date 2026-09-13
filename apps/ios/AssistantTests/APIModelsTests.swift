@@ -1167,8 +1167,97 @@ final class APIModelsTests: XCTestCase {
         guard case let .duration(_, duration, _, _)? = estimate.first else {
             return XCTFail("Expected a duration card")
         }
-        XCTAssertEqual(duration, "45 minutes")
+        XCTAssertEqual(duration, "45 min")
         XCTAssertTrue(MessageResponseCard.inferred(from: "The answer has 45 lines.").isEmpty)
+    }
+
+    func testDurationCardKeepsTheRangeAndDepartureTimeTheAnswerGave() {
+        let cards = MessageResponseCard.inferred(
+            from: """
+            From your place in the Richmond down to Bernal Intermediate School in South \
+            San Jose is roughly 60 to 65 miles.
+
+            On a Sunday afternoon, expect the drive to take about 1 hour 15 minutes to \
+            1 hour 30 minutes, factoring in getting through town down 19th Avenue before \
+            hopping on I-280 South.
+
+            To make the 4:15 PM arrival time without rushing, plan to head out around \
+            2:45 PM (3:00 PM at the absolute latest).
+            """,
+            cardKind: "duration"
+        )
+        guard case let .duration(_, duration, detail, _)? = cards.first else {
+            return XCTFail("Expected a duration card")
+        }
+        // The first number in the reply was "1 hour", which is not the estimate.
+        XCTAssertEqual(duration, "1 hr 15 min \u{2013} 1 hr 30 min")
+        XCTAssertEqual(detail, "Leave around 2:45 PM")
+    }
+
+    func testDurationCardReadsCompoundSharedUnitAndFractionalEstimates() {
+        func duration(_ text: String) -> String? {
+            guard case let .duration(_, duration, _, _)? = MessageResponseCard
+                .inferred(from: text, cardKind: "duration").first else { return nil }
+            return duration
+        }
+        XCTAssertEqual(duration("The drive takes roughly 45 to 60 minutes at that hour."), "45\u{2013}60 min")
+        XCTAssertEqual(duration("It should take about 1 hour and 15 minutes door to door."), "1 hr 15 min")
+        XCTAssertEqual(duration("Expect it to take about 1.5 hours."), "1.5 hr")
+        XCTAssertEqual(duration("It takes about 3 days to arrive."), "3 days")
+    }
+
+    func testDurationCardKeepsTheAnswersOwnHedgeAboutLeaving() {
+        func detail(_ text: String) -> String? {
+            guard case let .duration(_, _, detail, _)? = MessageResponseCard
+                .inferred(from: text, cardKind: "duration").first else { return nil }
+            return detail
+        }
+        XCTAssertEqual(
+            detail("The drive takes about 40 minutes. Plan to leave by 7:30 a.m."),
+            "Leave by 7:30 AM"
+        )
+        // No instruction to lift, and no filler in its place.
+        XCTAssertNil(detail("This will take about 45 minutes if the source material is ready."))
+    }
+
+    func testTimeEstimateReadFromProseSummarizesTheReplyRatherThanReplacingIt() {
+        let estimate = MessageResponseCard.inferred(
+            from: "The drive takes about 40 minutes, so leave by 7:30 a.m. to beat the bridge.",
+            cardKind: "duration"
+        )
+        XCTAssertFalse(estimate.isEmpty)
+        XCTAssertFalse(MessageResponseCard.replacesProse(estimate, authored: false))
+        // A card the server authored is the answer, so the prose would repeat it.
+        XCTAssertTrue(MessageResponseCard.replacesProse(estimate, authored: true))
+
+        let weather = MessageResponseCard.inferred(
+            from: "The weather is sunny and 18\u{00B0}C now. Wind stays light this afternoon."
+        )
+        XCTAssertTrue(MessageResponseCard.replacesProse(weather, authored: false))
+        XCTAssertFalse(MessageResponseCard.replacesProse([], authored: true))
+    }
+
+    @MainActor
+    func testOnDeviceCardDecisionsOutliveARowAndKeyOnTheReplyText() {
+        let decisions = OnDeviceCardDecisions(capacity: 2)
+        XCTAssertNil(decisions.decision(id: "m1", text: "about 40 minutes"))
+
+        decisions.record(.card(kind: "duration"), id: "m1", text: "about 40 minutes")
+        // What a re-mounted row reads instead of re-running the model.
+        XCTAssertEqual(decisions.decision(id: "m1", text: "about 40 minutes"), .card(kind: "duration"))
+        XCTAssertEqual(decisions.decision(id: "m1", text: "about 40 minutes")?.cardKind, "duration")
+        // A corrected reply is a different answer and earns a fresh pass.
+        XCTAssertNil(decisions.decision(id: "m1", text: "about 55 minutes"))
+
+        decisions.record(.noCard, id: "m2", text: "no card here")
+        XCTAssertEqual(decisions.decision(id: "m2", text: "no card here"), .noCard)
+        XCTAssertNil(OnDeviceCardDecision.noCard.cardKind)
+
+        // A long session drops its oldest decisions rather than growing forever.
+        decisions.record(.noCard, id: "m3", text: "third")
+        XCTAssertEqual(decisions.count, 2)
+        XCTAssertNil(decisions.decision(id: "m1", text: "about 40 minutes"))
+        XCTAssertEqual(decisions.decision(id: "m3", text: "third"), .noCard)
     }
 
     func testInterviewPrepCardReformatsStructuredInterviewerResearch() {
