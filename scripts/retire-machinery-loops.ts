@@ -13,8 +13,13 @@
  * the desk, selecting them the same way the fix does — by the trust of the
  * conversation they came from — rather than by guessing at titles.
  *
- *   pnpm tsx scripts/retire-machinery-loops.ts            # dry run, writes nothing
- *   pnpm tsx scripts/retire-machinery-loops.ts --apply    # dismiss them
+ *   pnpm tsx scripts/retire-machinery-loops.ts --prod            # dry run
+ *   pnpm tsx scripts/retire-machinery-loops.ts --prod --apply    # dismiss them
+ *
+ * `--prod` reads PROD_DATABASE_URL, the same way verify-browse and
+ * configure-models do; without it the script talks to the local development
+ * database, which on most machines does not exist. The loops this clears were
+ * written by a deployed assistant, so --prod is almost always what you want.
  *
  * `dismissed` rather than `stale`: stale means a loop aged out, and these
  * never had a lifetime to run down. The rows stay for the record — nothing is
@@ -26,8 +31,24 @@ import { commitments, conversations, createDb } from '@assistant/db';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 
 const apply = process.argv.includes('--apply');
+const prod = process.argv.includes('--prod');
 const config = loadConfig();
-const db = createDb(config.DATABASE_URL);
+const dbUrl = prod ? config.PROD_DATABASE_URL : config.DATABASE_URL;
+if (!dbUrl) {
+  console.error(prod ? 'PROD_DATABASE_URL missing from .env' : 'DATABASE_URL missing');
+  process.exit(1);
+}
+const db = createDb(dbUrl);
+
+/** Host and database name only — a connection string carries a password. */
+function describe(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}/${parsed.pathname.replace(/^\//, '')}`;
+  } catch {
+    return 'the configured database';
+  }
+}
 
 async function main(): Promise<void> {
   const rows = await db
@@ -46,11 +67,13 @@ async function main(): Promise<void> {
     .orderBy(commitments.updatedAt);
 
   if (rows.length === 0) {
-    console.log('No machinery-authored loops are open. Nothing to do.');
+    console.log(`No machinery-authored loops are open in ${describe(dbUrl)}. Nothing to do.`);
     return;
   }
 
-  console.log(`${rows.length} open loop(s) came from a non-owner conversation:\n`);
+  console.log(
+    `${rows.length} open loop(s) in ${describe(dbUrl)} came from a non-owner conversation:\n`,
+  );
   for (const row of rows) {
     const when = row.updatedAt.toISOString().slice(0, 10);
     console.log(`  [${row.kind}] ${row.title}`);
