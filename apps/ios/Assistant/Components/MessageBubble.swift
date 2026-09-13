@@ -18,10 +18,6 @@ struct MessageBubble: View {
     /// Inline approve/decline for pending approval cards — (approvalId, decision).
     let decideApproval: ((String, String) async -> Bool)?
 
-    /// Verdicts outlive the row: a lazy transcript unmounts a scrolled-away
-    /// message, and re-running the on-device pass on every return trip is
-    /// what made a formatted reply flicker back to raw prose.
-    private let cardDecisions = OnDeviceCardDecisions.shared
     @State private var decidingApproval = false
 
     @Environment(\.colorScheme) private var colorScheme
@@ -111,35 +107,6 @@ struct MessageBubble: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
-        .task(id: "\(message.id)-\(isStreaming)") {
-            guard message.role == .assistant,
-                  !isStreaming,
-                  message.noticeKind == nil,
-                  message.decisionParts.isEmpty,
-                  message.approvalSummary == nil,
-                  message.parts.compactMap(MessageResponseCard.init(part:)).isEmpty,
-                  let userPrompt,
-                  MessageResponseCard.hasCardSignals(in: message.text) else { return }
-            guard cardDecisions.decision(id: message.id, text: message.text) == nil else { return }
-            guard #available(iOS 26.0, *) else { return }
-            // A nil analysis is an unavailable model — assets still
-            // downloading, an unsupported locale, a busy session — not a
-            // verdict. Leaving it unrecorded lets a later pass try again.
-            guard let analysis = await OnDeviceCardParser.analyze(
-                request: userPrompt,
-                response: message.text
-            ) else { return }
-            let accepted = OnDeviceCardParser.accepts(
-                analysis,
-                request: userPrompt,
-                response: message.text
-            )
-            cardDecisions.record(
-                accepted ? .card(kind: OnDeviceCardParser.normalizedKind(analysis.cardKind)) : .noCard,
-                id: message.id,
-                text: message.text
-            )
-        }
     }
 
     @ViewBuilder
@@ -400,38 +367,27 @@ struct MessageBubble: View {
         message.decisionParts
     }
 
+    /// Cards arrive composed, from the one place that composes them. The phone
+    /// reads a card the runtime sent and draws it; it does not read the reply
+    /// and guess at one. The prose-to-card parsers that used to live here —
+    /// four hand-written kinds, a regex per fact, and an on-device pass to
+    /// pick between them — could only ever produce a shape someone had
+    /// already thought of, and re-derived it on every scroll.
     private var responseCards: [MessageResponseCard] {
         let explicit = message.parts.compactMap(MessageResponseCard.init(part:))
         guard explicit.isEmpty else { return explicit }
 
-        // Exact compatibility formats produced by earlier server builds are
-        // safe without a user prompt: they are narrow, deterministic shapes,
-        // not a general attempt to reinterpret prose.
-        let legacy = MessageResponseCard.inferredLegacy(from: message.text)
-        guard legacy.isEmpty else { return legacy }
-
-        if let kind = cardDecisions.decision(id: message.id, text: message.text)?.cardKind {
-            let inferred = MessageResponseCard.inferred(from: message.text, cardKind: kind)
-            if !inferred.isEmpty { return inferred }
-        }
-
-        // The deterministic fallback is intentionally request-gated. This
-        // keeps older/plain-text weather answers usable without allowing a
-        // directions response containing a weather reminder to become a
-        // weather card.
-        guard let userPrompt,
-              MessageResponseCard.requestLooksLikeWeather(userPrompt) else { return [] }
-        return MessageResponseCard.inferred(from: message.text, cardKind: "weather")
+        // One exception, and it is not prose interpretation: the proactive
+        // pulse still phrases an event alert as a sentence, in an exact
+        // format this build wrote itself.
+        return MessageResponseCard.inferredLegacy(from: message.text)
     }
 
     private var usesPrimaryCards: Bool {
-        // Authored answer cards and local prose-to-card fallbacks avoid a
-        // duplicate answer. Raw lookup results never replace the explanation.
+        // An answer card avoids a duplicate answer. Raw lookup results never
+        // replace the explanation, and neither does a card read off the reply.
         guard message.role == .assistant, !message.hasSupportingResultCards else { return false }
-        return MessageResponseCard.replacesProse(
-            responseCards,
-            authored: !message.parts.compactMap(MessageResponseCard.init(part:)).isEmpty
-        )
+        return MessageResponseCard.replacesProse(responseCards)
     }
 
     private func decisionCard(_ part: MessagePart) -> some View {
@@ -886,15 +842,6 @@ enum MessageResponseCard: Identifiable {
         let excerpt: String
     }
 
-    struct InterviewPerson: Identifiable {
-        let name: String
-        let role: String
-        let background: [String]
-        let interviewFocus: String
-
-        var id: String { name.lowercased() }
-    }
-
     struct KnowledgeEdge: Identifiable {
         let id: String
         let subject: String
@@ -957,6 +904,9 @@ enum MessageResponseCard: Identifiable {
 
     struct GeneratedCard {
         let id: String
+        /// The composer read this card out of the reply rather than out of a
+        /// lookup, so the card heads the answer instead of replacing it.
+        let groundedOnAnswer: Bool
         let title: String
         let subtitle: String
         let sourceLabel: String
@@ -972,7 +922,6 @@ enum MessageResponseCard: Identifiable {
     case event(id: String, start: String, time: String, title: String, location: String, attendees: [String], calendars: [String], calendarLinkURL: String?, meetingLinkURL: String?)
     case weather(location: String, temperature: String, condition: String, details: [WeatherDetail])
     case duration(title: String, duration: String, detail: String?, confidence: String?)
-    case interviewPrep(title: String, people: [InterviewPerson], techStack: [String], nextSteps: [String])
     case reminder(id: String, title: String, schedule: String, nextFires: String, enabled: Bool)
     case emails(id: String, title: String, query: String, mailbox: String, complete: Bool, matchingMessagesEstimate: Int?, messages: [EmailResult])
     case documents(id: String, title: String, query: String, passages: [DocumentPassage])
@@ -997,7 +946,6 @@ enum MessageResponseCard: Identifiable {
             // reading; the day name keeps each card's identity distinct.
             "weather-\(location)-\(details.first { $0.label.caseInsensitiveCompare("Day") == .orderedSame }?.value ?? "")-\(temperature)"
         case let .duration(title, duration, _, _): "duration-\(title)-\(duration)"
-        case let .interviewPrep(title, people, _, _): "interview-prep-\(title)-\(people.map(\.id).joined(separator: "-"))"
         case let .reminder(id, _, _, _, _): id
         case let .emails(id, _, _, _, _, _, _): id
         case let .documents(id, _, _, _): id
@@ -1393,6 +1341,11 @@ enum MessageResponseCard: Identifiable {
             guard !facts.isEmpty, !blocks.isEmpty else { return nil }
             self = .generated(.init(
                 id: data["id"]?.string ?? "generated-\(title)",
+                // Grounding rides on the payload beside the trail, not in the
+                // model-authored spec: which corpus a card stands on is the
+                // runtime's finding, never the composer's claim. An older
+                // build sends none, and a lookup card is the safe default.
+                groundedOnAnswer: data["grounding"]?.string == "answer",
                 title: title,
                 subtitle: spec["subtitle"]?.string ?? "",
                 sourceLabel: spec["sourceLabel"]?.string ?? "Assistant card",
@@ -1424,41 +1377,22 @@ enum MessageResponseCard: Identifiable {
         }
     }
 
-    static func inferred(from text: String, cardKind: String? = nil) -> [Self] {
-        let lower = text.lowercased()
-        if cardKind == nil || normalizedCardKind(cardKind) == "agenda" {
-            if let agenda = inferredAgenda(text, lower: lower) { return [agenda] }
-        }
-        if cardKind == nil || normalizedCardKind(cardKind) == "weather" {
-            let weather = inferredWeather(text, lower: lower)
-            if !weather.isEmpty { return weather }
-        }
-        if cardKind == nil || normalizedCardKind(cardKind) == "duration" {
-            if let duration = inferredDuration(text, lower: lower) { return [duration] }
-        }
-        if normalizedCardKind(cardKind) == "interview-prep" {
-            if let prep = inferredInterviewPrep(text) { return [prep] }
-        }
-        return []
-    }
-
     /// Whether these cards stand in for the reply or merely head it.
     ///
-    /// A card the server authored carries the answer, so the prose beside it
-    /// would repeat itself. A time estimate read out of prose is different: it
-    /// is one value lifted from an answer that also explains the distance, the
-    /// route, and when to leave. It summarizes the reply; it cannot replace it.
-    static func replacesProse(_ cards: [Self], authored: Bool) -> Bool {
+    /// A card grounded in a lookup carries the answer, so prose beside it
+    /// would only repeat it. A card the composer read out of the reply itself
+    /// is different: it redraws part of an answer that also explains the
+    /// route, the caveats, and when to leave. It summarizes the reply, and
+    /// replacing the reply with it would delete the rest of the answer.
+    static func replacesProse(_ cards: [Self]) -> Bool {
         guard !cards.isEmpty else { return false }
-        guard !authored else { return true }
-        return !cards.allSatisfy(\.isTimeEstimate)
+        return !cards.allSatisfy(\.summarizesAnswer)
     }
 
-    var isTimeEstimate: Bool {
-        if case .duration = self { return true }
+    var summarizesAnswer: Bool {
+        if case let .generated(card) = self { return card.groundedOnAnswer }
         return false
     }
-
     static func inferredLegacy(from text: String) -> [Self] {
         if let alert = inferredLegacyAlert(text) { return [alert] }
         if let agenda = inferredNumberedAgenda(text) { return [agenda] }
@@ -1539,464 +1473,32 @@ enum MessageResponseCard: Identifiable {
         return nil
     }
 
-    static func hasCardSignals(in text: String) -> Bool {
-        let lower = text.lowercased()
-        return lower.range(of: #"-?\d{1,3}\s*[°º]?[cf]\b"#, options: .regularExpression) != nil
-            || lower.range(of: #"\b\d+(?:\.\d+)?\s*(?:minutes?|mins?|hours?|hrs?|days?)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
-            || lower.contains("calendar")
-            || lower.contains("agenda")
-            || lower.contains("schedule")
-            || interviewPrepSignalCount(in: lower) >= 2
-    }
-
-    static func requestLooksLikeWeather(_ request: String) -> Bool {
-        let lower = request.lowercased()
-        return ["weather", "forecast", "temperature", "rain", "sunny", "cloudy", "snow"].contains {
-            lower.contains($0)
-        }
-    }
-
-    private static func normalizedCardKind(_ value: String?) -> String {
-        switch value?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) {
-        case "weather", "forecast", "temperature": return "weather"
-        case "agenda", "calendar", "schedule": return "agenda"
-        case "duration", "time-estimate", "time estimate": return "duration"
-        case "interview-prep", "interview prep", "interviewers", "people research": return "interview-prep"
-        default: return "none"
-        }
-    }
-
-    private enum InterviewSection {
-        case none
-        case background
-        case techStack
-        case nextSteps
-    }
-
-    /// This parser only reorganizes facts the assistant already wrote. The
-    /// on-device model decides whether interview research was the user's main
-    /// request; keeping extraction deterministic avoids inventing a person's
-    /// experience, role, or interview remit while still replacing a dense
-    /// nested markdown list with a scannable card.
-    private static func inferredInterviewPrep(_ text: String) -> Self? {
-        let lines = text.components(separatedBy: .newlines)
-        var people: [InterviewPerson] = []
-        var techStack: [String] = []
-        var nextSteps: [String] = []
-        var section: InterviewSection = .none
-        var name: String?
-        var role = ""
-        var background: [String] = []
-        var interviewFocus = ""
-
-        func flushPerson() {
-            guard let name, !name.isEmpty, !role.isEmpty, !interviewFocus.isEmpty else { return }
-            people.append(.init(name: name, role: role, background: Array(background.prefix(3)), interviewFocus: interviewFocus))
-        }
-
-        for index in lines.indices {
-            let raw = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !raw.isEmpty else { continue }
-            let text = cleanedInterviewLine(raw)
-            let lower = text.lowercased()
-
-            if lower.contains("tech stack") {
-                flushPerson()
-                name = nil
-                role = ""
-                background = []
-                interviewFocus = ""
-                section = .techStack
-                continue
-            }
-            if lower.hasPrefix("want me to") || lower.hasPrefix("next steps") {
-                flushPerson()
-                name = nil
-                role = ""
-                background = []
-                interviewFocus = ""
-                section = .nextSteps
-                continue
-            }
-            if looksLikeInterviewPersonHeading(raw, at: index, in: lines) {
-                flushPerson()
-                name = text
-                role = ""
-                background = []
-                interviewFocus = ""
-                section = .none
-                continue
-            }
-            if lower.hasPrefix("role:") {
-                role = String(text.dropFirst("Role:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-                section = .none
-                continue
-            }
-            if lower.hasPrefix("background:") {
-                let detail = String(text.dropFirst("Background:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !detail.isEmpty { background.append(detail) }
-                section = .background
-                continue
-            }
-            if lower.hasPrefix("likely interview focus:") {
-                interviewFocus = String(text.dropFirst("Likely interview focus:".count))
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                section = .none
-                continue
-            }
-
-            guard raw.hasPrefix("-") || raw.hasPrefix("•") || raw.hasPrefix("*") else { continue }
-            switch section {
-            case .background where name != nil:
-                background.append(text)
-            case .techStack:
-                techStack.append(text)
-            case .nextSteps:
-                nextSteps.append(text)
-            default:
-                break
-            }
-        }
-        flushPerson()
-
-        let distinctPeople = people.reduce(into: [InterviewPerson]()) { collected, person in
-            if !collected.contains(where: { $0.id == person.id }) { collected.append(person) }
-        }
-        guard distinctPeople.count >= 2 else { return nil }
-        return .interviewPrep(
-            title: "Interview prep",
-            people: Array(distinctPeople.prefix(4)),
-            techStack: Array(techStack.prefix(4)),
-            nextSteps: Array(nextSteps.prefix(3))
-        )
-    }
-
-    private static func interviewPrepSignalCount(in lower: String) -> Int {
-        let normalized = lower
-            .replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "__", with: "")
-        return min(
-            normalized.components(separatedBy: "role:").count - 1,
-            normalized.components(separatedBy: "likely interview focus:").count - 1
-        )
-    }
-
-    private static func cleanedInterviewLine(_ value: String) -> String {
-        var value = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        while value.hasPrefix("#") { value.removeFirst() }
-        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.hasPrefix("- ") { value.removeFirst(2) }
-        else if value.hasPrefix("•") { value.removeFirst() }
-        else if value.hasPrefix("* ") { value.removeFirst(2) }
-        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value
-            .replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "__", with: "")
+    private static func isWeatherCardDetail(_ label: String) -> Bool {
+        let normalized = label
+            .lowercased()
+            .replacingOccurrences(of: "’", with: "'")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized != "source",
+              !normalized.contains("current weather"),
+              !normalized.hasPrefix("here's the weather") else { return false }
+        // A metric names itself in a word or three — "Wind", "Rain chance",
+        // "Dew point". A sentence cut at its first colon does not: "For your
+        // 11:00 Zoom meeting: ideal indoor conditions" would otherwise become a
+        // row labelled "For your 11", which is prose broken in half rather than
+        // a fact. That sentence belongs to the reply, and stays there.
+        let words = normalized.split(separator: " ")
+        return (1...3).contains(words.count)
+            && normalized.rangeOfCharacter(from: .decimalDigits) == nil
+            && !prosaicDetailOpeners.contains(String(words[0]))
     }
 
-    private static func looksLikeInterviewPersonHeading(_ raw: String, at index: Int, in lines: [String]) -> Bool {
-        guard !raw.hasPrefix("-") && !raw.hasPrefix("•") else { return false }
-        let candidate = cleanedInterviewLine(raw)
-        guard !candidate.contains(":"), candidate.count <= 60, !candidate.isEmpty else { return false }
-        let end = min(lines.count, index + 5)
-        return lines[(index + 1)..<end].contains { $0.lowercased().contains("role:") }
-    }
-
-    private static func inferredAgenda(_ text: String, lower: String) -> Self? {
-        guard ["calendar", "agenda", "schedule", "today"].contains(where: lower.contains) else { return nil }
-        let pattern = #"(?m)^\s*(?:[-•*]|\d+\.)?\s*(\d{1,2}(?::\d{2})?\s?(?:a\.?m\.?|p\.?m\.?)?(?:\s*[–-]\s*\d{1,2}(?::\d{2})?\s?(?:a\.?m\.?|p\.?m\.?)?)?)\s*(?:[—–:-]\s*|\s{2,})(.{3,90})$"#
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
-        let range = NSRange(text.startIndex..., in: text)
-        let items = expression.matches(in: text, range: range).compactMap { match -> AgendaItem? in
-            guard let timeRange = Range(match.range(at: 1), in: text),
-                  let titleRange = Range(match.range(at: 2), in: text) else { return nil }
-            let rawTitle = String(text[titleRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-            let components = rawTitle.split(separator: "·", maxSplits: 1).map(String.init)
-            return .init(
-                time: String(text[timeRange]).uppercased(),
-                title: components[0],
-                detail: components.count > 1 ? components[1] : ""
-            )
-        }
-        guard !items.isEmpty else { return nil }
-        return .agenda(title: lower.contains("today") ? "Today" : "Your schedule", subtitle: "What is lined up", items: Array(items.prefix(6)))
-    }
-
-    private static func inferredWeather(_ text: String, lower: String) -> [Self] {
-        let weatherTerms = ["weather", "forecast", "sunny", "cloudy", "rain", "snow", "wind", "humidity"]
-        guard weatherTerms.contains(where: lower.contains) else { return [] }
-        guard let reading = weatherReading(in: text) else { return [] }
-        // An answer for one day often arrives as that day's arc — morning,
-        // afternoon, evening — with no single headline reading. The daytime
-        // part is what the question was about, so it, not whichever reading
-        // happens to come first in the text, sets the card's headline.
-        let dayParts = daytimeWeatherParts(in: text)
-        let temperature = weatherField(named: "temperature", in: text)
-            ?? dayParts.lazy.compactMap({ weatherReading(in: $0.value) }).first
-            ?? reading
-        let condition = weatherCondition(in: text, preferring: dayParts) ?? "Current conditions"
-        let location = weatherLocation(in: text)
-
-        // A forecast answer names each day it covers; deal every day its own
-        // card so a "Palo Alto this weekend" question reads as a Saturday card
-        // and a Sunday card instead of one today-flavored tile. Most answers
-        // set a day apart with its own heading and list that day's readings
-        // underneath, so those sections are the first place to look.
-        let sections = weatherDaySections(in: text)
-        if !sections.isEmpty {
-            return sections.map { section -> Self in
-                let sectionParts = daytimeWeatherParts(in: section.text)
-                return .weather(
-                    location: location ?? "Forecast",
-                    temperature: weatherField(named: "temperature", in: section.text)
-                        ?? sectionParts.lazy.compactMap({ weatherReading(in: $0.value) }).first
-                        ?? weatherReading(in: section.text)
-                        ?? temperature,
-                    condition: weatherCondition(in: section.text, preferring: sectionParts) ?? condition,
-                    details: [WeatherDetail(label: "Day", value: section.day)]
-                        + weatherDetails(in: section.text)
-                )
-            }
-        }
-
-        let details = weatherDetails(in: text)
-        let days = WeatherPresentation.split(details).days
-        guard !days.isEmpty else {
-            return [
-                .weather(
-                    location: location ?? "Right now",
-                    temperature: temperature,
-                    condition: condition,
-                    details: details
-                )
-            ]
-        }
-        return days.map { day in
-            .weather(
-                location: location ?? "Forecast",
-                temperature: forecastTemperature(in: day.facts) ?? temperature,
-                condition: forecastCondition(in: day.facts) ?? condition,
-                details: [WeatherDetail(label: "Day", value: day.day)] + day.facts
-            )
-        }
-    }
-
-    private struct WeatherDaySection {
-        let day: String
-        let text: String
-    }
-
-    private static let weatherDayHeadingExpression = try? NSRegularExpression(
-        pattern: #"^[^\p{L}\p{N}]*(?:\d+[.)][^\p{L}\p{N}]*)?"#
-            + #"(saturday|sunday|monday|tuesday|wednesday|thursday|friday"#
-            + #"|sat|sun|mon|tue|tues|wed|thu|thur|thurs|fri|today|tomorrow|tonight)"#
-            + #"\b[\s,:–—-]*"#
-            + #"(?:\(?\s*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*\d{1,2}(?:st|nd|rd|th)?\s*\)?"#
-            + #"|\(?\s*\d{1,2}\s*[/.-]\s*\d{1,2}\s*\)?)?"#
-            + #"[\s):,.–—_#-]*$"#,
-        options: [.caseInsensitive]
-    )
-
-    /// A multi-day answer sets each day apart with its own heading —
-    /// "**Saturday (August 29)**" — and lists that day's readings underneath.
-    /// Splitting on those headings is what lets a weekend question answer with
-    /// a Saturday card and a Sunday card instead of one merged tile.
-    private static func weatherDaySections(in text: String) -> [WeatherDaySection] {
-        var sections: [(day: String, lines: [String])] = []
-        for line in text.components(separatedBy: .newlines) {
-            if let day = weatherDayHeading(line) {
-                sections.append((day: day, lines: []))
-            } else if !sections.isEmpty {
-                sections[sections.count - 1].lines.append(line)
-            }
-        }
-        // A passing mention ("Monday looks wetter") is not a forecast day: a
-        // section earns its own card only when it carries a reading of its own.
-        return sections.compactMap { section -> WeatherDaySection? in
-            let body = section.lines.joined(separator: "\n")
-            guard weatherReading(in: body) != nil || !weatherDetails(in: body).isEmpty else {
-                return nil
-            }
-            return WeatherDaySection(day: section.day, text: body)
-        }
-    }
-
-    /// A heading names its day and nothing else. "**Saturday:** Sunny, 16–23°C"
-    /// carries the day's forecast on the same line, so it stays a labeled
-    /// detail rather than opening a section.
-    private static func weatherDayHeading(_ line: String) -> String? {
-        guard let expression = weatherDayHeadingExpression else { return nil }
-        let plain = line
-            .replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "__", with: "")
-        guard let match = expression.firstMatch(in: plain, range: NSRange(plain.startIndex..., in: plain)),
-              let dayRange = Range(match.range(at: 1), in: plain) else { return nil }
-        return String(plain[dayRange]).capitalized
-    }
-
-    /// The first temperature in the text, keeping a parenthetical second unit
-    /// ("22°C (72°F)") so the card can show whichever one the device reads in.
-    private static func weatherReading(in text: String) -> String? {
-        let unit = #"(-?\d{1,3})\s*[°º]?\s*([CF])\b"#
-        let pattern = #"(?<!\d)"# + unit + #"(?:\s*\(\s*"# + unit + #"\s*\))?"#
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let value = Range(match.range(at: 1), in: text),
-              let symbol = Range(match.range(at: 2), in: text) else { return nil }
-        let primary = "\(text[value])°\(text[symbol].uppercased())"
-        guard let pairedValue = Range(match.range(at: 3), in: text),
-              let pairedSymbol = Range(match.range(at: 4), in: text) else { return primary }
-        return "\(primary) (\(text[pairedValue])°\(text[pairedSymbol].uppercased()))"
-    }
-
-    /// The sky, never a metric. An explicit `Conditions:` field wins, then the
-    /// phrase beside the reading ("22°C (72°F), partly cloudy"), and only then
-    /// a bare keyword — scanned over text with probability phrasing removed so
-    /// a dry day's "Rain chance: 0%" cannot report the card as rain.
-    private static func weatherCondition(
-        in text: String,
-        preferring parts: [WeatherDetail] = []
-    ) -> String? {
-        if let field = weatherField(named: "conditions", in: text) { return field }
-        // "Afternoon: Sunny, 21°C" states the sky for the part of the day the
-        // card is reporting; a keyword swept from the rest of the answer does
-        // not, and has no business overruling it.
-        if let part = forecastCondition(in: parts) { return part }
-        if let beside = conditionBesideReading(in: text) { return beside }
-        let scan = conditionScanText(text)
-        return ["rain", "snow", "cloud", "sun", "wind", "fog", "storm"]
-            .first(where: scan.contains)
-            .map { $0 == "sun" ? "Sunny" : $0.capitalized }
-    }
-
-    private static func conditionBesideReading(in text: String) -> String? {
-        for line in text.components(separatedBy: .newlines) {
-            let plain = line
-                .replacingOccurrences(of: "**", with: "")
-                .replacingOccurrences(of: "__", with: "")
-            guard weatherReading(in: plain) != nil else { continue }
-            for phrase in plain.components(separatedBy: CharacterSet(charactersIn: ",;—–")) {
-                if let condition = conditionPhrase(phrase) { return condition }
-            }
-        }
-        return nil
-    }
-
-    /// A sky phrase carries letters and no measurement: "partly cloudy" is one,
-    /// "22°C (72°F)", "10 km/h" and "Rain chance: 0%" are not.
-    private static func conditionPhrase(_ phrase: String) -> String? {
-        let trimmed = phrase.trimmingCharacters(in: CharacterSet(charactersIn: " \t*_•·-.()"))
-        guard !trimmed.isEmpty,
-              !trimmed.contains(":"),
-              trimmed.rangeOfCharacter(from: .letters) != nil,
-              trimmed.rangeOfCharacter(from: .decimalDigits) == nil,
-              !trimmed.contains("°"), !trimmed.contains("º"), !trimmed.contains("%"),
-              !weatherMetricLabels.contains(trimmed.lowercased()) else { return nil }
-        return trimmed.capitalized
-    }
-
-    private static let weatherMetricLabels: Set<String> = [
-        "temperature", "conditions", "wind", "humidity", "rain chance", "feels like",
-        "visibility", "pressure", "uv index", "dew point", "source", "updated",
+    /// A row that opens like a sentence is a sentence. These are the words an
+    /// aside starts with, never the first word of a weather metric.
+    private static let prosaicDetailOpeners: Set<String> = [
+        "a", "also", "and", "as", "at", "because", "but", "by", "for", "given", "heads",
+        "if", "in", "note", "on", "one", "overall", "plus", "recommendation", "reminder",
+        "since", "so", "the", "tip", "to", "want", "what", "when", "with", "you", "your",
     ]
-
-    /// "Rain chance: 0%" is a metric and "no rain" is a reassurance — neither
-    /// describes the sky. Drop that phrasing before a bare keyword decides the
-    /// card's condition and its symbol.
-    private static func conditionScanText(_ text: String) -> String {
-        var scan = text.lowercased().replacingOccurrences(of: "**", with: "")
-        for phrase in [
-            "rain chance", "chance of rain", "rain probability", "probability of rain",
-            "precipitation chance", "chance of precipitation", "chance of showers",
-            "no rain", "without rain", "rain-free", "rain free",
-            "wind chill", "wind speed", "wind gusts", "wind:",
-        ] {
-            scan = scan.replacingOccurrences(of: phrase, with: " ")
-        }
-        return scan
-    }
-
-    /// The day's own reading ("16–23°C") becomes its card's big number; without
-    /// one, the answer's headline temperature carries over.
-    private static func forecastTemperature(in facts: [WeatherDetail]) -> String? {
-        let pattern = #"-?\d{1,3}(?:\s*[–-]\s*-?\d{1,3})?\s*[°º]\s*[CF]"#
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
-        for fact in facts {
-            let range = NSRange(fact.value.startIndex..., in: fact.value)
-            guard let match = expression.firstMatch(in: fact.value, range: range),
-                  let valueRange = Range(match.range, in: fact.value) else { continue }
-            return String(fact.value[valueRange])
-        }
-        return nil
-    }
-
-    /// The first phrase that is not a measurement ("Sunny, 16–23°C" or
-    /// "16–23°C, clear") names the day's sky for the card headline and symbol.
-    private static func forecastCondition(in facts: [WeatherDetail]) -> String? {
-        for fact in facts {
-            for phrase in fact.value.replacingOccurrences(of: "**", with: "").components(separatedBy: ",") {
-                let trimmed = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty,
-                      trimmed.rangeOfCharacter(from: .letters) != nil,
-                      !trimmed.contains("°"),
-                      !trimmed.contains("%") else { continue }
-                return trimmed.capitalized
-            }
-        }
-        return nil
-    }
-
-    /// One day's answer is often written as that day's arc rather than as a
-    /// single reading. Each part is a fact the card can show on its own row.
-    private static let weatherDayPartFields: [(label: String, names: [String])] = [
-        ("Morning", ["morning"]),
-        ("Midday", ["midday", "noon"]),
-        ("Afternoon", ["afternoon"]),
-        ("Evening", ["evening"]),
-        ("Overnight", ["overnight", "tonight", "night"]),
-    ]
-
-    /// The day's parts, daylight first: "how will the weather be" is a question
-    /// about the day itself, so the afternoon speaks for it, then midday, then
-    /// the morning. Evening and overnight answer only for an answer that
-    /// covers nothing else.
-    private static func daytimeWeatherParts(in text: String) -> [WeatherDetail] {
-        ["Afternoon", "Midday", "Morning", "Evening", "Overnight"].compactMap { label -> WeatherDetail? in
-            guard let field = weatherDayPartFields.first(where: { $0.label == label }),
-                  let value = field.names.lazy.compactMap({ weatherField(named: $0, in: text) }).first
-            else { return nil }
-            return WeatherDetail(label: field.label, value: value)
-        }
-    }
-
-    /// Keep weather measurements in the structured surface, while leaving
-    /// conversational boilerplate and provenance out of the card.
-    private static func weatherDetails(in text: String) -> [WeatherDetail] {
-        let fields: [(label: String, names: [String])] = weatherDayPartFields + [
-            ("Today", ["today's range", "today’s range"]),
-            ("Wind", ["wind"]),
-            ("Humidity", ["humidity"]),
-            ("Rain chance", ["rain chance", "precipitation chance"]),
-            ("Feels like", ["feels like"]),
-            ("Visibility", ["visibility"]),
-            ("UV index", ["uv index", "uv"]),
-            ("Pressure", ["pressure"]),
-            ("Updated", ["as of"]),
-        ]
-        let knownDetails: [WeatherDetail] = fields.compactMap { field in
-            guard let value = field.names.lazy.compactMap({ weatherField(named: $0, in: text) }).first else {
-                return nil
-            }
-            return WeatherDetail(label: field.label, value: value)
-        }
-        return knownDetails + markdownWeatherDetails(
-            in: text,
-            excluding: Set(knownDetails.map { $0.label.lowercased() })
-                .union(fields.flatMap(\.names).map { $0.lowercased() })
-                .union(["temperature", "conditions"])
-        )
-    }
 
     /// New cards carry an explicit list of weather metrics. Older server
     /// cards remain useful by promoting their range and one legacy detail.
@@ -2032,243 +1534,6 @@ enum MessageResponseCard: Identifiable {
                   !label.isEmpty, !value.isEmpty else { return nil }
             return .init(label: label, value: value)
         }
-    }
-
-    /// Names the place the answer is about: "the weather for Palo Alto", "the
-    /// weekend weather forecast for Palo Alto", "the forecast in Tokyo". A
-    /// parenthetical aside after the place ends the name, as a colon does.
-    private static func weatherLocation(in text: String) -> String? {
-        let pattern = #"(?i)\b(?:weather|forecast)(?:\s+(?:forecast|report|outlook|conditions|update))?"#
-            + #"\s+(?:for|in|at|near|around)\s+(.+?)(?:\s+as\s+of\b|[\r\n:(]|$)"#
-        let named = firstCapture(of: pattern, in: text).map {
-            cleanedLocation($0.replacingOccurrences(
-                of: #"(?i)^you\s+in\s+"#, with: "", options: .regularExpression
-            ))
-        }
-        // "San Francisco weather for Thu Aug 27, 2026" answers "for what day",
-        // not "for where". A date in the headline slot would name neither.
-        if let named, !isDateLike(named) { return locationWithoutTimeframe(named) }
-        if let before = placeBeforeWeatherWord(in: text) { return locationWithoutTimeframe(before) }
-        return nil
-    }
-
-    /// The place can lead the sentence instead of following the word:
-    /// "San Francisco weather for Thu Aug 27" names it before "weather".
-    private static func placeBeforeWeatherWord(in text: String) -> String? {
-        let pattern = #"([\p{Lu}][\p{L}.'’-]*(?:[ -][\p{Lu}][\p{L}.'’-]*)*(?:,\s*[\p{Lu}][\p{L}.]*)?)"#
-            + #"\s+(?:weather|forecast)\b"#
-        return firstCapture(of: pattern, in: text).map { cleanedLocation($0) }
-    }
-
-    /// A weekday, a month and day, or a bare number is a date, and a date is
-    /// never the place a forecast is about.
-    private static func isDateLike(_ value: String) -> Bool {
-        let pattern = #"(?i)^(?:(?:mon|tues?|wed(?:nes)?|thur?s?|fri|sat(?:ur)?|sun)(?:day)?\b"#
-            + #"|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*\d"#
-            + #"|today\b|tomorrow\b|tonight\b|\d)"#
-        return value.range(of: pattern, options: .regularExpression) != nil
-    }
-
-    private static func cleanedLocation(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "**", with: "")
-            .trimmingCharacters(in: CharacterSet(charactersIn: " \t*_,.–—-"))
-    }
-
-    private static func firstCapture(of pattern: String, in text: String) -> String? {
-        guard let expression = try? NSRegularExpression(pattern: pattern),
-              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let range = Range(match.range(at: 1), in: text) else { return nil }
-        return String(text[range])
-    }
-
-    /// Each card already stamps the day it describes, so "Palo Alto this
-    /// weekend" in the headline would say the same thing twice.
-    private static func locationWithoutTimeframe(_ location: String) -> String? {
-        let pattern = #"(?i)[\s,]*\b(?:this|the|next|coming|over\s+the)?\s*"#
-            + #"(?:weekend|week|morning|afternoon|evening|night|tonight|today|tomorrow"#
-            + #"|right\s+now|now|saturday|sunday|monday|tuesday|wednesday|thursday|friday)\b[\s.,]*$"#
-        var trimmed = location
-        if let expression = try? NSRegularExpression(pattern: pattern) {
-            // Twice covers a stacked qualifier such as "Palo Alto this weekend".
-            for _ in 0..<2 {
-                let range = NSRange(trimmed.startIndex..., in: trimmed)
-                guard let match = expression.firstMatch(in: trimmed, range: range),
-                      let matchRange = Range(match.range, in: trimmed),
-                      !matchRange.isEmpty else { break }
-                trimmed.removeSubrange(matchRange)
-            }
-        }
-        trimmed = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: " \t,.–—-"))
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    /// Preserves less-common metrics such as cloud cover or dew point without
-    /// requiring the app to be updated for every weather provider field.
-    private static func markdownWeatherDetails(in text: String, excluding labels: Set<String>) -> [WeatherDetail] {
-        var details: [WeatherDetail] = []
-        for line in text.components(separatedBy: .newlines) where line.contains("**") {
-            guard let colon = line.firstIndex(of: ":"),
-                  let firstLetter = line[..<colon].firstIndex(where: { $0.isLetter }) else { continue }
-            let label = String(line[firstLetter..<colon])
-                .replacingOccurrences(of: "**", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let normalized = label.lowercased()
-            let value = String(line[line.index(after: colon)...])
-                .replacingOccurrences(of: "**", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !label.isEmpty, !value.isEmpty,
-                  !labels.contains(normalized),
-                  isWeatherCardDetail(label) else { continue }
-            details.append(.init(label: label, value: value))
-        }
-        return details
-    }
-
-    private static func isWeatherCardDetail(_ label: String) -> Bool {
-        let normalized = label
-            .lowercased()
-            .replacingOccurrences(of: "’", with: "'")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized != "source",
-              !normalized.contains("current weather"),
-              !normalized.hasPrefix("here's the weather") else { return false }
-        // A metric names itself in a word or three — "Wind", "Rain chance",
-        // "Dew point". A sentence cut at its first colon does not: "For your
-        // 11:00 Zoom meeting: ideal indoor conditions" would otherwise become a
-        // row labelled "For your 11", which is prose broken in half rather than
-        // a fact. That sentence belongs to the reply, and stays there.
-        let words = normalized.split(separator: " ")
-        return (1...3).contains(words.count)
-            && normalized.rangeOfCharacter(from: .decimalDigits) == nil
-            && !prosaicDetailOpeners.contains(String(words[0]))
-    }
-
-    /// A row that opens like a sentence is a sentence. These are the words an
-    /// aside starts with, never the first word of a weather metric.
-    private static let prosaicDetailOpeners: Set<String> = [
-        "a", "also", "and", "as", "at", "because", "but", "by", "for", "given", "heads",
-        "if", "in", "note", "on", "one", "overall", "plus", "recommendation", "reminder",
-        "since", "so", "the", "tip", "to", "want", "what", "when", "with", "you", "your",
-    ]
-
-    /// Finds a labeled Markdown field in a conventional assistant response,
-    /// such as `- **Conditions:** Partly cloudy`. The detail itself stays in
-    /// Markdown so the card renderer can preserve its inline emphasis.
-    private static func weatherField(named name: String, in text: String) -> String? {
-        if name == "as of" {
-            let timestampPattern = #"(?i)\bas\s+of\s+(\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)(?:\s+[A-Z]{2,5})?)"#
-            guard let expression = try? NSRegularExpression(pattern: timestampPattern),
-                  let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-                  let valueRange = Range(match.range(at: 1), in: text) else { return nil }
-            return String(text[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        let pattern = #"(?im)\b\*{0,2}"# + NSRegularExpression.escapedPattern(for: name) + #"\*{0,2}\s*:\s*([^\r\n]+)"#
-        guard let expression = try? NSRegularExpression(pattern: pattern),
-              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let valueRange = Range(match.range(at: 1), in: text) else { return nil }
-        var value = String(text[valueRange])
-            .replacingOccurrences(of: "**", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if name == "source" {
-            value = value.trimmingCharacters(in: CharacterSet(charactersIn: "() "))
-        }
-        return value.isEmpty ? nil : value
-    }
-
-    private static func inferredDuration(_ text: String, lower: String) -> Self? {
-        guard ["take", "takes", "estimate", "estimated", "roughly", "about"].contains(where: lower.contains) else { return nil }
-        guard let span = durationSpan(in: text) else { return nil }
-        return .duration(
-            title: "Time estimate",
-            duration: span,
-            // The prose stays on screen under this card, so a sentence of
-            // generic reassurance would only take up room. The one line worth
-            // lifting is the instruction a bare number can't carry.
-            detail: departureNote(in: text),
-            confidence: nil
-        )
-    }
-
-    private static let durationUnit = #"(?:minutes?|mins?|hours?|hrs?|days?)"#
-
-    /// One quantity, including the compound form: "45 minutes", "1.5 hours",
-    /// "1 hour 15 minutes", "1 hour and 15 minutes".
-    private static let durationQuantity =
-        #"\d+(?:\.\d+)?\s*"# + durationUnit
-            + #"(?:\s*(?:and\s+)?\d+(?:\.\d+)?\s*"# + durationUnit + #")?"#
-
-    /// The estimate as the answer states it. An estimate is usually a range,
-    /// and taking only the first number turned "1 hour 15 minutes to 1 hour 30
-    /// minutes" into a flatly wrong "1 hour". The alternatives are ordered so
-    /// the fullest reading of the same position wins: a two-sided range first,
-    /// then a range sharing one unit, then a lone quantity.
-    private static func durationSpan(in text: String) -> String? {
-        let connector = #"\s*(?:to|through|–|—|-)\s*"#
-        let number = #"\d+(?:\.\d+)?"#
-        let pattern = "(?:(\(durationQuantity))\(connector)(\(durationQuantity))"
-            + "|(\(number))\(connector)(\(number))\\s*(\(durationUnit))"
-            + "|(\(durationQuantity)))"
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else {
-            return nil
-        }
-        func capture(_ index: Int) -> String? {
-            Range(match.range(at: index), in: text).map { String(text[$0]) }
-        }
-        if let low = capture(1), let high = capture(2) {
-            return "\(compactDuration(low)) – \(compactDuration(high))"
-        }
-        if let low = capture(3), let high = capture(4), let unit = capture(5) {
-            // A shared unit reads as one quantity — "45–60 min" — the way a
-            // temperature range does elsewhere in these cards.
-            return "\(low)–\(high) \(compactDuration(unit))"
-        }
-        return capture(6).map(compactDuration)
-    }
-
-    /// Card values are read at a glance, and "1 hour 15 minutes to 1 hour 30
-    /// minutes" spills over three lines at this type size. Units abbreviate;
-    /// the numbers the answer gave never change.
-    private static func compactDuration(_ value: String) -> String {
-        var compacted = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        for (pattern, replacement) in [
-            (#"\s+and\s+"#, " "),
-            (#"\b(?:hours?|hrs?)\b"#, "hr"),
-            (#"\b(?:minutes?|mins?)\b"#, "min"),
-            (#"\s+"#, " "),
-        ] {
-            compacted = compacted.replacingOccurrences(
-                of: pattern,
-                with: replacement,
-                options: [.regularExpression, .caseInsensitive]
-            )
-        }
-        return compacted.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// "Plan to head out around 2:45 PM" is the part of a travel-time answer
-    /// that gets acted on, so the card keeps it next to the estimate. The
-    /// answer's own hedge is preserved: "around" never becomes "by".
-    private static func departureNote(in text: String) -> String? {
-        let pattern = #"\b(?:leave|leaving|head\s+out|heading\s+out|depart|departing|set\s+off|get\s+going)\b"#
-            + #"[^.\r\n]{0,28}?\b(at|around|by|before)?\s*"#
-            + #"(\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?)"#
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let timeRange = Range(match.range(at: 2), in: text) else { return nil }
-        let qualifier = Range(match.range(at: 1), in: text)
-            .map { String(text[$0]).lowercased() }
-            // An unqualified time is the answer's own approximation, not a
-            // deadline it did not state.
-            ?? "around"
-        // "2:45 pm", "2:45 p.m." and "2:45PM" all belong on a card as "2:45 PM".
-        let time = String(text[timeRange])
-            .replacingOccurrences(of: #"(?i)\s*([ap])\.?m\.?"#, with: " $1m", options: .regularExpression)
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .uppercased()
-        return "Leave \(qualifier) \(time)"
     }
 }
 
@@ -2540,8 +1805,6 @@ struct RichResponseCards: View {
                 weatherCard(location: location, temperature: temperature, condition: condition, details: details)
             case let .duration(title, duration, detail, confidence):
                 durationCard(title: title, duration: duration, detail: detail, confidence: confidence)
-            case let .interviewPrep(title, people, techStack, nextSteps):
-                interviewPrepCard(title: title, people: people, techStack: techStack, nextSteps: nextSteps)
             case let .reminder(_, title, schedule, nextFires, enabled):
                 reminderCard(title: title, schedule: schedule, nextFires: nextFires, enabled: enabled)
             case let .emails(_, title, query, mailbox, complete, estimate, messages):
@@ -3004,120 +2267,6 @@ struct RichResponseCards: View {
             }
         }
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
-    }
-
-    private func interviewPrepCard(
-        title: String,
-        people: [MessageResponseCard.InterviewPerson],
-        techStack: [String],
-        nextSteps: [String]
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 15) {
-            resultHeader(
-                title: title,
-                subtitle: "People research, organized for your conversation",
-                countLabel: "\(people.count) people"
-            )
-
-            VStack(spacing: 0) {
-                ForEach(people) { person in
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "person.crop.circle.fill")
-                                .font(.system(size: 20, weight: .medium))
-                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                                .frame(width: 30, height: 30)
-                                .background(
-                                    AssistantTheme.accent(for: colorScheme).opacity(0.11),
-                                    in: Circle()
-                                )
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(person.name)
-                                    .font(.subheadline.weight(.bold))
-                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                                Text(AssistantMarkdown.inlineAttributed(person.role))
-                                    .font(.caption)
-                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                    .multilineTextAlignment(.leading)
-                            }
-                            Spacer(minLength: 0)
-                        }
-
-                        if !person.background.isEmpty {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Background")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                ForEach(person.background.indices, id: \.self) { index in
-                                    interviewBullet(person.background[index])
-                                }
-                            }
-                        }
-
-                        HStack(alignment: .top, spacing: 7) {
-                            Image(systemName: "target")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                                .frame(width: 16)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Interview focus")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                Text(AssistantMarkdown.inlineAttributed(person.interviewFocus))
-                                    .font(.caption)
-                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                                    .multilineTextAlignment(.leading)
-                            }
-                        }
-                    }
-                    .padding(.vertical, person.id == people.first?.id ? 0 : 15)
-
-                    if person.id != people.last?.id {
-                        Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
-                    }
-                }
-            }
-
-            if !techStack.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Tech stack", systemImage: "square.stack.3d.up.fill")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    AssistantFlowLayout(spacing: 6) {
-                        ForEach(techStack.indices, id: \.self) { index in
-                            Text(techStack[index])
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 7)
-                                .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
-                        }
-                    }
-                }
-                .padding(.top, 2)
-            }
-
-            if !nextSteps.isEmpty {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("Next steps")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    ForEach(nextSteps.indices, id: \.self) { index in
-                        HStack(alignment: .firstTextBaseline, spacing: 7) {
-                            Image(systemName: "arrow.right.circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                            Text(AssistantMarkdown.inlineAttributed(nextSteps[index]))
-                                .font(.caption)
-                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                                .multilineTextAlignment(.leading)
-                        }
-                    }
-                }
-                .padding(.top, 2)
-            }
-        }
-        .resultCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast)
     }
 
     private func interviewBullet(_ text: String) -> some View {
