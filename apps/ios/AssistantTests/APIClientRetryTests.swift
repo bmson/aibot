@@ -1088,3 +1088,50 @@ final class APIClientRetryTests: XCTestCase {
         XCTAssertEqual(error.errorDescription, "You appear to be offline.")
     }
 }
+
+extension APIClientRetryTests {
+    @MainActor
+    func testFocusedRingPlacesEveryNeighbourApartAndNamesThemAll() throws {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 393, height: 470))
+        let graph = RelationshipGraphFixture.snapshot(count: 200).focused(on: "node-4")
+        let size = RelationshipGraphSnapshot.focusPageSize
+        XCTAssertEqual(graph.nodes.count, size + 1, "A full page is the centre plus one ring")
+        view.configure(snapshot: graph, selectedID: "node-4", focusOnly: false, dark: false,
+                       reduceMotion: false, centeredID: "node-4")
+        view.layoutIfNeeded()
+        let placed = Dictionary(uniqueKeysWithValues: zip(view.layout.ids, view.layout.positions))
+        XCTAssertEqual(placed["node-4"], .zero, "The item in hand holds the centre")
+        let spokes = graph.nodes.dropFirst().compactMap { placed[$0.id] }
+        XCTAssertEqual(spokes.count, size)
+        // The four fixed corner slots this replaced wrapped with `% 4`, so a
+        // fifth and sixth neighbour were drawn on top of the first and second.
+        for (index, spoke) in spokes.enumerated() {
+            for other in spokes.dropFirst(index + 1) {
+                XCTAssertGreaterThan(hypot(spoke.x - other.x, spoke.y - other.y), 80)
+            }
+            XCTAssertGreaterThan(hypot(spoke.x, spoke.y), 80, "No spoke sits on the centre")
+        }
+    }
+
+    @MainActor
+    func testOverviewNamesItsBiggestHubRatherThanNothing() throws {
+        // A real graph never fits above the zoom the old label gate required,
+        // so it arrived as two hundred anonymous dots with nowhere to start.
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 393, height: 470))
+        let graph = RelationshipGraphFixture.snapshot(count: 200)
+        view.configure(snapshot: graph, selectedID: nil, focusOnly: false, dark: false, reduceMotion: false)
+        view.layoutIfNeeded()
+        XCTAssertLessThan(view.viewport.scale, 0.5, "This fixture only fits well below the old gate")
+        _ = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        }
+        let named = view.namedNodeIDs
+        XCTAssertFalse(named.isEmpty, "An overview that names nothing gives the owner nowhere to start")
+        // node-0 and node-2 carry the fixture's edges, so they are its hubs;
+        // the centre of a star is exactly the dot every side of which is
+        // contested, and exactly the one worth naming.
+        XCTAssertTrue(named.contains("node-0"), "The biggest hub is named even where the canvas is busiest")
+        XCTAssertLessThanOrEqual(named.count, 20, "Names stay rationed rather than covering the map")
+        XCTAssertTrue(named.isSubset(of: Set(graph.nodes.map(\.id))))
+    }
+}

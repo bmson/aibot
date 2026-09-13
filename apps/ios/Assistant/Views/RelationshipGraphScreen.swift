@@ -36,7 +36,8 @@ struct RelationshipGraphScreen: View {
     private var selected: RelationshipGraphNode? { graph.nodes.first { $0.id == selectedID } }
     private var center: RelationshipGraphNode? { graph.nodes.first { $0.id == centerID } }
     private var neighbors: [RelationshipGraphNode] { centerID.map { graph.directNeighbors(of: $0, peopleOnly: peopleOnly) } ?? [] }
-    private var pageCount: Int { max(1, (neighbors.count + 3) / 4) }
+    private var pageSize: Int { RelationshipGraphSnapshot.focusPageSize }
+    private var pageCount: Int { max(1, (neighbors.count + pageSize - 1) / pageSize) }
     private var visible: RelationshipGraphSnapshot {
         if let centerID { return graph.focused(on: centerID, page: page, peopleOnly: peopleOnly) }
         return peopleOnly ? graph.showing(Set(graph.nodes.filter { $0.kind == "person" }.map(\.id))) : graph
@@ -212,7 +213,7 @@ struct RelationshipGraphScreen: View {
                 Text("Connections to \(center.label)").font(.headline).lineLimit(2)
                 if usesList { Text("\(neighbors.count) connected items").font(.caption).foregroundStyle(.secondary) }
                 else { HStack {
-                    Text(neighbors.isEmpty ? "No connections loaded" : "\(min(page, pageCount - 1) * 4 + 1)–\(min((min(page, pageCount - 1) + 1) * 4, neighbors.count)) of \(neighbors.count) connected items")
+                    Text(neighbors.isEmpty ? "No connections loaded" : "\(min(page, pageCount - 1) * pageSize + 1)–\(min((min(page, pageCount - 1) + 1) * pageSize, neighbors.count)) of \(neighbors.count) connected items")
                     Spacer()
                     if pageCount > 1 {
                         Button("Previous connections", systemImage: "chevron.left") { changePage(-1) }.disabled(page == 0)

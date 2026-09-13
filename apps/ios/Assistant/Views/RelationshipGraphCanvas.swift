@@ -40,6 +40,29 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         return UIFontMetrics(forTextStyle: .caption1).scaledFont(for: base, maximumPointSize: size * 2)
     }
 
+    /// Where the nth of `count` neighbours sits around the item in hand.
+    ///
+    /// An ellipse taller than it is wide, because a phone canvas is taller
+    /// than it is wide and a name is wider than it is tall. Spreading the
+    /// spokes vertically gives each name its own horizontal band, which is
+    /// what lets six be drawn where four fixed corners used to be the limit —
+    /// past four, the old slot list wrapped and drew neighbours on top of each
+    /// other. A lone neighbour goes straight above, where its name has the
+    /// whole width of the canvas.
+    static func focusSlot(_ index: Int, of count: Int) -> CGPoint {
+        guard count > 1 else { return CGPoint(x: 0, y: -175) }
+        let angle = -CGFloat.pi / 2 + CGFloat(index) * 2 * .pi / CGFloat(count)
+        return CGPoint(x: cos(angle) * 125, y: sin(angle) * 185)
+    }
+
+    /// Which nodes the last paint actually put a name on.
+    ///
+    /// The canvas has far more nodes than room for names, so which ones get
+    /// one is a real decision with a real failure mode — an overview where
+    /// nothing is named. Recording it is what lets that be asserted; reading
+    /// pixels back out of a CGContext would not say which name was missing.
+    private(set) var namedNodeIDs: Set<String> = []
+
     private(set) var layout = RelationshipGraphLayout()
     private(set) var viewport = GraphViewport()
     private var nodes: [RelationshipGraphNode] = []
@@ -105,9 +128,8 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             if let centeredID, newFocus || changedItems {
                 layout.move(id: centeredID, to: .zero)
                 let others = nodes.filter { $0.id != centeredID }
-                let slots = [CGPoint(x: -115, y: -130), CGPoint(x: 115, y: -130), CGPoint(x: -115, y: 130), CGPoint(x: 115, y: 130)]
                 for (index, node) in others.enumerated() {
-                    layout.move(id: node.id, to: slots[index % slots.count])
+                    layout.move(id: node.id, to: Self.focusSlot(index, of: others.count))
                 }
                 if !bounds.isEmpty { fit(); needsInitialFit = false }
             } else if centeredID == nil && (!existing || newFocus) {
@@ -246,6 +268,10 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
                 context.addPath(UIBezierPath(roundedRect: area, cornerRadius: 28).cgPath); context.fillPath()
             }
         }
+        // Claimed by the direction arrows and relationship phrases below, so
+        // the node names placed afterwards can steer clear of both.
+        var arrowBounds: [CGRect] = []
+        var edgeLabelBounds: [CGRect] = []
         for link in links {
             guard let a = positions[link.a], let b = positions[link.b] else { continue }
             let highlighted = selectedID == link.a || selectedID == link.b
@@ -265,15 +291,29 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
                 context.addLine(to: arrow)
                 context.addLine(to: CGPoint(x: arrow.x - cos(angle + 0.5) * 7, y: arrow.y - sin(angle + 0.5) * 7))
                 context.strokePath()
+                // The head is drawn before any name and nothing told the name
+                // placement it was there, so a label could be laid straight
+                // over it — a name with an arrow through it. Claiming the
+                // space here lets that placement pick another side.
+                arrowBounds.append(CGRect(x: arrow.x - 9, y: arrow.y - 9, width: 18, height: 18))
             }
             if centeredID != nil, let label = edgeLabels[link] {
                 let text = label as NSString
                 let attributes: [NSAttributedString.Key: Any] = [.font: Self.scaledFont(11), .foregroundColor: ink.withAlphaComponent(0.75)]
                 let size = text.size(withAttributes: attributes)
-                let box = CGRect(x: (start.x + end.x - min(105, size.width)) / 2, y: (start.y + end.y - size.height) / 2,
+                // Two thirds of the way out from the centre rather than at the
+                // midpoint. Every spoke shares the same centre, so midpoint
+                // phrases all crowd into one small disc around it — and the
+                // near-vertical ones land on the centre's own name. Further
+                // out they fan apart with the spokes that carry them.
+                let hub = link.a == centeredID ? start : end
+                let rim = link.a == centeredID ? end : start
+                let anchor = CGPoint(x: hub.x + (rim.x - hub.x) * 0.66, y: hub.y + (rim.y - hub.y) * 0.66)
+                let box = CGRect(x: anchor.x - min(105, size.width) / 2, y: anchor.y - size.height / 2,
                                  width: min(105, size.width), height: size.height)
                 canvas.setFill(); context.fill(box.insetBy(dx: -4, dy: -3))
                 text.draw(with: box, options: [.truncatesLastVisibleLine], attributes: attributes, context: nil)
+                edgeLabelBounds.append(box.insetBy(dx: -4, dy: -3))
             }
         }
         context.setLineDash(phase: 0, lengths: [])
@@ -284,7 +324,34 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             return CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
         }
         var occupiedLabels: [CGRect] = []
-        let orderedNodes = nodes.sorted { ($0.id == selectedID ? 0 : neighbors.contains($0.id) ? 1 : 2) < ($1.id == selectedID ? 0 : neighbors.contains($1.id) ? 1 : 2) }
+        // Names are handed out in this order, and the canvas runs out of room
+        // long before it runs out of nodes — so the order decides which names
+        // the owner gets. Whatever is selected first, then its neighbours,
+        // then the biggest hubs, which are the landmarks an overview is read
+        // by. Ordering by the node array instead meant a two-hundred-item map
+        // named whichever items the response happened to list first.
+        let selection = selectedID
+        let related = neighbors
+        let rank = { (node: RelationshipGraphNode) in
+            node.id == selection ? 0 : related.contains(node.id) ? 1 : 2
+        }
+        let orderedNodes = nodes.sorted {
+            rank($0) != rank($1) ? rank($0) < rank($1)
+                : (degrees[$0.id] ?? 0) != (degrees[$1.id] ?? 0)
+                    ? (degrees[$0.id] ?? 0) > (degrees[$1.id] ?? 0)
+                    : $0.id < $1.id
+        }
+        // A ration for the whole-graph view. Collision alone would still let
+        // the sparse rim fill with names while the crowded middle — where the
+        // hubs are — stayed anonymous, and a map wearing forty names is not
+        // one anybody reads.
+        var overviewNamesLeft = 18
+        var named: Set<String> = []
+        // Every dot before any name. Drawing a node's dot and its name together
+        // meant the names went down interleaved with the dots, and the most
+        // important name — the hub's, placed first because it ranks first —
+        // spent the rest of the pass being painted over by the two hundred dots
+        // drawn after it.
         for node in orderedNodes {
             guard let position = positions[node.id], !focusOnly || selectedID == nil || neighbors.contains(node.id) else { continue }
             let point = viewport.screen(position, size: bounds.size)
@@ -299,7 +366,26 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             }
             context.setFillColor(tint.withAlphaComponent(relevant ? 1 : 0.22).cgColor)
             context.fillEllipse(in: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
-            guard centeredID != nil || selected || neighbors.contains(node.id) || (selectedID == nil && (viewport.scale > 0.5 || nodes.count < 35)) else { continue }
+        }
+        for (place, node) in orderedNodes.enumerated() {
+            guard let position = positions[node.id], !focusOnly || selectedID == nil || neighbors.contains(node.id) else { continue }
+            let point = viewport.screen(position, size: bounds.size)
+            guard bounds.insetBy(dx: -100, dy: -50).contains(point) else { continue }
+            let selected = node.id == selectedID
+            let relevant = centeredID != nil || selectedID == nil || neighbors.contains(node.id)
+            let radius: CGFloat = selected ? 11 : min(9, 4 + sqrt(CGFloat(degrees[node.id] ?? 0)))
+            // The overview used to name everything above one zoom level and
+            // nothing below it, so a real graph — which never fits above that
+            // zoom — arrived as two hundred anonymous dots with nowhere to
+            // start. It now always names something: the ration above, spent on
+            // the hubs first, placed only where the collision test says there
+            // is room.
+            let alwaysNamed = centeredID != nil || selected || neighbors.contains(node.id)
+            // A name for a dot that is itself off the edge would have to be
+            // dragged back on screen to be read, which separates it from the
+            // thing it names. Only a visible dot gets one.
+            let onCanvas = bounds.insetBy(dx: 2, dy: 2).contains(point)
+            guard alwaysNamed || (overviewNamesLeft > 0 && onCanvas) else { continue }
             let text = node.label as NSString
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: Self.scaledFont(
@@ -312,19 +398,59 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             let width = max(1, min(centeredID == nil ? 150 : 125, measured.width))
             let labelHeight = centeredID == nil ? measured.height : min(2, ceil(measured.width / width)) * measured.height
             let labelRadius = max(10, radius)
+            // Slid back inside the canvas rather than allowed to run past it:
+            // a name cut off by the edge reads as a rendering fault, and every
+            // candidate here is close enough to its dot to survive the nudge.
+            // Clamping before the crowding test means that test judges where
+            // the name will actually land.
+            func inside(_ rect: CGRect) -> CGRect {
+                var shifted = rect
+                shifted.origin.x = min(max(4, rect.origin.x), max(4, bounds.width - rect.width - 4))
+                shifted.origin.y = min(max(2, rect.origin.y), max(2, bounds.height - rect.height - 2))
+                return shifted
+            }
             let candidates = [
                 CGRect(x: point.x - width / 2, y: point.y + labelRadius + 7, width: width, height: labelHeight),
                 CGRect(x: point.x - width / 2, y: point.y - labelRadius - 7 - labelHeight, width: width, height: labelHeight),
                 CGRect(x: point.x + labelRadius + 8, y: point.y - labelHeight / 2, width: width, height: labelHeight),
-            ]
-            let clearLabel = candidates.first { candidate in
-                !(nodeBounds + occupiedLabels).contains { $0.intersects(candidate.insetBy(dx: -3, dy: -2)) }
+                CGRect(x: point.x - labelRadius - 8 - width, y: point.y - labelHeight / 2, width: width, height: labelHeight),
+            ].map(inside)
+            let taken = nodeBounds + occupiedLabels + arrowBounds + edgeLabelBounds
+            func crowding(_ candidate: CGRect) -> CGFloat {
+                let padded = candidate.insetBy(dx: -3, dy: -2)
+                return taken.reduce(0) { total, other in
+                    let overlap = other.intersection(padded)
+                    return overlap.isNull ? total : total + overlap.width * overlap.height
+                }
             }
-            guard let label = clearLabel ?? (selected ? candidates.first : nil) else { continue }
+            let clearLabel = candidates.first { crowding($0) == 0 }
+            // On a focused map every spoke was opened to be read, so a name is
+            // never dropped there: if all four sides are contested it takes the
+            // least contested one. Only the whole-graph overview, where an
+            // unnamed dot is still a legible dot, leaves one out.
+            // The biggest hubs are what an overview is navigated by, so the
+            // three most connected take the least contested side rather than
+            // going unnamed — the centre of a star graph is exactly the dot
+            // whose every side is contested, and exactly the one worth naming.
+            let mustName = selected || centeredID != nil || (selectedID == nil && place < 3)
+            let fallback = mustName ? candidates.min(by: { crowding($0) < crowding($1) }) : nil
+            guard let label = clearLabel ?? fallback else { continue }
+            // Spent only on a name that was actually drawn: charging the
+            // ration for one the collision test then dropped would quietly
+            // shrink the overview back towards silence.
+            if !alwaysNamed { overviewNamesLeft -= 1 }
+            named.insert(node.id)
             occupiedLabels.append(label)
-            canvas.withAlphaComponent(0.88).setFill(); context.fill(label.insetBy(dx: -2, dy: -1))
+            // Opaque, not the 0.88 this used to be. The placement search
+            // avoids dots and other names but knows nothing about the lines
+            // between them, and on a hub-and-spoke graph almost every clear
+            // patch still has a line crossing it — which showed through as a
+            // stroke drawn across the middle of the word.
+            canvas.setFill()
+            context.fill(label.insetBy(dx: -2, dy: -1))
             text.draw(with: label, options: [.truncatesLastVisibleLine, .usesLineFragmentOrigin], attributes: attributes, context: nil)
         }
+        namedNodeIDs = named
     }
     static func tint(for kind: String) -> UIColor {
         switch kind { case "place": .systemTeal; case "organization": .systemIndigo; case "project": .systemOrange; default: .systemPink }

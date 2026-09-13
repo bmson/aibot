@@ -2343,9 +2343,13 @@ extension APIModelsTests {
         let neighbors = graph.directNeighbors(of: "node-4")
         XCTAssertGreaterThan(neighbors.count, 180)
         var seen = Set<String>()
-        for page in 0..<((neighbors.count + 3) / 4) {
+        // Read the page size rather than restating it: the canvas decides how
+        // many spokes it can draw, and a test that hardcodes the number stops
+        // proving the pages tile the neighbours the moment that changes.
+        let size = RelationshipGraphSnapshot.focusPageSize
+        for page in 0..<((neighbors.count + size - 1) / size) {
             let focused = graph.focused(on: "node-4", page: page)
-            XCTAssertLessThanOrEqual(focused.nodes.count, 5)
+            XCTAssertLessThanOrEqual(focused.nodes.count, size + 1)
             XCTAssertEqual(focused.nodes.first?.id, "node-4")
             for node in focused.nodes.dropFirst() { XCTAssertTrue(seen.insert(node.id).inserted) }
             for edge in focused.edges {
@@ -2357,7 +2361,7 @@ extension APIModelsTests {
         let firstPage = graph.focused(on: "node-4").nodes.map(\.id)
         graph.nodes.reverse(); graph.edges.reverse()
         XCTAssertEqual(graph.focused(on: "node-4").nodes.map(\.id), firstPage)
-        XCTAssertLessThanOrEqual(graph.focused(on: "node-4", page: 999).nodes.count, 5)
+        XCTAssertLessThanOrEqual(graph.focused(on: "node-4", page: 999).nodes.count, size + 1)
         XCTAssertTrue(graph.focused(on: "missing").nodes.isEmpty)
         XCTAssertTrue(graph.focused(on: "node-4", peopleOnly: true).nodes.allSatisfy { $0.kind == "person" })
         let isolated = RelationshipGraphSnapshot(nodes: [graph.nodes[0]], edges: [], totalEdges: 0, truncated: true, focusId: nil)

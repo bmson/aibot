@@ -106,7 +106,16 @@ extension RelationshipGraphSnapshot {
         }
     }
 
-    func focused(on id: String, page: Int = 0, pageSize: Int = 4, peopleOnly: Bool = false) -> Self {
+    /// How many neighbours one focused page draws.
+    ///
+    /// Four was not a readability limit; it was the number of fixed corner
+    /// slots the canvas had, and a fifth neighbour was drawn on top of the
+    /// first. With the spokes placed around an ellipse instead, six fit with
+    /// their names clear of each other, which halves the paging on a busy
+    /// person. The searchable list remains the way to reach the rest.
+    static let focusPageSize = 6
+
+    func focused(on id: String, page: Int = 0, pageSize: Int = focusPageSize, peopleOnly: Bool = false) -> Self {
         guard let center = nodes.first(where: { $0.id == id }) else { return .empty }
         let neighbors = directNeighbors(of: id, peopleOnly: peopleOnly)
         let size = max(1, pageSize)
