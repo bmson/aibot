@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { type CommitmentRow, commitments, conversations, type Db, messages } from '@assistant/db';
+import { commitments, conversations, type Db, messages } from '@assistant/db';
+import {
+  isOwnerContextRepository,
+  type OwnerCommitment,
+  type OwnerContextRepository,
+} from '@assistant/persistence';
 import { and, desc, eq, gte, inArray, lt, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ModelRouter } from '../model-router/router.js';
@@ -213,24 +218,27 @@ export async function extractCommitments(
 }
 
 export async function listOpenCommitments(
-  db: Db,
+  store: Db | OwnerContextRepository,
   args: { agentId: string; query?: string; limit?: number; now?: Date },
-): Promise<CommitmentRow[]> {
+): Promise<OwnerCommitment[]> {
   const now = args.now ?? new Date();
-  const rows = await db
-    .select()
-    .from(commitments)
-    .where(
-      and(
-        eq(commitments.agentId, args.agentId),
-        or(
-          eq(commitments.status, 'open'),
-          and(eq(commitments.status, 'snoozed'), lt(commitments.snoozedUntil, now)),
-        ),
-      ),
-    )
-    .orderBy(desc(commitments.updatedAt))
-    .limit(Math.min(args.limit ?? 40, 60));
+  const candidateLimit = Math.min(args.limit ?? 40, 60);
+  const rows = isOwnerContextRepository(store)
+    ? await store.listOpenCommitments({ agentId: args.agentId, now, limit: candidateLimit })
+    : await store
+        .select()
+        .from(commitments)
+        .where(
+          and(
+            eq(commitments.agentId, args.agentId),
+            or(
+              eq(commitments.status, 'open'),
+              and(eq(commitments.status, 'snoozed'), lt(commitments.snoozedUntil, now)),
+            ),
+          ),
+        )
+        .orderBy(desc(commitments.updatedAt))
+        .limit(candidateLimit);
   const terms = (args.query ?? '')
     .toLowerCase()
     .split(/\s+/)
@@ -249,7 +257,7 @@ export async function listOpenCommitments(
   return scored.slice(0, args.limit ?? 8).map((entry) => entry.row);
 }
 
-export function renderOpenCommitments(rows: CommitmentRow[], maxChars = 1400): string {
+export function renderOpenCommitments(rows: OwnerCommitment[], maxChars = 1400): string {
   if (!rows.length) return '';
   const lines = rows.slice(0, 8).map((row) => {
     const due = row.dueAt ? ` (due ${row.dueAt.toISOString().slice(0, 10)})` : '';

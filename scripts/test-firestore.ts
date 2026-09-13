@@ -23,6 +23,7 @@ const child = spawn(
     'apps/agent/src/firestore-model-routing.test.ts',
     'apps/agent/src/firestore-runtime-smoke.test.ts',
     'apps/agent/src/firestore-executor.test.ts',
+    'apps/agent/src/firestore-chat.test.ts',
     'packages/tools/src/dispatcher.firestore.test.ts',
     ...process.argv.slice(2),
   ],

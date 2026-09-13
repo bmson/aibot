@@ -1,4 +1,5 @@
 import type { AgentRow, TaskRow } from '@assistant/db';
+import type { TaskLease, TaskRepository } from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
 import { describe, expect, it, vi } from 'vitest';
 import type { ModelRouter } from '../model-router/router.js';
@@ -86,6 +87,38 @@ describe('conceptual intent gate', () => {
 
     expect(object).not.toHaveBeenCalled();
     expect(result).toMatchObject({ action: 'reply', steps: [], missingInfo: [] });
+  });
+
+  it('uses lease-fenced repository persistence and stops when the lease is lost', async () => {
+    const persistPlan = vi.fn(async () => false);
+    const lease = { id: 'task-conceptual-lease', agentId: 'agent' } as TaskLease;
+    const result = await planTask(
+      { db: {} as never, router: {} as ModelRouter },
+      { id: lease.id, agentId: lease.agentId, type: 'chat_turn', trust: 'owner' } as TaskRow,
+      { name: 'AI Bot' } as AgentRow,
+      [{ role: 'user', content: 'Prepare interview questions' }] as ModelMessage[],
+      { repository: { persistPlan } as unknown as TaskRepository, lease },
+    );
+
+    expect(persistPlan).toHaveBeenCalledWith(lease, expect.objectContaining({ action: 'reply' }));
+    expect(result).toBeNull();
+  });
+
+  it('refuses to write a plan with a lease belonging to another task', async () => {
+    const persistPlan = vi.fn(async () => true);
+    await expect(
+      planTask(
+        { db: {} as never, router: {} as ModelRouter },
+        { id: 'task', agentId: 'agent', type: 'chat_turn', trust: 'owner' } as TaskRow,
+        { name: 'AI Bot' } as AgentRow,
+        [{ role: 'user', content: 'Prepare interview questions' }],
+        {
+          repository: { persistPlan } as unknown as TaskRepository,
+          lease: { id: 'another-task', agentId: 'agent' } as TaskLease,
+        },
+      ),
+    ).rejects.toThrow('does not match');
+    expect(persistPlan).not.toHaveBeenCalled();
   });
 });
 

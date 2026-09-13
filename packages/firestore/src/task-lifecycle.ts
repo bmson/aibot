@@ -29,6 +29,9 @@ export class FirestoreTaskRepository
   createTask(input: TaskCreateInput) {
     return createTask(this.store, input);
   }
+  async persistPlan(task: TaskLease, plan: unknown) {
+    return Boolean(await this.change(task.id, () => ({ plan }), task));
+  }
   private async change(
     id: string,
     update: (task: Task, now: Date) => Partial<Task> | null,
@@ -42,7 +45,8 @@ export class FirestoreTaskRepository
       const now = this.store.now();
       if (
         lease &&
-        (row.status !== 'running' ||
+        (row.agentId !== lease.agentId ||
+          row.status !== 'running' ||
           !lease.leaseToken ||
           row.leaseToken !== lease.leaseToken ||
           !row.lockedUntil ||

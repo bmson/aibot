@@ -262,7 +262,9 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   const useForcedToolFallback = role !== 'reason';
   const privilegedTask = task.trust === 'owner' || task.trust === 'assistant';
   const ownerCard =
-    privilegedTask && !readRequest && !state.untrustedContext ? await getOwnerCard(db) : undefined;
+    privilegedTask && !readRequest && !state.untrustedContext
+      ? await getOwnerCard(deps.persistence?.ownerContext ?? db, agent.id)
+      : undefined;
 
   // Ambient "right now" context (Phase 25): the fused location + weather block
   // (falls back to location-only when the snapshot is stale). Owner-private and
@@ -270,7 +272,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   let ambientBlock: string | undefined;
   if (privilegedTask && !readRequest && !state.untrustedContext) {
     try {
-      ambientBlock = await getAmbientBlock(db, agent.id);
+      ambientBlock = await getAmbientBlock(deps.persistence?.ownerContext ?? db, agent.id);
     } catch (err) {
       console.error('ambient lookup failed — continuing without it', err);
     }
@@ -381,7 +383,11 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       const query = typeof lastUser?.content === 'string' ? lastUser.content : '';
       openLoops =
         renderOpenCommitments(
-          await listOpenCommitments(db, { agentId: agent.id, query, limit: 6 }),
+          await listOpenCommitments(deps.persistence?.ownerContext ?? db, {
+            agentId: agent.id,
+            query,
+            limit: 6,
+          }),
         ) || undefined;
     } catch (err) {
       console.error('executor open-loop context failed — continuing without it', err);
@@ -410,13 +416,19 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       .trim();
     if (skillQuery) {
       try {
-        const found = await recallSkills(db, router, agent.id, skillQuery, {
-          taskId: task.id,
-        });
+        const found = await recallSkills(
+          deps.persistence?.skills ?? db,
+          router,
+          agent.id,
+          skillQuery,
+          {
+            taskId: task.id,
+          },
+        );
         if (found.length > 0) {
           skillsBlock = renderSkillsBlock(found);
           state.usedSkillIds = found.map((skill) => skill.id);
-          await bumpSkillUse(db, state.usedSkillIds);
+          await bumpSkillUse(deps.persistence?.skills ?? db, state.usedSkillIds, agent.id);
         }
       } catch (err) {
         console.error('skill recall failed — continuing without it', err);

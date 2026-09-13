@@ -1,5 +1,6 @@
 import type { AgentRow, Db, TaskRow } from '@assistant/db';
 import { tasks } from '@assistant/db';
+import type { TaskLease, TaskRepository } from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -163,6 +164,29 @@ export function normalizePersonalReadPlan(plan: Plan, request: PersonalReadReque
   };
 }
 
+interface PlanTaskOptions {
+  tainted?: boolean;
+  /** Optional lease-fenced persistence for executor-owned planning. */
+  repository?: TaskRepository;
+  lease?: TaskLease;
+}
+
+async function persistPlan(
+  deps: { db: Db },
+  task: TaskRow,
+  plan: Plan,
+  opts: PlanTaskOptions,
+): Promise<boolean> {
+  if (opts.repository) {
+    if (!opts.lease) throw new Error('A task lease is required for repository plan persistence');
+    if (opts.lease.id !== task.id || opts.lease.agentId !== task.agentId)
+      throw new Error('Planner task does not match its persistence lease');
+    return opts.repository.persistPlan(opts.lease, plan);
+  }
+  await deps.db.update(tasks).set({ plan }).where(eq(tasks.id, task.id));
+  return true;
+}
+
 /**
  * The planner step. Trivial owner chat short-circuits via the cheap classify
  * role (a planner call on every "thanks!" would double cost and latency).
@@ -174,7 +198,7 @@ export async function planTask(
   task: TaskRow,
   agent: AgentRow,
   window: ModelMessage[],
-  opts: { tainted?: boolean } = {},
+  opts: PlanTaskOptions = {},
 ): Promise<Plan | null> {
   const contextText = plannerContext(window);
   const latestOwnerText = [...window].reverse().find((message) => message.role === 'user');
@@ -188,8 +212,7 @@ export async function planTask(
       steps: [],
       missingInfo: [],
     };
-    await deps.db.update(tasks).set({ plan }).where(eq(tasks.id, task.id));
-    return plan;
+    return (await persistPlan(deps, task, plan, opts)) ? plan : null;
   }
   // Forced private-account reads are an owner capability. Applying this route
   // to external or assistant-generated tasks could disclose private calendar
@@ -204,8 +227,7 @@ export async function planTask(
       { action: 'workflow', reasoning: '', steps: [], missingInfo: [] },
       readRequest,
     );
-    await deps.db.update(tasks).set({ plan }).where(eq(tasks.id, task.id));
-    return plan;
+    return (await persistPlan(deps, task, plan, opts)) ? plan : null;
   }
 
   // Only owner chat/SMS short-circuit as trivial. Email deliberately does NOT:
@@ -245,6 +267,5 @@ export async function planTask(
   if (!planned.ok) return null;
 
   const plan = normalizePersonalReadPlan(PlanSchema.parse(planned.object), readRequest);
-  await deps.db.update(tasks).set({ plan }).where(eq(tasks.id, task.id));
-  return plan;
+  return (await persistPlan(deps, task, plan, opts)) ? plan : null;
 }

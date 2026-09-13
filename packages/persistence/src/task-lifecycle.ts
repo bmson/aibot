@@ -15,6 +15,8 @@ export interface TaskWake {
 }
 export interface TaskRepository extends TaskLeaseRepository {
   createTask(input: TaskCreateInput): Promise<TaskCreateResult>;
+  /** Persist planner output only while the supplied running lease is current. */
+  persistPlan(task: TaskLease, plan: unknown): Promise<boolean>;
   parkForApproval(
     task: TaskLease,
     state: Record<string, unknown>,

@@ -1,5 +1,13 @@
 import { type Db, type SkillRow, skills } from '@assistant/db';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import {
+  DEFAULT_SKILL_RECALL_LIMIT,
+  type LearnedSkill,
+  MIN_SKILL_RECALL_SIMILARITY,
+  type SkillContextRepository,
+  skillRecallBounds,
+  validateSkillEmbedding,
+} from '@assistant/persistence';
+import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { ModelRouter } from '../model-router/router.js';
 
 /**
@@ -10,9 +18,6 @@ import type { ModelRouter } from '../model-router/router.js';
  */
 
 const MAX_SKILL_CHARS = 4000;
-const RECALL_LIMIT = 4;
-const RECALL_MIN_SIMILARITY = 0.72;
-
 /** The text a skill is embedded on — the whole procedure, so recall matches intent. */
 function skillText(s: {
   name: string;
@@ -105,32 +110,83 @@ export async function saveSkill(
   return { saved: !existing, skill: row };
 }
 
+function isSkillContextRepository(
+  value: Db | SkillContextRepository,
+): value is SkillContextRepository {
+  return 'kind' in value && value.kind === 'skill-context-repository';
+}
+
 /** Top-k active skills semantically relevant to a query, for injection into planning. */
-export async function recallSkills(
-  db: Db,
+export function recallSkills(
+  storage: Db,
   router: ModelRouter,
   agentId: string,
   queryText: string,
-  opts: { limit?: number; taskId?: string } = {},
-): Promise<SkillRow[]> {
+  opts?: { limit?: number; minSimilarity?: number; taskId?: string },
+): Promise<SkillRow[]>;
+export function recallSkills(
+  storage: SkillContextRepository,
+  router: ModelRouter,
+  agentId: string,
+  queryText: string,
+  opts?: { limit?: number; minSimilarity?: number; taskId?: string },
+): Promise<LearnedSkill[]>;
+export function recallSkills(
+  storage: Db | SkillContextRepository,
+  router: ModelRouter,
+  agentId: string,
+  queryText: string,
+  opts?: { limit?: number; minSimilarity?: number; taskId?: string },
+): Promise<Array<SkillRow | LearnedSkill>>;
+export async function recallSkills(
+  storage: Db | SkillContextRepository,
+  router: ModelRouter,
+  agentId: string,
+  queryText: string,
+  opts: { limit?: number; minSimilarity?: number; taskId?: string } = {},
+): Promise<Array<SkillRow | LearnedSkill>> {
   const text = queryText.trim();
   if (!text) return [];
+  const { limit, minSimilarity } = skillRecallBounds({
+    limit: opts.limit ?? DEFAULT_SKILL_RECALL_LIMIT,
+    minSimilarity: opts.minSimilarity ?? MIN_SKILL_RECALL_SIMILARITY,
+  });
   const [embedding] = await router.embed([text.slice(0, 2000)], { taskId: opts.taskId });
-  const vec = JSON.stringify(embedding);
-  const rows = await db
+  const queryEmbedding = embedding ?? [];
+  validateSkillEmbedding(queryEmbedding);
+  if (isSkillContextRepository(storage)) {
+    const matches = await storage.recall({
+      agentId,
+      embedding: queryEmbedding,
+      limit,
+      minSimilarity,
+    });
+    return matches.map((match) => match.skill);
+  }
+  const vec = JSON.stringify(queryEmbedding);
+  const rows = await storage
     .select({
       skill: skills,
       similarity: sql<number>`1 - (${skills.embedding} <=> ${vec}::vector)`,
     })
     .from(skills)
-    .where(and(eq(skills.agentId, agentId), eq(skills.deprecated, false)))
-    .orderBy(sql`${skills.embedding} <=> ${vec}::vector`)
-    .limit(opts.limit ?? RECALL_LIMIT);
-  return rows.filter((r) => r.similarity >= RECALL_MIN_SIMILARITY).map((r) => r.skill);
+    .where(
+      and(
+        eq(skills.agentId, agentId),
+        eq(skills.deprecated, false),
+        isNotNull(skills.embedding),
+        sql`1 - (${skills.embedding} <=> ${vec}::vector) >= ${minSimilarity}`,
+      ),
+    )
+    .orderBy(sql`${skills.embedding} <=> ${vec}::vector`, asc(skills.id))
+    .limit(limit);
+  return rows.map((row) => row.skill);
 }
 
 /** Render retrieved skills as an advice block for the system prompt. */
-export function renderSkillsBlock(rows: SkillRow[]): string {
+export function renderSkillsBlock(
+  rows: Array<Pick<SkillRow, 'name' | 'preconditions' | 'steps' | 'gotchas'>>,
+): string {
   if (rows.length === 0) return '';
   const items = rows.map((s) =>
     [
@@ -194,9 +250,29 @@ export async function setSkillDeprecated(db: Db, id: string, deprecated: boolean
 }
 
 /** Count a retrieval (the skill was put in front of the model for a task). */
-export async function bumpSkillUse(db: Db, ids: string[]): Promise<void> {
+export function bumpSkillUse(db: Db, ids: string[]): Promise<void>;
+export function bumpSkillUse(
+  repository: SkillContextRepository,
+  ids: string[],
+  agentId: string,
+): Promise<void>;
+export function bumpSkillUse(
+  storage: Db | SkillContextRepository,
+  ids: string[],
+  agentId?: string,
+): Promise<void>;
+export async function bumpSkillUse(
+  storage: Db | SkillContextRepository,
+  ids: string[],
+  agentId?: string,
+): Promise<void> {
   if (ids.length === 0) return;
-  await db
+  if (isSkillContextRepository(storage)) {
+    if (!agentId) throw new Error('Skill use requires an owner agent ID');
+    await storage.bumpUse({ agentId, ids });
+    return;
+  }
+  await storage
     .update(skills)
     .set({ useCount: sql`${skills.useCount} + 1` })
     .where(inArray(skills.id, ids));
@@ -206,8 +282,31 @@ export async function bumpSkillUse(db: Db, ids: string[]): Promise<void> {
  * Record whether a task that used a skill succeeded. On a run of failures the
  * skill is auto-deprecated (reflection revises or the owner deletes it).
  */
-export async function recordSkillOutcome(db: Db, id: string, success: boolean): Promise<void> {
-  await db
+export function recordSkillOutcome(db: Db, id: string, success: boolean): Promise<void>;
+export function recordSkillOutcome(
+  repository: SkillContextRepository,
+  id: string,
+  success: boolean,
+  agentId: string,
+): Promise<void>;
+export function recordSkillOutcome(
+  storage: Db | SkillContextRepository,
+  id: string,
+  success: boolean,
+  agentId?: string,
+): Promise<void>;
+export async function recordSkillOutcome(
+  storage: Db | SkillContextRepository,
+  id: string,
+  success: boolean,
+  agentId?: string,
+): Promise<void> {
+  if (isSkillContextRepository(storage)) {
+    if (!agentId) throw new Error('Skill outcome requires an owner agent ID');
+    await storage.recordOutcome({ agentId, id, success });
+    return;
+  }
+  await storage
     .update(skills)
     .set(
       success

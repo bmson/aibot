@@ -1,4 +1,5 @@
 import { type AmbientSnapshotRow, ambientSnapshots, type Db } from '@assistant/db';
+import { isOwnerContextRepository, type OwnerContextRepository } from '@assistant/persistence';
 import { eq } from 'drizzle-orm';
 import { loadConfig } from '../config.js';
 import { withSpan } from '../otel.js';
@@ -569,19 +570,23 @@ export async function refreshAmbientSnapshot(
  * line (Phase 15) rather than serving old weather — never blocks on the network.
  */
 export async function getAmbientBlock(
-  db: Db,
+  store: Db | OwnerContextRepository,
   agentId: string,
   opts: { now?: Date; ttlMinutes?: number } = {},
 ): Promise<string | undefined> {
   const now = opts.now ?? new Date();
   const ttl = (opts.ttlMinutes ?? AMBIENT_TTL_MINUTES) * 60_000;
-  const [snap] = await db
-    .select()
-    .from(ambientSnapshots)
-    .where(eq(ambientSnapshots.agentId, agentId))
-    .limit(1);
+  const snap = isOwnerContextRepository(store)
+    ? await store.getAmbientSnapshot(agentId)
+    : (
+        await store
+          .select()
+          .from(ambientSnapshots)
+          .where(eq(ambientSnapshots.agentId, agentId))
+          .limit(1)
+      )[0];
   const ping = await latestLocation(
-    db,
+    store,
     agentId,
     loadConfig().LOCATION_RETENTION_DAYS,
     undefined,

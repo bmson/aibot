@@ -27,7 +27,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
         db: unavailable as Db,
         router: unavailable as ExecutorDeps['router'],
         dispatcher: unavailable as ExecutorDeps['dispatcher'],
-        persistence: createFirestoreExecutionPersistence(store, 'agent'),
+        persistence: createFirestoreExecutionPersistence(store, 'agent', {
+          provider: 'synthetic',
+          model: 'recovery-fixture',
+          dimensions: 1536,
+          revision: '1',
+        }),
       };
       await store
         .doc('conversations', 'chat')

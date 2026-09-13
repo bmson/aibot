@@ -8,7 +8,12 @@ import { createFirestoreExecutionPersistence, type InstallationStore } from '@as
 export async function firestoreExecutorSmoke(store: InstallationStore) {
   const agentId = randomUUID();
   const conversationId = randomUUID();
-  const persistence = createFirestoreExecutionPersistence(store, agentId);
+  const persistence = createFirestoreExecutionPersistence(store, agentId, {
+    provider: 'synthetic',
+    model: 'recovery-fixture',
+    dimensions: 1536,
+    revision: '1',
+  });
   await store
     .doc('conversations', conversationId)
     .set({ id: conversationId, agentId, channel: 'chat' });
