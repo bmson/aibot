@@ -153,7 +153,14 @@ describe('code job end-to-end (integration, scripted model)', () => {
     expect(row?.status).toBe('sleeping');
     const pendingJob = (row?.state as { pendingJob?: { callbackTokenHash: string } } | undefined)
       ?.pendingJob;
-    expect(pendingJob?.callbackTokenHash).toBe(hashCallbackToken(launches[0]?.callbackToken ?? ''));
+    const expectedHash = hashCallbackToken(launches[0]?.callbackToken ?? '');
+    expect(pendingJob?.callbackTokenHash).toBe(expectedHash);
+    const [call] = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
+    expect(call?.status).toBe('succeeded');
+    expect(call?.result).toMatchObject({
+      pending: 'code_job_pending',
+      callbackToken: expectedHash,
+    });
 
     // Wrong token → 403, task untouched
     const bad = await recordCodeJobResult(db, {
@@ -212,5 +219,12 @@ describe('code job end-to-end (integration, scripted model)', () => {
     expect(launches).toHaveLength(1);
     // What launches is exactly the approved spec.
     expect(launches[0]?.spec).toEqual(networkSpec);
+    const expectedHash = hashCallbackToken(launches[0]?.callbackToken ?? '');
+    const [call] = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
+    expect(call?.status).toBe('succeeded');
+    expect(call?.result).toMatchObject({
+      pending: 'code_job_pending',
+      callbackToken: expectedHash,
+    });
   });
 });

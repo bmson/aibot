@@ -25,8 +25,14 @@ describe('foldOwnerRepliesSincePark', () => {
     return id;
   }
 
-  async function addOwnerMessage(conversationId: string, text: string, at: Date): Promise<void> {
+  async function addOwnerMessage(
+    conversationId: string,
+    text: string,
+    at: Date,
+    id?: string,
+  ): Promise<void> {
     await db.insert(messages).values({
+      id,
       conversationId,
       role: 'user',
       origin: 'owner',
@@ -36,8 +42,8 @@ describe('foldOwnerRepliesSincePark', () => {
     });
   }
 
-  const stateWith = (seenConversationAt?: string): TaskState =>
-    ({ seenConversationAt, contextWindow: [] }) as unknown as TaskState;
+  const stateWith = (seenConversationAt?: string, seenConversationId?: string): TaskState =>
+    ({ seenConversationAt, seenConversationId, contextWindow: [] }) as unknown as TaskState;
 
   beforeAll(async () => {
     db = createDb(DATABASE_URL);
@@ -63,9 +69,10 @@ describe('foldOwnerRepliesSincePark', () => {
     await addOwnerMessage(conversationId, 'seed message', new Date('2026-07-22T10:00:00Z'));
     const state = stateWith(undefined);
     const window: ModelMessage[] = [];
-    await foldOwnerRepliesSincePark(db, { conversationId } as TaskRow, state, window);
+    await foldOwnerRepliesSincePark(db, { agentId, conversationId } as TaskRow, state, window);
     expect(window).toHaveLength(0); // nothing folded — seed already holds it
     expect(state.seenConversationAt).toBe(new Date('2026-07-22T10:00:00Z').toISOString());
+    expect(state.seenConversationId).toBeTruthy();
   });
 
   it('folds an owner reply newer than the watermark and advances it', async () => {
@@ -74,16 +81,40 @@ describe('foldOwnerRepliesSincePark', () => {
     await addOwnerMessage(conversationId, 'actually make it Bob', new Date('2026-07-22T11:00:00Z'));
     const state = stateWith(new Date('2026-07-22T10:00:00Z').toISOString());
     const window: ModelMessage[] = [];
-    await foldOwnerRepliesSincePark(db, { conversationId } as TaskRow, state, window);
+    await foldOwnerRepliesSincePark(db, { agentId, conversationId } as TaskRow, state, window);
     expect(window).toHaveLength(1);
     expect(String(window[0]?.content)).toContain('actually make it Bob');
     expect(String(window[0]?.content)).toContain('while the task was paused');
     expect(state.seenConversationAt).toBe(new Date('2026-07-22T11:00:00Z').toISOString());
+    expect(state.seenConversationId).toBeTruthy();
 
     // Idempotent: a second fold with the advanced watermark appends nothing.
     const window2: ModelMessage[] = [];
-    await foldOwnerRepliesSincePark(db, { conversationId } as TaskRow, state, window2);
+    await foldOwnerRepliesSincePark(db, { agentId, conversationId } as TaskRow, state, window2);
     expect(window2).toHaveLength(0);
+  });
+
+  it('folds a later message ID at the same timestamp exactly once', async () => {
+    if (!dbUp) return;
+    const conversationId = await makeConversation('chat');
+    const at = new Date('2026-07-22T11:00:00Z');
+    const firstId = '00000000-0000-4000-8000-000000000001';
+    const secondId = '00000000-0000-4000-8000-000000000002';
+    await addOwnerMessage(conversationId, 'already seen', at, firstId);
+    await addOwnerMessage(conversationId, 'same-time correction', at, secondId);
+    const state = stateWith(at.toISOString(), firstId);
+    const window: ModelMessage[] = [];
+
+    await foldOwnerRepliesSincePark(db, { agentId, conversationId } as TaskRow, state, window);
+
+    expect(window.map((message) => String(message.content))).toEqual([
+      expect.stringContaining('same-time correction'),
+    ]);
+    expect(state.seenConversationAt).toBe(at.toISOString());
+    expect(state.seenConversationId).toBe(secondId);
+    const repeated: ModelMessage[] = [];
+    await foldOwnerRepliesSincePark(db, { agentId, conversationId } as TaskRow, state, repeated);
+    expect(repeated).toEqual([]);
   });
 
   it('never folds email-channel conversations (no third-party reinjection)', async () => {
@@ -92,7 +123,7 @@ describe('foldOwnerRepliesSincePark', () => {
     await addOwnerMessage(conversationId, 'a quoted forward', new Date('2026-07-22T11:00:00Z'));
     const state = stateWith(new Date('2026-07-22T10:00:00Z').toISOString());
     const window: ModelMessage[] = [];
-    await foldOwnerRepliesSincePark(db, { conversationId } as TaskRow, state, window);
+    await foldOwnerRepliesSincePark(db, { agentId, conversationId } as TaskRow, state, window);
     expect(window).toHaveLength(0);
     // The watermark is left untouched for a non-chat channel.
     expect(state.seenConversationAt).toBe(new Date('2026-07-22T10:00:00Z').toISOString());

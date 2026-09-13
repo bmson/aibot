@@ -33,6 +33,7 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
   const channels = deps.modules.channels;
   return {
     db: deps.db,
+    persistence: deps.persistence,
     router: deps.router,
     dispatcher: deps.dispatcher,
     workspace: deps.workspace,

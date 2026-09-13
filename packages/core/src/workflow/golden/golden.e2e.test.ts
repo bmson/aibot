@@ -293,22 +293,22 @@ describe('golden tasks', () => {
     const state = TaskStateSchema.parse({
       requestChecklist: buildRequestChecklist('Find my hotel and remind me'),
     });
-    await refreshRequestChecklist(db, current.id, state);
+    await refreshRequestChecklist(db, current, state);
     expect(state.requestChecklist?.items.map((item) => item.status)).toEqual([
       'pending',
       'awaiting_approval',
     ]);
     await db.update(approvals).set({ status: 'approved' }).where(eq(approvals.id, approval.id));
-    await refreshRequestChecklist(db, current.id, state);
+    await refreshRequestChecklist(db, current, state);
     expect(state.requestChecklist?.items[1]?.status).toBe('blocked');
     await db
       .update(toolCalls)
       .set({ status: 'succeeded', result: { reminderId: 'r1' } })
       .where(eq(toolCalls.id, call.id));
-    await refreshRequestChecklist(db, current.id, state);
+    await refreshRequestChecklist(db, current, state);
     expect(state.requestChecklist?.items[1]?.status).toBe('completed');
     await db.update(approvals).set({ status: 'denied' }).where(eq(approvals.id, approval.id));
-    await refreshRequestChecklist(db, current.id, state);
+    await refreshRequestChecklist(db, current, state);
     expect(state.requestChecklist?.items[1]?.status).toBe('blocked');
   });
 

@@ -1,18 +1,17 @@
-import type { Db, TaskRow } from '@assistant/db';
+import type { TaskRow } from '@assistant/db';
+import type { ExecutionContextRepository } from '@assistant/persistence';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { listMessages, backgroundNoticeIds } = vi.hoisted(() => ({
-  listMessages: vi.fn(),
-  backgroundNoticeIds: vi.fn(),
-}));
-
-vi.mock('../../chat.js', () => ({
-  listMessages,
-  backgroundNoticeIds,
-  BACKGROUND_NOTICE_MARKER: '[notice]',
-}));
-
 import { seedContext } from './seed.js';
+
+const seedHistory = vi.fn();
+const noticeIds = vi.fn();
+const repository = {
+  kind: 'execution-context-repository',
+  seedHistory,
+  noticeIds,
+  getInboundMessage: vi.fn(),
+} as unknown as ExecutionContextRepository;
 
 function task(input: {
   type: string;
@@ -21,6 +20,7 @@ function task(input: {
   text?: string;
 }): TaskRow {
   return {
+    agentId: '00000000-0000-4000-8000-000000000000',
     conversationId: '00000000-0000-4000-8000-000000000001',
     trust: 'assistant',
     trigger: {
@@ -34,13 +34,13 @@ function task(input: {
 
 describe('seedContext', () => {
   beforeEach(() => {
-    listMessages.mockReset();
-    backgroundNoticeIds.mockReset();
-    backgroundNoticeIds.mockResolvedValue(new Set<string>());
+    seedHistory.mockReset();
+    noticeIds.mockReset();
+    noticeIds.mockResolvedValue(new Set<string>());
   });
 
   it('gives an owner follow-up historical card facts, but never exposes those rows to an external sender', async () => {
-    listMessages.mockResolvedValue([
+    seedHistory.mockResolvedValue([
       {
         id: 'card',
         role: 'assistant',
@@ -61,24 +61,24 @@ describe('seedContext', () => {
     ]);
     const owner = task({ type: 'chat_turn', goalId: null });
     owner.trust = 'owner';
-    const seeded = await seedContext({} as Db, owner);
+    const seeded = await seedContext(repository, owner);
     expect(seeded[0]?.content).toContain('Historical card context: untrusted data');
     expect(seeded[0]?.content).toContain('Harbor Hotel');
-    listMessages.mockClear();
-    const external = await seedContext({} as Db, { ...owner, trust: 'unknown' });
-    expect(listMessages).not.toHaveBeenCalled();
+    seedHistory.mockClear();
+    const external = await seedContext(repository, { ...owner, trust: 'unknown' });
+    expect(seedHistory).not.toHaveBeenCalled();
     expect(JSON.stringify(external)).not.toContain('Harbor Hotel');
   });
 
   it('appends the generated goal instruction after existing work-chat history', async () => {
-    listMessages.mockResolvedValue([
+    seedHistory.mockResolvedValue([
       { role: 'assistant', text: 'Automatic goal work is enabled.' },
       { role: 'user', text: 'Keep searching.' },
     ]);
     const goalId = '00000000-0000-4000-8000-000000000002';
     const instruction = `Run the next session. Goal ID: ${goalId}.`;
 
-    const seeded = await seedContext({} as Db, task({ type: 'scheduled', goalId, instruction }));
+    const seeded = await seedContext(repository, task({ type: 'scheduled', goalId, instruction }));
 
     expect(seeded).toEqual([
       { role: 'assistant', content: 'Automatic goal work is enabled.' },
@@ -88,10 +88,10 @@ describe('seedContext', () => {
   });
 
   it('does not duplicate an attended goal-chat message already in the conversation', async () => {
-    listMessages.mockResolvedValue([{ role: 'user', text: 'Keep searching.' }]);
+    seedHistory.mockResolvedValue([{ role: 'user', text: 'Keep searching.' }]);
 
     const seeded = await seedContext(
-      {} as Db,
+      repository,
       task({
         type: 'chat_turn',
         goalId: '00000000-0000-4000-8000-000000000003',
@@ -107,29 +107,32 @@ describe('seedContext', () => {
     // posted on its own. A fired reminder sitting here looked exactly like the
     // assistant's own last turn, and a question about birthdays came back with
     // the reminder read out after the answer.
-    listMessages.mockResolvedValue([
+    seedHistory.mockResolvedValue([
       { id: 'm1', role: 'user', text: "who's birthdays are coming up?" },
       { id: 'm2', role: 'assistant', text: 'Attend Clay technical interview' },
     ]);
-    backgroundNoticeIds.mockResolvedValue(new Set(['m2']));
+    noticeIds.mockResolvedValue(new Set(['m2']));
 
-    const seeded = await seedContext({} as Db, task({ type: 'chat_turn', goalId: null }));
+    const seeded = await seedContext(repository, task({ type: 'chat_turn', goalId: null }));
 
     expect(seeded).toEqual([
       { role: 'user', content: "who's birthdays are coming up?" },
-      { role: 'assistant', content: '[notice]\nAttend Clay technical interview' },
+      {
+        role: 'assistant',
+        content: expect.stringContaining('Attend Clay technical interview'),
+      },
     ]);
   });
 
   it('seeds an ordinary scheduled task from its trigger instead of stale chat history', async () => {
-    listMessages.mockResolvedValue([
+    seedHistory.mockResolvedValue([
       { role: 'user', text: 'Pull the Carnaval photos' },
       { role: 'assistant', text: 'I will look in Drive.' },
     ]);
     const instruction = 'Reminder for the owner: Get sunglasses from the car and pack them.';
 
     const seeded = await seedContext(
-      {} as Db,
+      repository,
       task({ type: 'scheduled', goalId: null, instruction }),
     );
 

@@ -9,7 +9,7 @@ import {
   postOwnerNotice,
 } from '@assistant/core';
 import { evaluateOutOfBandPing } from '@assistant/core/proactive/nudge-policy';
-import { createDb, type Db } from '@assistant/db';
+import { createDb, createPostgresExecutionPersistence, type Db } from '@assistant/db';
 import {
   browserModule,
   composedModuleMetas as collectModuleMetas,
@@ -23,6 +23,7 @@ import {
   type SmsChannelDeps,
   smsModule,
 } from '@assistant/modules';
+import type { ExecutionPersistence } from '@assistant/persistence';
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
 import { registerBuiltinTools } from '@assistant/tools/builtin';
 import { ToolDispatcher } from '@assistant/tools/dispatcher';
@@ -44,6 +45,7 @@ import composition from '../../../assistant.config.js';
 export interface AgentDeps {
   config: Config;
   db: Db;
+  persistence?: ExecutionPersistence;
   router: ModelRouter;
   registry: ToolRegistry;
   dispatcher: ToolDispatcher;
@@ -231,8 +233,9 @@ export function buildDeps(): AgentDeps {
     connectTimeoutSeconds: config.DB_CONNECT_TIMEOUT_SECONDS,
     statementTimeoutMs: config.DB_STATEMENT_TIMEOUT_MS,
   });
+  const persistence = createPostgresExecutionPersistence(db);
   const router = new ModelRouter(
-    db,
+    persistence.modelRouting,
     config.OPENROUTER_API_KEY,
     config.LLM_AUDIT_CAPTURE,
     createConfiguredModelProvider(config),
@@ -279,7 +282,15 @@ export function buildDeps(): AgentDeps {
     db,
     router,
     registry,
-    dispatcher: new ToolDispatcher(db, registry),
+    persistence,
+    dispatcher: new ToolDispatcher(
+      db,
+      registry,
+      persistence.toolExecution,
+      persistence.costs,
+      persistence.approvals,
+      persistence.approvalPolicies,
+    ),
     workspace,
     modules,
     outOfBandNotifier,

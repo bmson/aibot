@@ -6,6 +6,7 @@ import {
   withValidationDatabase,
 } from '@assistant/firestore/validation-admin';
 import { firestoreApprovalSmoke } from './firestore-approval-smoke.js';
+import { firestoreExecutorSmoke } from './firestore-executor-smoke.js';
 import { firestoreRuntimeSmoke } from './firestore-runtime-smoke.js';
 import { firestoreScheduleSmoke } from './firestore-schedule-smoke.js';
 import { firestoreTaskSmoke } from './firestore-task-smoke.js';
@@ -66,6 +67,7 @@ if (!values.run) {
     schedules: await firestoreScheduleSmoke(store),
     approvals: await firestoreApprovalSmoke(store),
     runtime: await firestoreRuntimeSmoke(store),
+    executor: await firestoreExecutorSmoke(store),
   }));
   console.log(JSON.stringify({ stage: 'complete', ...report }, null, 2));
 }

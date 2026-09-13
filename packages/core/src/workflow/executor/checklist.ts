@@ -1,31 +1,22 @@
-import { approvals, type Db, toolCalls } from '@assistant/db';
-import { eq } from 'drizzle-orm';
+import { createPostgresExecutionEvidenceRepository, type Db } from '@assistant/db';
+import type { ExecutionEvidenceRepository } from '@assistant/persistence';
 import type { TaskState } from '../../events.js';
 import { reconcileRequestChecklist } from '../request-checklist.js';
 
 /** Exact task scope, including undecided/denied calls; no conversation-wide receipts. */
 export async function refreshRequestChecklist(
-  db: Db,
-  taskId: string,
+  store: Db | ExecutionEvidenceRepository,
+  task: { id: string; agentId: string },
   state: TaskState,
 ): Promise<void> {
   if (!state.requestChecklist) return;
+  const repository =
+    'kind' in store && store.kind === 'execution-evidence-repository'
+      ? (store as ExecutionEvidenceRepository)
+      : createPostgresExecutionEvidenceRepository(store as Db);
   const [rows, decisions] = await Promise.all([
-    db
-      .select({
-        id: toolCalls.id,
-        toolName: toolCalls.toolName,
-        status: toolCalls.status,
-        args: toolCalls.args,
-        result: toolCalls.result,
-      })
-      .from(toolCalls)
-      .where(eq(toolCalls.taskId, taskId))
-      .orderBy(toolCalls.step, toolCalls.id),
-    db
-      .select({ toolCallId: approvals.toolCallId, status: approvals.status })
-      .from(approvals)
-      .where(eq(approvals.taskId, taskId)),
+    repository.taskEvidence({ agentId: task.agentId, taskId: task.id }),
+    repository.checklistDecisions({ agentId: task.agentId, taskId: task.id }),
   ]);
   const byCall = new Map(decisions.map((decision) => [decision.toolCallId, decision.status]));
   state.requestChecklist = reconcileRequestChecklist(

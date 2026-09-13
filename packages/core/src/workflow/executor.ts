@@ -1,8 +1,7 @@
-import type { Db, TaskRow } from '@assistant/db';
-import { goals, tasks } from '@assistant/db';
+import type { TaskRow } from '@assistant/db';
+import { createPostgresExecutionPersistence } from '@assistant/db';
+import type { ExecutionContextRepository } from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
-import { eq } from 'drizzle-orm';
-import { getAgent } from '../chat.js';
 import { HISTORICAL_CARD_CONTEXT } from '../conversation-context.js';
 import { BudgetReservationError } from '../cost.js';
 import { isForwardedIngest } from '../email-provenance.js';
@@ -67,14 +66,14 @@ export function goalStopReason(
   return null;
 }
 
-async function abandonedGoalFor(db: Db, task: TaskRow): Promise<'stopped' | 'archived' | null> {
+async function abandonedGoalFor(
+  repository: ExecutionContextRepository,
+  task: TaskRow,
+): Promise<'stopped' | 'archived' | null> {
   if (!task.goalId) return null;
-  const [goal] = await db
-    .select({ status: goals.status, archivedAt: goals.archivedAt })
-    .from(goals)
-    .where(eq(goals.id, task.goalId))
-    .limit(1);
-  return goalStopReason(goal);
+  return goalStopReason(
+    (await repository.getGoalStopState(task.agentId, task.goalId)) ?? undefined,
+  );
 }
 
 export { roleForTask } from './executor/role.js';
@@ -99,7 +98,9 @@ export async function executeTask(
   generation?: number,
 ): Promise<ExecuteResult> {
   const { db } = deps;
-  const task = await claimTask(db, taskId, generation);
+  const persistence = deps.persistence ?? createPostgresExecutionPersistence(db);
+  deps = { ...deps, persistence };
+  const task = await claimTask(persistence.tasks, taskId, generation);
   if (!task) return { outcome: 'not_claimable' };
 
   // The owner stopping or archiving a goal must also stop work already sitting
@@ -107,9 +108,9 @@ export async function executeTask(
   // can be claimed between the owner's click and the cancelling write — so the
   // executor refuses the run itself. Spending against an abandoned goal is the
   // failure this closes.
-  const abandoned = await abandonedGoalFor(db, task);
+  const abandoned = await abandonedGoalFor(persistence.executionContext, task);
   if (abandoned) {
-    await completeTask(db, task, {
+    await completeTask(persistence.tasks, task, {
       status: 'cancelled',
       progress: `stopped because its goal was ${abandoned}`,
     });
@@ -122,24 +123,33 @@ export async function executeTask(
     } catch (err) {
       if (err instanceof BudgetReservationError) {
         if (err.message.startsWith('task budget')) {
-          const marked = await markTaskNeedsAttention(db, task, `budget: ${err.message}`);
+          const marked = await markTaskNeedsAttention(
+            persistence.tasks,
+            task,
+            `budget: ${err.message}`,
+          );
           if (!marked) return LOST_LEASE;
           const budgetRequest = taskBudgetPermissionRequest(task, err.message);
           await notifyAttention(deps, task, budgetRequest.text, [budgetRequest.part]);
           return { outcome: 'needs_attention', detail: err.message.slice(0, 500) };
         }
-        const [fresh] = await db.select().from(tasks).where(eq(tasks.id, task.id));
-        const parked = await parkForBudget(db, task, taskState(fresh ?? task), err.resumeAt);
+        const fresh = await persistence.executionContext.getTask(task.agentId, task.id);
+        const parked = await parkForBudget(
+          persistence.tasks,
+          task,
+          taskState(fresh ?? task),
+          err.resumeAt,
+        );
         if (!parked) return LOST_LEASE;
         await postConversationNotice(
-          db,
+          persistence.messages,
           task,
           `I'm pausing here — ${err.message}. This resumes automatically when the budget resets.`,
           noticeParts('parked'),
         );
         return { outcome: 'parked', detail: err.message.slice(0, 500) };
       }
-      const disposition = await recordFailedAttempt(db, task, String(err));
+      const disposition = await recordFailedAttempt(persistence.tasks, task, String(err));
       if (disposition === 'lost_lease') return LOST_LEASE;
       if (disposition === 'dead_letter') {
         // Retry budget exhausted: the task is now needs_attention and will not
@@ -198,6 +208,7 @@ export function shouldTaintContext(task: Pick<TaskRow, 'trust' | 'trigger'>): bo
 
 async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteResult> {
   const { db, router, dispatcher } = deps;
+  const persistence = deps.persistence ?? createPostgresExecutionPersistence(db);
   const lease = task;
   const state = taskState(task);
   if (state.pendingFinal) return finalizePendingResponse(deps, lease, state.pendingFinal, state);
@@ -206,7 +217,8 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     state.untrustedContext = true;
   }
 
-  const agent = await getAgent(db);
+  const agent = await persistence.executionContext.getAgent(task.agentId);
+  if (!agent) throw new Error('Task agent does not exist');
   const abort = new AbortController();
 
   // Code jobs (nightly extraction/consolidation, imports) run a registered
@@ -219,7 +231,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
 
   let window = state.contextWindow as unknown as ModelMessage[];
   if (window.length === 0) {
-    window = await seedContext(db, task);
+    window = await seedContext(persistence.executionContext, task);
     // Publish the seeded window into state BEFORE building the tool context, so
     // harvestKnownAddresses (which scans state.contextWindow) sees the thread's
     // real recipients on the FIRST run — not just on resume. Without this, the
@@ -276,6 +288,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   };
   rc.ctx = createToolContext({
     db,
+    executionJobs: persistence.executionJobs,
     task,
     state,
     signal: abort.signal,
@@ -292,7 +305,12 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   // A browser job is (still) in flight — sleep until its callback or timeout.
   if (state.pendingJob) {
     state.contextWindow = compact(rc.window) as unknown as TaskState['contextWindow'];
-    const slept = await sleepTask(db, lease, state, new Date(state.pendingJob.timeoutAt));
+    const slept = await sleepTask(
+      persistence.tasks,
+      lease,
+      state,
+      new Date(state.pendingJob.timeoutAt),
+    );
     if (!slept) return LOST_LEASE;
     return { outcome: 'sleeping', detail: 'browser job running' };
   }
@@ -300,7 +318,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   // Fold any owner correction typed while this task was parked into the window,
   // so a resumed task acts on the latest owner intent, not a stale checkpoint.
   // (First run just baselines the watermark; chat channel only.)
-  await foldOwnerRepliesSincePark(db, task, state, rc.window);
+  await foldOwnerRepliesSincePark(persistence.executionContext, task, state, rc.window);
   const payload = (task.trigger as { payload?: { text?: unknown } } | null)?.payload;
   // Never promote an older conversation message into fresh authorization.
   const originalRequest = typeof payload?.text === 'string' ? payload.text : '';
@@ -313,7 +331,8 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
   ) {
     state.requestChecklist = buildRequestChecklist(originalRequest);
   }
-  if (state.requestChecklist && !(await checkpointTask(db, lease, state))) return LOST_LEASE;
+  if (state.requestChecklist && !(await checkpointTask(persistence.tasks, lease, state)))
+    return LOST_LEASE;
 
   // Save-status questions are read-only receipt checks, not new work for a
   // planner to invent or clarify. Resolve them before any model call.
@@ -352,6 +371,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       planResult.plan?.requestedOutcomes,
     );
   }
-  if (state.requestChecklist && !(await checkpointTask(db, lease, state))) return LOST_LEASE;
+  if (state.requestChecklist && !(await checkpointTask(persistence.tasks, lease, state)))
+    return LOST_LEASE;
   return runStepLoop(rc, planResult.plan);
 }

@@ -125,6 +125,7 @@ describe('seedContext background notices', () => {
     });
 
     const window = await seedContext(db, {
+      agentId,
       conversationId,
       trust: 'owner',
       type: 'chat_turn',

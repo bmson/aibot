@@ -1,8 +1,7 @@
-import type { Db, TaskRow } from '@assistant/db';
-import { conversations, messages } from '@assistant/db';
+import { createPostgresExecutionContextRepository, type Db, type TaskRow } from '@assistant/db';
+import type { ExecutionContextRepository } from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
-import { and, asc, desc, eq, gt } from 'drizzle-orm';
-import { BACKGROUND_NOTICE_MARKER, backgroundNoticeIds, listMessages } from '../../chat.js';
+import { BACKGROUND_NOTICE_MARKER } from '../../chat.js';
 import { conversationMessageTexts } from '../../conversation-context.js';
 import type { TaskState } from '../../events.js';
 import { isKnownSenderReplyTask, isUnattendedGoalSession } from './context-helpers.js';
@@ -16,7 +15,19 @@ function triggerInstruction(task: TaskRow): string | undefined {
       : undefined;
 }
 
-export async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]> {
+function executionContextRepository(
+  value: Db | ExecutionContextRepository,
+): ExecutionContextRepository {
+  return (value as Partial<ExecutionContextRepository>).kind === 'execution-context-repository'
+    ? (value as ExecutionContextRepository)
+    : createPostgresExecutionContextRepository(value as Db);
+}
+
+export async function seedContext(
+  db: Db | ExecutionContextRepository,
+  task: TaskRow,
+): Promise<ModelMessage[]> {
+  const repository = executionContextRepository(db);
   if (task.conversationId) {
     // A deterministically-enqueued known-sender reply child (D9) carries its
     // exact instruction + draft on the trigger. Seed from that, never the shared
@@ -39,16 +50,11 @@ export async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]
           ? trigger.payload.messageId
           : undefined;
       if (messageId) {
-        const [inbound] = await db
-          .select({ text: messages.text })
-          .from(messages)
-          .where(
-            and(
-              eq(messages.conversationId, task.conversationId),
-              eq(messages.channelMessageId, `gmail:${messageId}`),
-            ),
-          )
-          .limit(1);
+        const inbound = await repository.getInboundMessage({
+          agentId: task.agentId,
+          conversationId: task.conversationId,
+          channelMessageId: `gmail:${messageId}`,
+        });
         if (inbound) return [{ role: 'user', content: inbound.text } as ModelMessage];
       }
       // Never expose the rest of a private bound conversation to an external
@@ -60,14 +66,18 @@ export async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]
         } as ModelMessage,
       ];
     }
-    const rows = await listMessages(db, task.conversationId);
-    const recent = rows.filter((m) => m.role === 'user' || m.role === 'assistant').slice(-20);
+    const recent = await repository.seedHistory({
+      agentId: task.agentId,
+      conversationId: task.conversationId,
+      before: new Date(Date.now() + 1),
+      limit: 20,
+    });
     // A reminder that fired, a pulse alert, a briefing — all of these land in
     // the owner's primary thread, which is the same thread they chat in. Seeded
     // as bare assistant turns they are indistinguishable from replies, and a
     // model asked a question with one sitting at the end of its window answers
     // the question and then repeats the notice back. Name them instead.
-    const notices = await backgroundNoticeIds(db, recent);
+    const notices = await repository.noticeIds(task.agentId, recent);
     const contextTexts =
       task.trust === 'owner' && task.type === 'chat_turn'
         ? conversationMessageTexts(recent, notices)
@@ -135,42 +145,37 @@ export async function seedContext(db: Db, task: TaskRow): Promise<ModelMessage[]
  * already holds those — so nothing is double-counted.
  */
 export async function foldOwnerRepliesSincePark(
-  db: Db,
-  task: Pick<TaskRow, 'conversationId'>,
+  db: Db | ExecutionContextRepository,
+  task: Pick<TaskRow, 'conversationId' | 'agentId'>,
   state: TaskState,
   window: ModelMessage[],
 ): Promise<void> {
   if (!task.conversationId) return;
-  const [conv] = await db
-    .select({ channel: conversations.channel })
-    .from(conversations)
-    .where(eq(conversations.id, task.conversationId))
-    .limit(1);
-  if (conv?.channel !== 'chat') return;
+  const repository = executionContextRepository(db);
 
   if (!state.seenConversationAt) {
     // First run: baseline the mark at the newest existing message (already seeded).
-    const [latest] = await db
-      .select({ at: messages.createdAt })
-      .from(messages)
-      .where(eq(messages.conversationId, task.conversationId))
-      .orderBy(desc(messages.createdAt))
-      .limit(1);
-    state.seenConversationAt = (latest?.at ?? new Date(0)).toISOString();
+    const baseline = await repository.getLatestOwnerReplyCursor({
+      agentId: task.agentId,
+      conversationId: task.conversationId,
+    });
+    if (!baseline) return;
+    state.seenConversationAt = (baseline.cursor?.createdAt ?? new Date(0)).toISOString();
+    state.seenConversationId = baseline.cursor?.id ?? null;
     return;
   }
 
-  const newer = await db
-    .select({ text: messages.text, at: messages.createdAt })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.conversationId, task.conversationId),
-        eq(messages.role, 'user'),
-        gt(messages.createdAt, new Date(state.seenConversationAt)),
-      ),
-    )
-    .orderBy(asc(messages.createdAt));
+  const seenAt = new Date(state.seenConversationAt);
+  if (!Number.isFinite(seenAt.getTime())) throw new Error('Invalid conversation watermark');
+  const newer = await repository.getOwnerRepliesAfter({
+    agentId: task.agentId,
+    conversationId: task.conversationId,
+    after: {
+      createdAt: seenAt,
+      ...(state.seenConversationId ? { id: state.seenConversationId } : {}),
+    },
+    limit: 200,
+  });
   if (newer.length === 0) return;
   for (const m of newer) {
     const text = m.text?.trim();
@@ -182,5 +187,8 @@ export async function foldOwnerRepliesSincePark(
     }
   }
   const last = newer[newer.length - 1];
-  if (last) state.seenConversationAt = last.at.toISOString();
+  if (last) {
+    state.seenConversationAt = last.createdAt.toISOString();
+    state.seenConversationId = last.id;
+  }
 }
