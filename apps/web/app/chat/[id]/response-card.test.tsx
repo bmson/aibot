@@ -1,6 +1,11 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { ResponseCards, rendersAllCards, responseCardPayloads } from './response-card.js';
+import {
+  cardsReplaceProse,
+  ResponseCards,
+  rendersAllCards,
+  responseCardPayloads,
+} from './response-card.js';
 
 describe('responseCardPayloads', () => {
   it('collects data-card payloads in order and ignores everything else', () => {
@@ -368,5 +373,34 @@ describe('ResponseCards', () => {
         { kind: 'generated-card', id: 'future', spec: { version: 2, title: 'Future' } },
       ]),
     ).toBe(false);
+  });
+});
+
+describe('a card read out of the reply', () => {
+  it('heads the answer instead of replacing it', () => {
+    const fromAnswer = {
+      kind: 'generated-card',
+      id: 'card-1',
+      grounding: 'answer',
+      spec: {
+        version: 1,
+        title: 'Drive to Bernal Intermediate',
+        sourceLabel: 'This answer',
+        facts: [
+          { id: 'eta', label: 'Drive time', value: '1 hour 15 minutes to 1 hour 30 minutes' },
+        ],
+        blocks: [{ type: 'facts', factIds: ['eta'] }],
+      },
+    };
+    // The surface can draw it, and the prose beside it still has the route
+    // and the latest departure time to carry.
+    expect(rendersAllCards([fromAnswer])).toBe(true);
+    expect(cardsReplaceProse([fromAnswer])).toBe(false);
+
+    const fromLookup = { ...fromAnswer, grounding: 'evidence' };
+    expect(cardsReplaceProse([fromLookup])).toBe(true);
+    // An older build sends no grounding: a lookup card, the previous contract.
+    expect(cardsReplaceProse([{ ...fromAnswer, grounding: undefined }])).toBe(true);
+    expect(cardsReplaceProse([])).toBe(false);
   });
 });

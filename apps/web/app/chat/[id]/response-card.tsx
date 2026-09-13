@@ -1085,6 +1085,18 @@ function legacyTextCards(text: string): Raw[] {
   ];
 }
 
+/**
+ * Whether these cards stand in for the reply or merely head it.
+ *
+ * A card grounded in a lookup carries the answer, so prose beside it would
+ * only repeat it. A card the composer read out of the reply itself redraws
+ * part of an answer that also explains the route, the caveats and when to
+ * leave — replacing the reply with it would delete the rest of the answer.
+ */
+export function cardsReplaceProse(cards: Raw[]): boolean {
+  return cards.length > 0 && !cards.every((card) => str(card.grounding) === 'answer');
+}
+
 /** True when every card on the message is one this surface can render. */
 export function rendersAllCards(cards: Raw[]): boolean {
   return cards.every((card) => {

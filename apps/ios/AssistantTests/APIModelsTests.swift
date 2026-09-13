@@ -1151,207 +1151,47 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(linkURL, "https://sheets.example.com/budget")
     }
 
-    func testResponseCardsInferWeatherAndDurationOnlyFromStrongSignals() {
-        let weather = MessageResponseCard.inferred(
-            from: "The weather is sunny and 18°C now. Wind stays light this afternoon."
-        )
-        guard case let .weather(_, temperature, condition, _)? = weather.first else {
-            return XCTFail("Expected a weather card")
+    func testGeneratedCardGroundedOnTheAnswerHeadsTheReplyInsteadOfReplacingIt() {
+        func card(grounding: String?) -> MessageResponseCard {
+            var data: [String: JSONValue] = [
+                "kind": .string("generated-card"),
+                "id": .string("card-1"),
+                "spec": .object([
+                    "version": .number(1),
+                    "title": .string("Drive to Bernal Intermediate"),
+                    "sourceLabel": .string("This answer"),
+                    "facts": .array([
+                        .object([
+                            "id": .string("eta"),
+                            "label": .string("Drive time"),
+                            "value": .string("1 hour 15 minutes to 1 hour 30 minutes"),
+                        ]),
+                    ]),
+                    "blocks": .array([.object(["type": .string("facts"), "factIds": .array([.string("eta")])])]),
+                ]),
+            ]
+            if let grounding { data["grounding"] = .string(grounding) }
+            let part = MessagePart(type: "data-card", data: .object(data))
+            guard let card = MessageResponseCard(part: part) else {
+                XCTFail("Expected the payload to decode as a generated card")
+                return .duration(title: "", duration: "", detail: nil, confidence: nil)
+            }
+            return card
         }
-        XCTAssertEqual(temperature, "18°C")
-        XCTAssertEqual(condition, "Sunny")
 
-        let estimate = MessageResponseCard.inferred(
-            from: "This will take about 45 minutes if the source material is ready."
-        )
-        guard case let .duration(_, duration, _, _)? = estimate.first else {
-            return XCTFail("Expected a duration card")
-        }
-        XCTAssertEqual(duration, "45 min")
-        XCTAssertTrue(MessageResponseCard.inferred(from: "The answer has 45 lines.").isEmpty)
-    }
+        let fromAnswer = card(grounding: "answer")
+        XCTAssertTrue(fromAnswer.summarizesAnswer)
+        // The reply also carried the route and the latest departure time, and
+        // one redrawn value must not delete them.
+        XCTAssertFalse(MessageResponseCard.replacesProse([fromAnswer]))
 
-    func testDurationCardKeepsTheRangeAndDepartureTimeTheAnswerGave() {
-        let cards = MessageResponseCard.inferred(
-            from: """
-            From your place in the Richmond down to Bernal Intermediate School in South \
-            San Jose is roughly 60 to 65 miles.
+        let fromLookup = card(grounding: "evidence")
+        XCTAssertFalse(fromLookup.summarizesAnswer)
+        XCTAssertTrue(MessageResponseCard.replacesProse([fromLookup]))
 
-            On a Sunday afternoon, expect the drive to take about 1 hour 15 minutes to \
-            1 hour 30 minutes, factoring in getting through town down 19th Avenue before \
-            hopping on I-280 South.
-
-            To make the 4:15 PM arrival time without rushing, plan to head out around \
-            2:45 PM (3:00 PM at the absolute latest).
-            """,
-            cardKind: "duration"
-        )
-        guard case let .duration(_, duration, detail, _)? = cards.first else {
-            return XCTFail("Expected a duration card")
-        }
-        // The first number in the reply was "1 hour", which is not the estimate.
-        XCTAssertEqual(duration, "1 hr 15 min \u{2013} 1 hr 30 min")
-        XCTAssertEqual(detail, "Leave around 2:45 PM")
-    }
-
-    func testDurationCardReadsCompoundSharedUnitAndFractionalEstimates() {
-        func duration(_ text: String) -> String? {
-            guard case let .duration(_, duration, _, _)? = MessageResponseCard
-                .inferred(from: text, cardKind: "duration").first else { return nil }
-            return duration
-        }
-        XCTAssertEqual(duration("The drive takes roughly 45 to 60 minutes at that hour."), "45\u{2013}60 min")
-        XCTAssertEqual(duration("It should take about 1 hour and 15 minutes door to door."), "1 hr 15 min")
-        XCTAssertEqual(duration("Expect it to take about 1.5 hours."), "1.5 hr")
-        XCTAssertEqual(duration("It takes about 3 days to arrive."), "3 days")
-    }
-
-    func testDurationCardKeepsTheAnswersOwnHedgeAboutLeaving() {
-        func detail(_ text: String) -> String? {
-            guard case let .duration(_, _, detail, _)? = MessageResponseCard
-                .inferred(from: text, cardKind: "duration").first else { return nil }
-            return detail
-        }
-        XCTAssertEqual(
-            detail("The drive takes about 40 minutes. Plan to leave by 7:30 a.m."),
-            "Leave by 7:30 AM"
-        )
-        // No instruction to lift, and no filler in its place.
-        XCTAssertNil(detail("This will take about 45 minutes if the source material is ready."))
-    }
-
-    func testTimeEstimateReadFromProseSummarizesTheReplyRatherThanReplacingIt() {
-        let estimate = MessageResponseCard.inferred(
-            from: "The drive takes about 40 minutes, so leave by 7:30 a.m. to beat the bridge.",
-            cardKind: "duration"
-        )
-        XCTAssertFalse(estimate.isEmpty)
-        XCTAssertFalse(MessageResponseCard.replacesProse(estimate, authored: false))
-        // A card the server authored is the answer, so the prose would repeat it.
-        XCTAssertTrue(MessageResponseCard.replacesProse(estimate, authored: true))
-
-        let weather = MessageResponseCard.inferred(
-            from: "The weather is sunny and 18\u{00B0}C now. Wind stays light this afternoon."
-        )
-        XCTAssertTrue(MessageResponseCard.replacesProse(weather, authored: false))
-        XCTAssertFalse(MessageResponseCard.replacesProse([], authored: true))
-    }
-
-    @MainActor
-    func testOnDeviceCardDecisionsOutliveARowAndKeyOnTheReplyText() {
-        let decisions = OnDeviceCardDecisions(capacity: 2)
-        XCTAssertNil(decisions.decision(id: "m1", text: "about 40 minutes"))
-
-        decisions.record(.card(kind: "duration"), id: "m1", text: "about 40 minutes")
-        // What a re-mounted row reads instead of re-running the model.
-        XCTAssertEqual(decisions.decision(id: "m1", text: "about 40 minutes"), .card(kind: "duration"))
-        XCTAssertEqual(decisions.decision(id: "m1", text: "about 40 minutes")?.cardKind, "duration")
-        // A corrected reply is a different answer and earns a fresh pass.
-        XCTAssertNil(decisions.decision(id: "m1", text: "about 55 minutes"))
-
-        decisions.record(.noCard, id: "m2", text: "no card here")
-        XCTAssertEqual(decisions.decision(id: "m2", text: "no card here"), .noCard)
-        XCTAssertNil(OnDeviceCardDecision.noCard.cardKind)
-
-        // A long session drops its oldest decisions rather than growing forever.
-        decisions.record(.noCard, id: "m3", text: "third")
-        XCTAssertEqual(decisions.count, 2)
-        XCTAssertNil(decisions.decision(id: "m1", text: "about 40 minutes"))
-        XCTAssertEqual(decisions.decision(id: "m3", text: "third"), .noCard)
-    }
-
-    func testInterviewPrepCardReformatsStructuredInterviewerResearch() {
-        let cards = MessageResponseCard.inferred(
-            from: """
-            ## James Friend
-            - **Role:** Software Engineer at Clay ([LinkedIn](https://linkedin.com/in/jamesfriendau))
-            - **Background:**
-              - Previously at Canva (2022–2024), worked on frontend infrastructure.
-              - Focus: React, TypeScript, performance optimization.
-            - **Likely interview focus:** System design trade-offs and scaling UI components.
-
-            ## Brandon Goren
-            - **Role:** Software Engineer at Clay ([LinkedIn](https://linkedin.com/in/brandon-goren-3830b483))
-            - **Background:**
-              - Ex-Microsoft (Azure DevOps), ex-Washington University researcher.
-              - Specializes in React state management and API design.
-            - **Likely interview focus:** React patterns and data-flow architecture.
-
-            ## Clay's Tech Stack
-            - Next.js, TypeScript, Tailwind, GraphQL.
-
-            Want me to:
-            - Draft tailored prep questions for each interviewer?
-            """,
-            cardKind: "interview-prep"
-        )
-
-        guard case let .interviewPrep(_, people, techStack, nextSteps)? = cards.first else {
-            return XCTFail("Expected structured interviewer research to become an interview-prep card")
-        }
-        XCTAssertEqual(people.map(\.name), ["James Friend", "Brandon Goren"])
-        XCTAssertEqual(people[0].background.count, 2)
-        XCTAssertEqual(people[1].interviewFocus, "React patterns and data-flow architecture.")
-        XCTAssertEqual(techStack, ["Next.js, TypeScript, Tailwind, GraphQL."])
-        XCTAssertEqual(nextSteps, ["Draft tailored prep questions for each interviewer?"])
-    }
-
-    func testDirectionsPromptDoesNotEnableIncidentalWeatherCardFallback() {
-        let directions = "Directions to Palo Alto field"
-        let response = """
-        Here are directions to Mayfield Soccer Complex.
-        **Parking:** Free lot on-site.
-        (Weather reminder: Sunny, 22°C (72°F) at match time.)
-        """
-
-        XCTAssertFalse(MessageResponseCard.requestLooksLikeWeather(directions))
-        XCTAssertTrue(MessageResponseCard.inferred(from: response, cardKind: "weather").isEmpty == false)
-        XCTAssertFalse(OnDeviceCardParser.requestAllows(kind: "weather", request: directions))
-    }
-
-    func testWeatherCardInferenceUsesMarkdownConditionsInsteadOfRainChance() {
-        let weather = MessageResponseCard.inferred(
-            from: """
-            Here's the weather:
-            - 🌡️ **Temperature:** 19°C (66°F)
-            - ⛅ **Conditions:** Partly cloudy
-            - 💨 **Wind:** 15 km/h (9 mph)
-            - 🌧️ **Rain chance:** 0%
-            """
-        )
-        guard case let .weather(_, temperature, condition, details)? = weather.first else {
-            return XCTFail("Expected a weather card")
-        }
-        XCTAssertEqual(temperature, "19°C (66°F)")
-        XCTAssertEqual(condition, "Partly cloudy")
-        XCTAssertEqual(details.map(\.label), ["Wind", "Rain chance"])
-        XCTAssertEqual(details.first?.value, "15 km/h (9 mph)")
-    }
-
-    func testWeatherCardInferenceKeepsWeatherMetricsWithoutProvenance() {
-        let weather = MessageResponseCard.inferred(
-            from: """
-            Here's the current weather for San Francisco, CA as of 3:48 PM PDT:
-            - **Temperature:** 19°C (66°F)
-            - **Conditions:** Partly cloudy
-            - **Wind:** 15 km/h (9 mph)
-            - **Humidity:** 68%
-            - **Rain chance:** 0% (dry all day)
-            - **Dew point:** 13°C
-            **Today’s range:** 17–20°C (63–68°F). Mild with a light breeze.
-            (Source: OpenWeatherMap, refreshed at 3:48 PM.)
-            """
-        )
-        guard case let .weather(location, temperature, _, details)? = weather.first else {
-            return XCTFail("Expected a weather card")
-        }
-        XCTAssertEqual(location, "San Francisco, CA")
-        XCTAssertEqual(temperature, "19°C (66°F)")
-        XCTAssertEqual(details.map(\.label), ["Today", "Wind", "Humidity", "Rain chance", "Updated", "Dew point"])
-        XCTAssertEqual(details[0].value, "17–20°C (63–68°F). Mild with a light breeze.")
-        XCTAssertEqual(details[2].value, "68%")
-        XCTAssertEqual(details[4].value, "3:48 PM PDT")
-        XCTAssertEqual(details[5].value, "13°C")
+        // A build that sends no grounding is a lookup card, the older contract.
+        XCTAssertFalse(card(grounding: nil).summarizesAnswer)
+        XCTAssertFalse(MessageResponseCard.replacesProse([]))
     }
 
     func testRuntimeCorrectionDoesNotAnswerAnUnrelatedLatestQuestion() {
@@ -1368,14 +1208,6 @@ final class APIModelsTests: XCTestCase {
         XCTAssertFalse(message.isConversationAnswer)
     }
 
-    func testWeatherLocationOmitsConversationalPronoun() {
-        let cards = MessageResponseCard.inferred(from: "Here's the current weather for you in San Francisco:\nTemperature: 14°C\nConditions: Clear skies")
-        guard case let .weather(location, _, _, _)? = cards.first else {
-            return XCTFail("Expected a weather card")
-        }
-        XCTAssertEqual(location, "San Francisco")
-    }
-
     func testWeatherUnitsCollapsePairsAndConvertToThePreferredUnit() {
         XCTAssertEqual(WeatherUnits.localized("17°C (63°F)", preferFahrenheit: true), "63°F")
         XCTAssertEqual(WeatherUnits.localized("17°C (63°F)", preferFahrenheit: false), "17°C")
@@ -1389,168 +1221,6 @@ final class APIModelsTests: XCTestCase {
             WeatherUnits.localized("overcast, wind 18 km/h", preferFahrenheit: true),
             "overcast, wind 18 km/h"
         )
-    }
-
-    func testWeatherInferenceDealsEachForecastDayItsOwnCard() {
-        let cards = MessageResponseCard.inferred(
-            from: """
-            Here's the weather for Palo Alto this weekend:
-            - **Saturday:** Sunny, 16–23°C
-            - **Sunday:** Partly cloudy, 14–21°C, 20% chance of rain
-            """
-        )
-        XCTAssertEqual(cards.count, 2)
-        guard case let .weather(location, satTemperature, satCondition, satDetails) = cards[0],
-              case let .weather(_, sunTemperature, sunCondition, sunDetails) = cards[1] else {
-            return XCTFail("Expected one weather card per forecast day")
-        }
-        // Each card stamps its own day, so the headline keeps the place alone.
-        XCTAssertEqual(location, "Palo Alto")
-        XCTAssertEqual(satTemperature, "16–23°C")
-        XCTAssertEqual(satCondition, "Sunny")
-        XCTAssertEqual(satDetails.first?.label, "Day")
-        XCTAssertEqual(satDetails.first?.value, "Saturday")
-        XCTAssertEqual(sunTemperature, "14–21°C")
-        XCTAssertEqual(sunCondition, "Partly Cloudy")
-        XCTAssertEqual(sunDetails.first?.value, "Sunday")
-        XCTAssertNotEqual(cards[0].id, cards[1].id)
-    }
-
-    func testWeatherInferenceSplitsDayHeadingsIntoOneCardPerDay() {
-        let cards = MessageResponseCard.inferred(
-            from: """
-            Here's the **weekend weather forecast for Palo Alto** (where your Saturday match is scheduled):
-
-            **Saturday (August 29)**
-            - 🌤 **12:00 PM (match time):**
-              - **22°C (72°F)**, partly cloudy
-              - **Wind:** 10 km/h (6 mph) — gentle breeze
-              - **Rain chance: 0%**
-
-            **Sunday (August 30)**
-            - ☀️ **11:50 AM (match time):**
-              - **23°C (73°F)**, sunny
-              - **Wind:** 12 km/h (7 mph)
-              - **Rain chance: 0%**
-
-            **Perfect soccer conditions!** No rain, mild temps, and light wind.
-
-            *(Source: OpenWeatherMap, Palo Alto microclimate, refreshed at 5:47 PM PDT.)*
-            """
-        )
-        XCTAssertEqual(cards.count, 2)
-        guard case let .weather(location, satTemperature, satCondition, satDetails) = cards[0],
-              case let .weather(_, sunTemperature, sunCondition, sunDetails) = cards[1] else {
-            return XCTFail("Expected one weather card per forecast day")
-        }
-        // The place, not "Right now": the answer is about somewhere else.
-        XCTAssertEqual(location, "Palo Alto")
-        XCTAssertEqual(satDetails.first?.value, "Saturday")
-        XCTAssertEqual(sunDetails.first?.value, "Sunday")
-        XCTAssertEqual(satTemperature, "22°C (72°F)")
-        XCTAssertEqual(sunTemperature, "23°C (73°F)")
-        // A dry weekend reads its sky from the forecast, never from the label
-        // of the "Rain chance: 0%" metric sitting underneath it.
-        XCTAssertEqual(satCondition, "Partly Cloudy")
-        XCTAssertEqual(sunCondition, "Sunny")
-        XCTAssertEqual(satDetails.map(\.label), ["Day", "Wind", "Rain chance"])
-        XCTAssertEqual(satDetails[1].value, "10 km/h (6 mph) — gentle breeze")
-        XCTAssertEqual(sunDetails[1].value, "12 km/h (7 mph)")
-        XCTAssertNotEqual(cards[0].id, cards[1].id)
-        XCTAssertEqual(WeatherPresentation.caption(details: satDetails, hasForecast: false), "Saturday")
-    }
-
-    func testWeatherInferenceIgnoresDayMentionsThatCarryNoReading() {
-        let cards = MessageResponseCard.inferred(
-            from: """
-            It is 18°C and sunny right now.
-
-            **Monday**
-            Nothing booked yet.
-            """
-        )
-        XCTAssertEqual(cards.count, 1)
-        guard case let .weather(location, temperature, condition, details) = cards[0] else {
-            return XCTFail("Expected a single current-conditions card")
-        }
-        XCTAssertEqual(location, "Right now")
-        XCTAssertEqual(temperature, "18°C")
-        XCTAssertEqual(condition, "Sunny")
-        XCTAssertTrue(details.isEmpty)
-    }
-
-    func testWeatherConditionIgnoresRainChanceAndReassurances() {
-        let cards = MessageResponseCard.inferred(
-            from: """
-            Weather in Palo Alto:
-            - 24°C (75°F), clear skies
-            - **Rain chance:** 0% — no rain expected all day
-            """
-        )
-        guard case let .weather(location, _, condition, _)? = cards.first else {
-            return XCTFail("Expected a weather card")
-        }
-        XCTAssertEqual(location, "Palo Alto")
-        XCTAssertEqual(condition, "Clear Skies")
-    }
-
-    func testWeatherCardReadsOneDayFromItsDaytimePart() {
-        // The reported reply: one day written as its arc, with an aside, a
-        // provenance line and a row of pseudo-buttons the model made up.
-        let cards = MessageResponseCard.inferred(
-            from: """
-            Checking current weather sources...
-
-            **San Francisco weather for Thu Aug 27, 2026:**
-
-            🌤 **Morning:** Partly cloudy, 16°C (61°F)
-
-            ☀️ **Afternoon:** Sunny, 21°C (70°F)
-
-            🌬️ **Wind:** Light breeze (8 km/h W)
-
-            🌧️ **Rain chance:** 10%
-
-            **For your 11:00 Zoom meeting:** Ideal indoor conditions with mild temps outside.
-
-            (Source: National Weather Service SF Bay Area)
-
-            [⏰ Set weather alert] | [🌧️ Check rain timing]
-            """
-        )
-        XCTAssertEqual(cards.count, 1)
-        guard case let .weather(location, temperature, condition, details) = cards[0] else {
-            return XCTFail("Expected a weather card")
-        }
-        // The place, not the date that followed "weather for".
-        XCTAssertEqual(location, "San Francisco")
-        // The day is what was asked about, so the afternoon carries the
-        // headline — not the morning reading that happens to come first, and
-        // not "Rain" swept out of the "Check rain timing" line below.
-        XCTAssertEqual(temperature, "21°C (70°F)")
-        XCTAssertEqual(condition, "Sunny")
-        // Every part of the day stays on the card as its own row; the meeting
-        // aside stays in the reply, where it reads as the sentence it is.
-        XCTAssertEqual(details.map(\.label), ["Morning", "Afternoon", "Wind", "Rain chance"])
-        XCTAssertEqual(details[0].value, "Partly cloudy, 16°C (61°F)")
-        XCTAssertEqual(details[1].value, "Sunny, 21°C (70°F)")
-        XCTAssertEqual(details[2].value, "Light breeze (8 km/h W)")
-    }
-
-    func testWeatherCardKeepsSentencesOutOfTheMetricList() {
-        let cards = MessageResponseCard.inferred(
-            from: """
-            Weather in Palo Alto:
-            - **Conditions:** Sunny, 22°C (72°F)
-            - **Wind:** 10 km/h
-            - **For your 11:00 Zoom meeting:** Ideal indoor conditions.
-            - **Note for the drive home:** Nothing to worry about.
-            """
-        )
-        guard case let .weather(_, _, _, details) = cards[0] else {
-            return XCTFail("Expected a weather card")
-        }
-        XCTAssertEqual(details.map(\.label), ["Wind"])
     }
 
     func testWeatherCaptionNamesTheDayOnPerDayForecastCards() {

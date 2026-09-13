@@ -514,17 +514,33 @@ export async function stageModelFinalResponse(
       evidence,
       sourceKey: task.externalEventId ?? task.id,
       explicitRequest: cardRequested,
+      // A turn that called no tool has only its own reply to stand on. The
+      // composer admits it as evidence in that case alone, under the same
+      // verbatim rule, which is what the phone's hand-written kinds used to do
+      // with a regex per fact.
+      answerText: checked.text,
     });
     if (generated) {
-      generatedCard = await persistGeneratedCard(deps.db, {
-        agentId: task.agentId,
-        conversationId: task.conversationId,
-        payload: generated,
-      }).catch((error) => {
-        console.error('generated card persistence failed', error);
-        return undefined;
-      });
-      if (generatedCard && state.requestChecklist) {
+      /*
+       * A card read out of this turn's own reply is a view of the answer, not
+       * an object the owner acquired: "leave around 2:45" is wrong by tomorrow
+       * and belongs in the conversation it was said in. It rides the chat
+       * payload and is never filed, so the Cards page keeps holding tickets,
+       * reservations and deliveries — the things worth going back to. An
+       * explicit "save that as a card" is a deliberate object and still files.
+       */
+      const answerGrounded = generated.grounding === 'answer' && !cardRequested;
+      generatedCard = answerGrounded
+        ? generated
+        : await persistGeneratedCard(deps.db, {
+            agentId: task.agentId,
+            conversationId: task.conversationId,
+            payload: generated,
+          }).catch((error) => {
+            console.error('generated card persistence failed', error);
+            return undefined;
+          });
+      if (generatedCard && !answerGrounded && state.requestChecklist) {
         state.requestChecklist.savedCards = [
           {
             id: generatedCard.id,
