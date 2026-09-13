@@ -318,12 +318,19 @@ function connectionSentence(subject: string, predicate: string, object: string):
 export function AddKnowledgeRelation({
   selected,
   subjectLabel,
+  subjectContactId,
   vocabulary,
   correction,
 }: {
   selected: KnowledgeGraphEntityView | null;
   /** Fallback name for the first endpoint when `selected` is null. */
   subjectLabel?: string;
+  /**
+   * The contact that name belongs to. Without it the server resolves the typed
+   * label across every contact's names and aliases, so a page offering one
+   * specific person could have its fact bound to a namesake.
+   */
+  subjectContactId?: string;
   vocabulary: readonly PredicateSpec[];
   correction?: KnowledgeGraphRelationView;
 }) {
@@ -367,6 +374,11 @@ export function AddKnowledgeRelation({
   return (
     <Modal label={title} onClose={() => setOpen(false)}>
       <form action={formAction} className="grid gap-4">
+        {/* Only meaningful for a typed subject: an endpoint picked by id
+            carries its own contact and the server ignores this. */}
+        {subjectContactId && !correction && !selected ? (
+          <input type="hidden" name="subjectContactId" value={subjectContactId} />
+        ) : null}
         <div>
           <p className="font-display text-xl font-semibold text-strong">{title}</p>
           <p className="mt-1 text-sm leading-5 text-muted">

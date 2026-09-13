@@ -37,28 +37,41 @@ export async function POST(request: Request): Promise<Response> {
   if (!id) return mobileJson({ error: 'id is required' }, { status: 400 });
   const text = (value: unknown) => (typeof value === 'string' ? value : '');
 
+  /**
+   * Every one of these reports "nothing matched" by returning false rather than
+   * throwing — the loop was closed by someone else, already resolved, or the id
+   * is stale. Ignoring that told the phone a correction had saved when no row
+   * had changed, and the editor closed over the unsaved edit.
+   */
+  const settled = (changed: boolean) =>
+    changed
+      ? mobileJson({ ok: true })
+      : mobileJson({ error: 'That loop is no longer open.' }, { status: 409 });
+
   try {
     switch (body?.action) {
       case 'resolve':
-        await getApplication().resolveCommitment(id, 'Owner confirmed this loop is resolved.');
-        return mobileJson({ ok: true });
+        return settled(
+          await getApplication().resolveCommitment(id, 'Owner confirmed this loop is resolved.'),
+        );
       case 'snooze':
-        await getApplication().snoozeCommitment(id, new Date(Date.now() + SNOOZE_MS));
-        return mobileJson({ ok: true });
+        return settled(
+          await getApplication().snoozeCommitment(id, new Date(Date.now() + SNOOZE_MS)),
+        );
       case 'dismiss':
-        await getApplication().dismissCommitment(id);
-        return mobileJson({ ok: true });
+        return settled(await getApplication().dismissCommitment(id));
       case 'correct': {
         // The web form requires a title; an empty one would blank the loop's
         // only identifying text rather than correct it.
         const title = text(body.title).trim();
         if (!title) return mobileJson({ error: 'title is required' }, { status: 400 });
-        await getApplication().correctCommitment(id, {
-          title,
-          details: text(body.details),
-          nextAction: text(body.nextAction),
-        });
-        return mobileJson({ ok: true });
+        return settled(
+          await getApplication().correctCommitment(id, {
+            title,
+            details: text(body.details),
+            nextAction: text(body.nextAction),
+          }),
+        );
       }
       default:
         return mobileJson({ error: `action must be ${ACTIONS}` }, { status: 400 });

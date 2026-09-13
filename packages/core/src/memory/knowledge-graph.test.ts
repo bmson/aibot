@@ -1,5 +1,6 @@
 import {
   agents,
+  contacts,
   createDb,
   type Db,
   knowledgeGraphEntities,
@@ -137,6 +138,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (dbUp) {
     await db.delete(memories).where(like(memories.content, `${MARKER}%`));
+    await db.delete(contacts).where(like(contacts.name, `${MARKER}%`));
     await db.delete(agents).where(eq(agents.id, agentId));
   }
   await (db as unknown as { $client?: { end: () => Promise<void> } }).$client?.end?.();
@@ -651,6 +653,74 @@ describe('knowledge graph sync and recall', () => {
       queryEmbedding: unit(46),
     });
     expect(recalled.block).not.toContain(`${MARKER} Manual Project`);
+  });
+
+  /**
+   * A typed subject label is resolved against every contact's name *and*
+   * aliases, first match wins, with a prefix match as a fallback — so the
+   * person page, which offers one specific contact, could have its fact and
+   * the memory behind it attached to a different person who happens to hold
+   * that name as an alias. The page now names the contact it meant.
+   */
+  it('binds a pinned subject to the contact named, not to an alias holder', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // Inserted first, so an unpinned label resolution would reach this one.
+    const [namesake] = await db
+      .insert(contacts)
+      .values({
+        name: `${MARKER} Bobby Vance`,
+        aliases: [`${MARKER} Robert Vance`],
+        trust: 'known',
+      })
+      .returning({ id: contacts.id });
+    const [intended] = await db
+      .insert(contacts)
+      .values({ name: `${MARKER} Robert Vance`, aliases: [], trust: 'known' })
+      .returning({ id: contacts.id });
+    if (!intended || !namesake) throw new Error('contact fixtures were not created');
+
+    const saved = await createOwnerKnowledgeGraphFact(
+      {
+        db,
+        agentId,
+        router: {
+          async embed() {
+            return [unit(52)];
+          },
+        },
+      },
+      {
+        subject: {
+          label: `${MARKER} Robert Vance`,
+          kind: 'person',
+          contactId: intended.id,
+        },
+        predicate: 'works_at',
+        object: { label: `${MARKER} Vance Consulting`, kind: 'organization' },
+        note: 'Told me over lunch.',
+      },
+    );
+    expect(saved.error).toBeUndefined();
+    if (!saved.memoryId) throw new Error('pinned owner fact was not saved');
+
+    const [memory] = await db
+      .select({ subjectContactId: memories.subjectContactId })
+      .from(memories)
+      .where(eq(memories.id, saved.memoryId));
+    expect(memory?.subjectContactId).toBe(intended.id);
+    expect(memory?.subjectContactId).not.toBe(namesake.id);
+
+    // The entity the fact created has to belong to the same person.
+    const [entity] = await db
+      .select({ contactId: knowledgeGraphEntities.contactId })
+      .from(knowledgeGraphEntities)
+      .where(
+        and(
+          eq(knowledgeGraphEntities.agentId, agentId),
+          eq(knowledgeGraphEntities.label, `${MARKER} Robert Vance`),
+        ),
+      );
+    expect(entity?.contactId).toBe(intended.id);
   });
 
   it('links an owner fact to existing entities by id, without retyping names', async (ctx) => {

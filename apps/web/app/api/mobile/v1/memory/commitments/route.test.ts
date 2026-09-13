@@ -39,6 +39,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.auth.mockResolvedValue(true);
   mocks.list.mockResolvedValue([]);
+  // Each mutation reports whether it actually changed a row.
+  mocks.resolve.mockResolvedValue(true);
+  mocks.snooze.mockResolvedValue(true);
+  mocks.dismiss.mockResolvedValue(true);
+  mocks.correct.mockResolvedValue(true);
 });
 
 describe('native open loops', () => {
@@ -126,6 +131,25 @@ describe('native open loops', () => {
     const unknown = await post({ action: 'bogus', id: 'c1' });
     expect(unknown.status).toBe(400);
     expect(((await unknown.json()) as { error: string }).error).toContain('snooze');
+  });
+
+  /**
+   * These report "nothing matched" by returning false rather than throwing: the
+   * loop was closed elsewhere, or the id is stale. Reporting that as success
+   * told a phone editor its correction had saved when no row had changed.
+   */
+  it('reports a conflict when the loop is no longer open', async () => {
+    mocks.correct.mockResolvedValue(false);
+    const response = await post({ action: 'correct', id: 'c1', title: 'Send the deck' });
+    expect(response.status).toBe(409);
+    expect(mocks.correct).toHaveBeenCalledOnce();
+
+    mocks.resolve.mockResolvedValue(false);
+    expect((await post({ action: 'resolve', id: 'c1' })).status).toBe(409);
+    mocks.snooze.mockResolvedValue(false);
+    expect((await post({ action: 'snooze', id: 'c1' })).status).toBe(409);
+    mocks.dismiss.mockResolvedValue(false);
+    expect((await post({ action: 'dismiss', id: 'c1' })).status).toBe(409);
   });
 
   it('reports a failure from the application layer instead of throwing', async () => {

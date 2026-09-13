@@ -183,6 +183,7 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
           <AddKnowledgeRelation
             selected={dossier.entity}
             subjectLabel={contact.name}
+            subjectContactId={contact.id}
             vocabulary={PREDICATE_VOCABULARY}
           />
         </div>

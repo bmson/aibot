@@ -168,9 +168,13 @@ struct MemoryLibraryScreen: View {
                         Button("Always in profile") { perform(row, action: "prominence", prominence: "always") }
                         Button("When relevant") { perform(row, action: "prominence", prominence: "auto") }
                         // Web hides this for a fact about someone else, which
-                        // never auto-surfaces anyway; an empty subject is the
-                        // owner's own fact.
-                        if row.subjectLabel.isEmpty {
+                        // never auto-surfaces anyway. An empty label does not
+                        // identify the owner — their own facts join their own
+                        // contact and arrive carrying their name — so this
+                        // asked the server. Defaulting to true if an older
+                        // server omits it offers a no-op rather than hiding a
+                        // control the owner needs.
+                        if row.aboutOwner ?? true {
                             Button("Minor detail") { perform(row, action: "prominence", prominence: "minor") }
                         }
                     }

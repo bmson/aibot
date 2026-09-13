@@ -172,6 +172,7 @@ export async function addKnowledgeRelation(
       subjectLabel: String(formData.get('subjectLabel') ?? ''),
       subjectKind: String(formData.get('subjectKind') ?? ''),
       subjectId: subjectId || undefined,
+      subjectContactId: String(formData.get('subjectContactId') ?? '') || undefined,
       predicate: String(formData.get('predicate') ?? ''),
       objectLabel: String(formData.get('objectLabel') ?? ''),
       objectKind: String(formData.get('objectKind') ?? ''),

@@ -1323,6 +1323,13 @@ final class AppModel: ObservableObject {
         do {
             if let id { try await client.updatePerson(id: id, person: mutation) }
             else { try await client.createPerson(mutation) }
+            // Adding or renaming a person changes the directory and that
+            // person's card, neither of which refreshWorkspace touches. The
+            // People tab only reloads when peopleLoaded is false, so without
+            // this a just-added person stayed invisible there until a manual
+            // pull to refresh — and the first one left the tab reading empty.
+            invalidatePersonCaches()
+            await loadPeople()
             await refreshWorkspace(reportFailure: false)
             return true
         } catch {

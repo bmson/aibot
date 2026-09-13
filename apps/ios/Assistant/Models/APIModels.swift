@@ -1192,6 +1192,10 @@ struct MemoryLibraryRow: Codable, Identifiable, Equatable, Sendable {
     let organized: Bool
     let originTrust: String
     let subjectLabel: String
+    /// Whether this memory is the owner's own. The label cannot stand in for
+    /// it: an owner fact joins the owner's contact and so carries their name.
+    /// Optional so an older server stays decodable; defaulted at the use site.
+    var aboutOwner: Bool?
     let connectionCount: Int
     let projectionStatus: String
     let createdAt: String

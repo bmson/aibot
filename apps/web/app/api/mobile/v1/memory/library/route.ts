@@ -46,6 +46,12 @@ export async function GET(request: Request): Promise<Response> {
     listMemoryLibraryFilters(getDb()),
   ]);
 
+  // The same rule the web library applies: a row with no joined contact is the
+  // owner's, and so is one whose subject is the owner's own contact. The label
+  // alone cannot carry this — an owner fact joins the owner's contact and so
+  // arrives with their name, indistinguishable from a fact about someone else.
+  const ownerId = filters.subjects.find((subject) => subject.trust === 'owner')?.id ?? null;
+
   return mobileJson({
     rows: library.rows.map((row) => ({
       id: row.memory.id,
@@ -59,6 +65,7 @@ export async function GET(request: Request): Promise<Response> {
       organized: row.memory.lastConsolidatedAt !== null,
       originTrust: row.memory.originTrust,
       subjectLabel: row.subjectLabel ?? '',
+      aboutOwner: row.subjectId === null || row.subjectId === ownerId,
       connectionCount: row.connectionCount,
       projectionStatus: row.projectionStatus,
       createdAt: row.memory.createdAt.toISOString(),
