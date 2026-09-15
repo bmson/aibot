@@ -34,6 +34,20 @@ private struct LiftedTranscriptFixture: View {
                         }
                         .scrollClipDisabled()
                         .scrollPosition($position)
+                        // The clearance above the input is a content margin, as
+                        // it is in ChatView: the transcript stays as tall as the
+                        // stage so a row travelling under the composer is still
+                        // inside the viewport that builds it.
+                        .contentMargins(
+                            EdgeInsets(
+                                top: 0,
+                                leading: 0,
+                                bottom: state.composerHeight + 12
+                                    + PullMenuMotion.transcriptComposerSpacing,
+                                trailing: 0
+                            ),
+                            for: .scrollContent
+                        )
                         .transaction {
                             if state.reveal > 0 {
                                 $0.scrollContentOffsetAdjustmentBehavior = .disabled
@@ -345,7 +359,7 @@ final class AssistantMarkdownTests: XCTestCase {
         func descendants(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(descendants) }
         let scroll = try XCTUnwrap(descendants(window).compactMap { $0 as? UIScrollView }.first)
         XCTAssertEqual(baseline, 18, accuracy: 1)
-        func renderedEdges() throws -> (card: CGFloat, input: CGFloat) {
+        func centerColumn() throws -> [(red: UInt8, green: UInt8, blue: UInt8)] {
             let format = UIGraphicsImageRendererFormat()
             format.scale = 1
             let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
@@ -358,11 +372,20 @@ final class AssistantMarkdownTests: XCTestCase {
                 bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
             context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-            var red: [Int] = [], blue: [Int] = []
-            for y in 0..<height {
+            return (0..<height).map { y in
                 let i = (y * width + width / 2) * 4
-                if pixels[i] > 180 && pixels[i + 1] < 120 && pixels[i + 2] < 120 { red.append(y) }
-                if pixels[i] < 100 && pixels[i + 2] > 180 { blue.append(y) }
+                return (red: pixels[i], green: pixels[i + 1], blue: pixels[i + 2])
+            }
+        }
+        func isCard(_ pixel: (red: UInt8, green: UInt8, blue: UInt8)) -> Bool {
+            pixel.red > 180 && pixel.green < 120 && pixel.blue < 120
+        }
+        func renderedEdges() throws -> (card: CGFloat, input: CGFloat) {
+            let column = try centerColumn()
+            var red: [Int] = [], blue: [Int] = []
+            for (y, pixel) in column.enumerated() {
+                if isCard(pixel) { red.append(y) }
+                if pixel.red < 100 && pixel.blue > 180 { blue.append(y) }
             }
             return (CGFloat(try XCTUnwrap(red.last)) + 1, CGFloat(try XCTUnwrap(blue.first)))
         }
@@ -398,6 +421,18 @@ final class AssistantMarkdownTests: XCTestCase {
         scroll.setContentOffset(CGPoint(x: 0, y: scroll.contentOffset.y - 160), animated: false)
         try await Task.sleep(for: .milliseconds(100))
         let readingOffset = scroll.contentOffset.y
+        // 160pt of reading puts the newest card under the composer, which is
+        // exactly where a bubble used to disappear: the transcript ended at the
+        // input's top edge, so a row past that line was never built and the
+        // stage showed through. Read the strip the input's own bottom spacing
+        // leaves clear — the log must still be painting there.
+        window.layoutIfNeeded()
+        let underComposer = try centerColumn()
+        for y in (Int(state.composer.maxY) - 10)..<(Int(state.composer.maxY) - 2) {
+            XCTAssertTrue(
+                isCard(underComposer[y]),
+                "A message must keep being drawn below the composer, all the way off the screen")
+        }
         for distance: CGFloat in [20, 80, 450, 80, 0] {
             state.reveal = distance
             try await Task.sleep(for: .milliseconds(100))
