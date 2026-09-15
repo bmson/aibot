@@ -12,7 +12,6 @@ export * from './migration.js';
 export * from './model-routing.js';
 export * from './money.js';
 export * from './owner-context.js';
-export * from './owner-text.js';
 export * from './records.js';
 export * from './reminders.js';
 export * from './schedules.js';
