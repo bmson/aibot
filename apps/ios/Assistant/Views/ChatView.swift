@@ -1739,7 +1739,7 @@ struct ChatView: View {
                     textColor: .white,
                     placeholderColor: UIColor(composerPlaceholderColor),
                     cursorColor: UIColor(composerCursorColor),
-                    completionColor: UIColor.white.withAlphaComponent(0.5),
+                    completionColor: UIColor(composerCompletionColor),
                     onSubmit: sendDraft
                 )
                     .padding(.leading, 6)
@@ -1859,7 +1859,7 @@ struct ChatView: View {
     private var composerTextColor: Color {
         // Auxiliary composer marks (the stop affordance and its rim) use the
         // warm conversation white. The editable text itself is true white so
-        // its app-owned inline completion can read at an exact 50% opacity.
+        // its app-owned inline completion can read at an exact 25% opacity.
         AssistantTheme.stageStrong
     }
 
@@ -1872,6 +1872,13 @@ struct ChatView: View {
         // The hint belongs to the translucent stage, so it uses neutral white
         // rather than the muted ink reserved for paper cards.
         Color.white.opacity(0.5)
+    }
+
+    private var composerCompletionColor: Color {
+        // A step below the placeholder: the suggested suffix is the only text
+        // on the stage the person has not actually typed, so it reads as
+        // provisional next to both the hint and the draft it trails.
+        Color.white.opacity(0.25)
     }
 
     /// The ready send button's fill — the one bright object on the stage. With
@@ -2252,7 +2259,8 @@ struct ChatView: View {
 
 /// A small UIKit bridge gives the composer ownership of the inline-completion
 /// layer. Apple's stock prediction glyph is always system gray; rendering our
-/// own suffix lets it retain the same white-at-50% treatment as the prompt.
+/// own suffix lets it take the stage's translucent white instead, a step
+/// fainter than the prompt so it never reads as text already typed.
 private struct ComposerTextInput: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
@@ -2391,7 +2399,7 @@ private final class InlineCompletionTextView: UITextView {
     var placeholderColor: UIColor = .secondaryLabel {
         didSet { placeholderLabel.textColor = placeholderColor }
     }
-    var completionColor: UIColor = UIColor.white.withAlphaComponent(0.5) {
+    var completionColor: UIColor = UIColor.white.withAlphaComponent(0.25) {
         didSet { completionLabel.textColor = completionColor }
     }
 
@@ -2409,12 +2417,23 @@ private final class InlineCompletionTextView: UITextView {
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
 
+        // Every label value below reaches its view through a property
+        // observer, and an observer never runs for the value a property is
+        // declared with. The configure path then skips any write matching what
+        // is already stored, so a default that happens to equal the configured
+        // value leaves the observer with nothing to react to — which is how the
+        // suggestion suffix ended up on `UILabel`'s own `.label`, black on the
+        // green stage. Seeding each one here makes the initial state correct
+        // whether or not `didSet` ever fires.
         placeholderLabel.numberOfLines = 1
         placeholderLabel.lineBreakMode = .byTruncatingTail
+        placeholderLabel.text = placeholderText
+        placeholderLabel.textColor = placeholderColor
         placeholderLabel.isAccessibilityElement = false
         addSubview(placeholderLabel)
 
         completionLabel.numberOfLines = 1
+        completionLabel.textColor = completionColor
         completionLabel.isAccessibilityElement = false
         completionLabel.isUserInteractionEnabled = false
         addSubview(completionLabel)
