@@ -22,7 +22,9 @@ private struct LiftedTranscriptFixture: View {
                 ConversationColumn {
                     Group {
                         ScrollView {
-                            LazyVStack(spacing: 0) {
+                            // Eager, as the transcript is: the strip under the
+                            // composer can only show a row that exists.
+                            VStack(spacing: 0) {
                                 ForEach(0..<20) { _ in Color.white.frame(height: 200) }
                                 Color.red.frame(height: 100)
                                     .onGeometryChange(for: CGRect.self) {
@@ -34,21 +36,6 @@ private struct LiftedTranscriptFixture: View {
                         }
                         .scrollClipDisabled()
                         .scrollPosition($position)
-                        // The clearance above the input is a content margin, as
-                        // it is in ChatView: the transcript stays as tall as the
-                        // stage so a row travelling under the composer is still
-                        // inside the viewport that builds it.
-                        .contentMargins(
-                            .all,
-                            EdgeInsets(
-                                top: 0,
-                                leading: 0,
-                                bottom: state.composerHeight + 12
-                                    + PullMenuMotion.transcriptComposerSpacing,
-                                trailing: 0
-                            ),
-                            for: .scrollContent
-                        )
                         .transaction {
                             if state.reveal > 0 {
                                 $0.scrollContentOffsetAdjustmentBehavior = .disabled
@@ -422,11 +409,12 @@ final class AssistantMarkdownTests: XCTestCase {
         scroll.setContentOffset(CGPoint(x: 0, y: scroll.contentOffset.y - 160), animated: false)
         try await Task.sleep(for: .milliseconds(100))
         let readingOffset = scroll.contentOffset.y
-        // 160pt of reading puts the newest card under the composer, which is
-        // exactly where a bubble used to disappear: the transcript ended at the
-        // input's top edge, so a row past that line was never built and the
-        // stage showed through. Read the strip the input's own bottom spacing
-        // leaves clear — the log must still be painting there.
+        // 160pt of reading sends the newest card past the transcript's own
+        // viewport, which ends 18pt above the input — and that is exactly where
+        // a bubble used to disappear, because a lazily built row stops existing
+        // once it leaves that viewport and `scrollClipDisabled` has nothing to
+        // draw. Read the strip the composer's bottom spacing leaves clear: the
+        // log must still be painting there, not the stage.
         window.layoutIfNeeded()
         let underComposer = try centerColumn()
         for y in (Int(state.composer.maxY) - 10)..<(Int(state.composer.maxY) - 2) {

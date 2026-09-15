@@ -1,26 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// Give the transcript the whole conversation and float the composer over its
-/// bottom edge. The clearance above the input is a scroll content margin the
-/// transcript scrolls *through*, never a shorter viewport.
-///
-/// The two used to be stacked slots, which ended the transcript's viewport
-/// 18pt above the input and left the strip under the composer outside it. A
-/// row only lives while it is inside that viewport: one approaching the input
-/// was built, drawn under the glass — and then, a few points further down,
-/// dropped. Bubbles blinked out of existence a whole composer above the
-/// bottom of the screen instead of sliding off it.
-///
-/// They remain siblings rather than a `ScrollView` overlay: the composer is
-/// declared second, so it draws and hit-tests above the transcript, and a pull
-/// that begins on the input is never handed to the scroll view's own pan.
+/// Give the transcript and composer separate layout slots before lifting the
+/// stage. Clearance must not depend on a later input measurement or scroll inset.
 struct ConversationColumn<Transcript: View, Composer: View>: View {
     @ViewBuilder var transcript: Transcript
     @ViewBuilder var composer: Composer
 
     var body: some View {
-        ZStack(alignment: .bottom) {
+        VStack(spacing: PullMenuMotion.transcriptComposerSpacing) {
             transcript
             composer
         }
@@ -496,37 +484,6 @@ struct ChatView: View {
         )
     }
 
-    /// What the newest message keeps clear of the composer: the input's own
-    /// box — its bottom spacing included, which is what `composerHeight`
-    /// measures — plus the empty gap the menu's touch target owns.
-    ///
-    /// A content margin, not a shorter transcript: the viewport still reaches
-    /// the bottom of the stage, so a row travelling under the composer stays
-    /// inside it and keeps being drawn until it leaves the screen. The lift
-    /// never touches this, because the input's measured height does not change
-    /// while the whole surface moves as one.
-    private var transcriptBottomClearance: CGFloat {
-        composerHeight + PullMenuMotion.transcriptComposerSpacing
-    }
-
-    /// Whether the transcript is resting against its newest edge, within
-    /// `tolerance` points of it.
-    ///
-    /// The composer's clearance is a content inset, so the edge the reader
-    /// actually reaches is the end of the content *plus* that inset — and a log
-    /// only fits without scrolling when the content and both insets fit. Read
-    /// against the bare content height, every one of these answers yes a whole
-    /// composer early: the jump pill would go quiet, and an upward drag at the
-    /// wrong place would open the menu instead of scrolling.
-    private func transcriptIsAtEnd(_ geometry: ScrollGeometry, tolerance: CGFloat) -> Bool {
-        let insets = geometry.contentInsets
-        let contentFits =
-            geometry.contentSize.height + insets.top + insets.bottom
-                <= geometry.containerSize.height + 1
-        return contentFits
-            || geometry.visibleRect.maxY >= geometry.contentSize.height + insets.bottom - tolerance
-    }
-
     private var stageBackdrop: some View {
         ZStack {
             AssistantTheme.stage(for: colorScheme)
@@ -560,7 +517,24 @@ struct ChatView: View {
         return Group {
             ConversationColumn {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    // Deliberately eager, and the one thing here that is.
+                    //
+                    // The transcript's viewport ends 18pt above the composer,
+                    // and `scrollClipDisabled` below is what lets the strip
+                    // under the input keep showing the log. It can only draw
+                    // rows that exist, though, and a lazy stack stops vending
+                    // one once it leaves that viewport — so a bubble on its way
+                    // down was built, drawn under the glass, and then dropped a
+                    // few points later, blinking out of existence a whole
+                    // composer above the bottom of the screen.
+                    //
+                    // Building every row costs a long thread real work at open.
+                    // The alternative is a viewport that reaches the bottom of
+                    // the stage, and that is not free either: it puts the
+                    // scroll view in contact with geometry that moves under the
+                    // pull menu, and the transcript slid 10pt against the
+                    // composer for it. A row that exists cannot flicker.
+                    VStack(spacing: 0) {
                         if model.messages.isEmpty {
                             emptyConversation
                         } else {
@@ -581,9 +555,10 @@ struct ChatView: View {
                         value: model.messages.map(\.id)
                     )
                 }
-                // The transcript is as tall as the stage, so its own clip would
-                // be a hard rectangle across the sheet's rounded corners while
-                // the menu lifts it. Clip at the outer stage instead.
+                // Older rows continue beneath the floating input and off the
+                // bottom of the screen while scrolling — the stack above is
+                // eager so that every one of them is there to draw. Clip at the
+                // outer stage, not this shorter viewport.
                 .scrollClipDisabled()
                 .scrollIndicators(.hidden)
                 .scrollPosition($transcriptScrollPosition)
@@ -599,22 +574,13 @@ struct ChatView: View {
                     }
                 }
                 // Reserve real layout room for the crown at the start of the
-                // conversation, and for the composer at the end of it. Unlike
-                // the removed clear mask, this cannot slice through a message
-                // bubble or its text. The 8pt gap that used to be added at the
-                // top is inside the clearance now — it is the same gap the
+                // conversation. Unlike the removed clear mask, this cannot slice
+                // through a message bubble or its text. The 8pt gap that used to be
+                // added here is inside the clearance now — it is the same gap the
                 // error banner needs, so it belongs with the geometry.
-                //
-                // Both edges belong to one modifier: what the transcript keeps
-                // clear is a single geometry, not two insets that can drift.
                 .contentMargins(
-                    .all,
-                    EdgeInsets(
-                        top: crownContentTopInset,
-                        leading: 0,
-                        bottom: transcriptBottomClearance,
-                        trailing: 0
-                    ),
+                    .top,
+                    crownContentTopInset,
                     for: .scrollContent
                 )
                 // Never toggle `scrollDisabled` as the menu moves. That cancels
@@ -631,7 +597,10 @@ struct ChatView: View {
                     model.messages.isEmpty ? .top : (pinsTranscriptToBottom ? .bottom : nil)
                 )
                 .onScrollGeometryChange(for: Bool.self) { geometry in
-                    transcriptIsAtEnd(geometry, tolerance: 64)
+                    let contentFits =
+                        geometry.contentSize.height <= geometry.containerSize.height + 1
+                    return contentFits
+                        || geometry.visibleRect.maxY >= geometry.contentSize.height - 64
                 } action: { _, atBottom in
                     isAtBottom = atBottom
                     if transcriptScrollPosition.isPositionedByUser {
@@ -642,7 +611,10 @@ struct ChatView: View {
                     }
                 }
                 .onScrollGeometryChange(for: Bool.self) { geometry in
-                    transcriptIsAtEnd(geometry, tolerance: 2)
+                    let contentFits =
+                        geometry.contentSize.height <= geometry.containerSize.height + 1
+                    return contentFits
+                        || geometry.visibleRect.maxY >= geometry.contentSize.height - 2
                 } action: { _, atOpeningEdge in
                     isAtMenuOpeningEdge = atOpeningEdge
                 }
@@ -655,7 +627,9 @@ struct ChatView: View {
                     transcriptScroll.contentPosition = position
                 }
                 .onScrollPhaseChange { oldPhase, newPhase, context in
-                    let atBottom = transcriptIsAtEnd(context.geometry, tolerance: 64)
+                    let geometry = context.geometry
+                    let atBottom = geometry.contentSize.height <= geometry.containerSize.height + 1
+                        || geometry.visibleRect.maxY >= geometry.contentSize.height - 64
                     // Include the final position after a drag or its momentum.
                     // Programmatic scrolls and layout updates do not opt out.
                     if newPhase != .idle || transcriptScrollPosition.isPositionedByUser {
