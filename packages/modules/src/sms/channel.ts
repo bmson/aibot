@@ -10,6 +10,7 @@ import {
   reserveCost,
   resolveApproval,
 } from '@assistant/core';
+import { truncateAtBoundary } from '@assistant/core/owner-text';
 import {
   approvals,
   channelBindings,
@@ -289,7 +290,7 @@ export async function deliverSmsFinal(
   if (!binding || binding.externalId !== deps.config.OWNER_PHONE) return;
   await sendMeteredSms(deps, {
     to: binding.externalId,
-    text: text.slice(0, 1500),
+    text: truncateAtBoundary(text, 1500),
     taskId: task.id,
     description: 'owner SMS task reply',
     critical: true,
@@ -315,7 +316,7 @@ export async function notifyOwnerBySms(
   // stall, escalation) — a budget cap must degrade them last, like final replies.
   await sendMeteredSms(deps, {
     to: deps.config.OWNER_PHONE,
-    text: input.text.slice(0, 480),
+    text: truncateAtBoundary(input.text, 480),
     taskId: input.taskId,
     description: 'owner async update',
     critical: true,
@@ -340,9 +341,14 @@ export async function notifyApprovalsBySms(
       : 'Review and approve it on the Approvals page of the dashboard.';
     // critical: the out-of-band ping is the whole point of an approval park —
     // dropping it at a budget cap is exactly when the owner most needs it.
+    // A hard slice here severed the last word and glued the instruction
+    // straight onto the stump. Truncation now marks its own end, so a stop is
+    // added only when the summary does not already carry one.
+    const summary = truncateAtBoundary(approval.summary, 120);
+    const stop = /[.!?…]$/u.test(summary) ? '' : '.';
     await sendMeteredSms(deps, {
       to: deps.config.OWNER_PHONE,
-      text: `Approval ${approval.shortCode} — ${approval.summary.slice(0, 120)}. ${action}`,
+      text: `Approval ${approval.shortCode} — ${summary}${stop} ${action}`,
       taskId: approval.taskId,
       description: `approval notification ${approval.shortCode}`,
       critical: true,

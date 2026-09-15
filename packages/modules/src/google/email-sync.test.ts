@@ -15,6 +15,7 @@ import {
   importantEmailNotice,
   MailboxSyncCoordinator,
   type MailboxSyncResult,
+  parseSenderName,
   processForwardedIngest,
 } from './email-sync.js';
 
@@ -391,5 +392,37 @@ describe('forwarded-ingest owner alerts', () => {
         await db.delete(conversations).where(inArray(conversations.id, conversationIds));
       }
     }
+  });
+});
+
+describe('parseSenderName', () => {
+  it('takes the display name out of a normal From header', () => {
+    expect(parseSenderName('Hyundai Motor Finance <hmfusa@servicing.hmfusa.com>')).toBe(
+      'Hyundai Motor Finance',
+    );
+  });
+
+  it('strips the quotes a client wraps a name in', () => {
+    expect(parseSenderName('"Innes, Katharine" <katharine.innes@gmail.com>')).toBe(
+      'Innes, Katharine',
+    );
+  });
+
+  it('returns undefined for a bare address, which has no name to show', () => {
+    expect(parseSenderName('hmfusa@servicing.hmfusa.com')).toBeUndefined();
+    expect(parseSenderName('<hmfusa@servicing.hmfusa.com>')).toBeUndefined();
+  });
+
+  it('returns undefined when the name is only the address repeated', () => {
+    // Some senders emit `addr <addr>`; showing that is no better than the bare
+    // address, and the caller already falls back to it.
+    expect(parseSenderName('hmfusa@servicing.hmfusa.com <hmfusa@servicing.hmfusa.com>')).toBe(
+      undefined,
+    );
+  });
+
+  it('leaves an encoded-word alone rather than decoding it wrong', () => {
+    const header = '=?UTF-8?Q?Caf=C3=A9?= <hello@example.com>';
+    expect(parseSenderName(header)).toBe('=?UTF-8?Q?Caf=C3=A9?=');
   });
 });

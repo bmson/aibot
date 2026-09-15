@@ -1,4 +1,5 @@
 import { getAgent } from '@assistant/core/chat';
+import { truncateAtBoundary } from '@assistant/core/owner-text';
 import { invalidateDeviceToken, listActiveDeviceTokens } from '@assistant/core/push/devices';
 import type { Db } from '@assistant/db';
 import type { ApnsClient } from '@assistant/tools/modules/push';
@@ -8,13 +9,16 @@ export interface PushChannelDeps {
   apns: ApnsClient;
 }
 
-/** Push bodies are glanceable plain text: markdown stays on the dashboard. */
+/**
+ * Push bodies are glanceable plain text: markdown stays on the dashboard.
+ *
+ * The final cut is word-aware. A notification is the whole message on a lock
+ * screen — there is no "tap to see the rest of the sentence" — so a body that
+ * stopped mid-word read as a truncated bug rather than as a summary, and gave
+ * no sign that anything had been dropped.
+ */
 function plain(text: string, max = 220): string {
-  return text
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, max);
+  return truncateAtBoundary(text.replace(/\*\*(.+?)\*\*/g, '$1'), max);
 }
 
 /** The app's UNNotificationCategory identifiers (NotificationManager.swift). */

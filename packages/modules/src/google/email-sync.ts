@@ -11,6 +11,7 @@ import {
   startDocumentIngest,
   TaskRateLimitError,
 } from '@assistant/core';
+import { truncateAtBoundary } from '@assistant/core/owner-text';
 import {
   channelBindings,
   contacts,
@@ -143,6 +144,36 @@ export class MailboxSyncCoordinator {
 function parseSenderEmail(fromHeader: string): string {
   const match = fromHeader.match(/<([^>]+)>/);
   return (match?.[1] ?? fromHeader).trim().toLowerCase();
+}
+
+/**
+ * The display-name portion of a `From` header, e.g. "Hyundai Motor Finance"
+ * out of `"Hyundai Motor Finance <hmfusa@servicing.hmfusa.com>"`. This used to
+ * be discarded entirely at ingest — `parseSenderEmail` kept only the bracketed
+ * address — so every digest and card rendered a bare machine address instead
+ * of the name a person would recognize.
+ *
+ * Only the literal text before `<...>` is taken, with a wrapping pair of
+ * double quotes stripped. RFC 2047 encoded-words (`=?UTF-8?Q?...?=`) are left
+ * exactly as they arrive rather than decoded here — decoding wrong is worse
+ * than not decoding, and the header is meant to be stored, not displayed raw
+ * by this function's caller alone. Returns undefined when there is no
+ * bracketed address to split on, when the name is empty, or when it is just
+ * the address again (`<addr> <addr>`-style headers with no real name).
+ */
+export function parseSenderName(fromHeader: string): string | undefined {
+  const match = fromHeader.match(/^(.*)<([^>]+)>/);
+  if (!match) return undefined;
+  const namePart = match[1] as string;
+  const addressPart = (match[2] as string).trim();
+  const trimmed = namePart.trim();
+  const unquoted =
+    trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2
+      ? trimmed.slice(1, -1)
+      : trimmed;
+  if (!unquoted) return undefined;
+  if (unquoted.toLowerCase() === addressPart.toLowerCase()) return undefined;
+  return unquoted;
 }
 
 function normalizedAuthDomain(value: string): string {
@@ -632,13 +663,14 @@ export async function processForwardedIngest(
       conversationId,
       channelMessageId,
       fromEmail: from,
+      fromName: parseSenderName(gmailHeader(msg.payload, 'From')),
       subject: subject.slice(0, 500),
       contentTrust,
       authenticated: input.authenticated,
       category: score.category,
       importance: score.importance,
       actionable: score.actionable,
-      reason: score.reason.slice(0, 300),
+      reason: truncateAtBoundary(score.reason, 300),
       dates: score.dates,
     })
     .onConflictDoNothing({ target: emailIngest.channelMessageId })
@@ -755,13 +787,14 @@ async function recordDirectIngest(
         conversationId: input.conversationId,
         channelMessageId: input.channelMessageId,
         fromEmail: input.from,
+        fromName: parseSenderName(gmailHeader(input.payload, 'From')),
         subject: input.subject.slice(0, 500),
         contentTrust: input.contentTrust,
         authenticated: input.authenticated,
         category: score.category,
         importance: score.importance,
         actionable: score.actionable,
-        reason: score.reason.slice(0, 300),
+        reason: truncateAtBoundary(score.reason, 300),
         dates: score.dates,
       })
       .onConflictDoNothing({ target: emailIngest.channelMessageId });
