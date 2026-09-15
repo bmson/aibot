@@ -161,6 +161,11 @@ describe('runBriefing', () => {
     expect(prompt).toContain('flight departs');
     // Routine mail is counted but not itemised.
     expect(prompt).not.toContain(`${MARKER} Summer sale`);
+    // These notes are not only the model's input: they are delivered verbatim
+    // whenever the phrasing step fails, so they must already be owner-ready.
+    // Neither the scorer's internals nor a provider timestamp belongs in them.
+    expect(prompt).not.toMatch(/importance \d/);
+    expect(prompt).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
 
     const [suggestion] = await db
       .select({
@@ -468,6 +473,7 @@ describe('runBriefing — richer inputs', () => {
     const empty = {
       delivered: true,
       pinged: false,
+      composedFallback: false,
       mailScanned: 40,
       highlights: 0,
       needsAttention: 0,

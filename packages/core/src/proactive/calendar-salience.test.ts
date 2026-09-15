@@ -169,6 +169,32 @@ describe('salientEvents', () => {
       ctx,
     );
     expect(scored).toBeDefined();
-    expect(describeSalience(scored as NonNullable<typeof scored>)).toContain('Standup');
+    expect(describeSalience(scored as NonNullable<typeof scored>, ctx.timeZone)).toContain(
+      'Standup',
+    );
+  });
+
+  it('renders a Z-stamped event in the passed timezone, not UTC', () => {
+    // Reykjavik sits at UTC year-round in these fixtures, so use a zone with a
+    // real offset to prove the timestamp is actually being converted. Scored
+    // directly rather than through `salientEvents`, which would filter an event
+    // carrying no salience signal before there was anything to describe.
+    const scored = scoreCalendarEvent(
+      event({ start: '2026-03-04T23:30:00Z', end: '2026-03-05T00:00:00Z', allDay: false }),
+      ctx,
+    );
+    const line = describeSalience(scored, 'America/Los_Angeles');
+    // 23:30 UTC on Mar 4 is 15:30 (3:30 PM) Los Angeles time, still Mar 4.
+    expect(line).toContain('3:30 PM');
+    expect(line).not.toContain('23:30');
+    expect(line).not.toContain('2026-03-04T23:30:00Z');
+  });
+
+  it('produces no embedded newline when the event location contains one', () => {
+    const messyLocation = 'Crocker Amazon\n1669 Geneva Avenue, San Francisco, CA 94134';
+    const scored = scoreCalendarEvent(event({ location: messyLocation }), ctx);
+    const line = describeSalience(scored, ctx.timeZone);
+    expect(line).not.toContain('\n');
+    expect(line).toContain('Crocker Amazon 1669 Geneva Avenue, San Francisco, CA 94134');
   });
 });

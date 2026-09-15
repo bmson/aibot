@@ -1,3 +1,4 @@
+import { collapseWhitespace, ownerEventWhen } from '../owner-text.js';
 import type { BriefingCalendarEvent } from '../workflow/briefing.js';
 
 /**
@@ -124,7 +125,9 @@ function organizerLabel(organizer: string): string | null {
   const raw = organizer.trim();
   const angled = /^(.*?)\s*<([^>]+)>\s*$/.exec(raw);
   const name = angled?.[1]?.trim().replace(/^["']|["']$/g, '') ?? '';
-  if (name) return name;
+  // The display name is provider-supplied text, same family as a location —
+  // collapsed here, at the point it enters, rather than trusted downstream.
+  if (name) return collapseWhitespace(name);
   const email = organizerEmail(raw);
   return email.includes('@') && !isSyntheticOrganizer(email) ? email : null;
 }
@@ -160,7 +163,10 @@ export function scoreCalendarEvent(
 
   if (!event.allDay && isPhysicalLocation(event.location ?? '')) {
     score += WEIGHTS.travel;
-    reasons.push(`it is at ${(event.location ?? '').trim()}`);
+    // A Google Calendar location routinely arrives as "Venue\nStreet, City" —
+    // collapsed here so the reason stays one line wherever it is later joined
+    // into a bullet.
+    reasons.push(`it is at ${collapseWhitespace(event.location ?? '')}`);
   }
 
   if (!event.allDay) {
@@ -226,8 +232,19 @@ export function salientEvents(
     .sort((a, b) => b.score - a.score || Date.parse(a.event.start) - Date.parse(b.event.start));
 }
 
-/** One line per salient event, for the digest's structured notes. */
-export function describeSalience(scored: EventSalience): string {
-  const when = scored.event.allDay ? scored.event.start.slice(0, 10) : scored.event.start;
-  return `- ${when}: ${scored.event.summary} — ${scored.reasons.join('; ')}`;
+/**
+ * One line per salient event, for the digest's structured notes.
+ *
+ * `scored.event.start` is the calendar provider's raw string — whatever
+ * offset Google happened to return, not the owner's — so it is rendered
+ * through `ownerEventWhen` rather than printed as-is. The summary and the
+ * joined reasons are collapsed too: a reason built from provider text (a
+ * location, an organizer name) can still carry an embedded newline by the
+ * time it gets here, and that newline would end the markdown bullet early.
+ */
+export function describeSalience(scored: EventSalience, timeZone: string): string {
+  const when = ownerEventWhen({ start: scored.event.start, allDay: scored.event.allDay }, timeZone);
+  const summary = collapseWhitespace(scored.event.summary);
+  const reasons = collapseWhitespace(scored.reasons.join('; '));
+  return `- ${when}: ${summary} — ${reasons}`;
 }
