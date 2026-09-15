@@ -1497,6 +1497,8 @@ export const emailIngest = pgTable(
     /** `gmail:<messageId>` — matches tasks.external_event_id for the triage task. */
     channelMessageId: text('channel_message_id').notNull(),
     fromEmail: text('from_email').notNull(),
+    /** Display name from the `From` header; null when the sender sent none. */
+    fromName: text('from_name'),
     subject: text('subject').notNull().default(''),
     /**
      * Trust derived from the SENDER, kept separate from the task's trust (which

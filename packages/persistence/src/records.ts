@@ -577,6 +577,7 @@ export interface Records {
     importance: number;
     reason: string;
     fromEmail: string;
+    fromName: string | null;
     subject: string;
     contentTrust: string;
     authenticated: boolean;
