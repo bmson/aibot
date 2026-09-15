@@ -608,6 +608,7 @@ struct ChatView: View {
                 // Both edges belong to one modifier: what the transcript keeps
                 // clear is a single geometry, not two insets that can drift.
                 .contentMargins(
+                    .all,
                     EdgeInsets(
                         top: crownContentTopInset,
                         leading: 0,

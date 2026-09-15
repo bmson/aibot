@@ -39,6 +39,7 @@ private struct LiftedTranscriptFixture: View {
                         // stage so a row travelling under the composer is still
                         // inside the viewport that builds it.
                         .contentMargins(
+                            .all,
                             EdgeInsets(
                                 top: 0,
                                 leading: 0,
