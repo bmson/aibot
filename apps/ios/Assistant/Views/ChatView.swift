@@ -2417,15 +2417,17 @@ private final class InlineCompletionTextView: UITextView {
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
 
-        // Both labels take their color from a property observer, and an
-        // observer never runs for the value a property is declared with. The
-        // configure path then skips any write matching what is already stored,
-        // so a default that happens to equal the configured color leaves the
-        // observer with nothing to react to and the label sitting on
-        // `UILabel`'s own `.label` — black on the green stage. Seeding here
-        // makes the initial state correct whether or not `didSet` ever fires.
+        // Every label value below reaches its view through a property
+        // observer, and an observer never runs for the value a property is
+        // declared with. The configure path then skips any write matching what
+        // is already stored, so a default that happens to equal the configured
+        // value leaves the observer with nothing to react to — which is how the
+        // suggestion suffix ended up on `UILabel`'s own `.label`, black on the
+        // green stage. Seeding each one here makes the initial state correct
+        // whether or not `didSet` ever fires.
         placeholderLabel.numberOfLines = 1
         placeholderLabel.lineBreakMode = .byTruncatingTail
+        placeholderLabel.text = placeholderText
         placeholderLabel.textColor = placeholderColor
         placeholderLabel.isAccessibilityElement = false
         addSubview(placeholderLabel)
