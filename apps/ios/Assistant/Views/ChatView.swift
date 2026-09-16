@@ -517,7 +517,24 @@ struct ChatView: View {
         return Group {
             ConversationColumn {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    // Deliberately eager, and the one thing here that is.
+                    //
+                    // The transcript's viewport ends 18pt above the composer,
+                    // and `scrollClipDisabled` below is what lets the strip
+                    // under the input keep showing the log. It can only draw
+                    // rows that exist, though, and a lazy stack stops vending
+                    // one once it leaves that viewport — so a bubble on its way
+                    // down was built, drawn under the glass, and then dropped a
+                    // few points later, blinking out of existence a whole
+                    // composer above the bottom of the screen.
+                    //
+                    // Building every row costs a long thread real work at open.
+                    // The alternative is a viewport that reaches the bottom of
+                    // the stage, and that is not free either: it puts the
+                    // scroll view in contact with geometry that moves under the
+                    // pull menu, and the transcript slid 10pt against the
+                    // composer for it. A row that exists cannot flicker.
+                    VStack(spacing: 0) {
                         if model.messages.isEmpty {
                             emptyConversation
                         } else {
@@ -538,8 +555,10 @@ struct ChatView: View {
                         value: model.messages.map(\.id)
                     )
                 }
-                // Older rows may continue beneath the floating input while
-                // scrolling. Clip at the outer stage, not this shorter viewport.
+                // Older rows continue beneath the floating input and off the
+                // bottom of the screen while scrolling — the stack above is
+                // eager so that every one of them is there to draw. Clip at the
+                // outer stage, not this shorter viewport.
                 .scrollClipDisabled()
                 .scrollIndicators(.hidden)
                 .scrollPosition($transcriptScrollPosition)
