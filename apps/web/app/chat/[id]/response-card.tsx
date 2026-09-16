@@ -16,6 +16,13 @@ import {
   CalendarDays,
   CheckCircle2,
   Clock,
+  Cloud,
+  CloudDrizzle,
+  CloudFog,
+  CloudHail,
+  CloudLightning,
+  CloudRain,
+  CloudSnow,
   CloudSun,
   FileText,
   FolderOpen,
@@ -30,6 +37,7 @@ import {
   RotateCw,
   Sparkles,
   Star,
+  Sun,
   Ticket,
   Trophy,
   Users,
@@ -214,17 +222,114 @@ function DetailRows({ items }: { items: Array<{ label: string; value: string }> 
   );
 }
 
-function WeatherCard({ data }: { data: Raw }) {
-  const details = pairs(data.details);
+/**
+ * The card names its own sky (`symbol`, from response-cards.ts) rather than
+ * leaving the web to re-parse the description. An older payload carries no
+ * symbol and an unknown one may arrive from a newer server, so both fall back
+ * to the one glyph this card has always used.
+ */
+const WEATHER_ICONS: Record<string, typeof CloudSun> = {
+  clear: Sun,
+  'partly-cloudy': CloudSun,
+  cloudy: Cloud,
+  fog: CloudFog,
+  drizzle: CloudDrizzle,
+  rain: CloudRain,
+  sleet: CloudHail,
+  snow: CloudSnow,
+  thunderstorm: CloudLightning,
+};
+
+function weatherIcon(symbol: unknown): typeof CloudSun {
+  return WEATHER_ICONS[str(symbol)] ?? CloudSun;
+}
+
+/**
+ * A weather detail keeps the sky its server named, which `pairs` drops.
+ */
+function weatherDetails(value: unknown): Array<{ label: string; value: string; symbol: string }> {
+  return recs(value).flatMap((entry) => {
+    const label = str(entry.label);
+    const text = str(entry.value);
+    return label && text ? [{ label, value: text, symbol: str(entry.symbol) }] : [];
+  });
+}
+
+/**
+ * Rows whose label opens with a day ("Fri", "Thu Morning") belong to that day
+ * rather than to the current conditions, and group under it — one line for a
+ * plain forecast day, one line per part of the day when the owner asked about
+ * a single day. Mirrors WeatherPresentation.split on iOS, so a payload reads
+ * the same on both surfaces.
+ */
+const WEATHER_DAY =
+  /^(saturday|sunday|monday|tuesday|wednesday|thursday|friday|tomorrow|sat|sun|mon|tue|wed|thu|fri)\b[:\s–-]*(.*)$/i;
+
+function splitWeatherDays(details: ReturnType<typeof weatherDetails>) {
+  const current: ReturnType<typeof weatherDetails> = [];
+  const order: string[] = [];
+  const byDay = new Map<string, ReturnType<typeof weatherDetails>>();
+  for (const detail of details) {
+    const match = WEATHER_DAY.exec(detail.label);
+    if (!match?.[1]) {
+      current.push(detail);
+      continue;
+    }
+    const day = match[1];
+    if (!byDay.has(day)) {
+      order.push(day);
+      byDay.set(day, []);
+    }
+    byDay.get(day)?.push({ ...detail, label: match[2]?.trim() ?? '' });
+  }
+  return { current, days: order.map((day) => ({ day, facts: byDay.get(day) ?? [] })) };
+}
+
+function WeatherDayRow({ day, facts }: { day: string; facts: ReturnType<typeof weatherDetails> }) {
   return (
-    <CardShell icon={CloudSun} label={str(data.location) || 'Weather'}>
-      <p className="text-sm text-strong">
-        <span className="text-base font-semibold">{str(data.temperature)}</span>{' '}
-        <span className="text-muted">{str(data.condition)}</span>
-      </p>
-      {details.length > 0 ? (
+    <div className="flex gap-3 py-1.5 text-xs">
+      <p className="w-14 shrink-0 font-medium text-strong capitalize">{day}</p>
+      <div className="flex min-w-0 flex-col gap-1">
+        {facts.map((fact) => {
+          const Icon = weatherIcon(fact.symbol);
+          return (
+            <p key={`${fact.label}-${fact.value}`} className="flex items-baseline gap-1.5">
+              <Icon className="size-3.5 shrink-0 translate-y-0.5 text-accent" aria-hidden="true" />
+              {fact.label ? <span className="text-muted">{fact.label}</span> : null}
+              <span className="min-w-0 text-strong">{fact.value}</span>
+            </p>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function WeatherCard({ data }: { data: Raw }) {
+  const { current, days } = splitWeatherDays(weatherDetails(data.details));
+  // "Day" names which day the card is about; it is the card's caption rather
+  // than one of its readings, so it never renders as a metric.
+  const caption = current.find((detail) => detail.label.toLowerCase() === 'day')?.value;
+  const metrics = current.filter((detail) => detail.label.toLowerCase() !== 'day');
+  return (
+    <CardShell icon={weatherIcon(data.symbol)} label={str(data.location) || 'Weather'}>
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="min-w-0 text-sm text-strong">
+          <span className="text-base font-semibold">{str(data.temperature)}</span>{' '}
+          <span className="text-muted">{str(data.condition)}</span>
+        </p>
+        {caption ? <p className="shrink-0 text-xs text-muted">{caption}</p> : null}
+      </div>
+      {metrics.length > 0 ? (
         <div className="mt-2">
-          <DetailRows items={details} />
+          <DetailRows items={metrics} />
+        </div>
+      ) : null}
+      {days.length > 0 ? (
+        <div className="mt-2.5 divide-y divide-edge/50 border-t border-edge/60 pt-1">
+          {days.map((entry) => (
+            <WeatherDayRow key={entry.day} day={entry.day} facts={entry.facts} />
+          ))}
         </div>
       ) : null}
     </CardShell>

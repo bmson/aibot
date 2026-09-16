@@ -211,45 +211,6 @@ export function calendarResponseCards(
     .sort((a, b) => Date.parse(String(a.start)) - Date.parse(String(b.start)));
 }
 
-/** Ambient data is already trusted context, but only a tiny literal subset becomes a card. */
-export function weatherResponseCards(ambient?: string): ResponseCard[] {
-  if (!ambient) return [];
-  const weather =
-    /Weather there:\s*([^,]+),\s*(-?\d+)°C\s*\(today\s*(-?\d+)–(-?\d+)°C,\s*(\d+)% chance of rain, wind\s*(\d+) km\/h(?:, humidity\s*(\d+)%)?\)/i.exec(
-      ambient,
-    );
-  if (!weather) return [];
-  const [, condition = '', temperature = '', low = '', high = '', rain = '', wind = '', humidity] =
-    weather;
-  const location =
-    /Owner's current location:\s*(?:near\s+)?([^,(\n.]+)/i.exec(ambient)?.[1]?.trim() ||
-    'Right now';
-  // "Coming days: Tue 16–23°C, partly cloudy; Wed ..." becomes one
-  // day-labeled detail per day so the card can group the forecast by day.
-  const coming = /^Coming days:\s*(.+?)\.?\s*$/im.exec(ambient)?.[1] ?? '';
-  const forecast = coming
-    .split(';')
-    .map((entry) => /^(\w+)\s+(.+)$/.exec(entry.trim()))
-    .filter((day): day is RegExpExecArray => day !== null)
-    .map((day) => ({ label: day[1] ?? '', value: day[2] ?? '' }));
-  return [
-    {
-      kind: 'weather',
-      id: `weather-${temperature}-${condition.toLowerCase()}`,
-      location,
-      condition,
-      temperature: `${temperature}°C`,
-      details: [
-        { label: 'Today', value: `${low}–${high}°C` },
-        { label: 'Wind', value: `${wind} km/h` },
-        ...(humidity ? [{ label: 'Humidity', value: `${humidity}%` }] : []),
-        { label: 'Rain chance', value: `${rain}%` },
-        ...forecast,
-      ],
-    },
-  ];
-}
-
 /**
  * Rain worth naming in a one-line day summary. Mirrors the ambient block's own
  * threshold (see `getAmbientBlock`), so a day reads the same whichever source
@@ -279,6 +240,60 @@ function speed(value: unknown): string | undefined {
   return parsed === undefined ? undefined : `${parsed} km/h`;
 }
 
+/**
+ * The provider's vocabulary is a closed set of WMO descriptions (see `WMO` in
+ * ambient.ts), so the sky is classified once, here, into a small stable
+ * vocabulary the clients map to an icon. Neither client re-parses prose, and a
+ * description this list does not know degrades to the same default on both.
+ *
+ * Order matters: "freezing rain" is sleet rather than rain, and "partly cloudy"
+ * is its own sky rather than the overcast one.
+ */
+const WEATHER_SYMBOLS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/thunder/, 'thunderstorm'],
+  [/snow/, 'snow'],
+  [/freezing rain/, 'sleet'],
+  [/drizzle/, 'drizzle'],
+  [/rain/, 'rain'],
+  [/fog/, 'fog'],
+  [/partly cloudy|mostly clear/, 'partly-cloudy'],
+  [/overcast|cloud/, 'cloudy'],
+  [/clear/, 'clear'],
+];
+
+function weatherSymbol(description: string): string | undefined {
+  const text = description.toLowerCase();
+  return WEATHER_SYMBOLS.find(([pattern]) => pattern.test(text))?.[1];
+}
+
+/**
+ * "early-morning" is the tool's enum spelling; "Early morning" is the owner's.
+ * Anything unrecognised is dropped rather than shown raw, so a band the tool
+ * adds later never reaches a card as a hyphenated identifier.
+ */
+const TIME_OF_DAY_NAMES: Record<string, string> = {
+  'early-morning': 'Early morning',
+  morning: 'Morning',
+  midday: 'Midday',
+  afternoon: 'Afternoon',
+  evening: 'Evening',
+  night: 'Night',
+};
+
+function bandName(label: string): string {
+  return TIME_OF_DAY_NAMES[label.toLowerCase()] ?? '';
+}
+
+/** A detail row that also names its own sky, so a day can carry its own icon. */
+function weatherDetail(
+  label: string,
+  value: string,
+  description: string,
+): { label: string; value: string; symbol?: string } {
+  const symbol = weatherSymbol(description);
+  return { label, value, ...(symbol ? { symbol } : {}) };
+}
+
 /** "16–23°C, light rain, 80% chance of rain" — one day on one line. */
 function weatherDayValue(day: RecordValue): string {
   const rain = numeric(day.precipProbabilityMax);
@@ -289,6 +304,49 @@ function weatherDayValue(day: RecordValue): string {
   ]
     .filter(Boolean)
     .join(', ');
+}
+
+/** Ambient data is already trusted context, but only a tiny literal subset becomes a card. */
+export function weatherResponseCards(ambient?: string): ResponseCard[] {
+  if (!ambient) return [];
+  const weather =
+    /Weather there:\s*([^,]+),\s*(-?\d+)°C\s*\(today\s*(-?\d+)–(-?\d+)°C,\s*(\d+)% chance of rain, wind\s*(\d+) km\/h(?:, humidity\s*(\d+)%)?\)/i.exec(
+      ambient,
+    );
+  if (!weather) return [];
+  const [, condition = '', temperature = '', low = '', high = '', rain = '', wind = '', humidity] =
+    weather;
+  const location =
+    /Owner's current location:\s*(?:near\s+)?([^,(\n.]+)/i.exec(ambient)?.[1]?.trim() ||
+    'Right now';
+  // "Coming days: Tue 16–23°C, partly cloudy; Wed ..." becomes one
+  // day-labeled detail per day so the card can group the forecast by day.
+  const coming = /^Coming days:\s*(.+?)\.?\s*$/im.exec(ambient)?.[1] ?? '';
+  const forecast = coming
+    .split(';')
+    .map((entry) => /^(\w+)\s+(.+)$/.exec(entry.trim()))
+    .filter((day): day is RegExpExecArray => day !== null)
+    // The day's own words are inside its value ("16–23°C, light rain"), which
+    // is all the sky classification needs to give each day its own icon.
+    .map((day) => weatherDetail(day[1] ?? '', day[2] ?? '', day[2] ?? ''));
+  const symbol = weatherSymbol(condition);
+  return [
+    {
+      kind: 'weather',
+      id: `weather-${temperature}-${condition.toLowerCase()}`,
+      location,
+      condition,
+      temperature: `${temperature}°C`,
+      ...(symbol ? { symbol } : {}),
+      details: [
+        { label: 'Today', value: `${low}–${high}°C` },
+        { label: 'Wind', value: `${wind} km/h` },
+        ...(humidity ? [{ label: 'Humidity', value: `${humidity}%` }] : []),
+        { label: 'Rain chance', value: `${rain}%` },
+        ...forecast,
+      ],
+    },
+  ];
 }
 
 /**
@@ -325,16 +383,27 @@ export function weatherLookupResponseCards(evidence: ActionEvidence[]): Response
       (targetDay ? range(targetDay.lowC, targetDay.highC) : degrees(current?.tempC)) ?? '';
     const condition = string(headline.description);
 
-    // Hour windows ("Mon 11:00–14:00") keep their day in the label: both
-    // clients group a day-prefixed detail under that day.
+    // A date asked about without an hour comes back as one row per named part
+    // of the day, which is the shape an owner plans around: "Thu Morning",
+    // "Thu Evening". Every row keeps its weekday, because that prefix is how
+    // both clients group a day's rows together.
+    //
+    // The clock range always rides in the value, never the label. iOS drops a
+    // detail whose label carries digits — that rule keeps prose like "For your
+    // 11:00 Zoom meeting" from being torn into a row — so an explicitly-timed
+    // window labelled "Thu 13:00–15:00" would have rendered on web and
+    // vanished on iOS.
     const windows = Array.isArray(target?.windows)
       ? target.windows
           .map(record)
           .filter((window): window is RecordValue => !!window)
-          .map((window) => ({
-            label: [string(window.weekday), string(window.window)].filter(Boolean).join(' '),
-            value: weatherDayValue(window),
-          }))
+          .map((window) =>
+            weatherDetail(
+              [string(window.weekday), bandName(string(window.label))].filter(Boolean).join(' '),
+              [string(window.window), weatherDayValue(window)].filter(Boolean).join(' · '),
+              string(window.description),
+            ),
+          )
           .filter((detail) => detail.label && detail.value)
       : [];
 
@@ -356,11 +425,14 @@ export function weatherLookupResponseCards(evidence: ActionEvidence[]): Response
     // never repeats itself further down the same card.
     const comingDays = forecast
       .filter((day) => !targetDate || string(day.date) !== targetDate)
-      .map((day) => ({ label: string(day.weekday), value: weatherDayValue(day) }))
+      .map((day) =>
+        weatherDetail(string(day.weekday), weatherDayValue(day), string(day.description)),
+      )
       .filter((detail) => detail.label && detail.value);
 
     const cardDetails = [...headlineDetails, ...windows, ...comingDays];
     if (!temperature && !condition && cardDetails.length === 0) return [];
+    const symbol = weatherSymbol(condition);
     return [
       {
         kind: 'weather' as const,
@@ -368,6 +440,9 @@ export function weatherLookupResponseCards(evidence: ActionEvidence[]): Response
         location: place,
         condition,
         temperature,
+        // The headline sky, for the client that draws an icon for it. Older
+        // clients ignore the field and keep the one weather glyph they have.
+        ...(symbol ? { symbol } : {}),
         details: cardDetails,
       },
     ];

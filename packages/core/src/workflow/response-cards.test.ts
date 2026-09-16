@@ -290,7 +290,26 @@ describe('response cards', () => {
     ]);
   });
 
-  it('labels each hour window with its day so the card can group them', () => {
+  const window = (
+    label: string,
+    clock: string,
+    description: string,
+    lowC: number,
+    highC: number,
+    precipProbabilityMax = 5,
+  ) => ({
+    date: '2026-09-17',
+    weekday: 'Thu',
+    window: clock,
+    label,
+    description,
+    lowC,
+    highC,
+    precipProbabilityMax,
+    windKmhMax: 12,
+  });
+
+  it('gives a whole asked-about day one row per part of the day', () => {
     const [card] = weatherLookupResponseCards([
       {
         toolName: 'weather.lookup',
@@ -303,25 +322,268 @@ describe('response cards', () => {
             date: '2026-09-17',
             weekday: 'Thu',
             hours: [],
+            // A future date always carries its day row: the tool finds it in
+            // the forecast, which starts tomorrow.
+            day: {
+              date: '2026-09-17',
+              weekday: 'Thu',
+              description: 'light rain',
+              lowC: 9,
+              highC: 14,
+              precipProbabilityMax: 70,
+            },
             windows: [
-              {
-                date: '2026-09-17',
-                weekday: 'Thu',
-                window: '08:00–11:00',
-                label: 'morning',
-                description: 'overcast',
-                lowC: 13,
-                highC: 14,
-                precipProbabilityMax: 5,
-                windKmhMax: 12,
-              },
+              window('morning', '08:00–11:00', 'fog', 9, 11),
+              window('midday', '11:00–14:00', 'light rain', 12, 14, 70),
+              window('evening', '17:00–21:00', 'clear', 10, 12),
             ],
           },
         },
       },
     ]);
 
-    expect(card?.details).toContainEqual({ label: 'Thu 08:00–11:00', value: '13–14°C, overcast' });
+    // The band leads the label — it is what the owner asked in — and every row
+    // keeps the weekday prefix both clients group on.
+    expect(card?.details).toEqual([
+      { label: 'Day', value: 'Thu' },
+      { label: 'Rain chance', value: '70%' },
+      { label: 'Thu Morning', value: '08:00–11:00 · 9–11°C, fog', symbol: 'fog' },
+      {
+        label: 'Thu Midday',
+        value: '11:00–14:00 · 12–14°C, light rain, 70% chance of rain',
+        symbol: 'rain',
+      },
+      { label: 'Thu Evening', value: '17:00–21:00 · 10–12°C, clear', symbol: 'clear' },
+    ]);
+  });
+
+  it('headlines today with the current reading when the bands are today’s own', () => {
+    // The tool's forecast starts tomorrow, so a target it cannot find a day row
+    // for is today — and today's headline is what the sky is doing right now.
+    const [card] = weatherLookupResponseCards([
+      {
+        toolName: 'weather.lookup',
+        status: 'succeeded',
+        result: {
+          place: 'Reykjavík',
+          current: {
+            tempC: 12,
+            description: 'clear',
+            lowC: 9,
+            highC: 14,
+            precipProbabilityMax: 5,
+            windKmh: 20,
+          },
+          forecast: [],
+          target: {
+            date: '2026-09-16',
+            weekday: 'Wed',
+            hours: [],
+            windows: [{ ...window('evening', '17:00–21:00', 'fog', 8, 10), weekday: 'Wed' }],
+          },
+        },
+      },
+    ]);
+
+    expect(card).toMatchObject({ temperature: '12°C', condition: 'clear', symbol: 'clear' });
+    expect(card?.details).toContainEqual({
+      label: 'Wed Evening',
+      value: '17:00–21:00 · 8–10°C, fog',
+      symbol: 'fog',
+    });
+  });
+
+  it('labels an explicitly-timed window with its clock range, having no band to name', () => {
+    const [card] = weatherLookupResponseCards([
+      {
+        toolName: 'weather.lookup',
+        status: 'succeeded',
+        result: {
+          place: 'Reykjavík',
+          current: { tempC: 12, description: 'clear', lowC: 9, highC: 14 },
+          forecast: [],
+          target: {
+            date: '2026-09-17',
+            weekday: 'Thu',
+            hours: [],
+            windows: [{ ...window('', '13:00–15:00', 'heavy snow', 1, 3), label: undefined }],
+          },
+        },
+      },
+    ]);
+
+    // Day alone for the label: the clock carries digits, and iOS drops a
+    // detail whose label has any.
+    expect(card?.details).toContainEqual({
+      label: 'Thu',
+      value: '13:00–15:00 · 1–3°C, heavy snow',
+      symbol: 'snow',
+    });
+  });
+
+  it('names each sky from the closed provider vocabulary', () => {
+    const skies = [
+      ['thunderstorm with hail', 'thunderstorm'],
+      ['heavy snow', 'snow'],
+      ['snow showers', 'snow'],
+      ['freezing rain', 'sleet'],
+      ['light drizzle', 'drizzle'],
+      ['rain showers', 'rain'],
+      ['freezing fog', 'fog'],
+      ['fog', 'fog'],
+      ['partly cloudy', 'partly-cloudy'],
+      ['mostly clear', 'partly-cloudy'],
+      ['overcast', 'cloudy'],
+      ['clear', 'clear'],
+    ] as const;
+    const [card] = weatherLookupResponseCards([
+      {
+        toolName: 'weather.lookup',
+        status: 'succeeded',
+        result: {
+          place: 'Reykjavík',
+          current: { tempC: 12, description: 'clear', lowC: 9, highC: 14 },
+          forecast: skies.map(([description], index) => ({
+            date: `2026-09-${17 + index}`,
+            weekday: `D${index}`,
+            description,
+            lowC: 1,
+            highC: 2,
+            precipProbabilityMax: 0,
+          })),
+        },
+      },
+    ]);
+
+    if (!card) throw new Error('expected a weather card');
+    const drawn = new Map(
+      (card.details as Array<{ label: string; symbol?: string }>).map((detail) => [
+        detail.label,
+        detail.symbol,
+      ]),
+    );
+    expect(skies.map(([description], index) => [description, drawn.get(`D${index}`)])).toEqual(
+      skies.map(([description, symbol]) => [description, symbol]),
+    );
+    // An unrecognised description carries no symbol rather than a wrong one.
+    expect(
+      weatherLookupResponseCards([
+        {
+          toolName: 'weather.lookup',
+          status: 'succeeded',
+          result: {
+            place: 'Reykjavík',
+            current: { tempC: 3, description: 'unsettled' },
+            forecast: [],
+          },
+        },
+      ])[0],
+    ).not.toHaveProperty('symbol');
+  });
+
+  it('keeps every weather label inside what iOS will render', () => {
+    // isWeatherCardDetail on iOS drops a label carrying digits or running past
+    // three words, so a label that breaks either rule renders on web and
+    // silently disappears on the phone.
+    const cards = [
+      ...weatherLookupResponseCards([
+        {
+          toolName: 'weather.lookup',
+          status: 'succeeded',
+          result: {
+            place: 'Reykjavík',
+            current: {
+              tempC: 12,
+              description: 'clear',
+              lowC: 9,
+              highC: 14,
+              precipProbabilityMax: 5,
+              windKmh: 20,
+              humidity: 80,
+            },
+            forecast: [
+              {
+                date: '2026-09-18',
+                weekday: 'Fri',
+                description: 'fog',
+                lowC: 3,
+                highC: 6,
+                precipProbabilityMax: 0,
+              },
+            ],
+            target: {
+              date: '2026-09-17',
+              weekday: 'Thu',
+              hours: [],
+              day: {
+                date: '2026-09-17',
+                weekday: 'Thu',
+                description: 'light rain',
+                lowC: 9,
+                highC: 14,
+                precipProbabilityMax: 70,
+              },
+              windows: [
+                window('early-morning', '05:00–08:00', 'fog', 5, 7),
+                window('night', '21:00–24:00', 'clear', 4, 6),
+                { ...window('', '13:00–15:00', 'snow', 1, 3), label: undefined },
+              ],
+            },
+          },
+        },
+      ]),
+      ...weatherResponseCards(
+        "Owner's current location: near San Francisco.\nWeather there: overcast, 18°C (today 17–19°C, 2% chance of rain, wind 18 km/h, humidity 70%).\nComing days: Tue 16–23°C, clear; Wed 14–21°C, light rain, 80% chance of rain.",
+      ),
+    ];
+
+    const labels = cards.flatMap((card) =>
+      (card.details as Array<{ label: string }>).map((detail) => detail.label),
+    );
+    expect(labels.length).toBeGreaterThan(10);
+    expect(labels.filter((label) => /\d/.test(label))).toEqual([]);
+    expect(labels.filter((label) => label.split(' ').length > 3)).toEqual([]);
+  });
+
+  it('carries a full week of days when a full week was asked for', () => {
+    const week = ['Fri', 'Sat', 'Sun', 'Mon', 'Tue', 'Wed'];
+    const [card] = weatherLookupResponseCards([
+      {
+        toolName: 'weather.lookup',
+        status: 'succeeded',
+        args: { days: 6 },
+        result: {
+          place: 'Reykjavík',
+          current: {
+            tempC: 12,
+            description: 'clear',
+            lowC: 9,
+            highC: 14,
+            precipProbabilityMax: 5,
+            windKmh: 20,
+          },
+          forecast: week.map((weekday, index) => ({
+            date: `2026-09-${18 + index}`,
+            weekday,
+            description: 'partly cloudy',
+            lowC: 10 + index,
+            highC: 15 + index,
+            precipProbabilityMax: 10,
+          })),
+        },
+      },
+    ]);
+
+    if (!card) throw new Error('expected a weather card');
+    const days = (card.details as Array<{ label: string }>).filter((detail) =>
+      week.includes(detail.label),
+    );
+    expect(days.map((detail) => detail.label)).toEqual(week);
+    expect(days[0]).toEqual({
+      label: 'Fri',
+      value: '10–15°C, partly cloudy',
+      symbol: 'partly-cloudy',
+    });
   });
 
   it('cards a named place from its current reading when no day was asked for', () => {

@@ -67,6 +67,61 @@ describe('ResponseCards', () => {
   const render = (card: Record<string, unknown>) =>
     renderToStaticMarkup(<ResponseCards cards={[card]} timeZone="UTC" />);
 
+  it('groups a weather card by day and keeps the current metrics above them', () => {
+    const html = render({
+      kind: 'weather',
+      id: 'w1',
+      location: 'Reykjavík',
+      condition: 'overcast',
+      temperature: '14–17°C',
+      symbol: 'cloudy',
+      details: [
+        { label: 'Day', value: 'Thu' },
+        { label: 'Rain chance', value: '1%', symbol: 'cloudy' },
+        { label: 'Thu Morning', value: '08:00–11:00 · 9–11°C, fog', symbol: 'fog' },
+        { label: 'Thu Evening', value: '17:00–21:00 · 10–12°C, clear', symbol: 'clear' },
+        { label: 'Fri', value: '11–15°C, light rain, 80% chance of rain', symbol: 'rain' },
+      ],
+    });
+
+    // Each band reads under its day, with the day named once.
+    expect(html).toContain('Morning');
+    expect(html).toContain('Evening');
+    expect(html).toContain('08:00–11:00 · 9–11°C, fog');
+    expect(html).toContain('11–15°C, light rain, 80% chance of rain');
+    // The day the card is about is its caption, never a metric row.
+    expect(html).toContain('Thu');
+    expect(html).not.toContain('>Day<');
+    // Both bands hang off one Thu heading rather than repeating the day per
+    // row, and Fri opens its own.
+    const headings = html.match(/capitalize">([^<]+)</g) ?? [];
+    expect(headings).toEqual(['capitalize">Thu<', 'capitalize">Fri<']);
+  });
+
+  it('draws each sky with its own icon and falls back for an unknown one', () => {
+    const svgs = (html: string) => html.match(/class="lucide[^"]*"/g) ?? [];
+    const rain = svgs(
+      render({
+        kind: 'weather',
+        id: 'w2',
+        temperature: '9°C',
+        symbol: 'rain',
+        details: [{ label: 'Sat', value: '2–4°C, heavy snow', symbol: 'snow' }],
+      }),
+    ).join(' ');
+    expect(rain).toContain('cloud-rain');
+    expect(rain).toContain('cloud-snow');
+
+    // A payload from before symbols existed, and one naming a sky this build
+    // does not know, both keep the glyph this card has always used.
+    for (const card of [
+      { kind: 'weather', id: 'w3', temperature: '9°C', details: [{ label: 'Sat', value: 'mild' }] },
+      { kind: 'weather', id: 'w4', temperature: '9°C', symbol: 'meteor-shower', details: [] },
+    ]) {
+      expect(svgs(render(card)).join(' ')).toContain('cloud-sun');
+    }
+  });
+
   it('reformats the historical inline numbered calendar reply as an agenda', () => {
     const cards = responseCardPayloads([
       {
