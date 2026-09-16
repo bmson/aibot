@@ -55,6 +55,18 @@ export interface BuiltinDeps {
     taskId?: string;
     urgency?: 'ambient' | 'interrupt';
   }) => Promise<void>;
+  /**
+   * Retire the live facts a just-saved fact contradicts (injected by the
+   * composition root — it needs the model router, and a closure keeps that out
+   * of this package exactly like `embed` does). Absent in tests and minimal
+   * installs: a correction then waits for the nightly consolidation, which is
+   * the behaviour this closure exists to improve on, not a new failure.
+   */
+  supersede?: (input: {
+    agentId: string;
+    newFactId: string;
+    taskId?: string;
+  }) => Promise<{ superseded: string[] }>;
   /** Injected in tests; defaults to global fetch (used by `weather.lookup`). */
   fetchImpl?: (url: string, init?: { signal?: AbortSignal }) => Promise<Response>;
 }
@@ -125,7 +137,39 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
           })
           .onConflictDoNothing({ target: memories.contentHash })
           .returning();
-        return { saved: Boolean(row), duplicate: !row, quarantined };
+        if (!row) return { saved: false, duplicate: true, quarantined };
+
+        // A correction should take effect on the turn it is made, not on the
+        // next night's sweep. Only a trusted, live `knowledge` write may retire
+        // anything: an `experience` episode does not falsify an earlier one,
+        // and a quarantined save is still awaiting the owner's review.
+        const eligible = args.category === 'knowledge' && !quarantined;
+        const superseded =
+          eligible && deps.supersede
+            ? await deps
+                .supersede({
+                  agentId: ctx.agentId,
+                  newFactId: row.id,
+                  ...(ctx.taskId ? { taskId: ctx.taskId } : {}),
+                })
+                .then((result) => result.superseded)
+                // The fact is saved either way. Losing the check is a delay
+                // (consolidation still runs tonight); failing the tool call
+                // would lose the owner's correction outright.
+                .catch((err: unknown) => {
+                  console.error('memory.save: supersession check failed', err);
+                  return [] as string[];
+                })
+            : [];
+
+        return {
+          saved: true,
+          duplicate: false,
+          quarantined,
+          // Named so the model can tell the owner it replaced something rather
+          // than quietly adding a second version of the same fact.
+          ...(superseded.length ? { replacedEarlierFacts: superseded.length } : {}),
+        };
       },
     },
     { writesMemory: true },
