@@ -806,6 +806,10 @@ enum MessageResponseCard: Identifiable {
     struct WeatherDetail: Identifiable {
         let label: String
         let value: String
+        /// The sky this row describes, named by the server ("rain", "fog") so
+        /// the app does not re-parse prose. Empty on an older payload, and on
+        /// a row that describes no sky at all ("Wind", "Humidity").
+        var symbol: String = ""
         var id: String { label.lowercased() }
     }
 
@@ -941,7 +945,7 @@ enum MessageResponseCard: Identifiable {
 
     case agenda(title: String, subtitle: String, items: [AgendaItem])
     case event(id: String, start: String, time: String, title: String, location: String, attendees: [String], calendars: [String], calendarLinkURL: String?, meetingLinkURL: String?)
-    case weather(location: String, temperature: String, condition: String, details: [WeatherDetail])
+    case weather(location: String, temperature: String, condition: String, details: [WeatherDetail], symbol: String)
     case duration(title: String, duration: String, detail: String?, confidence: String?)
     case reminder(id: String, title: String, schedule: String, nextFires: String, enabled: Bool)
     case emails(id: String, title: String, query: String, mailbox: String, complete: Bool, matchingMessagesEstimate: Int?, messages: [EmailResult])
@@ -962,7 +966,7 @@ enum MessageResponseCard: Identifiable {
         switch self {
         case let .agenda(title, _, _): "agenda-\(title)"
         case let .event(id, _, _, _, _, _, _, _, _): id
-        case let .weather(location, temperature, _, details):
+        case let .weather(location, temperature, _, details, _):
             // Per-day forecast cards share their location and can share a
             // reading; the day name keeps each card's identity distinct.
             "weather-\(location)-\(details.first { $0.label.caseInsensitiveCompare("Day") == .orderedSame }?.value ?? "")-\(temperature)"
@@ -1028,7 +1032,8 @@ enum MessageResponseCard: Identifiable {
                 location: data["location"]?.string ?? "Right now",
                 temperature: temperature,
                 condition: condition,
-                details: details
+                details: details,
+                symbol: data["symbol"]?.string ?? ""
             )
         case "duration", "time-estimate":
             guard let duration = data["duration"]?.string else { return nil }
@@ -1531,7 +1536,7 @@ enum MessageResponseCard: Identifiable {
                       let value = detail["value"]?.string,
                       !label.isEmpty, !value.isEmpty,
                       isWeatherCardDetail(label) else { return nil }
-                return .init(label: label, value: value)
+                return .init(label: label, value: value, symbol: detail["symbol"]?.string ?? "")
             }
             if !details.isEmpty { return details }
         }
@@ -1685,7 +1690,8 @@ enum WeatherPresentation {
             if byDay[day] == nil { order.append(day) }
             byDay[day, default: []].append(.init(
                 label: rest.isEmpty ? "Forecast" : rest.capitalized,
-                value: detail.value
+                value: detail.value,
+                symbol: detail.symbol
             ))
         }
         return (current, order.map { DayFacts(day: $0, facts: byDay[$0] ?? []) })
@@ -1822,8 +1828,8 @@ struct RichResponseCards: View {
                 agendaCard(title: title, subtitle: subtitle, items: items)
             case .event:
                 EmptyView()
-            case let .weather(location, temperature, condition, details):
-                weatherCard(location: location, temperature: temperature, condition: condition, details: details)
+            case let .weather(location, temperature, condition, details, symbol):
+                weatherCard(location: location, temperature: temperature, condition: condition, details: details, symbol: symbol)
             case let .duration(title, duration, detail, confidence):
                 durationCard(title: title, duration: duration, detail: detail, confidence: confidence)
             case let .reminder(_, title, schedule, nextFires, enabled):
@@ -2129,7 +2135,8 @@ struct RichResponseCards: View {
         location: String,
         temperature: String,
         condition: String,
-        details: [MessageResponseCard.WeatherDetail]
+        details: [MessageResponseCard.WeatherDetail],
+        symbol: String = ""
     ) -> some View {
         let preferFahrenheit = WeatherUnits.prefersFahrenheit
         let reading = weatherTemperatureReading(temperature, preferFahrenheit: preferFahrenheit)
@@ -2173,7 +2180,7 @@ struct RichResponseCards: View {
 
                 Spacer(minLength: 0)
 
-                Image(systemName: weatherSymbol(condition))
+                Image(systemName: weatherSymbol(condition, symbol: symbol))
                     .font(.system(size: 27, weight: .medium))
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(AssistantTheme.accent(for: colorScheme))
@@ -2237,7 +2244,7 @@ struct RichResponseCards: View {
             guard !label.isEmpty, !value.isEmpty, normalized != "updated", normalized != "source", normalized != "day" else {
                 return nil
             }
-            return MessageResponseCard.WeatherDetail(label: label, value: value)
+            return MessageResponseCard.WeatherDetail(label: label, value: value, symbol: detail.symbol)
         }
     }
 
@@ -2247,6 +2254,13 @@ struct RichResponseCards: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                 .frame(width: usesAccessibilityLayout ? 104 : 88, alignment: .leading)
+            if let symbol = weatherFactSymbol(fact) {
+                Image(systemName: symbol)
+                    .font(.caption)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                    .accessibilityHidden(true)
+            }
             Text(AssistantMarkdown.inlineAttributed(fact.value))
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(AssistantTheme.ink(for: colorScheme))
@@ -3330,13 +3344,50 @@ struct RichResponseCards: View {
         return "doc.fill"
     }
 
-    private func weatherSymbol(_ condition: String) -> String {
+    /// The sky names the server sends (response-cards.ts), mapped to SF
+    /// Symbols. The wire vocabulary stays client-agnostic — the web maps the
+    /// same names to its own icon set — and a name this build does not know
+    /// falls through to the prose reading below.
+    private static let weatherSymbols: [String: String] = [
+        "clear": "sun.max.fill",
+        "partly-cloudy": "cloud.sun.fill",
+        "cloudy": "cloud.fill",
+        "fog": "cloud.fog.fill",
+        "drizzle": "cloud.drizzle.fill",
+        "rain": "cloud.rain.fill",
+        "sleet": "cloud.sleet.fill",
+        "snow": "cloud.snow.fill",
+        "thunderstorm": "cloud.bolt.rain.fill",
+    ]
+
+    /// `symbol` is the server's own classification and is trusted first. The
+    /// prose reading behind it still has to be right: it serves payloads from
+    /// before symbols existed, and it used to answer "fog" with a bright sun
+    /// because nothing matched.
+    private func weatherSymbol(_ condition: String, symbol: String = "") -> String {
+        if let named = Self.weatherSymbols[symbol.lowercased()] { return named }
         let lower = condition.lowercased()
-        if lower.contains("rain") || lower.contains("storm") { return "cloud.rain.fill" }
+        if lower.contains("thunder") || lower.contains("storm") { return "cloud.bolt.rain.fill" }
         if lower.contains("snow") { return "cloud.snow.fill" }
-        if lower.contains("cloud") { return "cloud.fill" }
+        if lower.contains("freezing rain") || lower.contains("sleet") { return "cloud.sleet.fill" }
+        if lower.contains("drizzle") { return "cloud.drizzle.fill" }
+        if lower.contains("rain") { return "cloud.rain.fill" }
+        if lower.contains("fog") || lower.contains("mist") || lower.contains("haze") { return "cloud.fog.fill" }
+        if lower.contains("partly cloudy") || lower.contains("mostly clear") { return "cloud.sun.fill" }
+        if lower.contains("cloud") || lower.contains("overcast") { return "cloud.fill" }
         if lower.contains("wind") { return "wind" }
         return "sun.max.fill"
+    }
+
+    /// A forecast row draws its own sky only when it describes one: a day or a
+    /// part of a day does, "Wind" and "Humidity" do not, and a glyph guessed
+    /// for those would be a reading the row never made.
+    private func weatherFactSymbol(_ fact: MessageResponseCard.WeatherDetail) -> String? {
+        if let named = Self.weatherSymbols[fact.symbol.lowercased()] { return named }
+        guard fact.symbol.isEmpty else { return nil }
+        let described = ["clear", "cloud", "overcast", "rain", "drizzle", "snow", "fog", "thunder", "storm", "sleet"]
+        let lower = fact.value.lowercased()
+        return described.contains(where: { lower.contains($0) }) ? weatherSymbol(fact.value) : nil
     }
 }
 

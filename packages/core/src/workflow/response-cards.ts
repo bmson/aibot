@@ -211,6 +211,101 @@ export function calendarResponseCards(
     .sort((a, b) => Date.parse(String(a.start)) - Date.parse(String(b.start)));
 }
 
+/**
+ * Rain worth naming in a one-line day summary. Mirrors the ambient block's own
+ * threshold (see `getAmbientBlock`), so a day reads the same whichever source
+ * drew it.
+ */
+const NOTABLE_RAIN_PROBABILITY = 30;
+
+/** Formatters that drop out entirely when the provider omitted the reading. */
+function degrees(value: unknown): string | undefined {
+  const parsed = numeric(value);
+  return parsed === undefined ? undefined : `${parsed}°C`;
+}
+
+function range(low: unknown, high: unknown): string | undefined {
+  const from = numeric(low);
+  const to = numeric(high);
+  return from === undefined || to === undefined ? undefined : `${from}–${to}°C`;
+}
+
+function percent(value: unknown): string | undefined {
+  const parsed = numeric(value);
+  return parsed === undefined ? undefined : `${parsed}%`;
+}
+
+function speed(value: unknown): string | undefined {
+  const parsed = numeric(value);
+  return parsed === undefined ? undefined : `${parsed} km/h`;
+}
+
+/**
+ * The provider's vocabulary is a closed set of WMO descriptions (see `WMO` in
+ * ambient.ts), so the sky is classified once, here, into a small stable
+ * vocabulary the clients map to an icon. Neither client re-parses prose, and a
+ * description this list does not know degrades to the same default on both.
+ *
+ * Order matters: "freezing rain" is sleet rather than rain, and "partly cloudy"
+ * is its own sky rather than the overcast one.
+ */
+const WEATHER_SYMBOLS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/thunder/, 'thunderstorm'],
+  [/snow/, 'snow'],
+  [/freezing rain/, 'sleet'],
+  [/drizzle/, 'drizzle'],
+  [/rain/, 'rain'],
+  [/fog/, 'fog'],
+  [/partly cloudy|mostly clear/, 'partly-cloudy'],
+  [/overcast|cloud/, 'cloudy'],
+  [/clear/, 'clear'],
+];
+
+function weatherSymbol(description: string): string | undefined {
+  const text = description.toLowerCase();
+  return WEATHER_SYMBOLS.find(([pattern]) => pattern.test(text))?.[1];
+}
+
+/**
+ * "early-morning" is the tool's enum spelling; "Early morning" is the owner's.
+ * Anything unrecognised is dropped rather than shown raw, so a band the tool
+ * adds later never reaches a card as a hyphenated identifier.
+ */
+const TIME_OF_DAY_NAMES: Record<string, string> = {
+  'early-morning': 'Early morning',
+  morning: 'Morning',
+  midday: 'Midday',
+  afternoon: 'Afternoon',
+  evening: 'Evening',
+  night: 'Night',
+};
+
+function bandName(label: string): string {
+  return TIME_OF_DAY_NAMES[label.toLowerCase()] ?? '';
+}
+
+/** A detail row that also names its own sky, so a day can carry its own icon. */
+function weatherDetail(
+  label: string,
+  value: string,
+  description: string,
+): { label: string; value: string; symbol?: string } {
+  const symbol = weatherSymbol(description);
+  return { label, value, ...(symbol ? { symbol } : {}) };
+}
+
+/** "16–23°C, light rain, 80% chance of rain" — one day on one line. */
+function weatherDayValue(day: RecordValue): string {
+  const rain = numeric(day.precipProbabilityMax);
+  return [
+    range(day.lowC, day.highC) ?? '',
+    string(day.description),
+    rain !== undefined && rain >= NOTABLE_RAIN_PROBABILITY ? `${rain}% chance of rain` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+
 /** Ambient data is already trusted context, but only a tiny literal subset becomes a card. */
 export function weatherResponseCards(ambient?: string): ResponseCard[] {
   if (!ambient) return [];
@@ -231,7 +326,10 @@ export function weatherResponseCards(ambient?: string): ResponseCard[] {
     .split(';')
     .map((entry) => /^(\w+)\s+(.+)$/.exec(entry.trim()))
     .filter((day): day is RegExpExecArray => day !== null)
-    .map((day) => ({ label: day[1] ?? '', value: day[2] ?? '' }));
+    // The day's own words are inside its value ("16–23°C, light rain"), which
+    // is all the sky classification needs to give each day its own icon.
+    .map((day) => weatherDetail(day[1] ?? '', day[2] ?? '', day[2] ?? ''));
+  const symbol = weatherSymbol(condition);
   return [
     {
       kind: 'weather',
@@ -239,6 +337,7 @@ export function weatherResponseCards(ambient?: string): ResponseCard[] {
       location,
       condition,
       temperature: `${temperature}°C`,
+      ...(symbol ? { symbol } : {}),
       details: [
         { label: 'Today', value: `${low}–${high}°C` },
         { label: 'Wind', value: `${wind} km/h` },
@@ -248,6 +347,106 @@ export function weatherResponseCards(ambient?: string): ResponseCard[] {
       ],
     },
   ];
+}
+
+/**
+ * `weather.lookup` answers exactly the questions the ambient block cannot — a
+ * day past today, or a town the owner is not standing in — and those answers
+ * arrived as bare prose, because no builder read this tool's ledger row. The
+ * ambient card deliberately stays off such a turn (it can only describe
+ * today-here, and would contradict the answer), which left "how is the weather
+ * tomorrow" with no card at all.
+ *
+ * Built from the same structured result the response contract checked, never
+ * from the prose, so a fluent answer still cannot invent a card.
+ */
+export function weatherLookupResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
+  return evidence.flatMap((row, index) => {
+    if (!succeeded(row) || row.toolName !== 'weather.lookup') return [];
+    const result = record(row.result);
+    // A lookup that could not resolve the place returns `{ error }` and no
+    // reading. There is nothing to draw, and the prose already explains it.
+    if (!result || string(result.error)) return [];
+    const current = record(result.current);
+    const target = record(result.target);
+    const targetDay = record(target?.day);
+    const place = string(result.place);
+    const forecast = Array.isArray(result.forecast)
+      ? result.forecast.map(record).filter((day): day is RecordValue => !!day)
+      : [];
+
+    // A dated question is answered about that day, so the card headlines the
+    // day rather than the current reading, which belongs to a different one.
+    const headline = targetDay ?? current;
+    if (!headline) return [];
+    const temperature =
+      (targetDay ? range(targetDay.lowC, targetDay.highC) : degrees(current?.tempC)) ?? '';
+    const condition = string(headline.description);
+
+    // A date asked about without an hour comes back as one row per named part
+    // of the day, which is the shape an owner plans around: "Thu Morning",
+    // "Thu Evening". Every row keeps its weekday, because that prefix is how
+    // both clients group a day's rows together.
+    //
+    // The clock range always rides in the value, never the label. iOS drops a
+    // detail whose label carries digits — that rule keeps prose like "For your
+    // 11:00 Zoom meeting" from being torn into a row — so an explicitly-timed
+    // window labelled "Thu 13:00–15:00" would have rendered on web and
+    // vanished on iOS.
+    const windows = Array.isArray(target?.windows)
+      ? target.windows
+          .map(record)
+          .filter((window): window is RecordValue => !!window)
+          .map((window) =>
+            weatherDetail(
+              [string(window.weekday), bandName(string(window.label))].filter(Boolean).join(' '),
+              [string(window.window), weatherDayValue(window)].filter(Boolean).join(' · '),
+              string(window.description),
+            ),
+          )
+          .filter((detail) => detail.label && detail.value)
+      : [];
+
+    const targetDate = string(target?.date);
+    const headlineDetails = targetDay
+      ? details([
+          // iOS stamps the card with this day; both clients read it as a label.
+          ['Day', string(target?.weekday)],
+          ['Rain chance', percent(targetDay.precipProbabilityMax)],
+        ])
+      : details([
+          ['Today', range(current?.lowC, current?.highC)],
+          ['Wind', speed(current?.windKmh)],
+          ['Humidity', percent(current?.humidity)],
+          ['Rain chance', percent(current?.precipProbabilityMax)],
+        ]);
+
+    // The headlined day is already the card's temperature and condition, so it
+    // never repeats itself further down the same card.
+    const comingDays = forecast
+      .filter((day) => !targetDate || string(day.date) !== targetDate)
+      .map((day) =>
+        weatherDetail(string(day.weekday), weatherDayValue(day), string(day.description)),
+      )
+      .filter((detail) => detail.label && detail.value);
+
+    const cardDetails = [...headlineDetails, ...windows, ...comingDays];
+    if (!temperature && !condition && cardDetails.length === 0) return [];
+    const symbol = weatherSymbol(condition);
+    return [
+      {
+        kind: 'weather' as const,
+        id: `weather-${place.toLowerCase() || index}-${targetDate || 'now'}`,
+        location: place,
+        condition,
+        temperature,
+        // The headline sky, for the client that draws an icon for it. Older
+        // clients ignore the field and keep the one weather glyph they have.
+        ...(symbol ? { symbol } : {}),
+        details: cardDetails,
+      },
+    ];
+  });
 }
 
 /** Completed reminder results are concise enough to own their response surface. */
@@ -857,13 +1056,16 @@ export function responseCardsForFinal(input: {
     ...knowledgeGraphResponseCards(input.evidence),
     ...driveResponseCards(input.evidence),
     ...sheetRowsResponseCards(input.evidence),
+    ...weatherLookupResponseCards(input.evidence),
     ...searchResponseCards(input.evidence),
   ];
   if (cards.length > 0) return cards;
   // Ambient weather is useful for a conversational/weather answer, but must
   // never appear as an unrelated result below a tool-backed response — nor
   // contradict an answer about another place or later days, which the
-  // location-and-today ambient block cannot describe.
+  // location-and-today ambient block cannot describe. Those questions route to
+  // `weather.lookup` and get their card from its ledger row above, so the
+  // narrow gate here costs them nothing.
   return input.readRequest || !isCurrentLocalWeatherRequest(input.requestText ?? '')
     ? []
     : weatherResponseCards(input.ambient);
