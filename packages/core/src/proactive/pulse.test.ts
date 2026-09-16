@@ -13,9 +13,15 @@ import { eq, like } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
 import type { BriefingCalendarEvent } from '../workflow/briefing.js';
-import { attendeeResponseDigest } from './calendar-diff.js';
+import { attendeeResponseDigest, type CalendarChange } from './calendar-diff.js';
 import type { EventSalience } from './calendar-salience.js';
-import { eventLeadMoments, type PulseMoment, runPulse, selectPulseMoment } from './pulse.js';
+import {
+  calendarChangeMoments,
+  eventLeadMoments,
+  type PulseMoment,
+  runPulse,
+  selectPulseMoment,
+} from './pulse.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -430,5 +436,61 @@ describe('runPulse', () => {
       // the next SUCCESSFUL read will compare against.
       expect(row).toBeDefined();
     });
+  });
+});
+
+describe('calendarChangeMoments', () => {
+  const change = (over: Partial<CalendarChange> = {}): CalendarChange => ({
+    kind: 'cancelled',
+    calendarId: 'cal-1',
+    eventId: 'evt-1',
+    iCalUID: null,
+    summary: 'Fall Practice',
+    start: '2026-03-04T23:30:00Z',
+    end: '2026-03-05T00:00:00Z',
+    ...over,
+  });
+
+  it('renders a Z-stamped start in the owner zone, not the provider offset', () => {
+    const [moment] = calendarChangeMoments([change()], 'America/Los_Angeles');
+    // 23:30 UTC on Mar 4 is 3:30 PM in Los Angeles, still Mar 4. The old
+    // formatter sliced the ISO string and showed "2026-03-04 23:30" to an
+    // owner who was nowhere near UTC.
+    expect(moment?.text).toContain('3:30 PM');
+    expect(moment?.text).not.toContain('23:30');
+    expect(moment?.text).not.toContain('2026-03-04T23:30:00Z');
+  });
+
+  it('renders the same instant differently for a different owner zone', () => {
+    const [la] = calendarChangeMoments([change()], 'America/Los_Angeles');
+    const [reykjavik] = calendarChangeMoments([change()], 'Atlantic/Reykjavik');
+    expect(la?.text).not.toBe(reykjavik?.text);
+    expect(reykjavik?.text).toContain('11:30 PM');
+  });
+
+  it('keeps a summary carrying a newline on one line', () => {
+    // Provider text is spliced into markdown downstream, where a stray newline
+    // ends the list item and strands the rest as its own paragraph.
+    const [moment] = calendarChangeMoments(
+      [change({ summary: 'Fall Practice\nCrocker Amazon' })],
+      'America/Los_Angeles',
+    );
+    expect(moment?.text).not.toContain('\n');
+    expect(moment?.text).toContain('Fall Practice Crocker Amazon');
+  });
+
+  it('renders both ends of a moved event in the owner zone', () => {
+    const [moment] = calendarChangeMoments(
+      [
+        change({
+          kind: 'moved',
+          previousStart: '2026-03-04T20:00:00Z',
+          start: '2026-03-04T23:30:00Z',
+        }),
+      ],
+      'America/Los_Angeles',
+    );
+    expect(moment?.text).toContain('12:00 PM');
+    expect(moment?.text).toContain('3:30 PM');
   });
 });

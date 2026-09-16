@@ -1,0 +1,1 @@
+ALTER TABLE "email_ingest" ADD COLUMN "from_name" text;

@@ -15,6 +15,13 @@ import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cos
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
 import {
+  collapseWhitespace,
+  ownerDate,
+  ownerDateTime,
+  ownerEventWhen,
+  truncateAtBoundary,
+} from '../owner-text.js';
+import {
   describeSalience,
   type EventSalience,
   salientEvents,
@@ -60,12 +67,22 @@ const COMPOSE_TIMEOUT_MS = 30_000;
  * calendar section. Event content comes from Google's API and is data, never
  * instructions.
  */
+const META_PREAMBLE = /^(?:here (?:is|[’']s)|below is) your daily briefing[^\n]*[:.]?$/i;
+
+/**
+ * Whether `briefingBody` would fall back to the raw notes for this draft —
+ * split out so the caller can log/flag the fallback without re-deriving the
+ * same check or changing `briefingBody`'s own signature (tests import it).
+ */
+function isFallbackDraft(composed: string | undefined): boolean {
+  const text = composed?.trim() ?? '';
+  return !text || META_PREAMBLE.test(text);
+}
+
 /** Reject empty/meta-only composition while preserving the already gathered facts. */
 export function briefingBody(composed: string | undefined, notes: string[]): string {
-  const text = composed?.trim() ?? '';
-  if (!text || /^(?:here (?:is|[’']s)|below is) your daily briefing[^\n]*[:.]?$/i.test(text))
-    return notes.join('\n');
-  return text;
+  if (isFallbackDraft(composed)) return notes.join('\n');
+  return (composed as string).trim();
 }
 
 export interface BriefingCalendarEvent {
@@ -174,11 +191,17 @@ export function briefingHasNews(counts: {
  * it freely is a model that can propose something the mail never said. The
  * shape comes from the category; the content comes from the row.
  */
-function proposalFor(entry: UpcomingDate): { summary: string; action: string } | null {
-  const when = entry.iso.slice(0, 16).replace('T', ' ');
+function proposalFor(
+  entry: UpcomingDate,
+  timeZone: string,
+): { summary: string; action: string } | null {
+  // `summary` is read by the owner, so it gets their local time; `action` is
+  // read by the agent that carries the proposal out, so it keeps the exact
+  // instant. Formatting the instruction would only make it ambiguous.
+  const when = ownerDateTime(entry.iso, timeZone);
   if (CALENDARABLE.has(entry.category)) {
     return {
-      summary: `${entry.what} on ${when}, from ${entry.from} — add it to your calendar?`,
+      summary: `${collapseWhitespace(entry.what)} on ${when}, from ${collapseWhitespace(entry.from)} — add it to your calendar?`,
       action:
         `Create a calendar event on the owner's own calendar with no attendees for: ${entry.what}. ` +
         `It starts at ${entry.iso}. This came from an email from ${entry.from}. ` +
@@ -187,7 +210,7 @@ function proposalFor(entry: UpcomingDate): { summary: string; action: string } |
   }
   if (PAYABLE.has(entry.category)) {
     return {
-      summary: `${entry.what} due ${when}, from ${entry.from} — want a reminder beforehand?`,
+      summary: `${collapseWhitespace(entry.what)} due ${when}, from ${collapseWhitespace(entry.from)} — want a reminder beforehand?`,
       action:
         `Set a reminder two days before ${entry.iso} about: ${entry.what}. ` +
         `This came from an email from ${entry.from}.`,
@@ -200,6 +223,13 @@ export interface BriefingResult {
   delivered: boolean;
   /** Whether the phone leg was attempted and accepted (not held by the policy). */
   pinged: boolean;
+  /**
+   * Set when the phrasing model returned nothing usable and the digest went
+   * out as the raw assembled notes instead of composed prose. The owner still
+   * gets the facts either way, but this used to fail silently — the exact way
+   * the debug bullet format once reached a live digest unnoticed.
+   */
+  composedFallback: boolean;
   mailScanned: number;
   highlights: number;
   needsAttention: number;
@@ -470,6 +500,7 @@ export async function runBriefing(
     const result: BriefingResult = {
       delivered: false,
       pinged: false,
+      composedFallback: false,
       mailScanned: 0,
       highlights: 0,
       needsAttention: 0,
@@ -503,10 +534,12 @@ export async function runBriefing(
         db
           .select({
             fromEmail: emailIngest.fromEmail,
+            // Nullable until the sender-name backfill lands; falls back to the
+            // address itself wherever it renders.
+            fromName: emailIngest.fromName,
             subject: emailIngest.subject,
             category: emailIngest.category,
             importance: emailIngest.importance,
-            reason: emailIngest.reason,
             dates: emailIngest.dates,
             channelMessageId: emailIngest.channelMessageId,
           })
@@ -595,14 +628,16 @@ export async function runBriefing(
         'Calendar conflicts in the next day or two:',
         ...conflicts.map(
           (c) =>
-            `- "${c.a[0]?.summary ?? 'Untitled event'}" overlaps "${c.b[0]?.summary ?? 'Untitled event'}" (${localDateTime(c.overlapStart, agent.timezone)} to ${localDateTime(c.overlapEnd, agent.timezone)})`,
+            `- "${collapseWhitespace(c.a[0]?.summary ?? 'Untitled event')}" overlaps "${collapseWhitespace(c.b[0]?.summary ?? 'Untitled event')}" (${localDateTime(c.overlapStart, agent.timezone)} to ${localDateTime(c.overlapEnd, agent.timezone)})`,
         ),
       );
     }
     if (salient.length > 0) {
       lines.push(
         `${lines.length ? '\n' : ''}Events worth a second look:`,
-        ...salient.slice(0, MAX_SALIENT).map(describeSalience),
+        // describeSalience takes the owner's zone so an unanswered-invitation
+        // line renders local time, not whatever the provider sent.
+        ...salient.slice(0, MAX_SALIENT).map((scored) => describeSalience(scored, agent.timezone)),
       );
     }
     if (calendar && calendar.events.length > 0) {
@@ -610,65 +645,83 @@ export async function runBriefing(
         `${lines.length ? '\n' : ''}On the calendar (${calendar.events.length} event(s) in the next ${CALENDAR_WINDOW_HOURS}h${calendar.complete ? '' : ', coverage partial'}):`,
         ...calendar.events
           .slice(0, 10)
-          .map((event) =>
-            event.allDay
-              ? `- ${event.start}: ${event.summary} (all day)`
-              : `- ${event.start} → ${event.end}: ${event.summary}`,
+          .map(
+            (event) =>
+              `- ${ownerEventWhen({ start: event.start, end: event.end, allDay: event.allDay }, agent.timezone)}: ${collapseWhitespace(event.summary)}`,
           ),
       );
     }
     if (highlights.length > 0) {
       lines.push(
-        `${lines.length ? '\n' : ''}Mail worth knowing about (${mail.length} arrived in total):`,
-        ...highlights.map(
-          (row) =>
-            `- [${row.category}, importance ${row.importance}] ${row.fromEmail}: "${row.subject}" — ${row.reason}`,
-        ),
+        `${lines.length ? '\n' : ''}Mail worth knowing about (showing ${highlights.length} of ${mail.length}):`,
+        ...highlights.map((row) => {
+          const sender = collapseWhitespace(row.fromName || row.fromEmail);
+          const subject = collapseWhitespace(row.subject);
+          return `- ${sender}: "${subject}"`;
+        }),
       );
     }
     if (upcoming.length > 0) {
       lines.push(
         '',
         'Dates coming up, taken from that mail:',
-        ...upcoming.map((entry) => `- ${entry.iso}: ${entry.what} (from ${entry.from})`),
+        ...upcoming.map(
+          (entry) =>
+            `- ${ownerDate(entry.iso, agent.timezone)}: ${collapseWhitespace(entry.what)} (from ${collapseWhitespace(entry.from)})`,
+        ),
       );
     }
     if (goalDeltas.length > 0) {
       lines.push(
         '',
         'Goals that moved since the last briefing:',
-        ...goalDeltas.map(
-          (row) =>
-            `- ${row.title} (${row.status})${row.nextAction ? ` — next: ${row.nextAction}` : ''}`,
-        ),
+        ...goalDeltas.map((row) => {
+          const title = collapseWhitespace(row.title);
+          const next = row.nextAction ? collapseWhitespace(row.nextAction) : '';
+          return `- ${title} (${row.status})${next ? ` — next: ${next}` : ''}`;
+        }),
       );
     }
     if (watchHits.length > 0) {
       lines.push(
         '',
         'Your watches fired (each already pinged when it happened):',
-        ...watchHits.map((row) => `- ${row.name}: ${row.summary}`),
+        ...watchHits.map(
+          (row) => `- ${collapseWhitespace(row.name)}: ${collapseWhitespace(row.summary)}`,
+        ),
       );
     }
     if (attention.length > 0) {
       lines.push(
         '',
         'Work that stopped and needs you:',
-        ...attention.map((row) => `- ${row.title}: ${row.progress || 'no detail recorded'}`),
+        ...attention.map((row) => {
+          // Mission-facing and dashboard-rendered, so it is fair to show, but
+          // it is the model's own words and can run long — cap it rather than
+          // let one stalled task's essay crowd out everything else.
+          const progress = row.progress
+            ? truncateAtBoundary(collapseWhitespace(row.progress), 160)
+            : 'no detail recorded';
+          // tasks.title is nullable (planner-authored, falls back to the
+          // instruction elsewhere) — this select carries only the title, so
+          // an absent one prints as an em dash rather than the string "null".
+          const title = row.title ? collapseWhitespace(row.title) : '—';
+          return `- ${title}: ${progress}`;
+        }),
       );
     }
     if (pending.length > 0) {
       lines.push(
         '',
         'Waiting on your approval:',
-        ...pending.map((row) => `- ${row.shortCode}: ${row.summary}`),
+        ...pending.map((row) => `- ${row.shortCode}: ${collapseWhitespace(row.summary)}`),
       );
     }
     if (openSuggestions.length > 0) {
       lines.push(
         '',
         'Suggestions still waiting on an answer:',
-        ...openSuggestions.map((row) => `- ${row.summary}`),
+        ...openSuggestions.map((row) => `- ${collapseWhitespace(row.summary)}`),
       );
     }
 
@@ -706,7 +759,22 @@ export async function runBriefing(
 
     // A model failure must not lose the briefing: the assembled notes are
     // already the substance, so fall back to delivering them as they are.
-    const body = briefingBody(composed?.ok ? composed.object.text : undefined, lines);
+    const draft = composed?.ok ? composed.object.text : undefined;
+    result.composedFallback = isFallbackDraft(draft);
+    if (result.composedFallback) {
+      // This used to fail silently — the fallback IS the correct behavior
+      // (facts beat nothing), but it must be findable, because a silent
+      // degrade here is exactly how a raw-notes digest reached the owner
+      // unnoticed. Warn rather than error: nothing was lost, the digest just
+      // went out unphrased.
+      console.warn('briefing: phrasing model returned no usable draft, delivering raw notes', {
+        taskId: opts.taskId,
+        agentId: agent.id,
+        draftLength: draft?.length ?? 0,
+        noteLines: lines.length,
+      });
+    }
+    const body = briefingBody(draft, lines);
     if (!body) return result;
 
     // Propose the obvious next step for each upcoming date, as an inert row the
@@ -742,7 +810,7 @@ export async function runBriefing(
       });
     }
     for (const entry of upcoming) {
-      const proposal = proposalFor(entry);
+      const proposal = proposalFor(entry, agent.timezone);
       if (!proposal) continue;
       const created = await createSuggestion(db, {
         agentId: agent.id,
