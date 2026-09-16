@@ -7,6 +7,7 @@ import {
   sheetRowsResponseCards,
   statusResponseCards,
   threadResponseCards,
+  weatherLookupResponseCards,
   weatherResponseCards,
 } from './response-cards.js';
 
@@ -218,6 +219,197 @@ describe('response cards', () => {
     });
 
     expect(result).toEqual([]);
+  });
+
+  it('cards a dated lookup on the day that was asked about, not on right now', () => {
+    const result = weatherLookupResponseCards([
+      {
+        toolName: 'weather.lookup',
+        status: 'succeeded',
+        args: { date: '2026-09-17' },
+        result: {
+          place: 'Reykjavík',
+          usedCurrentLocation: true,
+          current: {
+            tempC: 12,
+            description: 'clear',
+            lowC: 9,
+            highC: 14,
+            precipProbabilityMax: 5,
+            windKmh: 20,
+          },
+          forecast: [
+            {
+              date: '2026-09-17',
+              weekday: 'Thu',
+              description: 'overcast',
+              lowC: 14,
+              highC: 17,
+              precipProbabilityMax: 1,
+            },
+            {
+              date: '2026-09-18',
+              weekday: 'Fri',
+              description: 'light rain',
+              lowC: 11,
+              highC: 15,
+              precipProbabilityMax: 80,
+            },
+          ],
+          target: {
+            date: '2026-09-17',
+            weekday: 'Thu',
+            windows: [],
+            hours: [],
+            day: {
+              date: '2026-09-17',
+              weekday: 'Thu',
+              description: 'overcast',
+              lowC: 14,
+              highC: 17,
+              precipProbabilityMax: 1,
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(result).toMatchObject([
+      {
+        kind: 'weather',
+        location: 'Reykjavík',
+        condition: 'overcast',
+        temperature: '14–17°C',
+        details: [
+          { label: 'Day', value: 'Thu' },
+          { label: 'Rain chance', value: '1%' },
+          // The headlined day never repeats itself further down its own card.
+          { label: 'Fri', value: '11–15°C, light rain, 80% chance of rain' },
+        ],
+      },
+    ]);
+  });
+
+  it('labels each hour window with its day so the card can group them', () => {
+    const [card] = weatherLookupResponseCards([
+      {
+        toolName: 'weather.lookup',
+        status: 'succeeded',
+        result: {
+          place: 'Reykjavík',
+          current: { tempC: 12, description: 'clear', lowC: 9, highC: 14 },
+          forecast: [],
+          target: {
+            date: '2026-09-17',
+            weekday: 'Thu',
+            hours: [],
+            windows: [
+              {
+                date: '2026-09-17',
+                weekday: 'Thu',
+                window: '08:00–11:00',
+                label: 'morning',
+                description: 'overcast',
+                lowC: 13,
+                highC: 14,
+                precipProbabilityMax: 5,
+                windKmhMax: 12,
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    expect(card?.details).toContainEqual({ label: 'Thu 08:00–11:00', value: '13–14°C, overcast' });
+  });
+
+  it('cards a named place from its current reading when no day was asked for', () => {
+    expect(
+      weatherLookupResponseCards([
+        {
+          toolName: 'weather.lookup',
+          status: 'succeeded',
+          result: {
+            place: 'Tokyo',
+            usedCurrentLocation: false,
+            current: {
+              tempC: 24,
+              description: 'partly cloudy',
+              lowC: 20,
+              highC: 27,
+              precipProbabilityMax: 10,
+              windKmh: 8,
+              humidity: 65,
+            },
+            forecast: [],
+          },
+        },
+      ]),
+    ).toMatchObject([
+      {
+        kind: 'weather',
+        location: 'Tokyo',
+        condition: 'partly cloudy',
+        temperature: '24°C',
+        details: [
+          { label: 'Today', value: '20–27°C' },
+          { label: 'Wind', value: '8 km/h' },
+          { label: 'Humidity', value: '65%' },
+          { label: 'Rain chance', value: '10%' },
+        ],
+      },
+    ]);
+  });
+
+  it('draws no card from a lookup that resolved no place or failed', () => {
+    expect(
+      weatherLookupResponseCards([
+        {
+          toolName: 'weather.lookup',
+          status: 'succeeded',
+          result: { error: 'no weather reading is available for Crocker Amazon right now' },
+        },
+        { toolName: 'weather.lookup', status: 'failed', result: { place: 'Oslo', current: {} } },
+      ]),
+    ).toEqual([]);
+  });
+
+  it('attaches the tool-backed card to the tomorrow question the ambient card must skip', () => {
+    const result = responseCardsForFinal({
+      evidence: [
+        {
+          toolName: 'weather.lookup',
+          status: 'succeeded',
+          result: {
+            place: 'Reykjavík',
+            current: { tempC: 12, description: 'clear', lowC: 9, highC: 14 },
+            forecast: [],
+            target: {
+              date: '2026-09-17',
+              weekday: 'Thu',
+              windows: [],
+              hours: [],
+              day: {
+                date: '2026-09-17',
+                weekday: 'Thu',
+                description: 'overcast',
+                lowC: 14,
+                highC: 17,
+                precipProbabilityMax: 1,
+              },
+            },
+          },
+        },
+      ],
+      ambient:
+        "Right now (ambient context):\nOwner's current location: near Reykjavík (64.14, -21.94), as of just now.\nWeather there: clear, 12°C (today 9–14°C, 5% chance of rain, wind 20 km/h).",
+      requestText: 'How is the weather going to be tomorrow',
+    });
+
+    expect(result).toMatchObject([
+      { kind: 'weather', temperature: '14–17°C', condition: 'overcast' },
+    ]);
   });
 
   it('builds complete cards for reminders, inbox, documents, Drive, artifacts, and confirmations', () => {
