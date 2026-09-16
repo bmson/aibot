@@ -38,17 +38,35 @@ import { executeAgentTask } from './task-runner.js';
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
 const RUN = `Xtest-Application-${Date.now()}`;
-const NOW = new Date('2026-07-18T12:00:00.000Z');
+const DAY = 24 * 60 * 60_000;
 /**
- * A watch's stored expiry is checked against the real clock, not against NOW —
- * so deriving this from NOW alone gave every fixture a fixed expiry date, and
- * the whole file went red on 2026-08-17 with nobody having touched the code:
- * the watch stopped matching, the message fell through to classifySender, and
- * the harness has no router to classify it with. Anchor the expiry to whichever
- * of the logical and real clocks is later, so the watch is unexpired both ways
- * while NOW stays fixed for the assertions that depend on a stable timestamp.
+ * This file runs against two clocks, and the bugs here have all come from
+ * letting them drift apart.
+ *
+ * `NOW` is the logical clock: the harness serves it as `ctx.now()`, and tool
+ * code measures against it. The stored expiry of a watch is separately checked
+ * against the *real* clock when an email is matched. So every fixture date has
+ * to be valid on both, and an absolute `NOW` cannot stay that way — the gap
+ * between a fixed past date and today grows by a day per day until some window
+ * or other is out of range.
+ *
+ * That has now happened twice. Anchoring `NOW` to 2026-07-18 made the watches
+ * expire against the real clock, and the whole file went red on 2026-08-17
+ * with nobody having touched the code. Deriving `FUTURE` from the real clock
+ * fixed that and started the same drift from the other end: `applications.ts`
+ * caps a watch at 90 days from `ctx.now()`, `FUTURE` was real-now + 30 days,
+ * so the span it measured grew until it passed 90 days at 2026-09-16T12:00Z —
+ * again with nobody having touched the code.
+ *
+ * So `NOW` is a fixed offset from the real clock rather than a fixed date. It
+ * is still constant for the whole run, which is all the assertions need, and
+ * it is now always a day behind reality instead of drifting arbitrarily far
+ * from it. A day of margin keeps anything derived backwards from `NOW` (an
+ * expired watch is `NOW - 1`) safely in the real past too.
  */
-const FUTURE = new Date(Math.max(NOW.getTime(), Date.now()) + 30 * 24 * 60 * 60_000).toISOString();
+const NOW = new Date(Date.now() - DAY);
+/** Comfortably inside the tool's 90-day cap, and well ahead of the real clock. */
+const FUTURE = new Date(NOW.getTime() + 30 * DAY).toISOString();
 
 let db: Db;
 let dbUp = false;
