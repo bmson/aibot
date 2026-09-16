@@ -8,6 +8,7 @@ export * from './execution.js';
 export * from './execution-context.js';
 export * from './execution-evidence.js';
 export * from './execution-jobs.js';
+export * from './memory-supersede.js';
 export * from './migration.js';
 export * from './model-routing.js';
 export * from './money.js';

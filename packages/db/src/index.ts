@@ -7,6 +7,7 @@ export { createPostgresExecutionContextRepository } from './execution-context-re
 export { createPostgresExecutionEvidenceRepository } from './execution-evidence-repository.js';
 export { createPostgresExecutionJobRepository } from './execution-jobs-repository.js';
 export { createPostgresExecutionPersistence } from './execution-repository.js';
+export { createPostgresMemorySupersedeRepository } from './memory-supersede-repository.js';
 export { createPostgresMessageRepository } from './message-repository.js';
 export * from './model-config.js';
 export { createPostgresModelRoutingRepository } from './model-routing-repository.js';

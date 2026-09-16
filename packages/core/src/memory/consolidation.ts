@@ -74,7 +74,8 @@ const ConsolidationFindingsSchema = z.object({
 });
 type ConsolidationFindings = z.infer<typeof ConsolidationFindingsSchema>;
 
-interface FactLite {
+/** Exported for the write-time supersession check, which shares `pickWinner`. */
+export interface FactLite {
   id: string;
   agentId: string;
   content: string;
@@ -94,17 +95,24 @@ const MAX_WINDOWS_PER_RUN = 12;
 const MAX_FACTS_PER_ENTITY = 60;
 
 /**
+ * The fields precedence actually turns on. Stated as its own type so the
+ * write-time supersession check can share this rule without carrying a whole
+ * consolidation row — and so the rule stays honest about what it reads.
+ */
+export type FactPrecedence = Pick<FactLite, 'id' | 'confidence' | 'createdAt' | 'ownerConfirmed'>;
+
+/**
  * Pick the surviving fact of a group. Owner-confirmed beats everything;
  * otherwise confidence-weighted with a newest bonus (newer-wins on ties).
  * Exported for tests.
  */
-export function pickWinner(group: FactLite[]): FactLite {
+export function pickWinner<T extends FactPrecedence>(group: T[]): T {
   const newest = group.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
-  const score = (f: FactLite) =>
+  const score = (f: FactPrecedence) =>
     (f.ownerConfirmed ? 10 : 0) + Number(f.confidence) + (f.id === newest.id ? 0.15 : 0);
   return [...group].sort(
     (a, b) => score(b) - score(a) || b.createdAt.getTime() - a.createdAt.getTime(),
-  )[0] as FactLite;
+  )[0] as T;
 }
 
 function parseIsoDate(value: string): Date | null {

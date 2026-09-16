@@ -32,6 +32,7 @@
     "./memory/recall": "./src/memory/recall.ts",
     "./memory/recall-metrics": "./src/memory/recall-metrics.ts",
     "./memory/skills": "./src/memory/skills.ts",
+    "./memory/supersede": "./src/memory/supersede.ts",
     "./memory/voice-ingest": "./src/memory/voice-ingest.ts",
     "./model-router": "./src/model-router/index.ts",
     "./otel": "./src/otel.ts",
