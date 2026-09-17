@@ -30,6 +30,8 @@ async function insertFact(
     importance?: number;
     pinned?: boolean;
     subjectContactId?: string | null;
+    validFrom?: Date;
+    validUntil?: Date;
   },
 ) {
   const [row] = await db
@@ -49,6 +51,8 @@ async function insertFact(
       subjectContactId: input.subjectContactId === undefined ? ownerId : input.subjectContactId,
       domain: input.domain,
       createdAt: input.createdAt,
+      ...(input.validFrom ? { validFrom: input.validFrom } : {}),
+      ...(input.validUntil ? { validUntil: input.validUntil } : {}),
     })
     .returning({ id: memories.id });
   factIds[key] = (row as NonNullable<typeof row>).id;
@@ -382,6 +386,65 @@ describe('compileOwnerCard pinning (integration)', () => {
     expect(content).not.toContain('cardMid sleeps with the window open');
     // overflow is surfaced to the model so it knows recall has more
     expect(content).toContain('memory.recall');
+  });
+
+  it('a fact that has stopped being true does not take an auto slot from a current one', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+
+    // The defect this guards: auto-selection fills two slots per domain by
+    // importance, so the most important fact won even when its own stated
+    // validity said it had ended. A former address took the slot and then
+    // answered "where do I live".
+    await insertFact('cardEnded', {
+      content: `${MARKER}: cardEnded lived on Elm Street`,
+      confidence: '0.95',
+      domain: 'home',
+      importance: 5,
+      validFrom: new Date('2019-01-01T00:00:00Z'),
+      validUntil: new Date('2023-06-01T00:00:00Z'),
+    });
+    await insertFact('cardNow1', {
+      content: `${MARKER}: cardNow1 lives on Oak Avenue`,
+      confidence: '0.80',
+      domain: 'home',
+      importance: 4,
+      validFrom: new Date('2023-07-01T00:00:00Z'),
+    });
+    await insertFact('cardNow2', {
+      content: `${MARKER}: cardNow2 rents rather than owns`,
+      confidence: '0.75',
+      domain: 'home',
+      importance: 4,
+    });
+
+    const content = await compileOwnerCard(db);
+
+    expect(content).not.toContain('cardEnded lived on Elm Street');
+    expect(content).toContain('cardNow1 lives on Oak Avenue');
+    expect(content).toContain('cardNow2 rents rather than owns');
+    // An ongoing fact reads as ongoing rather than as a bare date range.
+    expect(content).toContain('cardNow1 lives on Oak Avenue (since 2023-07-01)');
+  });
+
+  it('a pinned fact that has lapsed still makes the card, labelled as past', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+
+    // Pinning is the owner saying "always tell it this", so it is not for
+    // auto-selection to overrule — but it must not read as current either.
+    await insertFact('cardPinnedPast', {
+      content: `${MARKER}: cardPinnedPast chaired the standards board`,
+      confidence: '0.90',
+      domain: 'home',
+      importance: 1,
+      pinned: true,
+      validUntil: new Date('2022-01-01T00:00:00Z'),
+    });
+
+    const content = await compileOwnerCard(db);
+
+    expect(content).toContain(
+      'cardPinnedPast chaired the standards board (past: until 2022-01-01)',
+    );
   });
 
   it('a pinned fact about a person is carried into the card under People', async (ctx) => {

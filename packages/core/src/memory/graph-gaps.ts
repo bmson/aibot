@@ -9,6 +9,7 @@ import {
 import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { activeGraphWhere } from './graph-recall.js';
+import { isCurrentAt } from './validity.js';
 
 const knowledgeGraphRelations = alias(graphRelations, 'relation');
 const memory = alias(memories, 'memory');
@@ -79,10 +80,30 @@ const EXPECTED: Partial<Record<string, ReadonlyArray<{ predicate: string; ask: s
   project: [{ predicate: 'starts_on', ask: 'when {name} starts' }],
 };
 
-/** Predicates that satisfy an expectation, including the obvious equivalents. */
+/**
+ * Predicates that satisfy an expectation.
+ *
+ * Present tense only, because every expectation above is phrased in the
+ * present ("I do not have current knowledge of where {name} works"). This list
+ * used to include the past-tense forms — `born_in` and `grew_up_in` counted as
+ * knowing where someone lives, `worked_at` as knowing where they work — which
+ * meant the one case where the assistant most obviously *should* ask was the
+ * one case it stayed quiet: it had been told about the old job, so it believed
+ * it knew about the current one.
+ *
+ * The original reason for the equivalents was not to over-interrogate the
+ * owner, and that concern is real but already answered somewhere better:
+ * `proactive/curiosity.ts` asks at most one question per run, runs at most
+ * once a day, and never re-asks a gap it has already put. Pacing is enforced
+ * there; pretending a birthplace answers a residence question was never
+ * pacing, it was a wrong answer.
+ *
+ * `studies_at` stays under `works_at`: it is present tense, and where someone
+ * studies is a real answer to what they are currently doing.
+ */
 const SATISFIED_BY: Record<string, readonly string[]> = {
-  lives_in: ['lives_in', 'born_in', 'grew_up_in'],
-  works_at: ['works_at', 'worked_at', 'studies_at', 'studied_at', 'interned_at'],
+  lives_in: ['lives_in'],
+  works_at: ['works_at', 'studies_at'],
   based_in: ['based_in'],
   starts_on: ['starts_on', 'ends_on'],
 };
@@ -94,7 +115,11 @@ const SATISFIED_BY: Record<string, readonly string[]> = {
  * this runs on a schedule against a graph that may hold thousands of rows, and
  * a question is not worth an N+1.
  */
-export async function findGraphGaps(db: Db, agentId: string): Promise<GraphGap[]> {
+export async function findGraphGaps(
+  db: Db,
+  agentId: string,
+  now: Date = new Date(),
+): Promise<GraphGap[]> {
   // Entities the graph actually leans on, by how connected they are. An entity
   // mentioned once is not something the owner wants to be quizzed about.
   const connected = await db
@@ -134,6 +159,7 @@ export async function findGraphGaps(db: Db, agentId: string): Promise<GraphGap[]
       reviewStatus: knowledgeGraphRelations.reviewStatus,
       id: knowledgeGraphRelations.id,
       confidence: knowledgeGraphRelations.confidence,
+      validUntil: knowledgeGraphRelations.validUntil,
       objectLabel: sql<string>`coalesce(nullif(${object.preferredLabel}, ''), ${object.label})`,
     })
     .from(knowledgeGraphRelations)
@@ -148,8 +174,13 @@ export async function findGraphGaps(db: Db, agentId: string): Promise<GraphGap[]
       ),
     );
 
+  // Only relations that still speak for the present can answer a present-tense
+  // expectation. A `works_at` edge the owner dated to a period that has ended
+  // is the same "I already know that" mistake as a past-tense predicate, just
+  // recorded in the validity columns instead of the predicate name.
   const predicatesBySubject = new Map<string, Set<string>>();
   for (const row of held) {
+    if (!isCurrentAt(row.validUntil, now)) continue;
     const set = predicatesBySubject.get(row.subjectEntityId) ?? new Set<string>();
     set.add(row.predicate);
     predicatesBySubject.set(row.subjectEntityId, set);

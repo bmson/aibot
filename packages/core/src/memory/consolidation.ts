@@ -8,6 +8,7 @@ import { isUnparseableObjectError, type ModelRouter } from '../model-router/rout
 import { withSpan } from '../otel.js';
 import { MEMORY_DOMAINS } from './extraction.js';
 import { saveOccasion } from './occasions.js';
+import { isCurrentAt, validitySuffix } from './validity.js';
 
 /**
  * Nightly consolidation (Phase 8): per entity, the model DETECTS duplicate
@@ -464,7 +465,7 @@ const CARD_PEOPLE_MIN_FACTS = 3;
  * card's footer tells the model how much that covers.
  * Rebuilt nightly after consolidation and on demand from the Profile page.
  */
-export async function compileOwnerCard(db: Db): Promise<string> {
+export async function compileOwnerCard(db: Db, now: Date = new Date()): Promise<string> {
   const [owner] = await db.select().from(contacts).where(eq(contacts.trust, 'owner')).limit(1);
 
   const lines: string[] = [];
@@ -494,20 +495,32 @@ export async function compileOwnerCard(db: Db): Promise<string> {
     for (const domain of CARD_DOMAIN_ORDER) {
       const inDomain = facts.filter((f) => (f.domain ?? 'other') === domain);
       const chosen = [
+        // Pinned is the owner saying "always tell it this", so a pinned fact
+        // makes the card whether or not its validity has lapsed — it is just
+        // labelled as past below rather than passed off as current state.
         ...inDomain.filter((f) => f.pinned),
+        // Auto-selection is a different matter. There are only
+        // CARD_AUTO_FACTS_PER_DOMAIN slots and they are filled by importance,
+        // so a former employer with importance 5 took the slot from the
+        // current one and then answered "where do I work". A fact that has
+        // stopped being true no longer competes for a slot; it stays in the
+        // store, counts toward the omitted total the footer reports, and is
+        // still reachable through memory.recall.
         ...inDomain
-          .filter((f) => !f.pinned && f.importance >= CARD_AUTO_MIN_IMPORTANCE)
+          .filter(
+            (f) =>
+              !f.pinned &&
+              f.importance >= CARD_AUTO_MIN_IMPORTANCE &&
+              isCurrentAt(f.validUntil, now),
+          )
           .slice(0, CARD_AUTO_FACTS_PER_DOMAIN),
       ];
       omitted += inDomain.length - chosen.length;
       if (chosen.length === 0) continue;
       lines.push(`${domain[0]?.toUpperCase()}${domain.slice(1)}:`);
       for (const f of chosen) {
-        const span = f.validFrom
-          ? ` (${f.validFrom.toISOString().slice(0, 10)}–${f.validUntil ? f.validUntil.toISOString().slice(0, 10) : 'now'})`
-          : '';
         const hedge = Number(f.confidence) < 0.5 ? ' (unconfirmed)' : '';
-        lines.push(`- ${f.content}${span}${hedge}`);
+        lines.push(`- ${f.content}${validitySuffix(f, now)}${hedge}`);
       }
     }
   }

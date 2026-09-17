@@ -40,7 +40,7 @@ export async function runCuriosity(
     const agent = await getAgent(db);
     const result: CuriosityResult = { gapsFound: 0, asked: null, pinged: false };
 
-    const gaps = await findGraphGaps(db, agent.id);
+    const gaps = await findGraphGaps(db, agent.id, now);
     result.gapsFound = gaps.length;
     await deps.heartbeat?.();
 

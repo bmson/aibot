@@ -28,7 +28,13 @@ async function addEntity(
   label: string,
   kind: string,
   predicates: string[],
-  opts: { contactId?: string; confidence?: string; reviewStatus?: string } = {},
+  opts: {
+    contactId?: string;
+    confidence?: string;
+    reviewStatus?: string;
+    /** Stated end of validity, per predicate, as the graph stores it: text. */
+    validUntil?: Record<string, string>;
+  } = {},
 ) {
   const [entity] = await db
     .insert(knowledgeGraphEntities)
@@ -67,6 +73,7 @@ async function addEntity(
       ordinal: index,
       confidence: opts.confidence ?? '0.9',
       reviewStatus: opts.reviewStatus ?? 'unreviewed',
+      ...(opts.validUntil?.[predicate] ? { validUntil: opts.validUntil[predicate] } : {}),
       evidenceQuote: `${MARKER} source`,
     });
   }
@@ -135,10 +142,48 @@ describe('findGraphGaps', () => {
     expect(questions).toContain(`${MARKER} Anna`);
   });
 
-  it('does not ask about something an equivalent predicate already covers', async (ctx) => {
+  it('does not ask about something a present-tense predicate already covers', async (ctx) => {
     if (!dbUp) return ctx.skip();
-    // `born_in` answers "where do they live" well enough not to interrogate.
-    const id = await addEntity('Bjorn', 'person', ['born_in', 'works_at', 'met']);
+    const id = await addEntity('Bjorn', 'person', ['lives_in', 'works_at', 'met']);
+    const gaps = await findGraphGaps(db, agentId);
+    const asked = gaps.filter((gap) => gap.key.includes(id) && gap.kind === 'missing-predicate');
+    expect(asked).toHaveLength(0);
+  });
+
+  it('still asks where someone lives when all it knows is where they were born', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // This used to be suppressed: `born_in` counted as knowing `lives_in`. It
+    // does not — someone born in Reykjavik may live anywhere — and the case
+    // where the assistant has only a birthplace is exactly the one worth
+    // asking about. Over-asking is bounded in proactive/curiosity.ts (one
+    // question per run, once a day, never re-asked), not by pretending the
+    // question is already answered.
+    const id = await addEntity('Bjorn Born', 'person', ['born_in', 'works_at', 'met']);
+    const gaps = await findGraphGaps(db, agentId);
+    const asked = gaps.filter((gap) => gap.key.includes(id) && gap.kind === 'missing-predicate');
+    expect(asked.map((gap) => gap.question).join(' ')).toContain('where');
+    expect(asked).toHaveLength(1);
+  });
+
+  it('still asks where someone works when the job it knows about has ended', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // The same mistake recorded in the validity columns instead of the
+    // predicate name: a `works_at` edge the owner dated to a period that has
+    // already closed cannot answer what they do now.
+    const id = await addEntity('Bjorn Former', 'person', ['works_at', 'lives_in', 'met'], {
+      validUntil: { works_at: '2023' },
+    });
+    const gaps = await findGraphGaps(db, agentId);
+    const asked = gaps.filter((gap) => gap.key.includes(id) && gap.kind === 'missing-predicate');
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.question).toContain('works');
+  });
+
+  it('keeps a job whose stated period has not closed yet', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const id = await addEntity('Bjorn Current', 'person', ['works_at', 'lives_in', 'met'], {
+      validUntil: { works_at: '2099' },
+    });
     const gaps = await findGraphGaps(db, agentId);
     const asked = gaps.filter((gap) => gap.key.includes(id) && gap.kind === 'missing-predicate');
     expect(asked).toHaveLength(0);
