@@ -18,6 +18,10 @@ export const googleToolLabels = {
     present: 'Updating a calendar event',
     past: 'Updated a calendar event',
   },
+  'calendar.respond_to_event': {
+    present: 'Answering an invitation',
+    past: 'Answered an invitation',
+  },
   'calendar.search_events': { present: 'Checking the calendar', past: 'Checked the calendar' },
   'calendar.list_events': { present: 'Checking the calendar', past: 'Checked the calendar' },
   'docs.create': { present: 'Creating a document', past: 'Created a document' },
