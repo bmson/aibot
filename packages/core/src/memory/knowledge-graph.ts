@@ -21,6 +21,7 @@ import { isUnparseableObjectError, type ModelRouter } from '../model-router/rout
 import { withSpan } from '../otel.js';
 import { canonicalizeDateLabel } from './date-labels.js';
 import {
+  canonicalPredicate,
   extractionVocabularyLines,
   GRAPH_ENTITY_KINDS,
   type GraphEntityKind,
@@ -672,8 +673,14 @@ async function persistRelationships(
       let ordinal = 0;
       let relationships = 0;
       for (const relation of extracted.relationships) {
+        // Grounding runs first, and on the wording the model actually produced:
+        // the evidence contract is that the predicate's words appear in the
+        // quote, so checking a canonical form would reject a correctly grounded
+        // edge whose source happened to say "employed by". Canonicalizing after
+        // it has passed keeps the check explainable and still stores one
+        // predicate per relationship rather than one per phrasing.
         if (!graphRelationshipIsGrounded(source.content, relation)) continue;
-        const predicate = cleanPredicate(relation.predicate);
+        const predicate = canonicalPredicate(cleanPredicate(relation.predicate)).id;
         const subjectLabel = cleanLabel(relation.subject.label);
         const objectLabel = cleanLabel(relation.object.label);
         if (!predicate || !subjectLabel || !objectLabel) continue;
@@ -1150,7 +1157,10 @@ export async function createOwnerKnowledgeGraphFact(
 
   const subjectParsed = GraphEntitySchema.safeParse(subjectRow);
   const objectParsed = GraphEntitySchema.safeParse(objectRow);
-  const predicate = cleanPredicate(input.predicate);
+  // The owner types freely here too, and the form's suggestions are only
+  // suggestions — so a hand-added edge lands in the same vocabulary as an
+  // extracted one instead of starting a synonym of it.
+  const predicate = canonicalPredicate(cleanPredicate(input.predicate)).id;
   const note = input.note.replace(/\s+/g, ' ').trim().slice(0, 1_000);
   if (!subjectParsed.success || !objectParsed.success || !predicate || note.length < 3) {
     return { error: 'Add both entities, a relationship, and a short source note.' };

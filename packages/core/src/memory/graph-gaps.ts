@@ -9,6 +9,7 @@ import {
 import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { activeGraphWhere } from './graph-recall.js';
+import { predicateAliases } from './predicate-vocabulary.js';
 import { isCurrentAt } from './validity.js';
 
 const knowledgeGraphRelations = alias(graphRelations, 'relation');
@@ -71,14 +72,16 @@ export interface GraphGap {
  * and an assistant that notices it has not been told whether your sister is
  * dead has misunderstood the assignment. These are the ordinary, askable ones.
  */
-const EXPECTED: Partial<Record<string, ReadonlyArray<{ predicate: string; ask: string }>>> = {
-  person: [
-    { predicate: 'lives_in', ask: 'where {name} lives' },
-    { predicate: 'works_at', ask: 'where {name} works' },
-  ],
-  organization: [{ predicate: 'based_in', ask: 'where {name} is based' }],
-  project: [{ predicate: 'starts_on', ask: 'when {name} starts' }],
-};
+/** Exported so a test can hold this to the predicate registry. */
+export const EXPECTED: Partial<Record<string, ReadonlyArray<{ predicate: string; ask: string }>>> =
+  {
+    person: [
+      { predicate: 'lives_in', ask: 'where {name} lives' },
+      { predicate: 'works_at', ask: 'where {name} works' },
+    ],
+    organization: [{ predicate: 'based_in', ask: 'where {name} is based' }],
+    project: [{ predicate: 'starts_on', ask: 'when {name} starts' }],
+  };
 
 /**
  * Predicates that satisfy an expectation.
@@ -101,12 +104,30 @@ const EXPECTED: Partial<Record<string, ReadonlyArray<{ predicate: string; ask: s
  * `studies_at` stays under `works_at`: it is present tense, and where someone
  * studies is a real answer to what they are currently doing.
  */
-const SATISFIED_BY: Record<string, readonly string[]> = {
+/** Exported so a test can hold this to the predicate registry. */
+export const SATISFIED_BY: Record<string, readonly string[]> = {
   lives_in: ['lives_in'],
   works_at: ['works_at', 'studies_at'],
   based_in: ['based_in'],
   starts_on: ['starts_on', 'ends_on'],
 };
+
+/**
+ * The same sets, widened to every wording that canonicalizes to a member.
+ *
+ * Edges written before canonicalization — or by any path that did not run it —
+ * still carry the source's own phrasing, so matching the registry id alone
+ * would treat a stored `employed_by` as not knowing where someone works and
+ * ask a question the owner has already answered. New rows arrive canonical and
+ * these aliases become redundant for them; until the graph has turned over,
+ * they are what keeps the detector honest about what it already knows.
+ */
+const SATISFIED_BY_ALIASES: Record<string, readonly string[]> = Object.fromEntries(
+  Object.entries(SATISFIED_BY).map(([expected, members]) => [
+    expected,
+    [...new Set(members.flatMap((member) => predicateAliases(member)))],
+  ]),
+);
 
 /**
  * Gaps worth asking about, most valuable first.
@@ -191,7 +212,7 @@ export async function findGraphGaps(
   for (const entity of connected) {
     const has = predicatesBySubject.get(entity.id) ?? new Set<string>();
     for (const expectation of EXPECTED[entity.kind] ?? []) {
-      const satisfying = SATISFIED_BY[expectation.predicate] ?? [expectation.predicate];
+      const satisfying = SATISFIED_BY_ALIASES[expectation.predicate] ?? [expectation.predicate];
       if (satisfying.some((predicate) => has.has(predicate))) continue;
       gaps.push({
         kind: 'missing-predicate',

@@ -94,6 +94,19 @@ export const PREDICATE_VOCABULARY: readonly PredicateSpec[] = [
   },
   { id: 'divorced_on', group: 'biography', subjectKinds: PERSON, objectKinds: ['date'] },
   { id: 'died_on', group: 'biography', subjectKinds: PERSON, objectKinds: ['date'] },
+  // Where a thing rather than a person sits. The gap detector has expected
+  // this predicate all along ("where {name} is based") while the registry did
+  // not define it, so extraction was never told to produce it and the form
+  // never suggested it — the assistant could ask the question and then had no
+  // vocabulary to record the answer in. `registryCoversExpectations` in the
+  // gap-detector tests now holds that pairing together.
+  {
+    id: 'based_in',
+    group: 'biography',
+    subjectKinds: ['organization', 'project', 'event'],
+    objectKinds: ['place'],
+    temporal: true,
+  },
 
   // ── Work and education ────────────────────────────────────────────────────
   {
@@ -183,6 +196,106 @@ const BY_ID = new Map(PREDICATE_VOCABULARY.map((spec) => [spec.id, spec]));
 
 export function predicateSpec(id: string): PredicateSpec | undefined {
   return BY_ID.get(id);
+}
+
+/**
+ * Wordings that mean a predicate the registry already has.
+ *
+ * The extraction prompt lists the vocabulary, but the schema accepts any
+ * string, so what actually lands is whatever phrasing the source used. That is
+ * the right trade for the evidence contract — a stored predicate has to be the
+ * words in the quote, or grounding could not check it — but it means the same
+ * relationship arrives as `works_at` from one email and `employed_by` from the
+ * next, and a traversal looking for one silently misses the other.
+ *
+ * Deliberately conservative, and deliberately not clever about tense. The
+ * registry treats `works_at` and `worked_at` as different predicates because
+ * they are, so nothing here collapses one into the other; a mapping is only
+ * listed when the two wordings mean the same thing at the same time.
+ */
+const PREDICATE_SYNONYMS: Readonly<Record<string, string>> = {
+  // Work
+  employed_by: 'works_at',
+  employed_at: 'works_at',
+  employee_of: 'works_at',
+  works_for: 'works_at',
+  working_at: 'works_at',
+  employer_of: 'employs',
+  // Education
+  studies_in: 'studies_at',
+  student_at: 'studies_at',
+  studied_in: 'studied_at',
+  // Residence
+  resides_in: 'lives_in',
+  lives_at: 'lives_in',
+  living_in: 'lives_in',
+  // Where an organization sits
+  headquartered_in: 'based_in',
+  based_at: 'based_in',
+  located_in: 'based_in',
+  // Family
+  married_to: 'spouse_of',
+  wife_of: 'spouse_of',
+  husband_of: 'spouse_of',
+};
+
+/**
+ * Prefixes a model tends to keep from the source wording ("is married to",
+ * "was born in") that carry no meaning the predicate does not already.
+ */
+const DROPPED_PREFIXES = ['is_', 'was_', 'are_', 'were_', 'has_', 'have_', 'a_', 'an_', 'the_'];
+
+function lookup(candidate: string): string | undefined {
+  if (BY_ID.has(candidate)) return candidate;
+  const mapped = PREDICATE_SYNONYMS[candidate];
+  return mapped && BY_ID.has(mapped) ? mapped : undefined;
+}
+
+/**
+ * The registry id a stored predicate belongs to, and whether one was found.
+ *
+ * An unknown wording is returned unchanged rather than dropped: losing a
+ * relationship the owner's own words support would be worse than holding one
+ * the registry cannot type, and `known: false` lets a caller decide. Nothing
+ * here ever invents a predicate the registry does not define.
+ */
+export function canonicalPredicate(value: string): { id: string; known: boolean } {
+  const cleaned = value.trim().toLocaleLowerCase().replace(/\s+/g, '_');
+  if (!cleaned) return { id: value, known: false };
+
+  const attempts = [cleaned];
+  for (const prefix of DROPPED_PREFIXES) {
+    if (cleaned.startsWith(prefix)) attempts.push(cleaned.slice(prefix.length));
+  }
+  // Verb agreement is the other common drift: a source that says "work at"
+  // rather than "works at" should not open a second predicate.
+  for (const attempt of [...attempts]) {
+    const [head, ...rest] = attempt.split('_');
+    if (!head) continue;
+    attempts.push([`${head}s`, ...rest].join('_'));
+    if (head.endsWith('s')) attempts.push([head.slice(0, -1), ...rest].join('_'));
+  }
+
+  for (const attempt of attempts) {
+    const hit = lookup(attempt);
+    if (hit) return { id: hit, known: true };
+  }
+  return { id: cleaned, known: false };
+}
+
+/**
+ * Every wording that canonicalizes to `id`, including `id` itself.
+ *
+ * Read paths need this: rows written before canonicalization, or by a path
+ * that never ran it, still carry the original wording, so a query that only
+ * matches the registry id would miss them.
+ */
+export function predicateAliases(id: string): string[] {
+  const aliases = new Set<string>([id]);
+  for (const [wording, target] of Object.entries(PREDICATE_SYNONYMS)) {
+    if (target === id) aliases.add(wording);
+  }
+  return [...aliases];
 }
 
 /** Suggestions for one kind pair, in registry order. Empty means: type freely. */
