@@ -191,6 +191,13 @@ final class AppModel: ObservableObject {
     private var isSceneActive = true
     private var thoughtClearTask: Task<Void, Never>?
     private var lastNotifiedTaskState: String?
+    /// How much of the reply in flight has been read aloud. Only a turn the
+    /// owner started speaks: a proactive notice arriving while the phone is on
+    /// a table is not something to announce to the room.
+    private var spokenTurn: SpokenTurn?
+    /// Talk mode reads every reply whether or not the setting is on — with no
+    /// transcript on screen, speech is the only thing there to answer with.
+    var speechAlwaysOn = false
 
     private let defaults = UserDefaults.standard
     private let serverKey = "assistant.server-url"
@@ -269,6 +276,11 @@ final class AppModel: ObservableObject {
         activeConversation?.conversation.id ?? bootstrap?.conversation.conversation.id
     }
     var latestMood: CompanionMood { CompanionMood.latest(in: messages) }
+    /// The expression the runtime sent with the most recent reply. Unused by
+    /// the transcript, which has the words; talk mode has nothing else.
+    var latestFace: CompanionFace? {
+        messages.reversed().compactMap(\.face).first
+    }
     var latestQuickReplies: [String] {
         messages.reversed().first(where: { $0.role == .assistant })?.quickReplies ?? []
     }
@@ -878,6 +890,8 @@ final class AppModel: ObservableObject {
         guard let client, let conversationId, message.isDurableLogRow else { return }
         guard let index = messages.firstIndex(where: { $0.id == message.id }) else { return }
         let removed = messages.remove(at: index)
+        // A row taken out of the log should not keep talking from inside it.
+        SpeechPlayer.shared.stop(messageID: message.id)
         do {
             try await client.setMessageHidden(
                 conversationId: conversationId,
@@ -1546,7 +1560,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func send(_ rawText: String, autonomous override: Bool? = nil, force: Bool = false) {
+    /// `spoken` says this turn will be heard rather than read, and asks the
+    /// server for a reply shaped for the ear: short, no tables, no Markdown to
+    /// pronounce.
+    func send(_ rawText: String, autonomous override: Bool? = nil, force: Bool = false, spoken: Bool = false) {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending,
               let client,
@@ -1568,6 +1585,7 @@ final class AppModel: ObservableObject {
         thoughtClearTask?.cancel()
 
         pollTask?.cancel()
+        beginSpeaking(streamID: streamID)
         // Recorded before the send, not after the receipt: backgrounding during
         // the stream is exactly the case this exists for, and at that point
         // there is no taskId yet. Polling by cursor alone still finds the reply.
@@ -1588,6 +1606,7 @@ final class AppModel: ObservableObject {
                     text: text,
                     autonomous: autonomous,
                     force: force,
+                    spoken: spoken,
                     onDelta: { [weak self] delta in
                         guard let self else { return }
                         await self.receive(delta: delta, streamID: streamID)
@@ -1761,6 +1780,9 @@ final class AppModel: ObservableObject {
         pollTask = nil
         resumableTurn = nil
         isSending = false
+        // Stopping a turn stops its voice too — a reply the owner cut off
+        // should not carry on talking.
+        stopSpeaking()
         toolActivity = []
         messages.removeAll { $0.id.hasPrefix("stream-") && $0.text.isEmpty }
         let detail = "You stopped this turn"
@@ -1839,6 +1861,8 @@ final class AppModel: ObservableObject {
     }
 
     private func setActiveConversation(_ conversation: ConversationView) {
+        // Another conversation's reply has no business still being read here.
+        stopSpeaking()
         activeConversation = conversation
         cursor = conversation.cursor
         // Another conversation's ids have no sequence to agree with this one's.
@@ -1860,6 +1884,7 @@ final class AppModel: ObservableObject {
         if let partIndex = messages[index].parts.lastIndex(where: { $0.type == "text" }) {
             messages[index].parts[partIndex].text = (messages[index].parts[partIndex].text ?? "") + delta
         }
+        speakArrivedText(streamID: id)
     }
 
     private func append(cue: MessagePart, to id: String) {
@@ -1872,6 +1897,53 @@ final class AppModel: ObservableObject {
             return
         }
         messages[index].parts.append(cue)
+    }
+
+    /// One turn's speech, from the first delta to the durable row that replaces
+    /// the streamed one. Keyed on the reply's own text rather than on a message
+    /// id, because the id changes underneath it halfway through.
+    private struct SpokenTurn {
+        let streamID: String
+        var progress = SpeechProgress()
+    }
+
+    /// Begin reading this turn aloud as it arrives, if the owner asked for that.
+    private func beginSpeaking(streamID: String) {
+        SpeechPlayer.shared.stop()
+        guard speechAlwaysOn || SpeechSettings.speakRepliesAloud else {
+            spokenTurn = nil
+            return
+        }
+        spokenTurn = SpokenTurn(streamID: streamID)
+    }
+
+    /// Say whatever has finished arriving. Called on every delta; speaks only
+    /// blocks the stream has closed, so a half-written table is never described
+    /// by its first row and then described again.
+    private func speakArrivedText(streamID: String) {
+        guard var turn = spokenTurn, turn.streamID == streamID,
+              let message = messages.first(where: { $0.id == streamID }) else { return }
+        let passages = turn.progress.take(from: message.text, isFinal: false)
+        spokenTurn = turn
+        SpeechPlayer.shared.enqueue(passages, for: streamID)
+    }
+
+    /// The durable row landed. Read the tail the stream never closed — and, for
+    /// a reply that was all card and no prose, read the card.
+    private func finishSpeaking(for message: ChatMessage) {
+        guard var turn = spokenTurn, message.role == .assistant else { return }
+        spokenTurn = nil
+
+        var passages = turn.progress.take(from: message.text, isFinal: true)
+        if !turn.progress.hasSpoken {
+            passages = SpeakableText.passages(for: message)
+        }
+        SpeechPlayer.shared.enqueue(passages, for: message.id)
+    }
+
+    func stopSpeaking() {
+        spokenTurn = nil
+        SpeechPlayer.shared.stop()
     }
 
     private func pollForReply(taskId: String?, streamID: String) async {
@@ -2008,6 +2080,9 @@ final class AppModel: ObservableObject {
                 }
             }
             messages.append(message)
+            // The streamed row is gone; speech follows the reply onto its
+            // durable id rather than stopping where the stream did.
+            finishSpeaking(for: message)
         }
         messages = logOrder.ordered(messages)
     }
