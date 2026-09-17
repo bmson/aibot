@@ -11,8 +11,15 @@ import {
 import { eq, inArray, like } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
-import { findGraphGaps, markGapAsked, nextUnaskedGap } from './graph-gaps.js';
+import {
+  EXPECTED,
+  findGraphGaps,
+  markGapAsked,
+  nextUnaskedGap,
+  SATISFIED_BY,
+} from './graph-gaps.js';
 import { GRAPH_EXTRACTION_VERSION } from './knowledge-graph.js';
+import { predicateSpec } from './predicate-vocabulary.js';
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://assistant@localhost:5432/assistant';
 const MARKER = `xtest-gaps-${Date.now()}`;
@@ -189,6 +196,16 @@ describe('findGraphGaps', () => {
     expect(asked).toHaveLength(0);
   });
 
+  it('counts a legacy synonym as knowing where someone works', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // Rows written before canonicalization carry the source's own phrasing.
+    // Matching the registry id alone would ask a question already answered.
+    const id = await addEntity('Bjorn Legacy', 'person', ['employed_by', 'lives_in', 'met']);
+    const gaps = await findGraphGaps(db, agentId);
+    const asked = gaps.filter((gap) => gap.key.includes(id) && gap.kind === 'missing-predicate');
+    expect(asked).toHaveLength(0);
+  });
+
   it('offers to keep contact details for a person it only has notes about', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const id = await addEntity('Unlinked', 'person', ['met', 'likes', 'sibling_of']);
@@ -267,5 +284,32 @@ describe('nextUnaskedGap', () => {
   it('returns nothing when there is nothing to ask', async (ctx) => {
     if (!dbUp) return ctx.skip();
     expect(await nextUnaskedGap(db, agentId, [])).toBeNull();
+  });
+});
+
+/**
+ * The gap detector is a fourth consumer of the predicate registry, and it had
+ * drifted from it: it expected `based_in` while the registry did not define
+ * it, so extraction was never told to produce the predicate and the
+ * add-relationship form never suggested it — the assistant could ask where an
+ * organization is based and then had no vocabulary to record the answer in.
+ * The registry's own header calls itself the source of truth for its
+ * consumers; this holds the detector to that.
+ */
+describe('registry covers what the detector expects', () => {
+  it('defines every predicate an expectation names', () => {
+    for (const expectations of Object.values(EXPECTED)) {
+      for (const expectation of expectations ?? []) {
+        expect(predicateSpec(expectation.predicate), expectation.predicate).toBeDefined();
+      }
+    }
+  });
+
+  it('defines every predicate that can satisfy an expectation', () => {
+    for (const members of Object.values(SATISFIED_BY)) {
+      for (const member of members) {
+        expect(predicateSpec(member), member).toBeDefined();
+      }
+    }
   });
 });
