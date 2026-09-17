@@ -82,7 +82,7 @@ final class SpeechListener: ObservableObject {
             let analyzer = SpeechAnalyzer(modules: [transcriber])
             self.analyzer = analyzer
 
-            guard let format = await SpeechTranscriber.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
                 state = .unavailable("This iPhone has no audio format the transcriber can take.")
                 return
             }
