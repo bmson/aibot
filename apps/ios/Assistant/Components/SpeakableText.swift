@@ -67,9 +67,8 @@ enum SpeakableText {
             return nodes.flatMap(speech(forNode:))
         case let .code(language, _):
             // Reading code aloud is never what anyone wanted. Say it is there.
-            let named = (language?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
-                $0.isEmpty ? nil : "\(spokenLanguageName($0)) "
-            } ?? ""
+            let tag: String = language?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let named: String = tag.isEmpty ? "" : "\(spokenLanguageName(tag)) "
             return ["There's a \(named)code block here."]
         case .equation:
             return ["There's an equation here."]

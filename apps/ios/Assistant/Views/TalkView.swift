@@ -229,12 +229,7 @@ private struct CompanionFaceView: View {
             Circle()
                 .strokeBorder(AssistantTheme.accentLight.opacity(ringOpacity), lineWidth: 2)
                 .scaleEffect(ringScale)
-                .animation(
-                    animates && phase != .idle
-                        ? .easeInOut(duration: phase == .speaking ? 0.5 : 1.8).repeatForever(autoreverses: true)
-                        : nil,
-                    value: phase
-                )
+                .animation(ringAnimation, value: phase)
 
             Circle()
                 .fill(AssistantTheme.accent.opacity(0.22))
@@ -246,6 +241,16 @@ private struct CompanionFaceView: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .accessibilityHidden(true)
+    }
+
+    /// Spelled out rather than nested inline: a conditional animation built
+    /// from two ternaries and an implicit member lookup is the shape that sends
+    /// the SwiftUI type checker away for minutes at a time.
+    private var ringAnimation: Animation? {
+        guard animates, phase != .idle else { return nil }
+        let beat: Double = phase == .speaking ? 0.5 : 1.8
+        let breathe: Animation = .easeInOut(duration: beat)
+        return breathe.repeatForever(autoreverses: true)
     }
 
     private var ringOpacity: Double {
