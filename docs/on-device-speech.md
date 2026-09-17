@@ -56,6 +56,31 @@ compact voices exist, say so once — a single dismissible row offering the Sett
 than letting the owner conclude the assistant sounds like a 2011 GPS. Personal Voice
 (`AVSpeechSynthesizer.requestPersonalVoiceAuthorization()`) is a later flourish, not a dependency.
 
+Enumerating by `.quality` alone is not enough, and the failure is silent. Siri's voices appear in
+`speechVoices()` and report `.premium`, but an utterance from a third-party app carrying one is
+spoken in the compact default — so an app that *did* go looking for a good voice sounds exactly like
+one that did not. `SpeechVoices.isUsable` drops them, along with Eloquence (a speech aid, tuned for
+speed over naturalness) and the legacy novelty voices; among voices of equal quality the tie goes to
+the one the phone is already set to, and then to identifier order, so the assistant does not change
+voice between launches.
+
+Three smaller things decide how synthetic the result sounds, and none of them are about the voice:
+
+- **Rate.** `AVSpeechUtteranceDefaultSpeechRate` is a read-a-document pace, audibly slower than
+  anyone talks. `SpeechPace` is stored in `UserDefaults` and offered in More → Speech; the default
+  is a step above the system rate, and the scale stops well short of the maximum, where even the
+  neural voices slur.
+- **Cadence.** Headings, list items and card fragments arrive without terminal punctuation, and a
+  synthesizer handed a bare fragment gives it no sentence-final fall — every item lands on the same
+  note. `SpeechProsody.phrase(from:)` adds the full stop at the audio boundary, leaving the tested
+  projection in `SpeakableText` as text.
+- **The gap between utterances.** A passage is a block, and a six-item list is six utterances. The
+  synthesizer already leaves a pause between them, so the app's own `preUtteranceDelay` is small,
+  and zero for the first thing said after silence — a delay before the first word reads as lag, not
+  as phrasing.
+
+Pitch and volume are left alone. Both are ways of making a neural voice sound synthetic again.
+
 The audio session needs a deliberate choice, not a default. `.playback` with mode `.spokenAudio`
 and `.duckOthers` is the right one for read-aloud: it lowers music instead of stopping it, and it
 resumes cleanly. It also **ignores the silent switch**, which is the correct behaviour for a
