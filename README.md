@@ -202,3 +202,4 @@ OIDC; the shared-secret mode exists only for local development.
 - [Anticipation layer](docs/anticipation-layer.md)
 - [Long-running chat memory](docs/long-running-chat-memory.md)
 - [Memory supersession](docs/memory-supersession.md)
+- [Temporal validity](docs/temporal-validity.md)
