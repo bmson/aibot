@@ -271,6 +271,49 @@ async function collectEvents(
  * execute runs the risk decision is already made — failing loudly is the only
  * honest outcome, and it tells the model exactly how to retry.
  */
+const respondSchema = z.object({
+  eventId: z.string().min(1).max(1024),
+  response: z.enum(['accepted', 'declined', 'tentative']),
+  /**
+   * The calendar the event was found on. Reads fan out across every calendar
+   * the assistant can see, so an invitation frequently lives on a shared one
+   * and `primary` would 404 — `list_events` and `search_events` both return
+   * the calendar identity for this reason.
+   */
+  calendarId: z.string().min(1).max(512).default('primary'),
+  comment: z.string().max(500).default(''),
+});
+
+/**
+ * Which guest row is us.
+ *
+ * Google marks the row belonging to the calendar being read with `self: true`,
+ * which is the only answer that stays correct when the assistant and the owner
+ * are both on the guest list, or when an invitation arrived at an alias. The
+ * address match is a fallback for the shared-calendar case, where `self` is
+ * relative to the calendar's owner rather than to this account.
+ *
+ * Returns -1 when no row is ours, which the caller reports rather than
+ * papering over: replying to an invitation and adding yourself to someone
+ * else's guest list are different acts.
+ */
+function selfAttendeeIndex(
+  attendees: ReadonlyArray<Record<string, unknown>>,
+  identity: { botEmail: string; ownerEmail: string },
+): number {
+  const flagged = attendees.findIndex((a) => a.self === true);
+  if (flagged >= 0) return flagged;
+  const mine = new Set(
+    [identity.botEmail, identity.ownerEmail]
+      .filter((email) => Boolean(email))
+      .map((email) => email.trim().toLocaleLowerCase()),
+  );
+  if (mine.size === 0) return -1;
+  return attendees.findIndex(
+    (a) => typeof a.email === 'string' && mine.has(a.email.trim().toLocaleLowerCase()),
+  );
+}
+
 async function assertNoAttendees(
   deps: CalendarToolDeps,
   eventId: string,
@@ -737,6 +780,87 @@ export function registerCalendarTools(
       /** See `update_event`: verified in execute, so the claim cannot lie. */
       ownerVisibleOnly: (args) => (args as { ownerOnly?: boolean }).ownerOnly === true,
     },
+  );
+
+  register(
+    registry,
+    {
+      name: 'calendar.respond_to_event',
+      description:
+        "Answer an invitation: accept, decline, or mark tentative on an event the assistant or owner was invited to. Use this for an event someone ELSE organized — calendar.update_event edits the assistant's own events and cannot set an RSVP. Pass the calendarId the event was found on (list_events and search_events return it); the default is the assistant's own calendar. The organizer is notified.",
+      inputSchema: respondSchema,
+      /**
+       * Always approval. An RSVP is a message to whoever called the meeting —
+       * declining is a social act with consequences the assistant is in no
+       * position to weigh — so there is no owner-only tier here the way there
+       * is for editing a private appointment. The risk callback is a constant
+       * rather than a function for exactly that reason.
+       */
+      risk: 'approval',
+      acceptsUntrustedInput: false,
+      approvalSummary: (args) => {
+        const a = args as z.infer<typeof respondSchema>;
+        const verb =
+          a.response === 'accepted'
+            ? 'Accept'
+            : a.response === 'declined'
+              ? 'Decline'
+              : 'Tentatively accept';
+        return `${verb} the invitation to ${a.eventId}${a.comment ? ` — "${a.comment}"` : ''}`;
+      },
+      execute: async (args) => {
+        const path = `${CAL}/calendars/${encodeURIComponent(args.calendarId)}/events/${encodeURIComponent(args.eventId)}`;
+        const event = await deps.client.api<{
+          summary?: string;
+          htmlLink?: string;
+          organizer?: { email?: string };
+          attendees?: Array<Record<string, unknown>>;
+        }>(path);
+
+        const attendees = event.attendees ?? [];
+        const index = selfAttendeeIndex(attendees, deps);
+        if (index < 0) {
+          // Without an attendee row there is nothing to answer. Saying so beats
+          // inventing one: adding the assistant to someone else's guest list is
+          // a different act from replying to an invitation, and not one the
+          // owner approved when they approved an RSVP.
+          throw new Error(
+            attendees.length === 0
+              ? `Event ${args.eventId} has no attendees, so there is no invitation to answer. It may be an event the assistant owns — use calendar.update_event or calendar.cancel_event instead.`
+              : `Neither ${deps.botEmail} nor ${deps.ownerEmail} is on the guest list for event ${args.eventId}, so there is no invitation to answer.`,
+          );
+        }
+
+        // Calendar replaces the attendees array wholesale, so every other guest
+        // is written back exactly as it was read — spread rather than rebuilt,
+        // because the stored rows carry fields this code does not model
+        // (displayName, optional, organizer, additionalGuests) and mapping them
+        // through a narrower shape would quietly drop them from the event.
+        const patched = attendees.map((attendee, at) =>
+          at === index
+            ? {
+                ...attendee,
+                responseStatus: args.response,
+                ...(args.comment ? { comment: args.comment } : {}),
+              }
+            : attendee,
+        );
+
+        const updated = await deps.client.api<{ id: string; htmlLink?: string }>(
+          `${path}?sendUpdates=all`,
+          { method: 'PATCH', body: JSON.stringify({ attendees: patched }) },
+        );
+        return {
+          eventId: updated.id,
+          response: args.response,
+          summary: event.summary ?? '',
+          organizer: event.organizer?.email ?? '',
+          link: updated.htmlLink ?? event.htmlLink,
+          responded: true,
+        };
+      },
+    },
+    { outwardFacing: true },
   );
 
   return registry;

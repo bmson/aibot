@@ -630,3 +630,170 @@ describe('calendar.cancel_event', () => {
     expect(api).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('calendar.respond_to_event', () => {
+  const invitation = {
+    summary: 'Design review',
+    htmlLink: 'https://calendar.google.com/evt-9',
+    organizer: { email: 'organizer@acme.example' },
+    attendees: [
+      { email: 'organizer@acme.example', responseStatus: 'accepted', organizer: true },
+      {
+        email: 'bot@example.com',
+        responseStatus: 'needsAction',
+        self: true,
+        displayName: 'Assistant',
+        optional: true,
+      },
+      { email: 'someone@acme.example', responseStatus: 'tentative', displayName: 'Someone' },
+    ],
+  };
+
+  it('always needs approval — an RSVP reaches the organizer', () => {
+    const entry = toolsWith(vi.fn()).get('calendar.respond_to_event');
+    expect(riskOf(entry, { eventId: 'evt-9', response: 'declined' })).toBe('approval');
+    expect(riskOf(entry, { eventId: 'evt-9', response: 'accepted' })).toBe('approval');
+    expect(entry?.flags.outwardFacing).toBe(true);
+    expect(entry?.tool.acceptsUntrustedInput).toBe(false);
+    // There is no owner-only tier to launder a decline through.
+    expect(
+      ownerVisibleOnlyFor(entry?.flags ?? {}, { eventId: 'evt-9', response: 'declined' }),
+    ).toBe(false);
+  });
+
+  it('names the event and the answer on the approval card', () => {
+    const entry = toolsWith(vi.fn()).get('calendar.respond_to_event');
+    const summary = entry?.tool.approvalSummary?.({
+      eventId: 'evt-9',
+      response: 'declined',
+      calendarId: 'primary',
+      comment: 'clashes with the offsite',
+    } as never);
+    expect(summary).toContain('Decline');
+    expect(summary).toContain('evt-9');
+    expect(summary).toContain('clashes with the offsite');
+  });
+
+  it('sets only its own response and writes every other guest back untouched', async () => {
+    const api = vi
+      .fn()
+      .mockResolvedValueOnce(invitation)
+      .mockResolvedValueOnce({ id: 'evt-9', htmlLink: 'https://calendar.google.com/evt-9' });
+
+    const result = await toolsWith(api)
+      .get('calendar.respond_to_event')
+      ?.tool.execute(
+        { eventId: 'evt-9', response: 'accepted', calendarId: 'primary', comment: '' },
+        {} as never,
+      );
+
+    const [, init] = api.mock.calls[1] as [string, { body: string }];
+    const sent = JSON.parse(init.body) as { attendees: Array<Record<string, unknown>> };
+    // Calendar replaces the array wholesale, so fields this code does not model
+    // must survive the round trip rather than being rebuilt out of existence.
+    expect(sent.attendees).toEqual([
+      { email: 'organizer@acme.example', responseStatus: 'accepted', organizer: true },
+      {
+        email: 'bot@example.com',
+        responseStatus: 'accepted',
+        self: true,
+        displayName: 'Assistant',
+        optional: true,
+      },
+      { email: 'someone@acme.example', responseStatus: 'tentative', displayName: 'Someone' },
+    ]);
+    expect(result).toMatchObject({
+      response: 'accepted',
+      responded: true,
+      summary: 'Design review',
+    });
+  });
+
+  it('tells the organizer, and addresses the calendar it was given', async () => {
+    const api = vi.fn().mockResolvedValueOnce(invitation).mockResolvedValueOnce({ id: 'evt-9' });
+    await toolsWith(api)
+      .get('calendar.respond_to_event')
+      ?.tool.execute(
+        { eventId: 'evt-9', response: 'declined', calendarId: 'work@example.com', comment: '' },
+        {} as never,
+      );
+    const [url] = api.mock.calls[1] as [string];
+    expect(url).toContain('sendUpdates=all');
+    expect(calendarIdIn(url)).toBe('work@example.com');
+  });
+
+  it('carries a comment onto its own guest row only', async () => {
+    const api = vi.fn().mockResolvedValueOnce(invitation).mockResolvedValueOnce({ id: 'evt-9' });
+    await toolsWith(api)
+      .get('calendar.respond_to_event')
+      ?.tool.execute(
+        {
+          eventId: 'evt-9',
+          response: 'tentative',
+          calendarId: 'primary',
+          comment: 'may be ten minutes late',
+        },
+        {} as never,
+      );
+    const [, init] = api.mock.calls[1] as [string, { body: string }];
+    const sent = JSON.parse(init.body) as { attendees: Array<Record<string, unknown>> };
+    expect(sent.attendees[1]).toMatchObject({
+      responseStatus: 'tentative',
+      comment: 'may be ten minutes late',
+    });
+    expect(sent.attendees[0]?.comment).toBeUndefined();
+    expect(sent.attendees[2]?.comment).toBeUndefined();
+  });
+
+  it('answers as the owner when the guest row is theirs rather than the assistant’s', async () => {
+    const api = vi
+      .fn()
+      .mockResolvedValueOnce({
+        attendees: [
+          { email: 'organizer@acme.example', responseStatus: 'accepted' },
+          { email: 'Owner@Example.com', responseStatus: 'needsAction' },
+        ],
+      })
+      .mockResolvedValueOnce({ id: 'evt-9' });
+    await toolsWith(api)
+      .get('calendar.respond_to_event')
+      ?.tool.execute(
+        { eventId: 'evt-9', response: 'declined', calendarId: 'owner@example.com', comment: '' },
+        {} as never,
+      );
+    const [, init] = api.mock.calls[1] as [string, { body: string }];
+    const sent = JSON.parse(init.body) as { attendees: Array<Record<string, unknown>> };
+    expect(sent.attendees[1]?.responseStatus).toBe('declined');
+    expect(sent.attendees[0]?.responseStatus).toBe('accepted');
+  });
+
+  it('refuses when no guest row is ours instead of adding one', async () => {
+    // Replying to an invitation and putting yourself on someone else's guest
+    // list are different acts, and only the first one was approved.
+    const api = vi.fn().mockResolvedValueOnce({
+      attendees: [{ email: 'organizer@acme.example', responseStatus: 'accepted' }],
+    });
+    await expect(
+      toolsWith(api)
+        .get('calendar.respond_to_event')
+        ?.tool.execute(
+          { eventId: 'evt-9', response: 'accepted', calendarId: 'primary', comment: '' },
+          {} as never,
+        ),
+    ).rejects.toThrow(/guest list/i);
+    expect(api).toHaveBeenCalledTimes(1);
+  });
+
+  it('points at the right tool when the event has no attendees at all', async () => {
+    const api = vi.fn().mockResolvedValueOnce({ summary: 'Dentist' });
+    await expect(
+      toolsWith(api)
+        .get('calendar.respond_to_event')
+        ?.tool.execute(
+          { eventId: 'evt-9', response: 'declined', calendarId: 'primary', comment: '' },
+          {} as never,
+        ),
+    ).rejects.toThrow(/no invitation to answer/i);
+    expect(api).toHaveBeenCalledTimes(1);
+  });
+});
