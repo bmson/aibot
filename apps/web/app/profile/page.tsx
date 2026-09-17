@@ -9,6 +9,7 @@ import {
   Network,
   ShieldCheck,
   ShieldQuestion,
+  ThumbsUp,
   UserRound,
   Users,
 } from 'lucide-react';
@@ -36,6 +37,61 @@ export const dynamic = 'force-dynamic';
 /** The review inbox shows the head of the queue; the rest is one click away. */
 const QUARANTINE_PREVIEW = 3;
 
+/**
+ * What the owner's own thumbs said about recall.
+ *
+ * The rating control has existed on every recalled reply for a while and
+ * nothing ever read the results, so the owner was being asked a question whose
+ * answer went nowhere. This reports the verdicts back as counts and no further:
+ * the stored row deliberately holds no recalled text, so there is no honest way
+ * to say *which* recall missed — only how often the owner said it did.
+ */
+function RecallFeedbackCard({
+  feedback,
+  now,
+}: {
+  feedback: {
+    rated: number;
+    helpful: number;
+    notHelpful: number;
+    lastRatedAt: Date | null;
+    windowDays: number;
+  };
+  now: Date;
+}) {
+  const rated = feedback.rated;
+  return (
+    <div className={`${cardShellClass} p-4 sm:p-5`}>
+      <div className="flex items-start justify-between gap-4">
+        <span className="inline-flex size-9 items-center justify-center rounded-xl bg-accent/10 text-accent">
+          <ThumbsUp className="size-4" aria-hidden="true" />
+        </span>
+        <span className="font-display text-3xl font-semibold tracking-[-0.04em]">
+          {rated > 0 ? `${feedback.helpful}/${rated}` : '—'}
+        </span>
+      </div>
+      <p className="mt-4 text-sm font-semibold">Recall you rated</p>
+      <p className="mt-1 text-xs leading-5 text-muted">
+        {rated > 0 ? (
+          <>
+            {feedback.helpful === rated
+              ? 'Every recalled reply you rated'
+              : `${feedback.helpful} of ${rated} recalled replies you rated`}{' '}
+            in the last {feedback.windowDays} days was useful
+            {feedback.notHelpful > 0 ? `, and ${feedback.notHelpful} was not` : ''}.
+            {feedback.lastRatedAt ? ` Last rated ${relativeTime(feedback.lastRatedAt, now)}.` : ''}
+          </>
+        ) : (
+          <>
+            Nothing rated in the last {feedback.windowDays} days. The thumbs on a reply that used
+            recalled sources are how the assistant learns whether what it found was any use.
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
 function toFactView(m: MemorySnapshot, now: Date): FactView {
   const from = m.validFrom?.toISOString().slice(0, 10);
   const until = m.validUntil?.toISOString().slice(0, 10);
@@ -62,8 +118,16 @@ export default async function ProfilePage() {
   await requireOwner();
   const db = getDb();
   const now = new Date();
-  const { owner, quarantined, memoryHealth, latestOrganizer, card, ownerFactCount, peopleCount } =
-    await getMemoryHubOverview(db);
+  const {
+    owner,
+    quarantined,
+    memoryHealth,
+    recallFeedback,
+    latestOrganizer,
+    card,
+    ownerFactCount,
+    peopleCount,
+  } = await getMemoryHubOverview(db);
   const openCommitments = await listCommitmentOverview(db);
 
   // Memory state only changes nightly or from an action on this page (which
@@ -153,6 +217,9 @@ export default async function ProfilePage() {
               <ArrowRight className="size-3" aria-hidden="true" />
             </span>
           </Link>
+        </div>
+        <div className="mt-3">
+          <RecallFeedbackCard feedback={recallFeedback} now={now} />
         </div>
         <div className="mt-3">
           <MemoryOrganizer
