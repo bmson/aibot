@@ -39,6 +39,7 @@ import {
   activeKnowledgeGraphConnectionCountForMemory,
   activeKnowledgeGraphRelationExistsForMemory,
 } from '../knowledge-graph.js';
+import { getRecallFeedbackSummary, type RecallFeedbackSummary } from '../recall-feedback.js';
 
 export interface MemorySnapshot {
   id: string;
@@ -258,6 +259,8 @@ export interface MemoryHubOverview {
   owner?: ContactSnapshot;
   quarantined: MemorySnapshot[];
   memoryHealth: MemoryHealth;
+  /** What the owner's own thumbs say about recall lately. */
+  recallFeedback: RecallFeedbackSummary;
   latestOrganizer: { id: string; status: string; progress: string; updatedAt: Date } | null;
   card: { compiledAt: Date; empty: boolean } | null;
   ownerFactCount: number;
@@ -274,52 +277,61 @@ export async function getMemoryHubOverview(db: Db): Promise<MemoryHubOverview> {
   );
   const [owner] = await db.select().from(contacts).where(eq(contacts.trust, 'owner')).limit(1);
 
-  const [quarantined, [card], memoryHealth, latestOrganizerRows, [ownerFactRow], [peopleRow]] =
-    await Promise.all([
-      db
-        .select()
-        .from(memories)
-        .where(
-          and(
-            eq(memories.agentId, agent.id),
-            eq(memories.category, 'knowledge'),
-            eq(memories.quarantined, true),
-            or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-          ),
-        )
-        .orderBy(desc(memories.createdAt))
-        .limit(QUARANTINE_LIMIT),
-      db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
-      getMemoryHealth(db, agent.id),
-      db
-        .select({
-          id: tasks.id,
-          status: tasks.status,
-          progress: tasks.progress,
-          updatedAt: tasks.updatedAt,
-        })
-        .from(tasks)
-        .where(
-          and(
-            eq(tasks.agentId, agent.id),
-            sql`${tasks.trigger} #>> '{payload,job}' = 'memory.consolidate'`,
-          ),
-        )
-        .orderBy(desc(tasks.createdAt))
-        .limit(1),
-      owner
-        ? db
-            .select({ value: count() })
-            .from(memories)
-            .where(and(active, eq(memories.subjectContactId, owner.id)))
-        : Promise.resolve([{ value: 0 }]),
-      db.select({ value: count() }).from(contacts).where(ne(contacts.trust, 'owner')),
-    ]);
+  const [
+    quarantined,
+    [card],
+    memoryHealth,
+    recallFeedback,
+    latestOrganizerRows,
+    [ownerFactRow],
+    [peopleRow],
+  ] = await Promise.all([
+    db
+      .select()
+      .from(memories)
+      .where(
+        and(
+          eq(memories.agentId, agent.id),
+          eq(memories.category, 'knowledge'),
+          eq(memories.quarantined, true),
+          or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
+        ),
+      )
+      .orderBy(desc(memories.createdAt))
+      .limit(QUARANTINE_LIMIT),
+    db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
+    getMemoryHealth(db, agent.id),
+    getRecallFeedbackSummary(db, agent.id),
+    db
+      .select({
+        id: tasks.id,
+        status: tasks.status,
+        progress: tasks.progress,
+        updatedAt: tasks.updatedAt,
+      })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.agentId, agent.id),
+          sql`${tasks.trigger} #>> '{payload,job}' = 'memory.consolidate'`,
+        ),
+      )
+      .orderBy(desc(tasks.createdAt))
+      .limit(1),
+    owner
+      ? db
+          .select({ value: count() })
+          .from(memories)
+          .where(and(active, eq(memories.subjectContactId, owner.id)))
+      : Promise.resolve([{ value: 0 }]),
+    db.select({ value: count() }).from(contacts).where(ne(contacts.trust, 'owner')),
+  ]);
 
   return {
     ...(owner ? { owner } : {}),
     quarantined,
     memoryHealth,
+    recallFeedback,
     latestOrganizer: latestOrganizerRows[0] ?? null,
     card: card ? { compiledAt: card.compiledAt, empty: card.content.trim() === '' } : null,
     ownerFactCount: Number(ownerFactRow?.value ?? 0),
