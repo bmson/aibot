@@ -141,11 +141,36 @@ struct MessageBubble: View {
                 Label(copyLabel, systemImage: "doc.on.doc")
             }
         }
+        // Hearing a reply is the same kind of act as copying one: something the
+        // owner asks a particular card for, from the menu that card already
+        // has. The menu is built when the long press opens it, so reading the
+        // player's state here costs the transcript no redraws.
+        if message.role == .assistant, !SpeakableText.passages(for: message).isEmpty {
+            if SpeechPlayer.shared.isSpeaking(message.id) {
+                Button(action: stopSpeaking) {
+                    Label("Stop speaking", systemImage: "speaker.slash")
+                }
+            } else {
+                Button(action: speakAloud) {
+                    Label("Speak reply", systemImage: "speaker.wave.2")
+                }
+            }
+        }
         if let hide {
             Button(role: .destructive, action: hide) {
                 Label("Hide from log", systemImage: "eye.slash")
             }
         }
+    }
+
+    @MainActor
+    private func speakAloud() {
+        SpeechPlayer.shared.speak(SpeakableText.passages(for: message), for: message.id)
+    }
+
+    @MainActor
+    private func stopSpeaking() {
+        SpeechPlayer.shared.stop()
     }
 
     @ViewBuilder

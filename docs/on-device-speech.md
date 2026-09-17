@@ -1,8 +1,11 @@
 # On-device speech: a talking interface on iPhone
 
 Feasibility study for making the iOS client *speak* its replies — and, later, *listen* — with no
-network round trip, no per-word billing, and no new server module. Nothing here has shipped; this
-document is the assessment and the plan it argues for.
+network round trip, no per-word billing, and no new server module.
+
+Status: **Phase 1 shipped** — `Components/SpeakableText.swift` projects a reply for the ear,
+`System/SpeechPlayer.swift` reads it, and spoken progress survives the stream-to-durable handoff.
+Phases 2 and 3 are as described below.
 
 **Verdict: feasible, and cheaper than it looks.** The Apple side is small. `AVSpeechSynthesizer`
 is about a hundred lines and costs nothing. The real work is not synthesis — it is deciding what a

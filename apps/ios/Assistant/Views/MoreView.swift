@@ -8,6 +8,7 @@ struct MoreView: View {
     @AppStorage(AssistantAppearance.defaultsKey) private var appearance = AssistantAppearance.dark
     @AppStorage(AppModel.shareLocationKey) private var shareLocation = false
     @AppStorage(AppModel.shareLocationBackgroundKey) private var shareLocationBackground = false
+    @AppStorage(SpeechSettings.speakRepliesKey) private var speakReplies = false
     @ObservedObject private var locations = LocationManager.shared
     @State private var showingAgentSettings = false
     @State private var settingsActionInFlight: String?
@@ -56,6 +57,17 @@ struct MoreView: View {
                 Text("Appearance")
             } footer: {
                 Text("Dark keeps the conversation stage day and night. System follows this iPhone’s appearance setting.")
+            }
+
+            Section {
+                Toggle("Speak replies aloud", isOn: $speakReplies)
+                if !SpeechVoices.hasNaturalVoice {
+                    voiceQualityHint
+                }
+            } header: {
+                Text("Speech")
+            } footer: {
+                Text("Long-press any reply to hear that one on its own. With this on, every reply to something you send is read as it arrives — out loud, through the speaker, even with the ringer off.")
             }
 
             Section("Connection") {
@@ -226,6 +238,19 @@ struct MoreView: View {
     }
 
     @ViewBuilder
+    /// The good voices are neural, and an app cannot fetch them — only the
+    /// owner can, from Settings. Say so once, here, rather than letting anyone
+    /// conclude the assistant simply sounds like this.
+    private var voiceQualityHint: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label("Only the compact voice is installed", systemImage: "waveform")
+            Text("Settings › Accessibility › Spoken Content › Voices has the natural ones. Download one for your language and the assistant will use it automatically.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
     private var notificationRow: some View {
         switch notifications.authorizationStatus {
         case .authorized, .provisional, .ephemeral:

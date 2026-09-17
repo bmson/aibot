@@ -8,6 +8,7 @@ The native SwiftUI client keeps the agent runtime on the existing Assistant serv
 - a chat-first shell with no persistent navigation chrome; pull beyond the latest message to reveal controls;
 - a Live Activity with compact, minimal, and expanded Dynamic Island presentations;
 - opt-in local notifications for completed work and approval handoffs;
+- replies read aloud on device, from the long-press menu or automatically;
 - deliberate confirmation before approving or denying outward actions;
 - a Keychain-stored mobile credential, Dynamic Type, dark mode, and Reduce Motion support.
 
@@ -43,6 +44,29 @@ deleted, so the decision reaches the web chat too, holds across reloads and
 devices, and can be undone from the bar that appears above the composer. A
 hidden message also leaves the history the model is given, because a reply
 hidden for being wrong should stop shaping the next one.
+
+## Speech
+
+Replies can be heard rather than read. Long-press any reply for **Speak reply**,
+or turn on **Speak replies aloud** in More → Speech and every reply to something
+you send is read as it arrives. Synthesis is `AVSpeechSynthesizer`, so it is
+entirely on-device: no key, no quota, no network, and nothing about a reply
+leaves the phone in order to be said.
+
+What is spoken is not what is drawn. A reply can be a table, a code block, or a
+card that stands in for the answer — so the ear gets its own projection of the
+same block tree the renderer parses (`Components/SpeakableText.swift`): prose is
+spoken, a table is described by its shape, a code block is named once, a
+sensitive fact is held back, and an approval is announced without reading its
+payload. Speech never decides anything; an approval still has to be opened.
+
+While a reply streams, only blocks the stream has closed are read, and spoken
+progress is an offset into the reply rather than a message id — the streamed row
+is replaced by the durable one mid-reply, and the ear must not hear the seam.
+
+The neural voices are a download the owner controls, in Settings ›
+Accessibility › Spoken Content › Voices; the app picks the best one installed
+and says so in More → Speech when only the compact voice is there.
 
 ## System surfaces
 
