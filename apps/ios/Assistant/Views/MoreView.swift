@@ -237,7 +237,6 @@ struct MoreView: View {
         }
     }
 
-    @ViewBuilder
     /// The good voices are neural, and an app cannot fetch them — only the
     /// owner can, from Settings. Say so once, here, rather than letting anyone
     /// conclude the assistant simply sounds like this.
@@ -251,6 +250,7 @@ struct MoreView: View {
         .padding(.vertical, 2)
     }
 
+    @ViewBuilder
     private var notificationRow: some View {
         switch notifications.authorizationStatus {
         case .authorized, .provisional, .ephemeral:

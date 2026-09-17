@@ -68,6 +68,16 @@ The neural voices are a download the owner controls, in Settings ›
 Accessibility › Spoken Content › Voices; the app picks the best one installed
 and says so in More → Speech when only the compact voice is there.
 
+Talking back works the other way: hold the microphone button beside the send
+button and speak. Transcription is the Speech framework's on-device
+`SpeechAnalyzer` — the audio is never written to a file and never leaves the
+phone, and the language model is a system asset iOS downloads once and shares
+between apps, so the first sentence in a new language waits for it. A press and
+hold rather than a toggle, so the gesture itself bounds how long the phone is
+listening; the words land in the composer, added to whatever was already typed,
+and nothing is sent until you send it. A misheard word is ordinary, and this
+assistant acts on what it is told.
+
 ## System surfaces
 
 Long-running turns start a Live Activity automatically. Tool progress updates its Dynamic Island

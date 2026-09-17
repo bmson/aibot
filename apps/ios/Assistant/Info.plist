@@ -36,6 +36,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hold the microphone button to talk instead of typing. Your voice is transcribed on this iPhone, by the system, while you hold the button — the audio is never recorded to a file and never sent anywhere, and the words land in the message field for you to check before you send them.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Speech is recognised on this iPhone, using the language model iOS keeps on the device. Nothing you say is sent to Apple or to your assistant server for transcription.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Your current position is sent to your own assistant server so it can answer nearby questions, like what to eat around you. It is kept only as a short-lived current-location ping and never stored as memory.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>

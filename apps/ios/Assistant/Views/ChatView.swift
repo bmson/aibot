@@ -314,6 +314,14 @@ struct ChatView: View {
     // let the UIKit delegate report real responder changes instead.
     @State private var composerFocused = false
 
+    // Dictation writes into the composer rather than sending: a misheard word
+    // is ordinary, and this assistant acts on what it is told. The draft as it
+    // stood when the button went down is kept so speech adds to what was typed
+    // instead of replacing it.
+    @StateObject private var listener = SpeechListener()
+    @State private var draftBeforeDictation = ""
+    @State private var pushToTalkActive = false
+
     // The menu is a short, two-column directory rather than a tiny icon grid.
     // Its content follows Dynamic Type; the reveal adds the device bottom inset
     // once so the menu frame and green surface share one physical distance.
@@ -1781,6 +1789,8 @@ struct ChatView: View {
                     }
                     .accessibilityIdentifier("assistant.chat.composer")
 
+                pushToTalkButton
+
                 Button {
                     if model.isSending {
                         model.cancelSend()
@@ -1882,9 +1892,81 @@ struct ChatView: View {
         AssistantTheme.stageStrong
     }
 
+    /// Hold to talk. A press-and-hold rather than a toggle: the gesture says
+    /// how long the assistant is listening, so there is no state to leave on by
+    /// accident and no moment where a phone is recording a room unattended.
+    private var pushToTalkButton: some View {
+        let listening = listener.isListening
+        let preparing = listener.state == .preparing
+        return ZStack {
+            if preparing {
+                ComposerWorkingIndicator(color: composerTextColor)
+            } else {
+                Image(systemName: listening ? "waveform" : "mic.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .symbolEffect(.variableColor, isActive: listening && !reduceMotion)
+            }
+        }
+        .foregroundStyle(listening ? AssistantTheme.stageDepth : composerPlaceholderColor)
+        .frame(width: 44, height: 44)
+        .background(
+            (listening ? sendReadyFill : AssistantTheme.raised(for: colorScheme))
+                .opacity(listening ? 1 : 0.06),
+            in: Circle()
+        )
+        .overlay {
+            Circle().strokeBorder(
+                composerTextColor.opacity(listening ? 0.3 : 0.1),
+                lineWidth: 0.7
+            )
+        }
+        .contentShape(Circle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in beginPushToTalk() }
+                .onEnded { _ in endPushToTalk() }
+        )
+        .accessibilityLabel(listening ? "Listening" : "Hold to talk")
+        .accessibilityHint("Hold to dictate into the message field. Nothing is sent until you send it.")
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: listening)
+        .onChange(of: listener.transcript) { _, heard in
+            guard pushToTalkActive || listener.isListening else { return }
+            draft = draftBeforeDictation.isEmpty
+                ? heard
+                : (heard.isEmpty ? draftBeforeDictation : "\(draftBeforeDictation) \(heard)")
+        }
+        .onChange(of: listener.state) { _, state in
+            // A refused microphone or a language with no model is worth saying
+            // once, through the banner every other failure already uses.
+            guard case let .unavailable(reason) = state else { return }
+            model.errorMessage = reason
+            listener.reset()
+        }
+    }
+
+    private func beginPushToTalk() {
+        guard !pushToTalkActive else { return }
+        pushToTalkActive = true
+        draftBeforeDictation = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task { await listener.start() }
+    }
+
+    private func endPushToTalk() {
+        guard pushToTalkActive else { return }
+        pushToTalkActive = false
+        Task {
+            await listener.stop()
+            // The keyboard comes up on what was heard, so a correction is one
+            // tap away rather than a re-take.
+            composerFocused = true
+        }
+    }
+
     private var composerPrompt: String {
         // Short enough to survive the narrowest phones without truncating.
-        model.isSending ? "Working — keep typing" : "Ask anything…"
+        if listener.isListening { return "Listening…" }
+        if listener.state == .preparing { return "Getting speech ready…" }
+        return model.isSending ? "Working — keep typing" : "Ask anything…"
     }
 
     private var composerPlaceholderColor: Color {
