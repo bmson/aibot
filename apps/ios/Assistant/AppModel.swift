@@ -195,6 +195,9 @@ final class AppModel: ObservableObject {
     /// owner started speaks: a proactive notice arriving while the phone is on
     /// a table is not something to announce to the room.
     private var spokenTurn: SpokenTurn?
+    /// Talk mode reads every reply whether or not the setting is on — with no
+    /// transcript on screen, speech is the only thing there to answer with.
+    var speechAlwaysOn = false
 
     private let defaults = UserDefaults.standard
     private let serverKey = "assistant.server-url"
@@ -273,6 +276,11 @@ final class AppModel: ObservableObject {
         activeConversation?.conversation.id ?? bootstrap?.conversation.conversation.id
     }
     var latestMood: CompanionMood { CompanionMood.latest(in: messages) }
+    /// The expression the runtime sent with the most recent reply. Unused by
+    /// the transcript, which has the words; talk mode has nothing else.
+    var latestFace: CompanionFace? {
+        messages.reversed().compactMap(\.face).first
+    }
     var latestQuickReplies: [String] {
         messages.reversed().first(where: { $0.role == .assistant })?.quickReplies ?? []
     }
@@ -1552,7 +1560,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func send(_ rawText: String, autonomous override: Bool? = nil, force: Bool = false) {
+    /// `spoken` says this turn will be heard rather than read, and asks the
+    /// server for a reply shaped for the ear: short, no tables, no Markdown to
+    /// pronounce.
+    func send(_ rawText: String, autonomous override: Bool? = nil, force: Bool = false, spoken: Bool = false) {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending,
               let client,
@@ -1595,6 +1606,7 @@ final class AppModel: ObservableObject {
                     text: text,
                     autonomous: autonomous,
                     force: force,
+                    spoken: spoken,
                     onDelta: { [weak self] delta in
                         guard let self else { return }
                         await self.receive(delta: delta, streamID: streamID)
@@ -1898,7 +1910,7 @@ final class AppModel: ObservableObject {
     /// Begin reading this turn aloud as it arrives, if the owner asked for that.
     private func beginSpeaking(streamID: String) {
         SpeechPlayer.shared.stop()
-        guard SpeechSettings.speakRepliesAloud else {
+        guard speechAlwaysOn || SpeechSettings.speakRepliesAloud else {
             spokenTurn = nil
             return
         }

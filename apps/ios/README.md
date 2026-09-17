@@ -78,6 +78,16 @@ listening; the words land in the composer, added to whatever was already typed,
 and nothing is sent until you send it. A misheard word is ordinary, and this
 assistant acts on what it is told.
 
+Tap that same button instead of holding it and the conversation goes hands-free.
+Talk mode is a full screen with no transcript and no composer: the companion
+face, a line of what was just said, and the loop — listen, notice the pause that
+means your turn is over, send, read the answer, listen again. The microphone
+stays open throughout, echo-cancelled, so the assistant can be interrupted
+mid-sentence the way a person can. A hands-free turn is sent with `spoken: true`
+and the server answers it in a register that survives being heard: a few
+sentences, no Markdown, no cue tags, no tables. Approvals are the exception it
+will not make — talk mode says a decision is waiting and stops there.
+
 ## System surfaces
 
 Long-running turns start a Live Activity automatically. Tool progress updates its Dynamic Island

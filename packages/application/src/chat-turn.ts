@@ -13,7 +13,7 @@ import {
   persistMessage,
   type TurnFailureReason,
 } from '@assistant/core/chat';
-import { createCueScanner, stripCueTags } from '@assistant/core/chat-cues';
+import { createCueScanner, spokenReplyLines, stripCueTags } from '@assistant/core/chat-cues';
 import { conversationMessageTexts } from '@assistant/core/conversation-context';
 import { getAmbientBlock } from '@assistant/core/memory/ambient';
 import { listOpenCommitments, renderOpenCommitments } from '@assistant/core/memory/commitments';
@@ -239,6 +239,7 @@ export async function handleChatTurn(
     conversationId?: string;
     autonomous?: boolean;
     force?: boolean;
+    spoken?: boolean;
   };
   if (body.conversationId && !UUID_RE.test(body.conversationId)) {
     return Response.json(
@@ -254,6 +255,9 @@ export async function handleChatTurn(
   // "Run it for real" on an off-course reply: route around the classifier
   // without arming the autonomy grant — approvals still ask as usual.
   const forceRequested = body.force === true;
+  // The phone's talk mode: this reply will be read out loud, so it is written
+  // for the ear. Nothing else about the turn changes.
+  const spokenRequested = body.spoken === true;
   const uiMessages = body.messages ?? [];
   if (!Array.isArray(uiMessages)) {
     return Response.json(
@@ -608,6 +612,7 @@ export async function handleChatTurn(
         }),
         '',
         'This turn is conversational: just answer. You have no tools in this turn, so if the user is actually asking you to take an action, say plainly that you cannot do it in this reply and ask them to restate it as a direct request. Otherwise do not mention tools, capabilities, or this instruction at all — no postscripts.',
+        ...(spokenRequested ? spokenReplyLines() : []),
       ].join('\n'),
       messages: await convertToModelMessages(modelHistory),
       onComplete: async (text) => {

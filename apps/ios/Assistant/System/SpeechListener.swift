@@ -39,18 +39,31 @@ final class SpeechListener: ObservableObject {
     private var results: Task<Void, Never>?
     private var settled = ""
     private var volatileTail = ""
+    private var cancellingEcho = false
+    /// Bumped by every start and every stop. `start` does real asynchronous
+    /// work — permission, a model download — and a release that arrives during
+    /// it must not leave a microphone open behind the owner's back.
+    private var generation = 0
 
     var isListening: Bool { state == .listening }
 
     // MARK: - Listening
 
-    func start() async {
+    /// - Parameter cancellingEcho: run the input through voice-processing I/O,
+    ///   so the microphone can stay open while the assistant is speaking
+    ///   without transcribing it. Talk mode needs that to be interruptible;
+    ///   push-to-talk simply takes turns, and stops the speech instead.
+    func start(cancellingEcho: Bool = false) async {
         guard state != .listening, state != .preparing else { return }
-        // Half duplex, on purpose: a phone listening to its own voice
-        // transcribes it. Barge-in needs the echo cancellation that talk mode
-        // turns on; push-to-talk simply takes turns.
-        SpeechPlayer.shared.stop()
+        if !cancellingEcho {
+            // Half duplex, on purpose: a phone listening to its own voice
+            // transcribes it.
+            SpeechPlayer.shared.stop()
+        }
+        self.cancellingEcho = cancellingEcho
 
+        generation += 1
+        let generation = self.generation
         settled = ""
         volatileTail = ""
         transcript = ""
@@ -63,6 +76,7 @@ final class SpeechListener: ObservableObject {
 
         do {
             let transcriber = try await makeTranscriber()
+            guard generation == self.generation else { return await teardown() }
             self.transcriber = transcriber
 
             let analyzer = SpeechAnalyzer(modules: [transcriber])
@@ -73,11 +87,15 @@ final class SpeechListener: ObservableObject {
                 return
             }
 
+            guard generation == self.generation else { return await teardown() }
             let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
             input = continuation
             try await analyzer.start(inputSequence: stream)
 
-            results = Task { [weak self] in await self?.consume(transcriber) }
+            results = Task { [weak self] in
+                guard let self else { return }
+                await self.consume(transcriber)
+            }
             try startEngine(writingTo: continuation, format: format)
             state = .listening
         } catch {
@@ -89,6 +107,7 @@ final class SpeechListener: ObservableObject {
     /// Stop listening and hand back everything that was heard.
     @discardableResult
     func stop() async -> String {
+        generation += 1
         guard state == .listening || state == .preparing else { return transcript }
         await teardown()
         state = .idle
@@ -148,10 +167,19 @@ final class SpeechListener: ObservableObject {
         format: AVAudioFormat
     ) throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.duckOthers, .defaultToSpeaker, .allowBluetooth])
+        try session.setCategory(
+            .playAndRecord,
+            // Voice chat mode is what turns the phone's own speaker into
+            // something the microphone can be told to ignore.
+            mode: cancellingEcho ? .voiceChat : .spokenAudio,
+            options: [.duckOthers, .defaultToSpeaker, .allowBluetooth]
+        )
         try session.setActive(true)
 
         let node = engine.inputNode
+        // Must be set before the engine starts, and it changes the input
+        // format, so it comes before the format is read.
+        try? node.setVoiceProcessingEnabled(cancellingEcho)
         let inputFormat = node.outputFormat(forBus: 0)
         let converter = AudioFormatConverter(from: inputFormat, to: format)
 

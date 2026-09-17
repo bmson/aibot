@@ -96,6 +96,10 @@ final class SpeechPlayer: ObservableObject {
     private func activateSession() {
         guard !sessionIsActive else { return }
         let session = AVAudioSession.sharedInstance()
+        // Talk mode holds the session open for recording so the microphone can
+        // stay live while this speaks. Taking it back to playback underneath
+        // that would close the ear mid-sentence, so leave it as it is.
+        guard session.category != .playAndRecord else { return }
         do {
             try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
             try session.setActive(true)

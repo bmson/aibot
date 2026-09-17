@@ -16,6 +16,7 @@ import {
   PROMPT_VERSION,
   setMessageHidden,
 } from './chat.js';
+import { spokenReplyLines } from './chat-cues.js';
 import { completeTask, findDueTasks } from './workflow/machine.js';
 
 const DATABASE_URL =
@@ -126,6 +127,24 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(dashboard).toContain('[action_chips: "Label" | "Label"]');
     expect(dashboard).toMatch(/Email and SMS keep the professional voice/);
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(31);
+  });
+
+  it('keeps the spoken register out of the cacheable system prefix', () => {
+    const spoken = spokenReplyLines();
+    expect(spoken.join('\n')).toMatch(/heard, not read/i);
+    expect(spoken.join('\n')).toMatch(/no markdown at all/i);
+    // Every cue the companion block introduces has to be answered for out
+    // loud, or a new one arrives in a register where it means nothing.
+    expect(spoken.join('\n')).toContain('[break]');
+    expect(spoken.join('\n')).toMatch(/chip cannot be tapped/i);
+    // These lines belong beside the other per-turn instructions, never inside
+    // buildSystemPrompt: a spoken turn and a typed one share one byte-stable
+    // prefix, and splicing this in would split the provider's prompt cache in
+    // two for the whole conversation.
+    for (const line of spoken.filter(Boolean)) {
+      expect(buildSystemPrompt(agent, { channel: 'dashboard-chat' })).not.toContain(line);
+      expect(buildSystemPrompt(agent, {})).not.toContain(line);
+    }
   });
 
   it('keeps replies text-first — no decorative emoji or perky readouts (v33)', () => {

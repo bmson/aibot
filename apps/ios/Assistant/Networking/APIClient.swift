@@ -886,6 +886,7 @@ struct APIClient: Sendable {
         text: String,
         autonomous: Bool,
         force: Bool = false,
+        spoken: Bool = false,
         onDelta: @escaping @Sendable (String) async -> Void,
         onCue: @escaping @Sendable (MessagePart) async -> Void
     ) async throws -> SendReceipt {
@@ -897,6 +898,7 @@ struct APIClient: Sendable {
             conversationId: conversationId,
             autonomous: autonomous,
             force: force,
+            spoken: spoken,
             messages: [.init(
                 id: UUID().uuidString,
                 role: "user",
@@ -1197,6 +1199,9 @@ private struct ChatRequest: Encodable {
     /// "Run it for real" on an off-course reply: route straight to the
     /// executor without arming the autonomy grant.
     let force: Bool
+    /// This turn will be heard rather than read. The server answers it in a
+    /// register that survives being spoken: short, no tables, no Markdown.
+    let spoken: Bool
     let messages: [RequestMessage]
 }
 

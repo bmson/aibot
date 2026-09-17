@@ -321,6 +321,8 @@ struct ChatView: View {
     @StateObject private var listener = SpeechListener()
     @State private var draftBeforeDictation = ""
     @State private var pushToTalkActive = false
+    @State private var pushToTalkStartedAt: Date?
+    @State private var showingTalk = false
 
     // The menu is a short, two-column directory rather than a tiny icon grid.
     // Its content follows Dynamic Type; the reveal adds the device bottom inset
@@ -749,6 +751,11 @@ struct ChatView: View {
                 reduceMotion ? nil : .easeOut(duration: 0.16),
                 value: model.hiddenMessageUndo
             )
+        }
+        // Talk mode takes the whole screen because it is the whole interface:
+        // no transcript, no composer, nothing to look at while it is in use.
+        .fullScreenCover(isPresented: $showingTalk) {
+            TalkView().environmentObject(model)
         }
     }
 
@@ -1928,6 +1935,11 @@ struct ChatView: View {
         )
         .accessibilityLabel(listening ? "Listening" : "Hold to talk")
         .accessibilityHint("Hold to dictate into the message field. Nothing is sent until you send it.")
+        // A hold and a tap are hard to tell apart under VoiceOver, so talk mode
+        // gets a named action of its own rather than a timing trick.
+        .accessibilityAction(named: "Talk to the assistant") {
+            showingTalk = true
+        }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: listening)
         .onChange(of: listener.transcript) { _, heard in
             guard pushToTalkActive || listener.isListening else { return }
@@ -1947,6 +1959,7 @@ struct ChatView: View {
     private func beginPushToTalk() {
         guard !pushToTalkActive else { return }
         pushToTalkActive = true
+        pushToTalkStartedAt = .now
         draftBeforeDictation = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         Task { await listener.start() }
     }
@@ -1954,13 +1967,27 @@ struct ChatView: View {
     private func endPushToTalk() {
         guard pushToTalkActive else { return }
         pushToTalkActive = false
+        let held = Date.now.timeIntervalSince(pushToTalkStartedAt ?? .now)
         Task {
-            await listener.stop()
+            let heard = await listener.stop()
+            // Hold to dictate, tap to hand the whole conversation over — the
+            // way a shutter button takes a photo on a tap and a video on a
+            // hold. A tap that did catch a word is treated as the dictation it
+            // evidently was.
+            if held < ChatView.talkModeTapSeconds,
+               heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                draft = draftBeforeDictation
+                showingTalk = true
+                return
+            }
             // The keyboard comes up on what was heard, so a correction is one
             // tap away rather than a re-take.
             composerFocused = true
         }
     }
+
+    /// Below this, a press on the microphone was a tap and not a hold.
+    private static let talkModeTapSeconds: TimeInterval = 0.35
 
     private var composerPrompt: String {
         // Short enough to survive the narrowest phones without truncating.

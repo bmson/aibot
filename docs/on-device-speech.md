@@ -3,10 +3,17 @@
 Feasibility study for making the iOS client *speak* its replies — and, later, *listen* — with no
 network round trip, no per-word billing, and no new server module.
 
-Status: **Phases 1 and 2 shipped** — `Components/SpeakableText.swift` projects a reply for the ear,
-`System/SpeechPlayer.swift` reads it, and spoken progress survives the stream-to-durable handoff;
-`System/SpeechListener.swift` transcribes push-to-talk on device through `SpeechAnalyzer`, writing
-into the composer rather than sending. Phase 3 is as described below.
+Status: **all three phases shipped.** `Components/SpeakableText.swift` projects a reply for the ear
+and `System/SpeechPlayer.swift` reads it, with spoken progress surviving the stream-to-durable
+handoff; `System/SpeechListener.swift` transcribes on device through `SpeechAnalyzer`, into the
+composer on push-to-talk and echo-cancelled in talk mode; `Views/TalkView.swift` is the hands-free
+loop, and `spokenReplyLines()` in `packages/core/src/chat-cues.ts` is the register a heard reply is
+written in. The sections below are the design as built.
+
+Two limits worth keeping in view. The spoken register applies to the conversational stream only —
+an action request routes through the executor, whose reply is read aloud faithfully but was written
+for a screen. And everything audio was verified by compiling and by the pure-function tests; voice
+quality, ducking, AirPods routing, echo cancellation and the silent switch still need a device pass.
 
 **Verdict: feasible, and cheaper than it looks.** The Apple side is small. `AVSpeechSynthesizer`
 is about a hundred lines and costs nothing. The real work is not synthesis — it is deciding what a

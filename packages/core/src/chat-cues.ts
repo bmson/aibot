@@ -301,6 +301,27 @@ export function splitAtBreaks(text: string, breaks: number[]): string[] {
  * Static text (safe for the byte-stable cacheable prefix); only spliced in
  * when the caller passes `channel: 'dashboard-chat'`.
  */
+/**
+ * The register for a turn that will be heard rather than read — the iOS talk
+ * mode, where there is no screen to scan back over and the phone reads the
+ * reply out loud.
+ *
+ * Appended AFTER the cacheable system prefix, next to the other per-turn
+ * instructions, so a spoken turn and a typed one still share one prompt prefix.
+ */
+export function spokenReplyLines(): string[] {
+  return [
+    '',
+    'This turn will be heard, not read: the owner is hands-free and your reply is spoken aloud by their phone.',
+    '- One to three short sentences. Nothing can be scanned back over, so anything that would need re-reading is simply lost.',
+    '- No Markdown at all — no tables, no bullet lists, no headings, no code, no bold. A list is said as a sentence: "three things: the dentist at one, the lease, and Alice about the invoice".',
+    '- Emit no cue tags in this register. A [break] means nothing out loud, and a chip cannot be tapped by someone who is not looking.',
+    '- Lead with the deciding fact and stop. Offer the rest rather than reciting it: "there are four more if you want them".',
+    '- Say numbers, times and dates the way a person says them: "half past two", "the 14th", "about twenty minutes".',
+    '- If something needs the owner to look at it — an approval, a long list, anything with a link — say so plainly and leave it on screen rather than reading it out.',
+  ];
+}
+
 export function companionPersonaLines(): string[] {
   return [
     '',

@@ -133,7 +133,23 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            test
+            test 2>&1 | tee "${RUNNER_TEMP}/xcodebuild.log"
+
+      # xcodebuild interleaves its diagnostics with thousands of lines of
+      # compile commands, and the errors land wherever the parallel jobs
+      # happened to be. Anyone reading this from a terminal — or through the
+      # API, where a log is fetched by the tail — needs the five lines that
+      # say what broke, at the end, where a failure is read from.
+      - name: What failed
+        if: failure()
+        run: |
+          echo "--- errors and test failures ---"
+          grep -E "error:|Testing failed|failed \(|\*\* .* FAILED \*\*" \
+            "${RUNNER_TEMP}/xcodebuild.log" \
+            | sed -E 's|/Users/runner/work/aibot/aibot/||' \
+            | sort -u \
+            | head -60 \
+            || echo "(no error lines matched; see the xcresult artifact)"
 
       # The result bundle carries the failing assertion and any crash logs,
       # which the console output truncates.
