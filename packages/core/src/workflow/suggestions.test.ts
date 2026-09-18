@@ -137,6 +137,21 @@ describe('suggestions', () => {
     expect(after?.expiresAt.getTime()).toBeGreaterThanOrEqual(until.getTime());
   });
 
+  it('snoozes again once a snooze has run out, but not while it is still sleeping', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const row = await makeSuggestion('resnooze');
+    if (!row) throw new Error('suggestion was not created');
+    const tomorrow = new Date(Date.now() + 24 * 3600 * 1000);
+    expect(await snoozeSuggestion(db, row.id, tomorrow)).toBe(true);
+    expect(await snoozeSuggestion(db, row.id, tomorrow)).toBe(false);
+
+    await db
+      .update(suggestions)
+      .set({ snoozedUntil: new Date(Date.now() - 1000) })
+      .where(eq(suggestions.id, row.id));
+    expect(await snoozeSuggestion(db, row.id, tomorrow)).toBe(true);
+  });
+
   it('retires unanswered proposals instead of accumulating them', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const row = await makeSuggestion('stale');

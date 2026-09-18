@@ -173,6 +173,11 @@ final class AppModel: ObservableObject {
     /// An in-flight poll may predate a successful POST. Terminal decisions
     /// cannot be undone by that older snapshot; reset on server/account change.
     private var acceptedApprovalDecisions: [String: String] = [:]
+    /// The same guard for suggestion cards, set the moment one is tapped. An
+    /// accept or dismiss is final and stays; a snooze is let go once the
+    /// server has said so itself, because a snooze is meant to lapse and ask
+    /// again.
+    private var suggestionAnswers: [String: SuggestionAnswer] = [:]
     private var pollTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     /// The turn in flight, kept so returning to the foreground can pick the
@@ -517,6 +522,7 @@ final class AppModel: ObservableObject {
             defaults.set(normalized, forKey: serverKey)
             client = APIClient(configuration: configuration)
             acceptedApprovalDecisions.removeAll()
+            suggestionAnswers.removeAll()
             await connect()
             if bootstrap != nil {
                 showingConnection = false
@@ -1761,12 +1767,75 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Answer a proactive suggestion from its chat card. Kept apart from the
+    /// approval path on purpose: nothing waits on a suggestion, so the inbox,
+    /// the badge and the Island are never touched.
+    ///
+    /// The card settles the moment it is tapped and re-opens if the server
+    /// does not take the answer. Returns what the card should say then —
+    /// inline, where the owner tapped, rather than as a banner — and nil when
+    /// there is nothing to say.
+    func decideSuggestion(id: String, decision: SuggestionDecision) async -> String? {
+        guard let client else { return "Connect to your assistant to answer this." }
+        let previous = messages.lazy.flatMap(\.parts)
+            .first { $0.type == "suggestion" && $0.suggestionId == id }
+        setSuggestionAnswer(.init(decision: decision), for: id)
+        do {
+            let result = try await client.decideSuggestion(id: id, decision: decision)
+            guard result.ok else {
+                throw APIError.server(status: 409, message: "This suggestion could not be updated.")
+            }
+            setSuggestionAnswer(.init(decision: decision, taskId: result.taskId), for: id)
+            // Accepting creates work. Activity should already have it by the
+            // time the owner goes looking.
+            if decision == .accepted { await refreshOverview(reportFailure: false) }
+            await refreshDecisionMessages(answeringSuggestion: id)
+            if decision == .snoozed { suggestionAnswers[id] = nil }
+            return nil
+        } catch {
+            suggestionAnswers[id] = nil
+            restoreSuggestion(id: id, to: previous)
+            return isRequestCancellation(error) ? nil : error.localizedDescription
+        }
+    }
+
+    private func setSuggestionAnswer(_ answer: SuggestionAnswer, for id: String) {
+        suggestionAnswers[id] = answer
+        messages = messages.map { $0.applyingSuggestionAnswers([id: answer]) }
+    }
+
+    /// Put a suggestion back the way the log last read it, for an answer that
+    /// did not land.
+    private func restoreSuggestion(id: String, to previous: MessagePart?) {
+        for messageIndex in messages.indices {
+            for partIndex in messages[messageIndex].parts.indices {
+                let part = messages[messageIndex].parts[partIndex]
+                guard part.type == "suggestion", part.suggestionId == id else { continue }
+                messages[messageIndex].parts[partIndex].status = previous?.status
+                messages[messageIndex].parts[partIndex].acceptedTaskId = previous?.acceptedTaskId
+            }
+        }
+    }
+
+    /// Every read of the log passes through here, so an answer given on this
+    /// device outlives a poll that left before it did.
+    private func withLocalDecisions(_ message: ChatMessage) -> ChatMessage {
+        message
+            .applyingApprovalDecisions(acceptedApprovalDecisions)
+            .applyingSuggestionAnswers(suggestionAnswers)
+    }
+
     /// Legacy summaries may have only a task ID. Ask the server to hydrate
     /// their outcomes after a decision, not just the independent inbox. Do
     /// not replace the whole transcript or advance a concurrent poll's cursor.
-    private func refreshDecisionMessages() async {
+    /// A suggestion just answered joins them by id: a day of briefings holds
+    /// plenty of settled ones that must not crowd approvals out of the ten.
+    private func refreshDecisionMessages(answeringSuggestion suggestionId: String? = nil) async {
         guard let client, let conversationId else { return }
-        let ids = messages.reversed().filter { !$0.decisionParts.isEmpty || $0.approvalSummary != nil }.prefix(10).map(\.id)
+        let ids = messages.reversed().filter { message in
+            !message.decisionParts.isEmpty || message.approvalSummary != nil
+                || (suggestionId != nil && message.suggestionParts.contains { $0.suggestionId == suggestionId })
+        }.prefix(10).map(\.id)
         guard !ids.isEmpty else { return }
         guard let updates = try? await client.updates(conversationId: conversationId, taskId: nil,
             cursor: cursor, refreshIds: ids), self.conversationId == conversationId else { return }
@@ -1844,7 +1913,7 @@ final class AppModel: ObservableObject {
             if preservingLocalMessages {
                 merge(response.conversation.messages)
             } else {
-                messages = logOrder.ordered(response.conversation.messages.map { $0.applyingApprovalDecisions(acceptedApprovalDecisions) })
+                messages = logOrder.ordered(response.conversation.messages.map { withLocalDecisions($0) })
             }
         }
         if !isSending, activityThought == nil || activityThought == .backgroundWork || activityThought == .needsYou {
@@ -1867,7 +1936,7 @@ final class AppModel: ObservableObject {
         cursor = conversation.cursor
         // Another conversation's ids have no sequence to agree with this one's.
         logOrder.reset()
-        messages = logOrder.ordered(conversation.messages.map { $0.applyingApprovalDecisions(acceptedApprovalDecisions) })
+        messages = logOrder.ordered(conversation.messages.map { withLocalDecisions($0) })
         toolActivity = []
         activityThought = nil
     }
@@ -2086,7 +2155,7 @@ final class AppModel: ObservableObject {
 
     private func merge(_ incoming: [ChatMessage]) {
         for incomingMessage in incoming {
-            let message = incomingMessage.applyingApprovalDecisions(acceptedApprovalDecisions)
+            let message = withLocalDecisions(incomingMessage)
             if let index = messages.firstIndex(where: { $0.id == message.id }) {
                 messages[index] = message
                 continue
@@ -2170,10 +2239,12 @@ final class AppModel: ObservableObject {
     /// Decision state lives in approvals/tasks rather than in the persisted
     /// message row. Re-read the newest visible cards during ordinary polling
     /// so a decision made on desktop changes into a receipt on the phone
-    /// without requiring a reload.
+    /// without requiring a reload. Suggestions ride along — answered on the
+    /// web, or a snooze lapsing back into a question — without ever counting
+    /// as a pending decision.
     private var unresolvedDecisionMessageIDs: [String] {
         messages.reversed()
-            .filter(\.hasPendingDecision)
+            .filter { $0.hasPendingDecision || $0.hasUnsettledSuggestion }
             .prefix(10)
             .map(\.id)
     }

@@ -95,6 +95,25 @@ final class SpeakableTextTests: XCTestCase {
         XCTAssertFalse(passages.joined().contains("12345678"))
     }
 
+    /// A suggestion is not an approval: it holds nothing back, and the prose
+    /// beside it is only half a sentence without it.
+    func testOpenSuggestionIsReadAfterItsProseAndNeverCalledADecision() {
+        let message = ChatMessage(
+            id: "m5",
+            role: .assistant,
+            parts: [
+                .init(type: "text", text: "One more thing from your **Flights** watch:"),
+                .init(type: "suggestion", suggestionId: "s1", summary: "Fares to Lisbon dropped — want me to hold one?"),
+                .init(type: "suggestion", suggestionId: "s2", summary: "Renew the passport?", status: "dismissed"),
+            ],
+            metadata: nil
+        )
+        XCTAssertEqual(SpeakableText.passages(for: message), [
+            "One more thing from your Flights watch:",
+            "Fares to Lisbon dropped — want me to hold one?",
+        ])
+    }
+
     func testUserMessagesAreNeverSpoken() {
         let message = ChatMessage.optimistic(role: .user, text: "What's on tomorrow?")
         XCTAssertEqual(SpeakableText.passages(for: message), [])

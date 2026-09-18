@@ -812,6 +812,8 @@ struct ChatView: View {
             runForReal: model.isSending ? nil : { text in model.send(text, force: true) },
             retry: model.isSending ? nil : { text in model.send(text) },
             decideApproval: { id, decision in await model.decideApproval(id: id, decision: decision) },
+            decideSuggestion: { id, decision in await model.decideSuggestion(id: id, decision: decision) },
+            openActivity: { openRoute(.activity) },
             // Only a row the server has stored can be taken out of the log; an
             // echo of a turn still in flight has no id it would recognise.
             hide: message.isDurableLogRow

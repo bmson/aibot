@@ -16,6 +16,7 @@ final class StubURLProtocol: URLProtocol {
     private static var outcomes: [Outcome] = []
     private static var recordedMethods: [String] = []
     private static var recordedURLs: [URL] = []
+    private static var recordedBodies: [Data] = []
     private static weak var activeStream: StubURLProtocol?
 
     static func prime(_ queued: [Outcome]) {
@@ -23,6 +24,7 @@ final class StubURLProtocol: URLProtocol {
             outcomes = queued
             recordedMethods = []
             recordedURLs = []
+            recordedBodies = []
             activeStream = nil
         }
     }
@@ -35,17 +37,37 @@ final class StubURLProtocol: URLProtocol {
 
     static var urls: [URL] { lock.withLock { recordedURLs } }
 
+    /// What each attempt sent. URLSession hands a protocol its body as a
+    /// stream rather than as `httpBody`, so it is drained here once.
+    static var bodies: [Data] { lock.withLock { recordedBodies } }
+
     static func appendStream(_ body: Data) {
         guard let stream = lock.withLock({ activeStream }) else { return }
         stream.client?.urlProtocol(stream, didLoad: body)
     }
 
-    private static func next(for method: String, url: URL?) -> Outcome {
+    private static func next(for method: String, url: URL?, body: Data) -> Outcome {
         lock.withLock {
             recordedMethods.append(method)
             if let url { recordedURLs.append(url) }
+            recordedBodies.append(body)
             return outcomes.isEmpty ? .success(status: 200, body: Data()) : outcomes.removeFirst()
         }
+    }
+
+    private static func body(of request: URLRequest) -> Data {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            data.append(buffer, count: count)
+        }
+        return data
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -54,7 +76,7 @@ final class StubURLProtocol: URLProtocol {
 
     override func startLoading() {
         let method = request.httpMethod ?? "GET"
-        switch Self.next(for: method, url: request.url) {
+        switch Self.next(for: method, url: request.url, body: Self.body(of: request)) {
         case let .failure(error):
             client?.urlProtocol(self, didFailWithError: error)
         case let .stream(body):
@@ -737,6 +759,110 @@ final class APIClientRetryTests: XCTestCase {
             XCTAssertNotNil(model.errorMessage)
             XCTAssertEqual(StubURLProtocol.attempts, ["POST"])
         }
+    }
+
+    private func suggestionMessage(id: String = "suggestion-message", status: String? = nil) -> ChatMessage {
+        ChatMessage(id: id, role: .assistant, parts: [
+            .init(type: "text", text: "One more thing from your \"Flights\" watch:"),
+            .init(type: "suggestion", suggestionId: "s1", summary: "Fares to Lisbon dropped — want me to hold one?",
+                status: status, proposedAction: "Hold the cheapest Lisbon fare"),
+        ])
+    }
+
+    @MainActor
+    func testSuggestionAnswersPostTheContractAndSettleTheCard() async throws {
+        for (decision, wire) in [(SuggestionDecision.accepted, "accepted"), (.dismissed, "dismissed"), (.snoozed, "snoozed")] {
+            let body = decision == .accepted ? #"{"ok":true,"taskId":"t9"}"# : #"{"ok":true}"#
+            StubURLProtocol.prime([
+                .success(status: 200, body: Data(body.utf8)),
+                .success(status: 401, body: Data())
+            ])
+            let model = AppModel(apiClient: makeClient(), initialMessages: [suggestionMessage()])
+            let failure = await model.decideSuggestion(id: "s1", decision: decision)
+
+            XCTAssertNil(failure)
+            let part = try XCTUnwrap(model.messages.first?.suggestionParts.first)
+            XCTAssertEqual(part.suggestionStatus.rawValue, wire)
+            XCTAssertEqual(part.acceptedTaskId, decision == .accepted ? "t9" : nil)
+            XCTAssertEqual(model.messages.first?.visibleTextBubbles.count, 1, "The prose explains the card")
+
+            let url = try XCTUnwrap(StubURLProtocol.urls.first)
+            XCTAssertEqual(url.path, "/api/mobile/v1/suggestions/s1")
+            let sent = try JSONSerialization.jsonObject(with: try XCTUnwrap(StubURLProtocol.bodies.first))
+            XCTAssertEqual(sent as? [String: String], ["decision": wire])
+            // Only an accept creates work worth re-reading Activity for; the
+            // inbox refresh it triggers failing must stay quiet.
+            XCTAssertEqual(StubURLProtocol.attempts, decision == .accepted ? ["POST", "GET"] : ["POST"])
+            XCTAssertNil(model.errorMessage)
+            XCTAssertEqual(model.pendingApprovalCount, 0)
+        }
+    }
+
+    @MainActor
+    func testRejectedSuggestionAnswerReopensTheCardWithTheReasonInline() async {
+        for response in [
+            StubURLProtocol.Outcome.success(status: 409, body: Data(#"{"error":"This suggestion was already answered."}"#.utf8)),
+            .failure(URLError(.timedOut)),
+            .success(status: 200, body: Data(#"{"ok":false}"#.utf8))
+        ] {
+            StubURLProtocol.prime([response])
+            let pending = suggestionMessage()
+            let model = AppModel(apiClient: makeClient(), initialMessages: [pending])
+            let failure = await model.decideSuggestion(id: "s1", decision: .accepted)
+
+            XCTAssertNotNil(failure)
+            XCTAssertEqual(model.messages, [pending], "A failed answer must put the question back exactly")
+            XCTAssertNil(model.errorMessage, "The reason belongs on the card, not in a banner")
+            XCTAssertEqual(StubURLProtocol.attempts, ["POST"], "An answer is never retried on its own")
+        }
+        StubURLProtocol.prime([.success(status: 409, body: Data(#"{"error":"This suggestion was already answered."}"#.utf8))])
+        let model = AppModel(apiClient: makeClient(), initialMessages: [suggestionMessage()])
+        let failure = await model.decideSuggestion(id: "s1", decision: .dismissed)
+        XCTAssertEqual(failure, "This suggestion was already answered.")
+    }
+
+    /// The answer re-reads its own row, and a read that left before the POST
+    /// landed cannot put the question back.
+    @MainActor
+    func testSuggestionAnswerRereadsItsMessageAndOutlivesAStaleRead() async throws {
+        let model = AppModel(apiClient: makeClient())
+        let conversation = ConversationView(
+            conversation: .init(id: "suggestion-chat", title: "Suggestions", modelOverride: nil,
+                archivedAt: nil, isPrimary: true),
+            agentName: "Assistant", agentTimezone: "UTC", messages: [suggestionMessage()],
+            models: [], goalTitle: nil, canArchive: false, cursor: nil, asyncTurn: nil)
+        StubURLProtocol.prime([.success(status: 200, body: try JSONEncoder().encode(conversation))])
+        let opened = await model.openConversation(id: "suggestion-chat")
+        XCTAssertTrue(opened)
+
+        let stale = ChatUpdates(taskStatus: nil, messages: [], refreshed: [suggestionMessage(status: "pending")],
+            superseded: nil, nextCursor: nil, hasMore: false, activity: [])
+        StubURLProtocol.prime([
+            .success(status: 200, body: Data(#"{"ok":true}"#.utf8)),
+            .success(status: 200, body: try JSONEncoder().encode(stale))
+        ])
+        let failure = await model.decideSuggestion(id: "s1", decision: .dismissed)
+
+        XCTAssertNil(failure)
+        XCTAssertEqual(StubURLProtocol.attempts, ["POST", "GET"])
+        let reread = try XCTUnwrap(StubURLProtocol.urls.last)
+        XCTAssertEqual(reread.path, "/api/mobile/v1/chat/status")
+        let refresh = URLComponents(url: reread, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "refresh" }?.value
+        XCTAssertEqual(refresh, "suggestion-message")
+        XCTAssertEqual(model.messages.first?.suggestionParts.first?.suggestionStatus, .dismissed)
+    }
+
+    @MainActor
+    func testPendingSuggestionIsNeverAPendingApproval() {
+        StubURLProtocol.prime([])
+        let model = AppModel(apiClient: makeClient(), initialMessages: [
+            suggestionMessage(), suggestionMessage(id: "snoozed-message", status: "snoozed")
+        ])
+        XCTAssertEqual(model.pendingApprovalCount, 0)
+        XCTAssertFalse(model.messages.contains(where: \.hasPendingDecision))
+        XCTAssertTrue(model.messages.allSatisfy(\.decisionParts.isEmpty))
+        XCTAssertTrue(StubURLProtocol.attempts.isEmpty)
     }
 
     func testCancellationIsControlFlowIncludingFoundationWrappers() {

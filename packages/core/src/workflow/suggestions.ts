@@ -176,7 +176,17 @@ export async function snoozeSuggestion(
       expiresAt: sql`GREATEST(${suggestions.expiresAt}, ${until.toISOString()}::timestamptz)`,
       updatedAt: now,
     })
-    .where(and(eq(suggestions.id, suggestionId), eq(suggestions.status, 'pending')))
+    .where(
+      and(
+        eq(suggestions.id, suggestionId),
+        // A snooze that has run out reads as pending again, buttons and all, so
+        // "Later" has to work on it a second time.
+        or(
+          eq(suggestions.status, 'pending'),
+          and(eq(suggestions.status, 'snoozed'), lte(suggestions.snoozedUntil, now)),
+        ),
+      ),
+    )
     .returning({ id: suggestions.id });
   return Boolean(row);
 }

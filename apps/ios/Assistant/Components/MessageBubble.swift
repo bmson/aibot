@@ -17,6 +17,13 @@ struct MessageBubble: View {
     let retry: ((String) -> Void)?
     /// Inline approve/decline for pending approval cards — (approvalId, decision).
     let decideApproval: ((String, String) async -> Bool)?
+    /// One-tap answers for suggestion cards — (suggestionId, decision). Returns
+    /// what the card should say when the answer did not land. Nil outside the
+    /// live log, where the question is shown but cannot be answered.
+    var decideSuggestion: ((String, SuggestionDecision) async -> String?)? = nil
+    /// Where an accepted suggestion's task can be seen. The phone has no page
+    /// for a single task, so this is Activity.
+    var openActivity: (() -> Void)? = nil
     /// Take this card out of the log. Nil while the row is still in flight —
     /// there is nothing for the server to hide until the turn has settled —
     /// and nil wherever a bubble is rendered outside the log, as in snapshots.
@@ -114,6 +121,14 @@ struct MessageBubble: View {
                 } else {
                     settledDecisionReceipt(part)
                 }
+            }
+
+            if message.role == .assistant, !message.suggestionParts.isEmpty {
+                SuggestionCard(
+                    parts: message.suggestionParts,
+                    decide: decideSuggestion,
+                    openActivity: openActivity
+                )
             }
 
             if message.role == .assistant, !responseCards.isEmpty, !message.hasSupportingResultCards {
@@ -3650,6 +3665,220 @@ struct DecisionReceiptCard: View {
         .accessibilityLabel(([title, summary, code ?? ""] + (expanded && detail != summary ? [detail] : []))
             .filter { !$0.isEmpty }.joined(separator: ". "))
         .accessibilityHint(expanded ? "Hides decision details" : "Shows the full request and decision details")
+    }
+}
+
+/// "I noticed X — want me to Y?" with a one-tap yes. Mirrored from the web's
+/// inline-suggestion.tsx — keep the copy in step.
+///
+/// Deliberately not an approval card. An approval says "this is about to
+/// happen, stop it if you want"; this says "nothing is happening, shall it?".
+/// Accepting does not perform the action — it creates the work, which runs the
+/// normal pipeline and still raises its own approval for anything that reaches
+/// another person. So it never borrows the amber approval surface, and it
+/// answers in one tap rather than arm-and-confirm: a card that looks and acts
+/// like an approval trains the owner to skim both.
+struct SuggestionCard: View {
+    let parts: [MessagePart]
+    let decide: ((String, SuggestionDecision) async -> String?)?
+    let openActivity: (() -> Void)?
+
+    /// Every button in the card stands down while one answer is in flight.
+    @State private var answering = false
+    /// Why the last answer did not land. Kept here rather than on the part so
+    /// it survives the card settling optimistically and re-opening.
+    @State private var failure: String?
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        if parts.contains(where: { $0.suggestionStatus.isOpen }) {
+            openCard
+        } else {
+            // Nothing left to ask: each answer leaves the same receipt an
+            // approval does, so the log reads as one surface.
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(parts, id: \.suggestionId) { part in
+                    VStack(alignment: .leading, spacing: 0) {
+                        let receipt = receipt(for: part.suggestionStatus)
+                        DecisionReceiptCard(title: receipt.title, summary: part.summary ?? receipt.detail,
+                            detail: receipt.detail, code: nil, symbol: receipt.symbol, tint: receipt.tint)
+                        taskLink(part, onPaper: false)
+                    }
+                }
+            }
+        }
+    }
+
+    private var openCard: some View {
+        let accent = AssistantTheme.accent(for: colorScheme)
+        let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+        return VStack(alignment: .leading, spacing: 14) {
+            Label(parts.count == 1 ? "A suggestion" : "\(parts.count) suggestions", systemImage: "lightbulb.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(accent)
+                .accessibilityAddTraits(.isHeader)
+
+            ForEach(parts, id: \.suggestionId) { part in
+                if part.suggestionStatus.isOpen {
+                    question(part)
+                } else {
+                    settledRow(part)
+                }
+            }
+
+            if let failure {
+                Label(failure, systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(15)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AssistantTheme.bubblePaper(for: colorScheme), in: shape)
+        .overlay {
+            shape.strokeBorder(
+                accent.opacity(colorSchemeContrast == .increased ? 0.5 : 0.25),
+                lineWidth: colorSchemeContrast == .increased ? 1.2 : 0.9
+            )
+        }
+    }
+
+    private func question(_ part: MessagePart) -> some View {
+        let id = part.suggestionId ?? ""
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(part.summary ?? part.proposedAction ?? "The assistant has a suggestion.")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // Wrapping keeps all three at their full 44pt size on a narrow
+            // column; accessibility sizes stack them full width instead.
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(spacing: 8) { answers(for: id, fillsWidth: true) }
+            } else {
+                AssistantFlowLayout(spacing: 8) { answers(for: id, fillsWidth: false) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func answers(for id: String, fillsWidth: Bool) -> some View {
+        answerButton("Yes, do it", id: id, decision: .accepted, kind: .primary, fillsWidth: fillsWidth,
+            hint: "Hands this to the assistant as a task. Anything that reaches another person still asks you first.")
+        answerButton("Later", id: id, decision: .snoozed, kind: .neutral, fillsWidth: fillsWidth,
+            hint: "Puts this aside and asks again later.")
+        answerButton("No thanks", id: id, decision: .dismissed, kind: .neutral, fillsWidth: fillsWidth,
+            hint: "Dismisses this suggestion.")
+    }
+
+    private func answerButton(_ title: String, id: String, decision: SuggestionDecision,
+                              kind: AssistantActionButtonKind, fillsWidth: Bool, hint: String) -> some View {
+        Button {
+            answer(id: id, decision: decision)
+        } label: {
+            Text(title).fixedSize(horizontal: false, vertical: true)
+        }
+        .buttonStyle(AssistantActionButtonStyle(kind: kind, compact: true, fillsWidth: fillsWidth))
+        .disabled(answering || decide == nil || id.isEmpty)
+        .accessibilityHint(hint)
+    }
+
+    private func answer(id: String, decision: SuggestionDecision) {
+        guard !answering, let decide else { return }
+        answering = true
+        failure = nil
+        Task {
+            let failure = await decide(id, decision)
+            self.failure = failure
+            answering = false
+            // The buttons are gone either way — to a receipt, or back with a
+            // reason — so say which, rather than leave VoiceOver on nothing.
+            AccessibilityNotification.Announcement(failure ?? receipt(for: decision.status).title).post()
+        }
+    }
+
+    /// An answered suggestion sharing a card with one still open: a line, not
+    /// a second sheet of paper inside the first.
+    private func settledRow(_ part: MessagePart) -> some View {
+        let receipt = receipt(for: part.suggestionStatus)
+        return VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                Label(receipt.title, systemImage: receipt.symbol)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(receipt.tint)
+                Text(part.summary ?? receipt.detail)
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            taskLink(part, onPaper: true)
+        }
+    }
+
+    /// Under a settled receipt the link sits on the chat's green, where accent
+    /// ink all but vanishes, so it brings its own paper, as every other thing
+    /// in the log does.
+    @ViewBuilder
+    private func taskLink(_ part: MessagePart, onPaper: Bool) -> some View {
+        if part.suggestionStatus == .accepted, let taskId = part.acceptedTaskId, !taskId.isEmpty, let openActivity {
+            Button(action: openActivity) {
+                HStack(spacing: 5) {
+                    Text("View in Activity")
+                    Image(systemName: "arrow.right")
+                        .font(.caption2.weight(.bold))
+                        .accessibilityHidden(true)
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                .padding(.horizontal, onPaper ? 0 : 14)
+                .padding(.vertical, onPaper ? 0 : 8)
+                .background {
+                    if !onPaper { Capsule().fill(AssistantTheme.bubblePaper(for: colorScheme)) }
+                }
+                .padding(.top, onPaper ? 0 : 6)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens Activity, where the new task is running.")
+        }
+    }
+
+    /// The settled line for each status. Only an accept is a success; the
+    /// rest are quiet, never red — passing on an offer is not a failure.
+    private func receipt(for status: SuggestionStatus) -> (title: String, detail: String, symbol: String, tint: Color) {
+        let quiet = AssistantTheme.inkMuted(for: colorScheme)
+        return switch status {
+        case .accepted:
+            ("Working on it", "The assistant took this on as a task.", "checkmark.circle.fill",
+             AssistantTheme.success(for: colorScheme))
+        case .dismissed:
+            ("Dismissed", "You passed on this suggestion.", "xmark.circle.fill", quiet)
+        case .snoozed:
+            ("Snoozed", "This will come back later.", "clock.fill", quiet)
+        case .expired:
+            ("Expired", "This suggestion is no longer waiting for an answer.",
+             "clock.badge.exclamationmark.fill", quiet)
+        case .pending, .missing:
+            ("No longer available", "This suggestion is no longer available.", "minus.circle.fill", quiet)
+        }
+    }
+}
+
+private extension SuggestionDecision {
+    var status: SuggestionStatus {
+        switch self {
+        case .accepted: .accepted
+        case .dismissed: .dismissed
+        case .snoozed: .snoozed
+        }
     }
 }
 

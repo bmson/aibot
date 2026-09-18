@@ -35,13 +35,23 @@ enum SpeakableText {
             return ["A decision is waiting for you."]
         }
 
-        let prose = message.visibleTextBubbles.flatMap { passages(forProse: $0) }
-        guard prose.isEmpty else { return prose }
-
+        var spoken = message.visibleTextBubbles.flatMap { passages(forProse: $0) }
         // No prose means the cards carry the answer.
-        return message.parts
-            .compactMap(MessageResponseCard.init(part:))
-            .compactMap(passage(for:))
+        if spoken.isEmpty {
+            spoken = message.parts
+                .compactMap(MessageResponseCard.init(part:))
+                .compactMap(passage(for:))
+        }
+
+        // A suggestion is not a decision in that sense: it proposes, it holds
+        // nothing back, and its prose ("One more thing from your watch:") is
+        // only half a sentence without it. So an open one is read after the
+        // rest. Speech still answers nothing — the card has to be tapped.
+        let questions = message.suggestionParts
+            .filter { $0.suggestionStatus.isOpen }
+            .compactMap(\.summary)
+            .flatMap { passages(forProse: $0) }
+        return spoken + questions
     }
 
     // MARK: - Prose
