@@ -4,14 +4,21 @@ struct MoreView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var notifications = NotificationManager.shared
     @AppStorage(AssistantAppearance.defaultsKey) private var appearance = AssistantAppearance.dark
     @AppStorage(AppModel.shareLocationKey) private var shareLocation = false
     @AppStorage(AppModel.shareLocationBackgroundKey) private var shareLocationBackground = false
     @AppStorage(SpeechSettings.speakRepliesKey) private var speakReplies = false
+    @AppStorage(SpeechSettings.paceKey) private var speechPace = SpeechPace.default
+    @AppStorage(SpeechSettings.voiceKey) private var speechVoice = ""
     @ObservedObject private var locations = LocationManager.shared
     @State private var showingAgentSettings = false
     @State private var settingsActionInFlight: String?
+    /// The voices installed for this language, best first. Read once the screen
+    /// appears rather than on every redraw — the answer only changes when the
+    /// owner leaves for Settings and downloads one.
+    @State private var voiceChoices: [SpeechVoices.Candidate] = []
 
     var body: some View {
         AssistantSettingsList {
@@ -61,7 +68,11 @@ struct MoreView: View {
 
             Section {
                 Toggle("Speak replies aloud", isOn: $speakReplies)
-                if !SpeechVoices.hasNaturalVoice {
+                speechPacePicker
+                if voiceChoices.count > 1 {
+                    speechVoicePicker
+                }
+                if let best = voiceChoices.first, !best.isNatural {
                     voiceQualityHint
                 }
             } header: {
@@ -226,14 +237,68 @@ struct MoreView: View {
             _ = await (overviewRefresh, workspaceRefresh)
         }
         .task {
+            refreshVoiceChoices()
             await notifications.refreshAuthorizationStatus()
             if model.workspace == nil { await model.refreshWorkspace() }
             await model.refreshMcpConnections()
+        }
+        // Downloading a voice happens in Settings, not here. Coming back to
+        // this screen is the moment to notice that one arrived.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            refreshVoiceChoices()
+            SpeechPlayer.shared.voicePreferenceChanged()
         }
         .sheet(isPresented: $showingAgentSettings) {
             if let settings = model.workspace?.settings.agent {
                 NavigationStack { AgentSettingsEditor(settings: settings) }
             }
+        }
+    }
+
+    /// A voice the owner picked can be deleted from Settings while the choice
+    /// is still stored here. Fall back to "best installed" rather than showing
+    /// a picker with nothing selected.
+    private func refreshVoiceChoices() {
+        voiceChoices = SpeechVoices.choices()
+        if !speechVoice.isEmpty, !voiceChoices.contains(where: { $0.identifier == speechVoice }) {
+            speechVoice = ""
+        }
+    }
+
+    /// The system's read-aloud rate is a dictation pace, and a reply in a chat
+    /// is conversation. The default sits above it; this is where someone who
+    /// disagrees says so, and hears the answer straight away.
+    private var speechPacePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Speed")
+            Picker("Speed", selection: $speechPace) {
+                ForEach(SpeechPace.allCases) { pace in
+                    Text(pace.label).tag(pace)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+        .padding(.vertical, 2)
+        .onChange(of: speechPace) { _, _ in
+            SpeechPlayer.shared.preview()
+        }
+    }
+
+    /// Which of the installed voices to use. "Best installed" is the default
+    /// and stays right as voices are added, but a phone with two natural
+    /// voices on it has a preference worth having.
+    private var speechVoicePicker: some View {
+        Picker("Voice", selection: $speechVoice) {
+            Text("Best installed").tag("")
+            ForEach(voiceChoices, id: \.identifier) { voice in
+                Text("\(voice.name) · \(voice.qualityLabel)").tag(voice.identifier)
+            }
+        }
+        .onChange(of: speechVoice) { _, _ in
+            SpeechPlayer.shared.voicePreferenceChanged()
+            SpeechPlayer.shared.preview()
         }
     }
 

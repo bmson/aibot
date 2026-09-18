@@ -66,7 +66,15 @@ is replaced by the durable one mid-reply, and the ear must not hear the seam.
 
 The neural voices are a download the owner controls, in Settings ›
 Accessibility › Spoken Content › Voices; the app picks the best one installed
-and says so in More → Speech when only the compact voice is there.
+and says so in More → Speech when only the compact voice is there. Two things
+about that pick are worth knowing. Siri's voices are listed on the device and
+report themselves as premium, but an ordinary app handed one is spoken in the
+compact default instead — so they are filtered out, along with Eloquence and the
+novelty voices, and the tie between two equally good voices goes to whichever
+one the phone is already set to. And More → Speech has both a **Speed** and,
+where more than one voice is installed, a **Voice** — the default pace is a step
+above the system's read-aloud rate, which is a dictation pace rather than a
+conversational one. Changing either says a line back in the new voice.
 
 Talking back works the other way: hold the microphone button beside the send
 button and speak. Transcription is the Speech framework's on-device
