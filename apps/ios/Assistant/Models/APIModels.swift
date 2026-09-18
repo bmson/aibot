@@ -151,6 +151,18 @@ struct MessagePart: Codable, Hashable, Sendable {
     /// Auto-recall provenance. Optional keeps an older server and all prior
     /// message parts decodable while GraphRAG rolls out.
     var sources: [MessageRecallSource]? = nil
+    /// The work a suggestion would hand the assistant if accepted. The card
+    /// asks with `summary`; this is what the resulting task is told to do.
+    var proposedAction: String? = nil
+    /// The task an accepted suggestion became, hydrated by the server.
+    var acceptedTaskId: String? = nil
+
+    /// Where a suggestion part stands. The server hydrates `status` on every
+    /// read, so a part it has not hydrated yet is a live question; a status
+    /// this build does not know reads as gone rather than as open.
+    var suggestionStatus: SuggestionStatus {
+        status.map { SuggestionStatus(rawValue: $0) ?? .missing } ?? .pending
+    }
 
     /// Apply only an acknowledged decision for an approval this part names.
     /// Repeated delivery is idempotent; a partial decision never settles the
@@ -171,6 +183,39 @@ struct MessagePart: Codable, Hashable, Sendable {
         outcomes = current
         if wasPending, let pendingCount { self.pendingCount = max(0, pendingCount - 1) }
     }
+}
+
+/// "I noticed X — want me to Y?" Deliberately not an approval: an approval
+/// holds work that is about to happen, a suggestion proposes work nobody has
+/// started. Accepting creates a task, which runs the normal pipeline and still
+/// raises its own approval for anything that reaches another person — so a
+/// suggestion never counts toward the approval inbox, badge or Island.
+enum SuggestionStatus: String, Sendable {
+    case pending
+    case accepted
+    case dismissed
+    case snoozed
+    case expired
+    case missing
+
+    /// Only a live question asks. A hydrated `snoozed` is a snooze still
+    /// sleeping — an elapsed one comes back from the server as `pending` — so
+    /// until then it settles like any other answer rather than re-asking.
+    var isOpen: Bool { self == .pending }
+}
+
+/// The three answers a suggestion card offers. "Later" is a snooze.
+enum SuggestionDecision: String, Codable, Sendable {
+    case accepted
+    case dismissed
+    case snoozed
+}
+
+/// An answer given on this device, held over later reads of the log until
+/// the server says the same thing itself.
+struct SuggestionAnswer: Hashable, Sendable {
+    let decision: SuggestionDecision
+    var taskId: String? = nil
 }
 
 struct ApprovalSummaryOutcome: Codable, Hashable, Sendable, Identifiable {
@@ -214,6 +259,19 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
             for (id, status) in decisions {
                 message.parts[index].applyApprovalDecision(id: id, status: status)
             }
+        }
+        return message
+    }
+
+    /// Lay answers given here over a read that may predate them. Only the
+    /// suggestions they name change; the rest of the row is the server's.
+    func applyingSuggestionAnswers(_ answers: [String: SuggestionAnswer]) -> Self {
+        guard !answers.isEmpty else { return self }
+        var message = self
+        for index in message.parts.indices where message.parts[index].type == "suggestion" {
+            guard let id = message.parts[index].suggestionId, let answer = answers[id] else { continue }
+            message.parts[index].status = answer.decision.rawValue
+            if let taskId = answer.taskId { message.parts[index].acceptedTaskId = taskId }
         }
         return message
     }
@@ -282,6 +340,22 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         parts.filter { ["approval", "budget-request"].contains($0.type) }
     }
 
+    /// Proactive suggestions, kept out of `decisionParts` on purpose. Nothing
+    /// waits on one, so none of the approval machinery — pending counts, the
+    /// approved-receipt run, the spoken "decision is waiting" — applies. And a
+    /// decision card replaces its prose where a suggestion does not: the text
+    /// beside it is what explains it ("One more thing from your watch:"). A
+    /// part with no id has nothing a card could answer, so it is not drawn.
+    var suggestionParts: [MessagePart] {
+        parts.filter { $0.type == "suggestion" && !($0.suggestionId ?? "").isEmpty }
+    }
+
+    /// A suggestion worth reading back: one still open, or a snooze the server
+    /// will turn back into a question once it lapses.
+    var hasUnsettledSuggestion: Bool {
+        suggestionParts.contains { $0.suggestionStatus == .pending || $0.suggestionStatus == .snoozed }
+    }
+
     /// Dashboard mirrors carry a compact reason and count rather than the raw
     /// approval payloads. The Approvals screen remains the exact review surface.
     var approvalSummary: ApprovalSummary? {
@@ -304,10 +378,12 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         decisionParts.isEmpty && approvalSummary == nil ? textBubbles : []
     }
 
-    /// Runtime notices and proactive cards do not answer the nearest owner question.
+    /// Runtime notices and proactive cards do not answer the nearest owner
+    /// question. A suggestion only ever arrives from a background writer (the
+    /// server counts it among its notice parts), so it is one of those too.
     var isConversationAnswer: Bool {
         role == .assistant && !visibleTextBubbles.isEmpty && !parts.contains { part in
-            if part.type == "notice" { return true }
+            if part.type == "notice" || part.type == "suggestion" { return true }
             guard part.type == "data-card", case let .object(data) = part.data else { return false }
             return data["kind"]?.string == "proactive-alert"
         }
@@ -359,6 +435,8 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         }
     }
 
+    /// An approval or budget decision still waiting on the owner. A pending
+    /// suggestion is not one — see `hasUnsettledSuggestion`.
     var hasPendingDecision: Bool {
         (approvalSummary?.pendingCount ?? 0) > 0 || decisionParts.contains { part in
             part.status == nil || part.status == "pending" || part.status == "snoozed"
@@ -1880,6 +1958,13 @@ struct ApprovalResult: Codable, Sendable {
     let taskId: String
     let toolCallId: String
     let approvalId: String
+}
+
+/// `taskId` names the work an accepted suggestion became; the other answers
+/// create nothing and leave it out.
+struct SuggestionResult: Codable, Sendable {
+    let ok: Bool
+    let taskId: String?
 }
 
 struct SendReceipt: Sendable {

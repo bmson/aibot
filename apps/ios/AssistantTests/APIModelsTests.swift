@@ -623,6 +623,106 @@ final class APIModelsTests: XCTestCase {
         XCTAssertFalse(approved.hasPendingDecision)
     }
 
+    func testSuggestionPartDecodesAsAnOpenQuestionBesideItsProse() throws {
+        let data = Data("""
+        {"id":"suggestion-message","role":"assistant","parts":[
+          {"type":"text","text":"One more thing from your \\"Flights\\" watch:"},
+          {"type":"suggestion","suggestionId":"s1","summary":"Fares to Lisbon dropped — want me to hold one?",
+           "proposedAction":"Hold the cheapest Lisbon fare"}
+        ]}
+        """.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        let part = try XCTUnwrap(message.suggestionParts.first)
+
+        XCTAssertEqual(part.suggestionId, "s1")
+        XCTAssertEqual(part.summary, "Fares to Lisbon dropped — want me to hold one?")
+        XCTAssertEqual(part.proposedAction, "Hold the cheapest Lisbon fare")
+        XCTAssertNil(part.acceptedTaskId)
+        XCTAssertEqual(part.suggestionStatus, .pending, "A part the server has not hydrated is a live question")
+        XCTAssertTrue(part.suggestionStatus.isOpen)
+        XCTAssertTrue(message.hasUnsettledSuggestion)
+        // The prose explains the card, so it stays; and a background proposal
+        // is not the answer to whatever the owner asked last.
+        XCTAssertEqual(message.visibleTextBubbles, ["One more thing from your \"Flights\" watch:"])
+        XCTAssertFalse(message.isConversationAnswer)
+    }
+
+    func testPendingSuggestionNeverCountsAsAPendingDecision() {
+        let message = ChatMessage(id: "m", role: .assistant, parts: [
+            .init(type: "text", text: "Your briefing."),
+            .init(type: "suggestion", suggestionId: "s1", summary: "Book the dentist?", status: "pending"),
+            .init(type: "suggestion", suggestionId: "s2", summary: "Renew the passport?"),
+        ])
+        XCTAssertEqual(message.suggestionParts.count, 2)
+        XCTAssertTrue(message.decisionParts.isEmpty)
+        XCTAssertFalse(message.hasPendingDecision)
+        XCTAssertNil(message.approvalSummary)
+        XCTAssertFalse(message.isApprovedApprovalReceipt)
+        XCTAssertEqual(
+            [message, message].transcriptItems().count, 2,
+            "A suggestion row must never fold into an approved-receipt run"
+        )
+    }
+
+    func testSettledSuggestionStatusesCloseTheCard() throws {
+        let cases: [(String, SuggestionStatus, Bool)] = [
+            ("accepted", .accepted, false),
+            ("dismissed", .dismissed, false),
+            // A snooze still sleeping settles, but is read back until it lapses.
+            ("snoozed", .snoozed, true),
+            ("expired", .expired, false),
+            ("missing", .missing, false),
+            ("something-new", .missing, false),
+        ]
+        for (raw, expected, unsettled) in cases {
+            let data = Data("""
+            {"id":"m","role":"assistant","parts":[
+              {"type":"suggestion","suggestionId":"s1","summary":"Book the dentist?",
+               "proposedAction":"Book a check-up","status":"\(raw)","acceptedTaskId":"task-7"}
+            ]}
+            """.utf8)
+            let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+            let part = try XCTUnwrap(message.suggestionParts.first)
+            XCTAssertEqual(part.suggestionStatus, expected, raw)
+            XCTAssertFalse(part.suggestionStatus.isOpen, raw)
+            XCTAssertEqual(message.hasUnsettledSuggestion, unsettled, raw)
+            XCTAssertEqual(part.acceptedTaskId, "task-7")
+        }
+    }
+
+    func testSuggestionWithoutAnIdIsNotDrawn() {
+        let message = ChatMessage(id: "m", role: .assistant, parts: [
+            .init(type: "suggestion", summary: "Nothing to answer this with"),
+        ])
+        XCTAssertTrue(message.suggestionParts.isEmpty)
+        XCTAssertFalse(message.hasUnsettledSuggestion)
+    }
+
+    func testLocalSuggestionAnswerOutlivesAStaleReadAndTouchesNothingElse() {
+        let stale = ChatMessage(id: "m", role: .assistant, parts: [
+            .init(type: "text", text: "Your briefing."),
+            .init(type: "suggestion", suggestionId: "s1", summary: "Book the dentist?", status: "pending"),
+            .init(type: "suggestion", suggestionId: "s2", summary: "Renew the passport?", status: "pending"),
+            .init(type: "approval", approvalId: "s1", status: "pending"),
+        ])
+        let answered = stale.applyingSuggestionAnswers(["s1": .init(decision: .accepted, taskId: "t1")])
+        XCTAssertEqual(answered.parts[1].suggestionStatus, .accepted)
+        XCTAssertEqual(answered.parts[1].acceptedTaskId, "t1")
+        XCTAssertEqual(answered.parts[2].suggestionStatus, .pending)
+        XCTAssertEqual(answered.parts[3].status, "pending", "An approval sharing the id is not a suggestion")
+        XCTAssertEqual(answered.text, "Your briefing.")
+        XCTAssertEqual(answered.applyingSuggestionAnswers(["s1": .init(decision: .accepted, taskId: "t1")]), answered)
+
+        // The server's own task id survives an answer held before it was known.
+        let hydrated = ChatMessage(id: "m", role: .assistant, parts: [
+            .init(type: "suggestion", suggestionId: "s1", status: "accepted", acceptedTaskId: "t1"),
+        ])
+        XCTAssertEqual(
+            hydrated.applyingSuggestionAnswers(["s1": .init(decision: .accepted)]).parts[0].acceptedTaskId, "t1"
+        )
+        XCTAssertEqual(stale.applyingSuggestionAnswers([:]), stale)
+    }
+
     func testApprovalSummaryUsesItsStructuredCardAndKeepsFallbackTextHidden() throws {
         let data = """
         {"id":"approval-summary-message","role":"assistant","parts":[
