@@ -27,6 +27,7 @@ import {
   type ModelProvider,
   type ProviderOptions,
   type ProviderUsage,
+  type ReasoningMode,
 } from './provider.js';
 
 export type ModelRole =
@@ -47,6 +48,13 @@ export interface RouteOptions {
   forceFallback?: boolean;
   /** Owner chat/SMS replies: hard caps degrade instead of blocking (carve-out). */
   critical?: boolean;
+  /**
+   * The caller already resolved this conversation's model override, so an
+   * absent `modelOverride` means "none", not "not looked up yet". Without it
+   * `route()` re-reads an override the caller is holding — the chat turn has
+   * the conversation row in hand and passes its column straight through.
+   */
+  modelOverrideResolved?: boolean;
 }
 
 export type Route =
@@ -55,7 +63,10 @@ export type Route =
       model: LanguageModel;
       modelId: string;
       degraded: boolean;
-      /** Reasoning model (capability flag): needs its own token headroom. */
+      /**
+       * The model *can* reason (capability flag on its row). Whether a given
+       * call actually asks it to is decided per call by `reasoningMode`.
+       */
       thinking: boolean;
       decision: BudgetDecision;
       params: Record<string, unknown>;
@@ -71,6 +82,8 @@ export interface CallOptions {
   forceFallback?: boolean;
   /** Owner chat/SMS replies: hard caps degrade instead of blocking (carve-out). */
   critical?: boolean;
+  /** See RouteOptions.modelOverrideResolved. */
+  modelOverrideResolved?: boolean;
   system?: string;
   messages?: ModelMessage[];
   prompt?: string;
@@ -367,6 +380,44 @@ export const EMBEDDING_DIMENSIONS = 1_536;
 const MODEL_CALL_TIMEOUT_MS = 150_000;
 
 /**
+ * Shorter deadlines for the calls a person is sitting and waiting on.
+ *
+ * The 150s above was measured against goal-session *step* prompts — long,
+ * tool-carrying, running behind a queue where nobody is watching a cursor
+ * blink. A streamed reply and the triage classifier in front of it are the
+ * opposite: they sit in the request path of a chat turn, so spending 150s on
+ * one before even reporting failure is far worse than failing early and
+ * retrying. Tool-calling steps keep the full budget (see `modelCallSignal`),
+ * so the tuning the original number came from is untouched.
+ */
+const INTERACTIVE_CALL_TIMEOUT_MS: Partial<Record<ModelRole, number>> = {
+  classify: 30_000,
+  draft: 60_000,
+};
+
+/**
+ * Roles whose answers are worth hidden reasoning even with no tools in play.
+ *
+ * Reasoning tokens are generated *before* the visible answer, so on any call a
+ * person is waiting for they are pure added latency (and billed output). Only
+ * the two roles whose whole job is deliberation keep it by default; a
+ * tool-calling step keeps it regardless of role, because a step that cannot
+ * think may fail to emit the tool call at all.
+ */
+const REASONING_ROLES: ReadonlySet<ModelRole> = new Set<ModelRole>(['plan', 'reason']);
+
+/**
+ * How long a `model_roles` / `models` row stays usable without re-reading it.
+ *
+ * Both tables are tiny, near-static installation config, yet `route()` reads
+ * two to three rows from them on *every* model call — two or three times per
+ * chat turn. They change only when the owner picks a model or a seed
+ * reconciles, so a few seconds of staleness costs nothing and a short TTL
+ * needs no invalidation hook reaching into the router from the seed path.
+ */
+const ROUTING_CACHE_TTL_MS = 30_000;
+
+/**
  * Reasoning ("thinking") models spend completion tokens on hidden reasoning
  * before the visible answer, and that reasoning is billed against the same
  * `max_tokens` budget. If reasoning shares the visible-output budget it starves
@@ -374,13 +425,28 @@ const MODEL_CALL_TIMEOUT_MS = 150_000;
  * with truncated or empty text (the "request failed after thinking" chat
  * turns, plus triage/classify JSON that never lands). Give reasoning its own
  * bounded headroom on top of the visible budget, and cap it via OpenRouter so
- * the answer always keeps its full allocation. Only thinking models (capability
- * flag on the model row) get this; plain models are unaffected.
+ * the answer always keeps its full allocation. Only a call that will actually
+ * reason gets this — see `reasoningMode`, which is narrower than the model's
+ * capability flag: a classifier on a thinking model is told not to reason and
+ * so needs no headroom to protect.
  */
 const REASONING_HEADROOM_TOKENS = 4_096;
 
-function modelCallSignal(signal?: AbortSignal): AbortSignal {
-  const deadline = AbortSignal.timeout(MODEL_CALL_TIMEOUT_MS);
+/**
+ * Exported for test: `AbortSignal.timeout` is native and does not move under
+ * fake timers, so the deadline is verified as the number it is chosen to be.
+ */
+export function modelCallTimeoutMs(role: ModelRole | undefined, toolCall: boolean): number {
+  if (toolCall || !role) return MODEL_CALL_TIMEOUT_MS;
+  return INTERACTIVE_CALL_TIMEOUT_MS[role] ?? MODEL_CALL_TIMEOUT_MS;
+}
+
+function modelCallSignal(
+  signal: AbortSignal | undefined,
+  role?: ModelRole,
+  toolCall = false,
+): AbortSignal {
+  const deadline = AbortSignal.timeout(modelCallTimeoutMs(role, toolCall));
   return signal ? AbortSignal.any([signal, deadline]) : deadline;
 }
 
@@ -445,6 +511,12 @@ export function isProviderCapabilityError(err: unknown): boolean {
 export class ModelRouter {
   private provider: ModelProvider;
   private readonly persistence: ModelRoutingRepository;
+  /**
+   * Per-router, not module-global: a test builds its own router per fixture and
+   * must never inherit another's rows, and the web process holds exactly one
+   * router, which is where the repeated reads actually happen.
+   */
+  private readonly routingCache = new Map<string, { at: number; value: unknown }>();
 
   constructor(
     store: Db | ModelRoutingRepository,
@@ -463,6 +535,28 @@ export class ModelRouter {
       'kind' in store && store.kind === 'model-routing-repository'
         ? (store as ModelRoutingRepository)
         : createPostgresModelRoutingRepository(store as Db);
+  }
+
+  /**
+   * Read installation routing config through a short TTL.
+   *
+   * Only `model_roles` and `models` go through here. Budget totals, task
+   * budgets and conversation overrides are deliberately excluded: those change
+   * as a direct result of the very calls being routed, and serving a stale one
+   * would let spend slip past the guard or pin a conversation to a model the
+   * owner just switched away from.
+   */
+  private async cachedRouting<T>(key: string, read: () => Promise<T>): Promise<T> {
+    const hit = this.routingCache.get(key);
+    if (hit && Date.now() - hit.at < ROUTING_CACHE_TTL_MS) return hit.value as T;
+    const value = await read();
+    this.routingCache.set(key, { at: Date.now(), value });
+    return value;
+  }
+
+  /** Drop cached routing config — for a process that just rewrote those rows. */
+  clearRoutingCache(): void {
+    this.routingCache.clear();
   }
 
   /**
@@ -505,18 +599,26 @@ export class ModelRouter {
       return { ok: false, decision };
     }
 
-    const roleRow = await this.persistence.role(role);
+    const roleRow = await this.cachedRouting(`role:${role}`, () => this.persistence.role(role));
     if (!roleRow) throw new Error(`no model_roles row for role: ${role}`);
 
     let primaryId = roleRow.primaryModel;
     let modelOverride = opts.modelOverride;
     // The conversation picker applies to tool-driven work as well as streamed
     // replies. Background planning/extraction keep their inexpensive role routes.
-    if (!modelOverride && opts.taskId && (role === 'reason' || role === 'draft')) {
+    if (
+      !modelOverride &&
+      !opts.modelOverrideResolved &&
+      opts.taskId &&
+      (role === 'reason' || role === 'draft')
+    ) {
       modelOverride = (await this.persistence.conversationOverride(opts.taskId)) ?? undefined;
     }
     if (modelOverride) {
-      const override = await this.persistence.model(modelOverride);
+      const overrideId = modelOverride;
+      const override = await this.cachedRouting(`model:${overrideId}`, () =>
+        this.persistence.model(overrideId),
+      );
       if (override?.enabled && !(override.capabilities as { embedding?: boolean }).embedding) {
         primaryId = override.id;
       }
@@ -525,7 +627,9 @@ export class ModelRouter {
     const degraded = opts.forceFallback || decision.mode === 'fallback';
     const modelId = degraded ? roleRow.fallbackModel : primaryId;
     const params = (roleRow.params ?? {}) as Record<string, unknown>;
-    const modelRow = await this.persistence.model(modelId);
+    const modelRow = await this.cachedRouting(`model:${modelId}`, () =>
+      this.persistence.model(modelId),
+    );
     if (!modelRow) throw new Error(`model row missing for routed model: ${modelId}`);
     if (!modelRow.enabled) throw new Error(`routed model is disabled: ${modelId}`);
     const promptCostPerMTok = Number(modelRow.promptCostPerMTok);
@@ -574,31 +678,47 @@ export class ModelRouter {
   }
 
   /**
+   * Whether this call should spend tokens on hidden reasoning.
+   *
+   * A model that cannot reason reports 'unsupported' so the provider sends no
+   * reasoning parameter at all. A model that can reason is told explicitly
+   * either way, because silence means "reason by default" upstream.
+   */
+  private reasoningMode(
+    role: Exclude<ModelRole, 'embed'>,
+    route: Extract<Route, { ok: true }>,
+    toolCall: boolean,
+  ): ReasoningMode {
+    if (!route.thinking) return 'unsupported';
+    return toolCall || REASONING_ROLES.has(role) ? 'enabled' : 'disabled';
+  }
+
+  /**
    * The completion budget to send the provider, plus any provider options.
-   * A thinking model gets bounded reasoning headroom on top of the visible
-   * answer budget (and OpenRouter is told to keep reasoning within it), so the
-   * answer never truncates at finishReason 'length'. The inflated total also
-   * flows into the cost reservation below — reasoning tokens are billed, so
-   * reserving for them keeps the budget guard honest. Plain models are
-   * unchanged: same limit, no provider options.
+   * A call that will reason gets bounded reasoning headroom on top of the
+   * visible answer budget (and OpenRouter is told to keep reasoning within it),
+   * so the answer never truncates at finishReason 'length'. The inflated total
+   * also flows into the cost reservation below — reasoning tokens are billed,
+   * so reserving for them keeps the budget guard honest. Every other call gets
+   * the visible limit alone.
    */
   private modelCallBudget(
     role: Exclude<ModelRole, 'embed'>,
     route: Extract<Route, { ok: true }>,
     opts: CallOptions,
+    toolCall: boolean,
   ): { maxOutputTokens: number; providerOptions?: ProviderOptions } {
     const visibleLimit = this.outputLimit(role, route, opts);
-    if (!route.thinking) {
-      return {
-        maxOutputTokens: visibleLimit,
-        providerOptions: this.provider.optionsFor({ thinking: false }),
-      };
-    }
-    // Reasoning models still need headroom when a tool is mandatory. Removing
-    // it can exhaust the completion budget before the tool call is emitted.
+    const reasoning = this.reasoningMode(role, route, toolCall);
+    // Headroom exists to keep reasoning from eating the visible answer, so it
+    // is owed only to a call that will actually reason. Reserving it for one
+    // that will not would also over-hold budget for tokens nobody generates.
+    // Reasoning models still need it when a tool is mandatory: removing it can
+    // exhaust the completion budget before the tool call is emitted.
     return {
-      maxOutputTokens: visibleLimit + REASONING_HEADROOM_TOKENS,
-      providerOptions: this.provider.optionsFor({ thinking: true }),
+      maxOutputTokens:
+        reasoning === 'enabled' ? visibleLimit + REASONING_HEADROOM_TOKENS : visibleLimit,
+      providerOptions: this.provider.optionsFor({ reasoning }),
     };
   }
 
@@ -606,8 +726,9 @@ export class ModelRouter {
     role: Exclude<ModelRole, 'embed'>,
     route: Extract<Route, { ok: true }>,
     opts: CallOptions,
+    toolCall: boolean,
   ) {
-    const { maxOutputTokens, providerOptions } = this.modelCallBudget(role, route, opts);
+    const { maxOutputTokens, providerOptions } = this.modelCallBudget(role, route, opts, toolCall);
     const inputTokens = estimatedInputTokens(opts);
     const estimatedUsd = Math.max(
       0.000001,
@@ -635,6 +756,8 @@ export class ModelRouter {
   private async prepareModelCall(
     role: Exclude<ModelRole, 'embed'>,
     opts: CallOptions,
+    /** True only for a tool-carrying step, which keeps reasoning and the full deadline. */
+    toolCall = false,
   ): Promise<
     | { ok: false; decision: Extract<BudgetDecision, { mode: 'park' | 'block' }> }
     | {
@@ -649,7 +772,7 @@ export class ModelRouter {
     const attempt = async (forceFallback: boolean) => {
       const route = await this.route(role, { ...opts, forceFallback });
       if (!route.ok) return { ok: false as const, decision: route.decision };
-      const prepared = await this.reserveModelCall(role, route, opts);
+      const prepared = await this.reserveModelCall(role, route, opts, toolCall);
       if (!prepared.reservation.ok) {
         return {
           ok: false as const,
@@ -846,7 +969,7 @@ export class ModelRouter {
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),
           maxOutputTokens,
           providerOptions,
-          abortSignal: modelCallSignal(opts.abortSignal),
+          abortSignal: modelCallSignal(opts.abortSignal, role),
         });
         await this.meterWithoutRepeatingProviderWork({
           taskId: opts.taskId,
@@ -914,7 +1037,7 @@ export class ModelRouter {
         temperature: opts.temperature ?? (route.params.temperature as number | undefined),
         maxOutputTokens,
         providerOptions,
-        abortSignal: modelCallSignal(opts.abortSignal),
+        abortSignal: modelCallSignal(opts.abortSignal, role),
         onFinish: async (event: FinishEventLike & { text?: string }) => {
           await terminalOnce(async () => {
             // AI SDK pauses stream finalization until this promise resolves.
@@ -1068,7 +1191,7 @@ export class ModelRouter {
     role: Exclude<ModelRole, 'embed'>,
     opts: CallOptions & { tools: ToolSet; toolChoice?: StepToolChoice },
   ): Promise<StepCallOutcome> {
-    const prepared = await this.prepareModelCall(role, opts);
+    const prepared = await this.prepareModelCall(role, opts, true);
     if (!prepared.ok) return prepared;
     const { route, reservationId, maxOutputTokens, providerOptions, estimatedUsd } = prepared;
 
@@ -1091,7 +1214,7 @@ export class ModelRouter {
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),
           maxOutputTokens,
           providerOptions,
-          abortSignal: modelCallSignal(opts.abortSignal),
+          abortSignal: modelCallSignal(opts.abortSignal, role, true),
         });
         await this.meterWithoutRepeatingProviderWork({
           taskId: opts.taskId,
@@ -1164,7 +1287,7 @@ export class ModelRouter {
             temperature: opts.temperature ?? (route.params.temperature as number | undefined),
             maxOutputTokens,
             providerOptions,
-            abortSignal: modelCallSignal(opts.abortSignal),
+            abortSignal: modelCallSignal(opts.abortSignal, role),
           });
           await this.meterWithoutRepeatingProviderWork({
             taskId: opts.taskId,

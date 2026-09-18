@@ -151,9 +151,15 @@ describe('injected model providers', () => {
     });
     expect(vertex.chat('vertex:gemini-2.5-flash')).toBe(vertexModel);
     expect(vertex.textEmbeddingModel('vertex:text-embedding-005')).toBe(embeddingModel);
-    expect(vertex.optionsFor({ thinking: true })).toEqual({
+    expect(vertex.optionsFor({ reasoning: 'enabled' })).toEqual({
       vertex: { thinkingConfig: { thinkingBudget: 4_096 } },
     });
+    // A capable model is told explicitly to stay quiet; silence would leave
+    // Vertex's own default (think freely) in charge.
+    expect(vertex.optionsFor({ reasoning: 'disabled' })).toEqual({
+      vertex: { thinkingConfig: { thinkingBudget: 0 } },
+    });
+    expect(vertex.optionsFor({ reasoning: 'unsupported' })).toBeUndefined();
     expect(vertex.embeddingOptions()).toEqual({ vertex: { outputDimensionality: 1_536 } });
     expect(() => vertex.assertModelId('vertex:gemini-3.8-flash')).not.toThrow();
     expect(() => vertex.assertModelId('vertex:text-embedding-005')).not.toThrow();

@@ -7,6 +7,19 @@ export type ProviderOptions = Record<string, Record<string, JSONValue>>;
 
 export type ModelProviderKind = 'openrouter' | 'vertex';
 
+/**
+ * What this particular call wants from a model's hidden reasoning.
+ *
+ * Three states, not two, because "do not reason" and "cannot reason" must send
+ * different requests. A reasoning-capable model has to be told explicitly to
+ * stay quiet — omitting the parameter leaves the provider's own default in
+ * charge, which for these models is to reason freely and bill for it. A model
+ * with no reasoning capability must be sent nothing at all: `chat()` sets
+ * OpenRouter's `require_parameters`, so naming a parameter the upstream pool
+ * does not implement narrows that pool and can empty it outright.
+ */
+export type ReasoningMode = 'enabled' | 'disabled' | 'unsupported';
+
 export interface ProviderUsage {
   inputTokens?: number;
   outputTokens?: number;
@@ -21,7 +34,7 @@ export interface ModelProvider {
   assertModelId(modelId: string): void;
   chat(modelId: string): LanguageModel;
   textEmbeddingModel(modelId: string): EmbeddingModel;
-  optionsFor(input: { thinking: boolean }): ProviderOptions | undefined;
+  optionsFor(input: { reasoning: ReasoningMode }): ProviderOptions | undefined;
   /** Provider options applied to the embedding request. */
   embeddingOptions(): ProviderOptions | undefined;
   /** Provider-specific cache hints for the message boundary, if supported. */
@@ -132,8 +145,11 @@ export function createOpenRouterModelProvider(apiKey: string): ModelProvider {
       assertOpenRouterModelId(modelId);
       return provider.textEmbeddingModel(modelId);
     },
-    optionsFor({ thinking }) {
-      return thinking ? { openrouter: { reasoning: { max_tokens: 4_096 } } } : undefined;
+    optionsFor({ reasoning }) {
+      if (reasoning === 'unsupported') return undefined;
+      return reasoning === 'enabled'
+        ? { openrouter: { reasoning: { max_tokens: 4_096 } } }
+        : { openrouter: { reasoning: { enabled: false } } };
     },
     embeddingOptions: () => undefined,
     cacheHint: () => ({ openrouter: { cacheControl: { type: 'ephemeral' } } }),
@@ -214,8 +230,11 @@ export function createVertexModelProvider(options: VertexModelProviderOptions): 
       const model = provider.embeddingModel(id);
       return id === 'gemini-embedding-001' ? singleInputVertexEmbeddingModel(model) : model;
     },
-    optionsFor({ thinking }) {
-      return thinking ? { vertex: { thinkingConfig: { thinkingBudget: 4_096 } } } : undefined;
+    optionsFor({ reasoning }) {
+      if (reasoning === 'unsupported') return undefined;
+      return reasoning === 'enabled'
+        ? { vertex: { thinkingConfig: { thinkingBudget: 4_096 } } }
+        : { vertex: { thinkingConfig: { thinkingBudget: 0 } } };
     },
     embeddingOptions: () => ({ vertex: { outputDimensionality: 1_536 } }),
     cacheHint: () => undefined,
