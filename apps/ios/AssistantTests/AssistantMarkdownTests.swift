@@ -640,6 +640,55 @@ final class AssistantMarkdownTests: XCTestCase {
         }
     }
 
+    /// A suggestion is offered on paper in the accent, never on the amber
+    /// approval surface; its prose stays above it; answered ones leave the
+    /// same receipt an approval does.
+    @MainActor
+    func testSuggestionCardSnapshots() throws {
+        let open = ChatMessage(id: "open", role: .assistant, parts: [
+            .init(type: "text", text: "One more thing from your \"Flights\" watch:"),
+            .init(type: "suggestion", suggestionId: "s1",
+                summary: "Fares to Lisbon dropped to €89 for the weekend of the 4th — want me to hold the cheapest one?"),
+        ])
+        let mixed = ChatMessage(id: "mixed", role: .assistant, parts: [
+            .init(type: "text", text: "Two dates coming up this week."),
+            .init(type: "suggestion", suggestionId: "s2", summary: "Book a table for Robin's birthday on Friday?",
+                status: "accepted", acceptedTaskId: "t1"),
+            .init(type: "suggestion", suggestionId: "s3", summary: "Renew the car insurance before it lapses on the 30th?"),
+        ])
+        let settled = ChatMessage(id: "settled", role: .assistant, parts: [
+            .init(type: "text", text: "The dentist has an opening next week."),
+            .init(type: "suggestion", suggestionId: "s4", summary: "Book the Tuesday 9am check-up?", status: "snoozed"),
+        ])
+        for (name, scheme, size, width) in [
+            ("light", ColorScheme.light, DynamicTypeSize.large, CGFloat(390)),
+            ("dark", .dark, .large, 390),
+            ("narrow", .light, .xxxLarge, 320),
+            ("accessible", .light, .accessibility3, 390)
+        ] {
+            let view = VStack(spacing: 16) {
+                ForEach([open, mixed, settled]) { message in
+                    MessageBubble(message: message, userPrompt: nil, isCurrentAnswer: false,
+                        isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil,
+                        decideSuggestion: { _, _ in nil }, openActivity: {})
+                }
+            }
+            .padding(16).frame(width: width).background(AssistantTheme.stage)
+            .environment(\.colorScheme, scheme)
+            .environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 3
+            renderer.proposedSize = ProposedViewSize(width: width, height: nil)
+            let image = try XCTUnwrap(renderer.uiImage)
+            XCTAssertEqual(image.size.width, width)
+            XCTAssertGreaterThan(image.size.height, 400)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "suggestion-card-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     func testSpreadsheetPasteKeepsFirstRowAndMissingValues() {
         let source = "Family birthdays\n\nAda\tApril 20, 1918\tMonkey\n\t\t\nBaby\t\tHorse"
         let blocks = AssistantMarkdown.blocks(in: source)

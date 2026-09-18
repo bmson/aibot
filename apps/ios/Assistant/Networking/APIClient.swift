@@ -846,6 +846,18 @@ struct APIClient: Sendable {
         return try await perform(request, as: ApprovalResult.self)
     }
 
+    /// Answer a proactive suggestion. A 400 or 409 comes back with the
+    /// server's own words, which the card shows where the owner tapped.
+    func decideSuggestion(id: String, decision: SuggestionDecision) async throws -> SuggestionResult {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/suggestions/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["decision": decision])
+        return try await perform(request, as: SuggestionResult.self)
+    }
+
     func approveAndRemember(id: String) async throws -> ApprovalResult {
         try await approvalAction(id: id, body: ApprovalActionBody(action: "remember", payload: nil))
     }
