@@ -3705,7 +3705,7 @@ struct SuggestionCard: View {
                         let receipt = receipt(for: part.suggestionStatus)
                         DecisionReceiptCard(title: receipt.title, summary: part.summary ?? receipt.detail,
                             detail: receipt.detail, code: nil, symbol: receipt.symbol, tint: receipt.tint)
-                        taskLink(part)
+                        taskLink(part, onPaper: false)
                     }
                 }
             }
@@ -3818,12 +3818,15 @@ struct SuggestionCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)
-            taskLink(part)
+            taskLink(part, onPaper: true)
         }
     }
 
+    /// Under a settled receipt the link sits on the chat's green, where accent
+    /// ink all but vanishes, so it brings its own paper, as every other thing
+    /// in the log does.
     @ViewBuilder
-    private func taskLink(_ part: MessagePart) -> some View {
+    private func taskLink(_ part: MessagePart, onPaper: Bool) -> some View {
         if part.suggestionStatus == .accepted, let taskId = part.acceptedTaskId, !taskId.isEmpty, let openActivity {
             Button(action: openActivity) {
                 HStack(spacing: 5) {
@@ -3834,6 +3837,12 @@ struct SuggestionCard: View {
                 }
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                .padding(.horizontal, onPaper ? 0 : 14)
+                .padding(.vertical, onPaper ? 0 : 8)
+                .background {
+                    if !onPaper { Capsule().fill(AssistantTheme.bubblePaper(for: colorScheme)) }
+                }
+                .padding(.top, onPaper ? 0 : 6)
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
