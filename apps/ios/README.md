@@ -76,18 +76,22 @@ where more than one voice is installed, a **Voice** — the default pace is a st
 above the system's read-aloud rate, which is a dictation pace rather than a
 conversational one. Changing either says a line back in the new voice.
 
-Talking back works the other way: hold the microphone button beside the send
+Talking back works the other way: tap the microphone button beside the send
 button and speak. Transcription is the Speech framework's on-device
 `SpeechAnalyzer` — the audio is never written to a file and never leaves the
 phone, and the language model is a system asset iOS downloads once and shares
-between apps, so the first sentence in a new language waits for it. A press and
-hold rather than a toggle, so the gesture itself bounds how long the phone is
-listening; the words land in the composer, added to whatever was already typed,
-and nothing is sent until you send it. A misheard word is ordinary, and this
-assistant acts on what it is told.
+between apps, so the first sentence in a new language waits for it. A tap leaves
+the microphone on and the button in its active white state, and a second tap
+puts it back to rest; holding the button instead listens only for as long as it
+is held, so the gesture itself can bound how long the phone is listening. Either
+way the button stays where it is — speaking never takes over the screen — and
+the words land in the composer, added to whatever was already typed, with
+nothing sent until you send it. A misheard word is ordinary, and this assistant
+acts on what it is told.
 
-Tap that same button instead of holding it and the conversation goes hands-free.
-Talk mode is a full screen with no transcript and no composer: the companion
+Hands-free is a separate, deliberate move rather than something a tap can fall
+into: talk mode is reached from the microphone's "Talk to the assistant"
+accessibility action. It is a full screen with no transcript and no composer: the companion
 face, a line of what was just said, and the loop — listen, notice the pause that
 means your turn is over, send, read the answer, listen again. The microphone
 stays open throughout, echo-cancelled, so the assistant can be interrupted
