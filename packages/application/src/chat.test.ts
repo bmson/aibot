@@ -222,6 +222,80 @@ describe('hydrateChatApprovals', () => {
     expect(hydrated[0]?.parts).toEqual(parts);
     expect(db.select).not.toHaveBeenCalled();
   });
+
+  /**
+   * Both the web card and the native one render straight from this shape, so
+   * it is pinned as it reaches the wire: an unset `acceptedTaskId` is absent,
+   * not null.
+   */
+  it('hydrates suggestion parts with their live status and accepted task', async () => {
+    const now = new Date('2026-09-18T12:00:00.000Z');
+    const later = new Date('2026-09-25T12:00:00.000Z');
+    const id = (n: number) => `5555555${n}-5555-4555-8555-555555555555`;
+    const where = vi.fn().mockResolvedValue([
+      {
+        id: id(1),
+        status: 'accepted',
+        expiresAt: later,
+        snoozedUntil: null,
+        acceptedTaskId: '66666666-6666-4666-8666-666666666666',
+      },
+      {
+        id: id(2),
+        status: 'snoozed',
+        expiresAt: later,
+        snoozedUntil: new Date('2026-09-19T12:00:00.000Z'),
+        acceptedTaskId: null,
+      },
+      // A snooze whose time has come re-opens the card.
+      {
+        id: id(3),
+        status: 'snoozed',
+        expiresAt: later,
+        snoozedUntil: new Date('2026-09-18T11:00:00.000Z'),
+        acceptedTaskId: null,
+      },
+      { id: id(4), status: 'pending', expiresAt: now, snoozedUntil: null, acceptedTaskId: null },
+    ]);
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where })) })),
+    } as unknown as Db;
+    const suggestion = (n: number) => ({
+      type: 'suggestion',
+      suggestionId: id(n),
+      summary: `Noticed ${n}`,
+      proposedAction: `Do ${n}`,
+    });
+
+    const hydrated = await hydrateChatApprovals(
+      db,
+      [
+        {
+          id: 'message-1',
+          role: 'assistant',
+          parts: [
+            { type: 'text', text: 'Morning.' },
+            ...[1, 2, 3, 4, 5].map(suggestion),
+          ] as unknown as UIMessage['parts'],
+        },
+      ] satisfies UIMessage[],
+      now,
+    );
+
+    expect(db.select).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(JSON.stringify(hydrated[0]?.parts))).toEqual([
+      { type: 'text', text: 'Morning.' },
+      {
+        ...suggestion(1),
+        status: 'accepted',
+        acceptedTaskId: '66666666-6666-4666-8666-666666666666',
+      },
+      { ...suggestion(2), status: 'snoozed' },
+      { ...suggestion(3), status: 'pending' },
+      { ...suggestion(4), status: 'expired' },
+      { ...suggestion(5), status: 'missing' },
+    ]);
+  });
 });
 
 describe('collapseRuntimeMessageDuplicates', () => {

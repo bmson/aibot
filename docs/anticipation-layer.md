@@ -283,6 +283,10 @@ change.
 > Snooze shipped as the card's "Later" button (default +24h; the core `snoozeSuggestion`
 > carries the expiry out with it, so "later" means later). There is still no standalone
 > dashboard page — suggestions live where they are raised.
+>
+> The iOS app answers the same card through `POST /api/mobile/v1/suggestions/{id}` with
+> `{"decision": "accepted" | "dismissed" | "snoozed"}` — the same use cases as the web buttons,
+> `snoozed` being "Later". It reads the card from the ordinary chat payload, hydrated like the web's.
 
 `suggest`-tier watchers and the briefing both need to say "I noticed X — want me to Y?" and have
 "Yes" *create* the work. Approvals don't fit (they attach to an already-queued tool call); needs
