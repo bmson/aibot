@@ -32,7 +32,11 @@ export interface ModelProvider {
   readonly kind: ModelProviderKind;
   /** Reject model IDs belonging to another provider before constructing a request. */
   assertModelId(modelId: string): void;
-  chat(modelId: string): LanguageModel;
+  /**
+   * `interactive` marks a call somebody is waiting on, so a provider that can
+   * choose between upstreams can prefer a fast one.
+   */
+  chat(modelId: string, options?: { interactive?: boolean }): LanguageModel;
   textEmbeddingModel(modelId: string): EmbeddingModel;
   optionsFor(input: { reasoning: ReasoningMode }): ProviderOptions | undefined;
   /** Provider options applied to the embedding request. */
@@ -137,9 +141,22 @@ export function createOpenRouterModelProvider(apiKey: string): ModelProvider {
   return {
     kind: 'openrouter',
     assertModelId: assertOpenRouterModelId,
-    chat(modelId) {
+    chat(modelId, options) {
       assertOpenRouterModelId(modelId);
-      return provider.chat(modelId, { provider: { require_parameters: true } });
+      return provider.chat(modelId, {
+        provider: {
+          // require_parameters: OpenRouter must only route to providers that
+          // support everything this request sends.
+          require_parameters: true,
+          // One model is served by several upstreams of very different speed,
+          // and the slow tail is real: successful calls have been observed at
+          // 97-118s in prod. Ordering by latency costs nothing when they are
+          // all healthy and avoids the tail when they are not. Only for calls
+          // someone is waiting on — background work would rather have the
+          // cheapest upstream than the quickest.
+          ...(options?.interactive ? { sort: 'latency' as const } : {}),
+        },
+      });
     },
     textEmbeddingModel(modelId) {
       assertOpenRouterModelId(modelId);

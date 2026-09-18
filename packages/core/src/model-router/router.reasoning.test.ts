@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { ModelProvider } from './provider.js';
 import { createOpenRouterModelProvider } from './provider.js';
-import { ModelRouter, modelCallTimeoutMs } from './router.js';
+import { isInteractiveRole, ModelRouter, modelCallTimeoutMs } from './router.js';
 
 const stubs = vi.hoisted(() => ({
   generateObject: vi.fn(),
@@ -166,50 +166,50 @@ describe('per-call deadlines', () => {
   });
 });
 
+const roleRow = {
+  role: 'draft',
+  primaryModel: 'vendor/model-test',
+  fallbackModel: 'vendor/fallback',
+  params: {},
+  updatedAt: new Date(),
+};
+const modelRow = {
+  id: 'vendor/model-test',
+  label: 'Test',
+  enabled: true,
+  capabilities: { thinking: false },
+  promptCostPerMTok: '1',
+  completionCostPerMTok: '1',
+  latencyClass: 'fast',
+  updatedAt: new Date(),
+};
+
+function repository() {
+  const role = vi.fn(async () => roleRow);
+  const model = vi.fn(async () => modelRow);
+  const totals = vi.fn(async () => ({
+    dailySpentUsd: 0,
+    monthlySpentUsd: 0,
+    heldUsd: 0,
+    dailyLimitUsd: 100,
+    monthlyLimitUsd: 100,
+    softPct: 0.8,
+  }));
+  const costs = { kind: 'cost-repository', totals } as unknown as CostRepository;
+  const repo = {
+    kind: 'model-routing-repository',
+    costs,
+    taskBudget: vi.fn(async () => null),
+    conversationOverride: vi.fn(async () => null),
+    role,
+    model,
+    recordCall: vi.fn(async () => 'call-1'),
+    recordAudit: vi.fn(async () => {}),
+  } as unknown as ModelRoutingRepository;
+  return { repo, role, model, totals };
+}
+
 describe('routing configuration cache', () => {
-  const roleRow = {
-    role: 'draft',
-    primaryModel: 'vendor/model-test',
-    fallbackModel: 'vendor/fallback',
-    params: {},
-    updatedAt: new Date(),
-  };
-  const modelRow = {
-    id: 'vendor/model-test',
-    label: 'Test',
-    enabled: true,
-    capabilities: { thinking: false },
-    promptCostPerMTok: '1',
-    completionCostPerMTok: '1',
-    latencyClass: 'fast',
-    updatedAt: new Date(),
-  };
-
-  function repository() {
-    const role = vi.fn(async () => roleRow);
-    const model = vi.fn(async () => modelRow);
-    const totals = vi.fn(async () => ({
-      dailySpentUsd: 0,
-      monthlySpentUsd: 0,
-      heldUsd: 0,
-      dailyLimitUsd: 100,
-      monthlyLimitUsd: 100,
-      softPct: 0.8,
-    }));
-    const costs = { kind: 'cost-repository', totals } as unknown as CostRepository;
-    const repo = {
-      kind: 'model-routing-repository',
-      costs,
-      taskBudget: vi.fn(async () => null),
-      conversationOverride: vi.fn(async () => null),
-      role,
-      model,
-      recordCall: vi.fn(async () => 'call-1'),
-      recordAudit: vi.fn(async () => {}),
-    } as unknown as ModelRoutingRepository;
-    return { repo, role, model, totals };
-  }
-
   it('reads near-static role and model rows once, not once per call', async () => {
     const { repo, role, model } = repository();
     const router = new ModelRouter(repo, 'unused', 'off', provider());
@@ -253,5 +253,29 @@ describe('routing configuration cache', () => {
 
     await router.route('draft', { taskId: 'task-1' });
     expect(conversationOverride).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('provider routing for calls a person is waiting on', () => {
+  it('asks for a fast upstream on the interactive roles only', () => {
+    expect(isInteractiveRole('draft')).toBe(true);
+    expect(isInteractiveRole('classify')).toBe(true);
+    // Queued work would rather have the cheapest upstream than the quickest.
+    expect(isInteractiveRole('reason')).toBe(false);
+    expect(isInteractiveRole('plan')).toBe(false);
+    expect(isInteractiveRole('batch')).toBe(false);
+    expect(isInteractiveRole('embed')).toBe(false);
+  });
+
+  it('passes that choice to the provider when routing', async () => {
+    const chat = vi.fn(() => ({}) as LanguageModel);
+    const { repo } = repository();
+    const router = new ModelRouter(repo, 'unused', 'off', provider({ chat }));
+
+    await router.route('draft');
+    expect(chat).toHaveBeenCalledWith('vendor/model-test', { interactive: true });
+
+    await router.route('batch');
+    expect(chat).toHaveBeenLastCalledWith('vendor/model-test', { interactive: false });
   });
 });

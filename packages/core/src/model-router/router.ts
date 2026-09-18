@@ -396,6 +396,16 @@ const INTERACTIVE_CALL_TIMEOUT_MS: Partial<Record<ModelRole, number>> = {
 };
 
 /**
+ * Roles that answer a person who is waiting, rather than a queue.
+ *
+ * Used for two things: the shorter deadlines above, and asking the provider to
+ * prefer a fast upstream when it has the choice.
+ */
+export function isInteractiveRole(role: ModelRole): boolean {
+  return INTERACTIVE_CALL_TIMEOUT_MS[role] !== undefined;
+}
+
+/**
  * Roles whose answers are worth hidden reasoning even with no tools in play.
  *
  * Reasoning tokens are generated *before* the visible answer, so on any call a
@@ -653,7 +663,7 @@ export class ModelRouter {
       // deepseek-chat is also served by providers with no structured-output
       // support, which hard-fail the request. Per-request semantics: plain
       // text calls still use the full provider pool.
-      model: this.provider.chat(modelId),
+      model: this.provider.chat(modelId, { interactive: isInteractiveRole(role) }),
       modelId,
       degraded,
       thinking: capabilities.thinking === true,
