@@ -182,6 +182,53 @@ function boundedModelHistory(
   return selected.reverse();
 }
 
+/**
+ * The owner's unfinished business, rendered for the prompt.
+ *
+ * Best-effort by contract: this is background colour for a reply, so a failure
+ * to read it degrades the answer but must never fail the turn. It is gathered
+ * alongside the turn's other context reads, which is the only reason it is a
+ * named function — an inline closure inside that gather could not be tested.
+ */
+export async function openLoopContext(
+  db: Db,
+  agentId: string,
+  query: string,
+): Promise<string | undefined> {
+  try {
+    return (
+      renderOpenCommitments(await listOpenCommitments(db, { agentId, query, limit: 6 })) ||
+      undefined
+    );
+  } catch (err) {
+    console.error('open-loop context failed — continuing without it', err);
+    return undefined;
+  }
+}
+
+/**
+ * This turn's task row, and the goal bookkeeping that has to precede it.
+ *
+ * Same goal link as the action-routed path: an owner reply in a goal's work
+ * chat answers whatever question had that goal blocked, so the waiting marker
+ * comes down before the task exists. Unlike the context reads around it this
+ * is not best-effort — a turn with no task row has nowhere to bill its model
+ * call — so failures propagate.
+ */
+export async function chatTurnTask(
+  db: Db,
+  input: { agentId: string; conversationId: string; title: string },
+) {
+  const goalId = await goalIdForConversation(db, input.conversationId);
+  if (goalId) await clearGoalBlockedOnOwnerReply(db, goalId);
+  return createChatTask(db, {
+    agentId: input.agentId,
+    conversationId: input.conversationId,
+    goalId,
+    title: input.title,
+  });
+}
+
 export async function handleChatTurn(
   req: Request,
   dependencies: { config: Config; db: Db; router: ModelRouter },
@@ -470,10 +517,8 @@ export async function handleChatTurn(
   // Long-running-chat auto-recall (Phase 1): reach back into the owner's own
   // earlier discussion that is relevant to this turn but has scrolled out of
   // the live window. Best-effort — a recall failure must never fail the chat.
-  let recallBlock: string | undefined;
-  let recallSources: RecallSource[] = [];
-  let openLoops: string | undefined;
-  if (config.CHAT_RECALL_ENABLED) {
+  const recallPromise = (async (): Promise<{ block?: string; sources: RecallSource[] }> => {
+    if (!config.CHAT_RECALL_ENABLED) return { sources: [] };
     try {
       const layered = await recallWithGraphFallback({
         graph: config.GRAPH_RAG_ENABLED
@@ -518,8 +563,6 @@ export async function handleChatTurn(
           );
         },
       });
-      recallBlock = layered.block || undefined;
-      recallSources = layered.sources;
       void recordRecallMetric(db, {
         agentId: agent.id,
         conversationId: conversation.id,
@@ -533,39 +576,42 @@ export async function handleChatTurn(
         historyUsed: layered.history.used ?? layered.history.sources.length,
         sourceCount: layered.sources.length,
       }).catch((err) => console.error('chat recall metric failed', err));
+      return { block: layered.block || undefined, sources: layered.sources };
     } catch (err) {
       console.error('chat recall failed — continuing without it', err);
+      return { sources: [] };
     }
-  }
+  })();
 
-  try {
-    openLoops =
-      renderOpenCommitments(
-        await listOpenCommitments(db, { agentId: agent.id, query: userText, limit: 6 }),
-      ) || undefined;
-  } catch (err) {
-    console.error('open-loop context failed — continuing without it', err);
-  }
-
-  // Same goal link as the action-routed path above: an owner reply in a goal's
-  // work chat answers its blocked question, so the waiting marker clears now.
-  const goalId = await goalIdForConversation(db, conversation.id);
-  if (goalId) await clearGoalBlockedOnOwnerReply(db, goalId);
-  const task = await createChatTask(db, {
+  const openLoopsPromise = openLoopContext(db, agent.id, userText);
+  const taskPromise = chatTurnTask(db, {
     agentId: agent.id,
     conversationId: conversation.id,
-    goalId,
     title: userText,
   });
 
-  // Honesty-check scope for guardDraft: everything earlier turns actually did,
-  // all marked prior-turn. This turn itself runs no tools.
-  const toolEvidence = await listConversationToolEvidence(db, conversation.id);
+  // Everything this turn needs before it can call the model, gathered at once.
+  // None of these consumes another's result — the goal lookup and the task it
+  // creates are the one real chain, and it stays a chain inside its own
+  // promise — so serialising them only ever cost the owner a round trip each.
+  //
+  // `toolEvidence` is the honesty-check scope for guardDraft: everything
+  // earlier turns actually did, all marked prior-turn, since this turn runs no
+  // tools itself. `ambientBlock` is the fused "right now" block (location +
+  // weather), available because owner chat is always owner-trust and
+  // untainted, so "where am I?" and "should I go for a run?" answer without a
+  // mid-task tool call.
+  const [recall, openLoops, task, toolEvidence, ambientBlock, ownerCard] = await Promise.all([
+    recallPromise,
+    openLoopsPromise,
+    taskPromise,
+    listConversationToolEvidence(db, conversation.id),
+    getAmbientBlock(db, agent.id),
+    getOwnerCard(db),
+  ]);
+  const recallBlock = recall.block;
+  const recallSources = recall.sources;
   const readRequest = detectPersonalReadRequest(modelHistory);
-  // Owner chat is always owner-trust and untainted here, so the fused
-  // "right now" block (location + weather) is available — "where am I?"
-  // and "should I go for a run?" answer without a mid-task tool call.
-  const ambientBlock = await getAmbientBlock(db, agent.id);
   // Corpus for the URL-provenance rule, mirroring finalize.ts: every tool
   // result, plus everything else the turn legitimately saw — the owner's own
   // words, the recalled context, the ambient block. Deliberately NOT the
@@ -602,9 +648,13 @@ export async function handleChatTurn(
       // owner chat is the critical carve-out: degrade on a hard cap, don't block
       critical: true,
       modelOverride: conversation.modelOverride ?? undefined,
+      // The conversation row is already in hand, so its override column is
+      // authoritative here; without this the router re-reads it through a
+      // tasks↔conversations join for a value this turn just passed in.
+      modelOverrideResolved: true,
       system: [
         buildSystemPrompt(agent, {
-          ownerCard: await getOwnerCard(db),
+          ownerCard,
           recall: recallBlock,
           openLoops,
           ambient: ambientBlock,

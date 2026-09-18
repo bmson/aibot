@@ -2021,22 +2021,30 @@ final class AppModel: ObservableObject {
         let attention = Set(["waiting_approval", "waiting_budget", "needs_attention"])
         var grace = 0
         var finalStatus: String?
-        for attempt in 0..<360 {
+        // A held poll waits on the server, so the loop is bounded by how long a
+        // turn may legitimately take rather than by a count of ticks.
+        let deadline = Date().addingTimeInterval(30 * 60)
+        var attempt = -1
+        // Kept at the top of the loop, where the old fixed interval was, so
+        // that every `continue` below still backs off rather than spinning.
+        var gapMilliseconds: Int64 = 0
+        while Date() < deadline {
+            attempt += 1
             if Task.isCancelled { return }
-            if attempt > 0 {
-                try? await Task.sleep(for: .milliseconds(PollingPolicy.replyIntervalMilliseconds(
-                    attempt: attempt,
-                    hasTaskID: taskId != nil
-                )))
+            if gapMilliseconds > 0 {
+                try? await Task.sleep(for: .milliseconds(gapMilliseconds))
             }
             if Task.isCancelled { return }
             do {
+                let startedAt = Date()
                 let updates = try await client.updates(
                     conversationId: conversationId,
                     taskId: taskId,
                     cursor: cursor,
-                    refreshIds: unresolvedDecisionMessageIDs
+                    refreshIds: unresolvedDecisionMessageIDs,
+                    waitMilliseconds: PollingPolicy.holdMilliseconds
                 )
+                let elapsedMilliseconds = Int64(Date().timeIntervalSince(startedAt) * 1_000)
                 let assistantBefore = messages.filter { !$0.id.hasPrefix("stream-") && $0.role == .assistant }.count
                 merge(updates.messages)
                 merge(updates.refreshed)
@@ -2050,6 +2058,14 @@ final class AppModel: ObservableObject {
                 }
                 if let nextCursor = updates.nextCursor { cursor = nextCursor }
                 let assistantAfter = messages.filter { !$0.id.hasPrefix("stream-") && $0.role == .assistant }.count
+                gapMilliseconds = PollingPolicy.gapMilliseconds(
+                    elapsedMilliseconds: elapsedMilliseconds,
+                    carriedNews: assistantAfter > assistantBefore
+                        || !updates.messages.isEmpty
+                        || !updates.superseded.isEmpty,
+                    attempt: attempt,
+                    hasTaskID: taskId != nil
+                )
 
                 if taskId == nil, assistantAfter > assistantBefore {
                     messages.removeAll { $0.id == streamID }
@@ -2065,6 +2081,12 @@ final class AppModel: ObservableObject {
                 // Same as above: a poll interrupted by cancelSend must not
                 // report itself as a failure.
                 if Task.isCancelled { return }
+                // A failed poll never held anything, so fall back to the timed
+                // cadence rather than retrying as fast as the network allows.
+                gapMilliseconds = PollingPolicy.replyIntervalMilliseconds(
+                    attempt: attempt,
+                    hasTaskID: taskId != nil
+                )
                 if isRequestCancellation(error) { continue }
                 if attempt > 3 {
                     reportError(error)
@@ -2160,22 +2182,29 @@ final class AppModel: ObservableObject {
         idleTask?.cancel()
         idleTask = Task { [weak self] in
             var unchangedPolls = 0
+            // The server holds this poll open, so the sleep below is only the
+            // gap between holds — against a server that does not hold, it stays
+            // the timed backoff it has always been.
+            var gapSeconds = PollingPolicy.idleIntervalSeconds(unchangedPolls: 0)
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(PollingPolicy.idleIntervalSeconds(
-                    unchangedPolls: unchangedPolls
-                )))
+                if gapSeconds > 0 {
+                    try? await Task.sleep(for: .seconds(gapSeconds))
+                }
                 guard !Task.isCancelled, let self, self.isSceneActive else { return }
                 guard !self.isSending,
                       let client = self.client,
                       let conversationId = self.conversationId else {
                     unchangedPolls += 1
+                    gapSeconds = PollingPolicy.idleIntervalSeconds(unchangedPolls: unchangedPolls)
                     continue
                 }
+                let startedAt = Date()
                 if let updates = try? await client.updates(
                     conversationId: conversationId,
                     taskId: nil,
                     cursor: self.cursor,
-                    refreshIds: self.unresolvedDecisionMessageIDs
+                    refreshIds: self.unresolvedDecisionMessageIDs,
+                    waitMilliseconds: PollingPolicy.holdMilliseconds
                 ) {
                     let changed = !updates.messages.isEmpty || !updates.refreshed.isEmpty ||
                         !(updates.superseded?.isEmpty ?? true)
@@ -2194,8 +2223,14 @@ final class AppModel: ObservableObject {
                         )
                     }
                     unchangedPolls = changed ? 0 : unchangedPolls + 1
+                    gapSeconds = PollingPolicy.idleGapSeconds(
+                        elapsedMilliseconds: Int64(Date().timeIntervalSince(startedAt) * 1_000),
+                        unchangedPolls: unchangedPolls
+                    )
                 } else {
                     unchangedPolls += 1
+                    // A failed poll held nothing; back off on the timed cadence.
+                    gapSeconds = PollingPolicy.idleIntervalSeconds(unchangedPolls: unchangedPolls)
                 }
             }
         }

@@ -69,6 +69,7 @@ import {
   updateNotificationPrefs,
   uploadDocument,
   uploadImport,
+  waitForChatUpdates,
 } from '@assistant/application';
 import { loadConfig, repoRoot } from '@assistant/config';
 import { createConfiguredModelProvider, ModelRouter } from '@assistant/core/model-router';
@@ -281,7 +282,11 @@ function createApplication() {
       cursor?: string;
       pageSize?: number;
       refreshIds?: string[];
-    }) => getChatUpdates(db, input),
+      /** Hold the poll open for up to this long rather than answering "nothing yet". */
+      waitMs?: number;
+      /** The request's own signal, so a client that hangs up ends the hold. */
+      signal?: AbortSignal;
+    }) => waitForChatUpdates(db, input),
     isValidChatCursor,
     handleChatTurn: (request: Request) =>
       handleChatTurn(request, { config: loadConfig(), db, router: getRouter() }),

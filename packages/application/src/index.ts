@@ -2,6 +2,7 @@ export * from './activity.js';
 export * from './approvals.js';
 export * from './cards.js';
 export * from './chat.js';
+export * from './chat-long-poll.js';
 export * from './chat-turn.js';
 export * from './commitments.js';
 export * from './costs.js';

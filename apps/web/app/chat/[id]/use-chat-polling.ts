@@ -166,14 +166,54 @@ function unresolvedDecisionIds(log: UIMessage[]): string[] {
   return ids;
 }
 
-/** Poll cadence while a task is running, versus the open thread sitting idle. */
+/**
+ * Fallback poll cadence, for a server that answers immediately instead of
+ * holding the request open. A current server holds (see POLL_HOLD_MS), and
+ * `nextPollDelayMs` keeps these out of the way when it does.
+ */
 const ACTIVE_POLL_MS = 2_500;
 const IDLE_POLL_MS = 12_000;
+
+/**
+ * How long the server may hold a poll open before answering "nothing yet".
+ *
+ * Under the service's own 25s ceiling so the server is what ends the hold.
+ * This is what removes the dead time between a reply being written and the
+ * next tick noticing: there is no next tick, the open request answers.
+ */
+const POLL_HOLD_MS = 20_000;
+
+/**
+ * A response faster than this did not involve a hold — either it carried news,
+ * or the server predates `wait` and answered straight away.
+ */
+const HELD_THRESHOLD_MS = 2_000;
+
 /**
  * A poll that has not answered in this long is not going to answer usefully —
- * the next tick asks again from the same cursor anyway.
+ * the next tick asks again from the same cursor anyway. It has to clear the
+ * hold itself, or every held poll would abort as a client timeout.
  */
-const POLL_TIMEOUT_MS = 15_000;
+const POLL_TIMEOUT_MS = POLL_HOLD_MS + 15_000;
+
+/**
+ * How long to wait before asking again, given what the last poll did.
+ *
+ * A held connection already did the waiting, so the next request goes out at
+ * once — that is what makes a reply appear when it is written rather than up
+ * to a full interval later. An instant answer falls back to the timed cadence,
+ * which is the only thing keeping an older server from turning this loop into
+ * a spin.
+ */
+export function nextPollDelayMs(input: {
+  elapsedMs: number;
+  carriedNews: boolean;
+  turnActive: boolean;
+}): number {
+  if (input.elapsedMs >= HELD_THRESHOLD_MS) return 0;
+  if (input.carriedNews) return 250;
+  return input.turnActive ? ACTIVE_POLL_MS : IDLE_POLL_MS;
+}
 /** How long to keep claiming live progress for one turn before saying so. */
 const TURN_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -290,18 +330,25 @@ export function useChatPolling({
         };
       }
       const turnState = turn ? turnRef.current : null;
+      // What this poll did, read by schedule() at the bottom to decide whether
+      // the server held (ask again now) or answered at once (back off).
+      let elapsedMs = 0;
+      let carriedNews = false;
       try {
         const query = new URLSearchParams({ conversationId });
         if (turn) query.set('taskId', turn.taskId);
         if (cursorRef.current) query.set('cursor', cursorRef.current);
         const refreshIds = unresolvedDecisionIds(logRef.current);
         if (refreshIds.length > 0) query.set('refresh', refreshIds.join(','));
-        // Bounded, because poll() awaits this before rescheduling: without a
-        // deadline one hung request stalls the whole loop for as long as the
-        // server is willing to hold it, and nothing throws to raise trouble.
+        query.set('wait', String(POLL_HOLD_MS));
+        // Still bounded, because poll() awaits this before rescheduling: the
+        // deadline now clears the hold we asked for, so it catches a genuinely
+        // hung request without cutting off a healthy one.
+        const startedAt = Date.now();
         const res = await fetch(`/api/chat/status?${query.toString()}`, {
           signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
         });
+        elapsedMs = Date.now() - startedAt;
         // A dead session never recovers by polling — say so and stop asking.
         if (res.status === 401 || res.status === 403) {
           pollFailures = 0;
@@ -325,6 +372,7 @@ export function useChatPolling({
           // re-read of a card already on screen is not this turn producing an
           // answer. `superseded` is likewise a removal, never new output.
           mergeMessages(data.messages, data.refreshed ?? [], data.superseded ?? []);
+          carriedNews = data.messages.length > 0 || (data.superseded ?? []).length > 0;
           // The cursor deliberately lags behind rows too fresh to be safely
           // remembered (see CURSOR_SETTLE_MS in the application service), so a
           // tick can legitimately end where it began. Only chase the next page
@@ -373,9 +421,9 @@ export function useChatPolling({
       // answer still lands on its own whenever the executor finishes.
       if (turnState && Date.now() - turnState.startedAt > TURN_TIMEOUT_MS) {
         settle('Still working. The result will appear here when it finishes.');
-        return schedule(null);
+        return schedule(null, { elapsedMs, carriedNews });
       }
-      schedule(asyncTurnRef.current);
+      schedule(asyncTurnRef.current, { elapsedMs, carriedNews });
     };
 
     // A visibility change or a newly handed-off task can wake the loop while
@@ -401,9 +449,12 @@ export function useChatPolling({
       }
     };
 
-    const schedule = (turn: { taskId: string } | null) => {
+    const schedule = (
+      turn: { taskId: string } | null,
+      last: { elapsedMs: number; carriedNews: boolean } = { elapsedMs: 0, carriedNews: false },
+    ) => {
       if (cancelled) return;
-      timer = window.setTimeout(tick, turn ? ACTIVE_POLL_MS : IDLE_POLL_MS);
+      timer = window.setTimeout(tick, nextPollDelayMs({ ...last, turnActive: Boolean(turn) }));
     };
 
     // Coming back to the tab should feel current immediately, not one idle

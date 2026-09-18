@@ -7,6 +7,13 @@ const PAGE_SIZE = 50;
 const MAX_REFRESH_IDS = 10;
 
 /**
+ * A held poll occupies this handler for as long as the caller asked for, so
+ * the platform's own ceiling has to clear the application's 25s cap with room
+ * to spare. Without this the hold could be cut off by a default far below it.
+ */
+export const maxDuration = 60;
+
+/**
  * Poll target for the open chat. `taskId` is optional: with one, the caller
  * also gets that task's status and live tool activity (an action turn waiting
  * on the executor); without one, this is the idle thread poll that picks up
@@ -36,6 +43,10 @@ export async function GET(req: Request) {
   if (refreshIds.some((id) => !UUID_RE.test(id))) {
     return Response.json({ error: 'invalid refresh id' }, { status: 400 });
   }
+  const waitMs = Number(url.searchParams.get('wait') ?? 0);
+  if (!Number.isFinite(waitMs) || waitMs < 0) {
+    return Response.json({ error: 'invalid wait' }, { status: 400 });
+  }
   const application = getApplication();
   if (cursorValue && !application.isValidChatCursor(cursorValue)) {
     return Response.json({ error: 'invalid cursor' }, { status: 400 });
@@ -46,6 +57,9 @@ export async function GET(req: Request) {
     ...(cursorValue ? { cursor: cursorValue } : {}),
     ...(refreshIds.length ? { refreshIds } : {}),
     pageSize: PAGE_SIZE,
+    waitMs,
+    // A client that navigates away or times out should stop costing us a hold.
+    signal: req.signal,
   });
   if (!status) {
     return Response.json({ error: 'not found' }, { status: 404 });

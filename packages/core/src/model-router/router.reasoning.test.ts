@@ -1,0 +1,281 @@
+import type { Db } from '@assistant/db';
+import type { CostRepository, ModelRoutingRepository } from '@assistant/persistence';
+import type { EmbeddingModel, LanguageModel } from 'ai';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+import type { ModelProvider } from './provider.js';
+import { createOpenRouterModelProvider } from './provider.js';
+import { isInteractiveRole, ModelRouter, modelCallTimeoutMs } from './router.js';
+
+const stubs = vi.hoisted(() => ({
+  generateObject: vi.fn(),
+  generateText: vi.fn(),
+  streamText: vi.fn(),
+  reconcileReservation: vi.fn(async () => {}),
+  releaseReservation: vi.fn(async () => {}),
+  reserveCost: vi.fn(async () => ({ ok: true as const, reservationId: 'reservation-1' })),
+}));
+
+vi.mock('@openrouter/ai-sdk-provider', () => ({
+  createOpenRouter: () => ({ chat: vi.fn(), textEmbeddingModel: vi.fn() }),
+}));
+
+vi.mock('ai', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('ai')>()),
+  generateObject: stubs.generateObject,
+  generateText: stubs.generateText,
+  streamText: stubs.streamText,
+}));
+
+vi.mock('../cost.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../cost.js')>()),
+  reconcileReservation: stubs.reconcileReservation,
+  releaseReservation: stubs.releaseReservation,
+  reserveCost: stubs.reserveCost,
+}));
+
+function provider(overrides: Partial<ModelProvider> = {}): ModelProvider {
+  return {
+    kind: 'openrouter',
+    assertModelId: vi.fn(),
+    chat: vi.fn(() => ({}) as LanguageModel),
+    textEmbeddingModel: vi.fn(() => ({}) as EmbeddingModel),
+    optionsFor: vi.fn(() => undefined),
+    embeddingOptions: vi.fn(() => undefined),
+    cacheHint: vi.fn(() => undefined),
+    normalizeUsage: vi.fn(() => ({})),
+    ...overrides,
+  };
+}
+
+const db = {
+  insert: () => ({ values: () => ({ returning: async () => [{ id: 'call-1' }] }) }),
+} as unknown as Db;
+
+/** A router whose routing decision is fixed, so only the call shape is under test. */
+function routerWith(modelProvider: ModelProvider, thinking = true) {
+  const router = new ModelRouter(db, 'unused', 'off', modelProvider);
+  vi.spyOn(router, 'route').mockResolvedValue({
+    ok: true,
+    model: {} as LanguageModel,
+    modelId: 'vendor/model-test',
+    degraded: false,
+    thinking,
+    decision: { mode: 'primary' },
+    params: {},
+    promptCostPerMTok: 1,
+    completionCostPerMTok: 1,
+  });
+  return router;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  stubs.reserveCost.mockResolvedValue({ ok: true, reservationId: 'reservation-1' });
+  stubs.generateText.mockResolvedValue({ text: 'answer', toolCalls: [], toolResults: [] });
+  stubs.generateObject.mockResolvedValue({ object: { needsAction: false } });
+});
+
+describe('reasoning is spent only where it earns its latency', () => {
+  it('turns reasoning off for a classifier, and does not reserve headroom it will not use', async () => {
+    const optionsFor = vi.fn(() => undefined);
+    const router = routerWith(provider({ optionsFor }));
+
+    await router.object('classify', {
+      schema: z.object({ needsAction: z.boolean() }),
+      prompt: 'x',
+    });
+
+    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'disabled' });
+    // classify's visible budget is 512; headroom would have made it 4608.
+    expect(stubs.generateObject.mock.calls[0]?.[0].maxOutputTokens).toBe(512);
+  });
+
+  it('turns reasoning off for the streamed owner reply', async () => {
+    const optionsFor = vi.fn(() => undefined);
+    const router = routerWith(provider({ optionsFor }));
+    stubs.streamText.mockReturnValue({ toUIMessageStream: vi.fn(), text: Promise.resolve('hi') });
+
+    await router.stream('draft', { prompt: 'hello' });
+
+    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'disabled' });
+    expect(stubs.streamText.mock.calls[0]?.[0].maxOutputTokens).toBe(2_048);
+  });
+
+  it('keeps reasoning for a tool-carrying step, whatever role it runs under', async () => {
+    const optionsFor = vi.fn(() => undefined);
+    const router = routerWith(provider({ optionsFor }));
+
+    // 'draft' is what roleForTask returns for reply-shaped tasks, and those
+    // still reach the executor with tools attached. Removing headroom here can
+    // exhaust the budget before the tool call is emitted.
+    await router.step('draft', { prompt: 'hello', tools: {} });
+
+    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'enabled' });
+    expect(stubs.generateText.mock.calls[0]?.[0].maxOutputTokens).toBe(2_048 + 4_096);
+  });
+
+  it('keeps reasoning for the deliberating roles even with no tools', async () => {
+    const optionsFor = vi.fn(() => undefined);
+    const router = routerWith(provider({ optionsFor }));
+
+    await router.generate('reason', { prompt: 'think' });
+
+    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'enabled' });
+  });
+
+  it('sends no reasoning parameter at all for a model that cannot reason', async () => {
+    const optionsFor = vi.fn(() => undefined);
+    const router = routerWith(provider({ optionsFor }), false);
+
+    await router.generate('reason', { prompt: 'think' });
+
+    // Not 'disabled': naming a parameter the upstream pool does not implement
+    // narrows OpenRouter's provider choice under require_parameters.
+    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'unsupported' });
+  });
+});
+
+describe('OpenRouter reasoning parameters', () => {
+  it('maps each mode to a distinct request, silence included', () => {
+    const openrouter = createOpenRouterModelProvider('unused');
+    expect(openrouter.optionsFor({ reasoning: 'enabled' })).toEqual({
+      openrouter: { reasoning: { max_tokens: 4_096 } },
+    });
+    expect(openrouter.optionsFor({ reasoning: 'disabled' })).toEqual({
+      openrouter: { reasoning: { enabled: false } },
+    });
+    expect(openrouter.optionsFor({ reasoning: 'unsupported' })).toBeUndefined();
+  });
+});
+
+describe('per-call deadlines', () => {
+  it('gives an interactive call a deadline a person would wait out', () => {
+    expect(modelCallTimeoutMs('classify', false)).toBe(30_000);
+    expect(modelCallTimeoutMs('draft', false)).toBe(60_000);
+  });
+
+  it('leaves the queued tool-calling path on the full budget it was tuned for', () => {
+    // The 150s figure came from goal-session step prompts: long, unattended,
+    // and observed succeeding at 97-118s upstream.
+    expect(modelCallTimeoutMs('draft', true)).toBe(150_000);
+    expect(modelCallTimeoutMs('classify', true)).toBe(150_000);
+    expect(modelCallTimeoutMs('reason', false)).toBe(150_000);
+    expect(modelCallTimeoutMs('plan', false)).toBe(150_000);
+    expect(modelCallTimeoutMs(undefined, false)).toBe(150_000);
+  });
+});
+
+const roleRow = {
+  role: 'draft',
+  primaryModel: 'vendor/model-test',
+  fallbackModel: 'vendor/fallback',
+  params: {},
+  updatedAt: new Date(),
+};
+const modelRow = {
+  id: 'vendor/model-test',
+  label: 'Test',
+  enabled: true,
+  capabilities: { thinking: false },
+  promptCostPerMTok: '1',
+  completionCostPerMTok: '1',
+  latencyClass: 'fast',
+  updatedAt: new Date(),
+};
+
+function repository() {
+  const role = vi.fn(async () => roleRow);
+  const model = vi.fn(async () => modelRow);
+  const totals = vi.fn(async () => ({
+    dailySpentUsd: 0,
+    monthlySpentUsd: 0,
+    heldUsd: 0,
+    dailyLimitUsd: 100,
+    monthlyLimitUsd: 100,
+    softPct: 0.8,
+  }));
+  const costs = { kind: 'cost-repository', totals } as unknown as CostRepository;
+  const repo = {
+    kind: 'model-routing-repository',
+    costs,
+    taskBudget: vi.fn(async () => null),
+    conversationOverride: vi.fn(async () => null),
+    role,
+    model,
+    recordCall: vi.fn(async () => 'call-1'),
+    recordAudit: vi.fn(async () => {}),
+  } as unknown as ModelRoutingRepository;
+  return { repo, role, model, totals };
+}
+
+describe('routing configuration cache', () => {
+  it('reads near-static role and model rows once, not once per call', async () => {
+    const { repo, role, model } = repository();
+    const router = new ModelRouter(repo, 'unused', 'off', provider());
+
+    await router.route('draft');
+    await router.route('draft');
+    await router.route('draft');
+
+    expect(role).toHaveBeenCalledTimes(1);
+    expect(model).toHaveBeenCalledTimes(1);
+  });
+
+  it('never caches spend, which the calls being routed are themselves changing', async () => {
+    const { repo, totals } = repository();
+    const router = new ModelRouter(repo, 'unused', 'off', provider());
+
+    await router.route('draft');
+    await router.route('draft');
+
+    expect(totals).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-reads after an explicit clear, so a process that rewrote the rows sees them', async () => {
+    const { repo, role } = repository();
+    const router = new ModelRouter(repo, 'unused', 'off', provider());
+
+    await router.route('draft');
+    router.clearRoutingCache();
+    await router.route('draft');
+
+    expect(role).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not re-read an override the caller already resolved', async () => {
+    const { repo } = repository();
+    const conversationOverride = repo.conversationOverride as ReturnType<typeof vi.fn>;
+    const router = new ModelRouter(repo, 'unused', 'off', provider());
+
+    await router.route('draft', { taskId: 'task-1', modelOverrideResolved: true });
+    expect(conversationOverride).not.toHaveBeenCalled();
+
+    await router.route('draft', { taskId: 'task-1' });
+    expect(conversationOverride).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('provider routing for calls a person is waiting on', () => {
+  it('asks for a fast upstream on the interactive roles only', () => {
+    expect(isInteractiveRole('draft')).toBe(true);
+    expect(isInteractiveRole('classify')).toBe(true);
+    // Queued work would rather have the cheapest upstream than the quickest.
+    expect(isInteractiveRole('reason')).toBe(false);
+    expect(isInteractiveRole('plan')).toBe(false);
+    expect(isInteractiveRole('batch')).toBe(false);
+    expect(isInteractiveRole('embed')).toBe(false);
+  });
+
+  it('passes that choice to the provider when routing', async () => {
+    const chat = vi.fn(() => ({}) as LanguageModel);
+    const { repo } = repository();
+    const router = new ModelRouter(repo, 'unused', 'off', provider({ chat }));
+
+    await router.route('draft');
+    expect(chat).toHaveBeenCalledWith('vendor/model-test', { interactive: true });
+
+    await router.route('batch');
+    expect(chat).toHaveBeenLastCalledWith('vendor/model-test', { interactive: false });
+  });
+});
