@@ -1,6 +1,6 @@
 import type { UIMessage } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { mergeChatLog } from './use-chat-polling';
+import { mergeChatLog, nextPollDelayMs } from './use-chat-polling';
 
 const NOT_STREAMING = { streaming: false, retracted: new Set<string>() };
 
@@ -97,5 +97,25 @@ describe('mergeChatLog', () => {
       retracted: new Set<string>(),
     });
     expect(merged.map((message) => message.id)).toEqual(['stream-1', 's1']);
+  });
+});
+
+describe('nextPollDelayMs', () => {
+  it('asks again immediately when the server held the connection', () => {
+    // The hold was the wait. Sleeping again here is exactly the dead time
+    // between a reply being written and the client noticing.
+    expect(nextPollDelayMs({ elapsedMs: 20_000, carriedNews: false, turnActive: true })).toBe(0);
+    expect(nextPollDelayMs({ elapsedMs: 20_000, carriedNews: false, turnActive: false })).toBe(0);
+  });
+
+  it('falls back to the timed cadence when the server answered at once', () => {
+    // A deployment that predates `wait` answers instantly and reports nothing.
+    // Without this the loop would spin as fast as the network allows.
+    expect(nextPollDelayMs({ elapsedMs: 30, carriedNews: false, turnActive: true })).toBe(2_500);
+    expect(nextPollDelayMs({ elapsedMs: 30, carriedNews: false, turnActive: false })).toBe(12_000);
+  });
+
+  it('comes back promptly after news, but never in a tight loop', () => {
+    expect(nextPollDelayMs({ elapsedMs: 30, carriedNews: true, turnActive: true })).toBe(250);
   });
 });

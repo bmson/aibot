@@ -814,11 +814,20 @@ struct APIClient: Sendable {
         _ = try await perform(request, as: OkPayload.self)
     }
 
+    /// Read whatever the conversation has produced since `cursor`.
+    ///
+    /// With `waitMilliseconds` the server is allowed to hold the connection
+    /// until there is something to report, so the answer arrives when it is
+    /// written rather than on the next tick of a client-side timer — and the
+    /// phone spends one radio wake-up on the wait instead of one per interval.
+    /// A server that does not understand `wait` simply answers immediately;
+    /// PollingPolicy.gapMilliseconds is what keeps that from becoming a spin.
     func updates(
         conversationId: String,
         taskId: String?,
         cursor: String?,
-        refreshIds: [String] = []
+        refreshIds: [String] = [],
+        waitMilliseconds: Int64 = 0
     ) async throws -> ChatUpdates {
         var components = URLComponents(
             url: configuration.baseURL.appending(path: "api/mobile/v1/chat/status"),
@@ -830,10 +839,18 @@ struct APIClient: Sendable {
             cursor.map { .init(name: "cursor", value: $0) },
             refreshIds.isEmpty
                 ? nil
-                : .init(name: "refresh", value: refreshIds.prefix(10).joined(separator: ","))
+                : .init(name: "refresh", value: refreshIds.prefix(10).joined(separator: ",")),
+            waitMilliseconds > 0 ? .init(name: "wait", value: String(waitMilliseconds)) : nil
         ].compactMap { $0 }
         guard let url = components?.url else { throw APIError.invalidServerURL }
-        return try await perform(makeRequest(url: url), as: ChatUpdates.self)
+        var request = makeRequest(url: url)
+        if waitMilliseconds > 0 {
+            // The session default (30s) leaves no room above a 20s hold once
+            // the network is slow. Clear the hold by a wide margin so a held
+            // poll ends at the server's choosing, never as a client timeout.
+            request.timeoutInterval = Double(waitMilliseconds) / 1_000 + 30
+        }
+        return try await perform(request, as: ChatUpdates.self)
     }
 
     func decideApproval(id: String, decision: String) async throws -> ApprovalResult {

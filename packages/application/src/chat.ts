@@ -38,7 +38,8 @@ import {
 } from 'drizzle-orm';
 
 const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
-const SETTLED_TASK_STATUSES = new Set([
+/** A task in one of these is not going to produce more output on its own. */
+export const SETTLED_TASK_STATUSES = new Set([
   ...TERMINAL_TASK_STATUSES,
   'needs_attention',
   'waiting_approval',

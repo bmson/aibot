@@ -398,6 +398,59 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(PollingPolicy.idleIntervalSeconds(unchangedPolls: 10), 90)
     }
 
+    func testHeldPollAsksAgainImmediatelyBecauseTheHoldWasTheWait() {
+        // 20s round trip: the server held the connection, so waiting again
+        // locally would only delay a reply that is already overdue.
+        XCTAssertEqual(
+            PollingPolicy.gapMilliseconds(
+                elapsedMilliseconds: 20_000,
+                carriedNews: false,
+                attempt: 30,
+                hasTaskID: true
+            ),
+            0
+        )
+        XCTAssertEqual(
+            PollingPolicy.idleGapSeconds(elapsedMilliseconds: 20_000, unchangedPolls: 10),
+            0
+        )
+    }
+
+    func testAnImmediateAnswerFallsBackToTheTimedCadence() {
+        // A server too old to understand `wait` answers at once and reports
+        // nothing. Without the fallback this loop would spin on the radio.
+        XCTAssertEqual(
+            PollingPolicy.gapMilliseconds(
+                elapsedMilliseconds: 40,
+                carriedNews: false,
+                attempt: 20,
+                hasTaskID: true
+            ),
+            5_000
+        )
+        XCTAssertEqual(
+            PollingPolicy.idleGapSeconds(elapsedMilliseconds: 40, unchangedPolls: 10),
+            90
+        )
+        // News that arrived at once is the other reason for a fast answer:
+        // ask again promptly, but never in a tight loop.
+        XCTAssertEqual(
+            PollingPolicy.gapMilliseconds(
+                elapsedMilliseconds: 40,
+                carriedNews: true,
+                attempt: 20,
+                hasTaskID: true
+            ),
+            250
+        )
+    }
+
+    func testHoldStaysUnderTheServerCeiling() {
+        // MAX_CHAT_WAIT_MS in the application service is 25s. Asking for less
+        // keeps the server the one that ends the hold.
+        XCTAssertLessThan(PollingPolicy.holdMilliseconds, 25_000)
+    }
+
     func testChatUpdatesDecodesSupersededRetractions() throws {
         let withRetractions = """
         {"taskStatus":null,"messages":[],"refreshed":[],
