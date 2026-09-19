@@ -20,6 +20,7 @@ import {
   retireProvisionalReplies,
   retireProvisionalUserTurns,
 } from './message-view';
+import { suggestionTaskIsActive } from './suggestion-state';
 
 /** The executor hand-off the open turn is waiting on. */
 export interface AsyncTurn {
@@ -146,13 +147,21 @@ function unresolvedDecisionIds(log: UIMessage[]): string[] {
   for (let index = log.length - 1; index >= 0 && ids.length < MAX_REFRESH_IDS; index -= 1) {
     const message = log[index] as UIMessage;
     const open = (
-      message.parts as Array<{ type?: string; status?: string; pendingCount?: number }>
+      message.parts as Array<{
+        type?: string;
+        status?: string;
+        pendingCount?: number;
+        acceptedTaskStatus?: string;
+      }>
     ).some((part) => {
       // The approval summary carries no status of its own — it is open while
       // anything it stands for is still pending, and an un-hydrated one is
       // assumed open so the very first re-read can settle it.
       if (part?.type === 'approval-summary') {
         return part.pendingCount === undefined || part.pendingCount > 0;
+      }
+      if (part?.type === 'suggestion' && part.status === 'accepted') {
+        return suggestionTaskIsActive(part.acceptedTaskStatus);
       }
       return (
         (part?.type === 'approval' ||

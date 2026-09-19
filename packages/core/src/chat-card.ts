@@ -162,6 +162,55 @@ function legacyNoticeKind(text: string): string | undefined {
 }
 
 /**
+ * The original pulse mail producer used the scorer's internal rationale as a
+ * summary and labelled every actionable message as requiring a reply. Match
+ * its exact envelope, not arbitrary email cards, to repair already-saved chat
+ * history on read. Storage and proposed actions remain unchanged.
+ */
+function readablePulseMailParts(parts: unknown[]): unknown[] {
+  const legacy = parts.flatMap((part) => {
+    const value = record(part);
+    const card = record(value?.data);
+    if (
+      value?.type !== 'data-card' ||
+      card?.kind !== 'proactive-alert' ||
+      card.category !== 'email' ||
+      typeof card.id !== 'string' ||
+      !card.id.startsWith('mail-action:') ||
+      card.urgencyLabel !== 'Needs a reply' ||
+      typeof card.title !== 'string'
+    )
+      return [];
+    const sender = Array.isArray(card.details)
+      ? card.details.map(record).find((detail) => detail?.label === 'From')?.value
+      : undefined;
+    return [{ part, card, sender }];
+  });
+  if (!legacy.length) return parts;
+  return parts.map((part) => {
+    const match = legacy.find((entry) => entry.part === part);
+    if (match) {
+      // This legacy producer's summary is either its scoring rationale or a
+      // duplicate "From …" line. Neither adds an owner-facing fact.
+      const { summary: _internalReason, ...card } = match.card;
+      return {
+        ...record(part),
+        data: { ...card, urgencyLabel: 'Needs attention', title: clip(String(card.title), 200) },
+      };
+    }
+    const value = record(part);
+    if (value?.type !== 'suggestion' || typeof value.summary !== 'string') return part;
+    const source = legacy.find(
+      ({ card, sender }) =>
+        typeof sender === 'string' && value.summary === `Deal with "${card.title}" from ${sender}?`,
+    );
+    return source
+      ? { ...value, summary: `Help with “${clip(String(source.card.title), 200)}”?` }
+      : part;
+  });
+}
+
+/**
  * Enrich a persisted message without rewriting it. It upgrades known legacy
  * runtime prose into a compact notice and fills the presentation envelope on
  * newer marker-only parts. Decision and data cards already speak for themselves.
@@ -171,7 +220,7 @@ export function compactChatMessageParts(
   input: unknown[],
   taskId?: string,
 ): unknown[] {
-  const parts = Array.isArray(input) ? input : [];
+  const parts = readablePulseMailParts(Array.isArray(input) ? input : []);
   if (
     parts.some((part) => {
       const type = record(part)?.type;

@@ -18,6 +18,7 @@ import type { EventSalience } from './calendar-salience.js';
 import {
   calendarChangeMoments,
   eventLeadMoments,
+  mailMoment,
   type PulseMoment,
   runPulse,
   selectPulseMoment,
@@ -144,6 +145,51 @@ describe('eventLeadMoments', () => {
   });
 });
 
+describe('mailMoment', () => {
+  const mail = {
+    channelMessageId: 'gmail:security-1',
+    fromEmail: 'no-reply@example.com',
+    fromName: 'Account security',
+    subject: 'We noticed a new login',
+    importance: 5,
+  };
+
+  it('does not claim actionable automated mail needs a reply', () => {
+    const moment = mailMoment(mail);
+    expect(moment.card).toMatchObject({
+      urgencyLabel: 'Needs attention',
+      title: mail.subject,
+      details: [{ label: 'From', value: mail.fromName }],
+    });
+    expect(moment.card.summary).toBeUndefined();
+    expect(moment.text).not.toContain('unanswered');
+    expect(moment.suggestion?.summary).toBe(
+      'Review “We noticed a new login” and suggest next steps?',
+    );
+    expect(moment.suggestion?.proposedAction).toContain('gmail:security-1');
+    expect(moment.suggestion?.proposedAction).toContain(
+      'Do not send messages, create reminders or calendar events',
+    );
+  });
+
+  it('keeps unbounded or multiline source fields out of card layout without losing the source identity', () => {
+    const subject = 'Long subject '.repeat(30);
+    const moment = mailMoment({ ...mail, fromName: 'Account\n security', subject });
+    expect(String(moment.card.title).length).toBeLessThanOrEqual(200);
+    expect(moment.card.title).toMatch(/…$/);
+    expect(moment.card.details).toEqual([{ label: 'From', value: 'Account security' }]);
+    expect(moment.suggestion?.summary).not.toContain('\n');
+    expect(moment.suggestion?.proposedAction).toContain(subject.trim());
+    const oversized = mailMoment({ ...mail, subject: 'long '.repeat(2_000) });
+    expect(oversized.suggestion?.proposedAction.length).toBeLessThan(2_000);
+    expect(oversized.suggestion?.proposedAction).toContain('Do not send messages');
+    expect(mailMoment({ ...mail, subject: '  ', fromName: ' ' }).card).toMatchObject({
+      title: '(no subject)',
+      details: [{ label: 'From', value: mail.fromEmail }],
+    });
+  });
+});
+
 describe('runPulse', () => {
   let db: Db;
   let dbUp = false;
@@ -236,7 +282,7 @@ describe('runPulse', () => {
           data: expect.objectContaining({
             kind: 'proactive-alert',
             category: 'email',
-            urgencyLabel: 'Needs a reply',
+            urgencyLabel: 'Needs attention',
           }),
         }),
       ]),

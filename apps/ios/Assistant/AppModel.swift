@@ -173,11 +173,11 @@ final class AppModel: ObservableObject {
     /// An in-flight poll may predate a successful POST. Terminal decisions
     /// cannot be undone by that older snapshot; reset on server/account change.
     private var acceptedApprovalDecisions: [String: String] = [:]
-    /// The same guard for suggestion cards, set the moment one is tapped. An
-    /// accept or dismiss is final and stays; a snooze is let go once the
-    /// server has said so itself, because a snooze is meant to lapse and ask
-    /// again.
+    /// The same guard for suggestion cards, set once an answer is confirmed. An
+    /// accept or dismiss is final and stays; a snooze is protected until its
+    /// deadline, so an older poll cannot make Later immediately reappear.
     private var suggestionAnswers: [String: SuggestionAnswer] = [:]
+    private var suggestionsBeingAnswered: Set<String> = []
     private var pollTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     /// The turn in flight, kept so returning to the foreground can pick the
@@ -1771,50 +1771,41 @@ final class AppModel: ObservableObject {
     /// approval path on purpose: nothing waits on a suggestion, so the inbox,
     /// the badge and the Island are never touched.
     ///
-    /// The card settles the moment it is tapped and re-opens if the server
-    /// does not take the answer. Returns what the card should say then —
+    /// The card shows progress until the server acknowledges the answer.
+    /// Returns what the card should say if the request fails —
     /// inline, where the owner tapped, rather than as a banner — and nil when
     /// there is nothing to say.
     func decideSuggestion(id: String, decision: SuggestionDecision) async -> String? {
         guard let client else { return "Connect to your assistant to answer this." }
-        let previous = messages.lazy.flatMap(\.parts)
-            .first { $0.type == "suggestion" && $0.suggestionId == id }
-        setSuggestionAnswer(.init(decision: decision), for: id)
+        guard suggestionsBeingAnswered.insert(id).inserted else { return "Your answer is still being saved." }
+        defer { suggestionsBeingAnswered.remove(id) }
         do {
             let result = try await client.decideSuggestion(id: id, decision: decision)
             guard result.ok else {
                 throw APIError.server(status: 409, message: "This suggestion could not be updated.")
             }
-            setSuggestionAnswer(.init(decision: decision, taskId: result.taskId), for: id)
+            let snoozedUntil = decision == .snoozed
+                ? result.snoozedUntil.flatMap {
+                    ISO8601DateFormatter.assistant.date(from: $0)
+                        ?? AssistantFormatters.internetDateTime.date(from: $0)
+                } ?? Date().addingTimeInterval(24 * 3600)
+                : nil
+            setSuggestionAnswer(.init(decision: decision, taskId: result.taskId, snoozedUntil: snoozedUntil), for: id)
             // Accepting creates work. Activity should already have it by the
             // time the owner goes looking.
             if decision == .accepted { await refreshOverview(reportFailure: false) }
             await refreshDecisionMessages(answeringSuggestion: id)
-            if decision == .snoozed { suggestionAnswers[id] = nil }
             return nil
         } catch {
-            suggestionAnswers[id] = nil
-            restoreSuggestion(id: id, to: previous)
-            return isRequestCancellation(error) ? nil : error.localizedDescription
+            return isRequestCancellation(error)
+                ? "Your answer could not be confirmed. Try again."
+                : error.localizedDescription
         }
     }
 
     private func setSuggestionAnswer(_ answer: SuggestionAnswer, for id: String) {
         suggestionAnswers[id] = answer
         messages = messages.map { $0.applyingSuggestionAnswers([id: answer]) }
-    }
-
-    /// Put a suggestion back the way the log last read it, for an answer that
-    /// did not land.
-    private func restoreSuggestion(id: String, to previous: MessagePart?) {
-        for messageIndex in messages.indices {
-            for partIndex in messages[messageIndex].parts.indices {
-                let part = messages[messageIndex].parts[partIndex]
-                guard part.type == "suggestion", part.suggestionId == id else { continue }
-                messages[messageIndex].parts[partIndex].status = previous?.status
-                messages[messageIndex].parts[partIndex].acceptedTaskId = previous?.acceptedTaskId
-            }
-        }
     }
 
     /// Every read of the log passes through here, so an answer given on this

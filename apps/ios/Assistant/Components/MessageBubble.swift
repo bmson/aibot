@@ -1033,7 +1033,12 @@ enum MessageResponseCard: Identifiable {
               let kind = data["kind"]?.string else { return nil }
         switch kind {
         case "calendar-event":
-            guard let title = data["title"]?.string, let time = data["time"]?.string else { return nil }
+            guard let title = data["title"]?.string else { return nil }
+            let rawStart = data["start"]?.string ?? ""
+            let allDay = data["allDay"] == .bool(true)
+            let start = allDay ? String(rawStart.prefix(10)) : rawStart
+            let time = allDay ? "All day" : CalendarEventPresentation.timeLabel(start: start,
+                end: data["end"]?.string, fallback: data["time"]?.string ?? "Time unavailable")
             let attendees = data["attendees"]?.arrayStrings ?? []
             let calendars = data["calendars"]?.arrayStrings ?? []
             let calendarLink = data["calendarLink"]?.objectValue
@@ -1041,7 +1046,7 @@ enum MessageResponseCard: Identifiable {
             let legacyURL = data["link"]?.objectValue?["url"]?.string
             self = .event(
                 id: data["id"]?.string ?? "calendar-\(title)-\(time)",
-                start: data["start"]?.string ?? "", time: time, title: title,
+                start: start, time: time, title: title,
                 location: data["location"]?.string ?? "", attendees: attendees, calendars: calendars,
                 calendarLinkURL: calendarLink?["url"]?.string
                     ?? (Self.isCalendarEventURL(legacyURL) ? legacyURL : nil),
@@ -1756,6 +1761,41 @@ enum WeatherPresentation {
     }
 }
 
+/// Persisted labels may have been formatted in the server's timezone. Native
+/// schedules use device-local instants, while date-only events keep their day.
+enum CalendarEventPresentation {
+    static func timestamp(_ value: String) -> Date? {
+        ISO8601DateFormatter.assistant.date(from: value)
+            ?? AssistantFormatters.internetDateTime.date(from: value)
+    }
+
+    static func timeLabel(start: String, end: String?, fallback: String,
+                          timeZone: TimeZone = .current, locale: Locale = .autoupdatingCurrent) -> String {
+        if start.count == 10, AssistantFormatters.calendarDay.date(from: start) != nil { return "All day" }
+        guard let date = timestamp(start) else { return fallback }
+        let style = Date.FormatStyle(locale: locale, timeZone: timeZone).hour().minute()
+        let first = date.formatted(style)
+        guard let end, let last = timestamp(end), last > date else { return first }
+        return "\(first)–\(last.formatted(style))"
+    }
+
+    static func dateCaption(_ start: String, timeZone: TimeZone = .current,
+                            locale: Locale = .autoupdatingCurrent) -> String? {
+        var zone = timeZone
+        let date: Date?
+        if start.count == 10 {
+            // Noon UTC makes a date-only value a calendar day, never an instant
+            // to shift into the previous day in the Americas.
+            date = timestamp("\(start)T12:00:00Z")
+            zone = TimeZone(secondsFromGMT: 0)!
+        } else {
+            date = timestamp(start)
+        }
+        return date?.formatted(Date.FormatStyle(locale: locale, timeZone: zone)
+            .weekday(.abbreviated).month(.abbreviated).day().year())
+    }
+}
+
 struct RichResponseCards: View {
     private struct EventRow: Identifiable {
         let id: String
@@ -2047,14 +2087,7 @@ struct RichResponseCards: View {
     }
 
     private func eventDateCaption(_ start: String) -> String? {
-        guard !start.isEmpty else { return nil }
-
-        if let date = AssistantFormatters.internetDateTime.date(from: start) {
-            return date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().year())
-        }
-
-        return AssistantFormatters.calendarDay.date(from: start)?
-            .formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().year())
+        CalendarEventPresentation.dateCaption(start)
     }
 
     private func eventAttendee(_ value: String) -> EventAttendee {
@@ -3674,6 +3707,35 @@ struct DecisionReceiptCard: View {
 /// another person. So it never borrows the amber approval surface, and it
 /// answers in one tap rather than arm-and-confirm: a card that looks and acts
 /// like an approval trains the owner to skim both.
+enum SuggestionTaskReceipt {
+    static func title(for status: String?) -> String {
+        switch status {
+        case "done", "completed": "Completed"
+        case "failed", "dead", "dead_letter": "Couldn’t complete"
+        case "cancelled": "Cancelled"
+        case "pending", "queued": "Queued"
+        case "sleeping", "waiting_event": "Waiting"
+        case "running": "Working on it"
+        case let value? where value.hasPrefix("waiting_") || value == "needs_attention": "Needs attention"
+        default: "Accepted"
+        }
+    }
+
+    static func detail(for status: String?) -> String {
+        switch status {
+        case "done", "completed": "The task finished. View its status in Activity."
+        case "failed", "dead", "dead_letter": "The task did not finish. View the details in Activity."
+        case "cancelled": "The task was cancelled. View the details in Activity."
+        case "pending", "queued": "The task is waiting to start."
+        case "sleeping", "waiting_event": "The task is waiting to continue."
+        case "running": "The assistant is working on this task."
+        case let value? where value.hasPrefix("waiting_") || value == "needs_attention":
+            "The task needs attention. View the next step in Activity."
+        default: "The assistant accepted this as a task. View its status in Activity."
+        }
+    }
+}
+
 struct SuggestionCard: View {
     let parts: [MessagePart]
     let decide: ((String, SuggestionDecision) async -> String?)?
@@ -3681,8 +3743,7 @@ struct SuggestionCard: View {
 
     /// Every button in the card stands down while one answer is in flight.
     @State private var answering = false
-    /// Why the last answer did not land. Kept here rather than on the part so
-    /// it survives the card settling optimistically and re-opening.
+    /// Why the last answer did not land, shown beside the controls.
     @State private var failure: String?
 
     @Environment(\.colorScheme) private var colorScheme
@@ -3698,9 +3759,9 @@ struct SuggestionCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(parts, id: \.suggestionId) { part in
                     VStack(alignment: .leading, spacing: 0) {
-                        let receipt = receipt(for: part.suggestionStatus)
+                        let receipt = receipt(for: part.suggestionStatus, taskStatus: part.acceptedTaskStatus)
                         DecisionReceiptCard(title: receipt.title, summary: part.summary ?? receipt.detail,
-                            detail: receipt.detail, code: nil, symbol: receipt.symbol, tint: receipt.tint)
+                            detail: receiptDetail(part, fallback: receipt.detail), code: nil, symbol: receipt.symbol, tint: receipt.tint)
                         taskLink(part, onPaper: false)
                     }
                 }
@@ -3723,6 +3784,15 @@ struct SuggestionCard: View {
                 } else {
                     settledRow(part)
                 }
+            }
+
+            if answering {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Saving your answer…").font(.caption)
+                }
+                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                .accessibilityElement(children: .combine)
             }
 
             if let failure {
@@ -3781,6 +3851,7 @@ struct SuggestionCard: View {
         }
         .buttonStyle(AssistantActionButtonStyle(kind: kind, compact: true, fillsWidth: fillsWidth))
         .disabled(answering || decide == nil || id.isEmpty)
+        .accessibilityIdentifier("assistant.suggestion.\(id).\(decision.rawValue)")
         .accessibilityHint(hint)
     }
 
@@ -3801,7 +3872,7 @@ struct SuggestionCard: View {
     /// An answered suggestion sharing a card with one still open: a line, not
     /// a second sheet of paper inside the first.
     private func settledRow(_ part: MessagePart) -> some View {
-        let receipt = receipt(for: part.suggestionStatus)
+        let receipt = receipt(for: part.suggestionStatus, taskStatus: part.acceptedTaskStatus)
         return VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
                 Label(receipt.title, systemImage: receipt.symbol)
@@ -3814,8 +3885,22 @@ struct SuggestionCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)
+            if part.suggestionStatus == .accepted, let update = part.acceptedTaskSummary, !update.isEmpty {
+                Text("Latest update: \(update)")
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
+            }
             taskLink(part, onPaper: true)
         }
+    }
+
+    private func receiptDetail(_ part: MessagePart, fallback: String) -> String {
+        guard part.suggestionStatus == .accepted, let update = part.acceptedTaskSummary, !update.isEmpty else {
+            return fallback
+        }
+        return "\(fallback)\n\nLatest update: \(update)"
     }
 
     /// Under a settled receipt the link sits on the chat's green, where accent
@@ -3843,22 +3928,22 @@ struct SuggestionCard: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityHint("Opens Activity, where the new task is running.")
+            .accessibilityHint("Opens Activity to show task status.")
         }
     }
 
     /// The settled line for each status. Only an accept is a success; the
     /// rest are quiet, never red — passing on an offer is not a failure.
-    private func receipt(for status: SuggestionStatus) -> (title: String, detail: String, symbol: String, tint: Color) {
+    private func receipt(for status: SuggestionStatus, taskStatus: String? = nil) -> (title: String, detail: String, symbol: String, tint: Color) {
         let quiet = AssistantTheme.inkMuted(for: colorScheme)
         return switch status {
         case .accepted:
-            ("Working on it", "The assistant took this on as a task.", "checkmark.circle.fill",
-             AssistantTheme.success(for: colorScheme))
+            (SuggestionTaskReceipt.title(for: taskStatus), SuggestionTaskReceipt.detail(for: taskStatus),
+             taskStatus == "done" || taskStatus == "completed" ? "checkmark.circle.fill" : "tray.full.fill", quiet)
         case .dismissed:
             ("Dismissed", "You passed on this suggestion.", "xmark.circle.fill", quiet)
         case .snoozed:
-            ("Snoozed", "This will come back later.", "clock.fill", quiet)
+            ("Snoozed", "I’ll bring this back when the snooze ends.", "clock.fill", quiet)
         case .expired:
             ("Expired", "This suggestion is no longer waiting for an answer.",
              "clock.badge.exclamationmark.fill", quiet)

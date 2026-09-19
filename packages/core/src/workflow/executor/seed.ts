@@ -28,6 +28,18 @@ export async function seedContext(
   task: TaskRow,
 ): Promise<ModelMessage[]> {
   const repository = executionContextRepository(db);
+  const trigger = task.trigger as { source?: string; payload?: { suggestionId?: unknown } } | null;
+  if (
+    task.type === 'adhoc' &&
+    task.trust === 'owner' &&
+    trigger?.source === 'internal' &&
+    typeof trigger.payload?.suggestionId === 'string'
+  ) {
+    const instruction = triggerInstruction(task);
+    // The chat is a delivery destination. Tapping a suggestion asks for its
+    // stored proposal, not a rerun of the last unrelated user message there.
+    if (instruction) return [{ role: 'user', content: instruction } as ModelMessage];
+  }
   if (task.conversationId) {
     // A deterministically-enqueued known-sender reply child (D9) carries its
     // exact instruction + draft on the trigger. Seed from that, never the shared

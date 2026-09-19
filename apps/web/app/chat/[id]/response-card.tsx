@@ -383,11 +383,23 @@ function calendarDayLabel(value: string, timeZone: string): string {
     weekday: 'long',
     month: 'short',
     day: 'numeric',
-    timeZone,
+    // Date-only all-day events are calendar dates, not UTC instants.
+    timeZone: /^\d{4}-\d{2}-\d{2}$/.test(value) ? 'UTC' : timeZone,
   }).format(date);
 }
 
-function CalendarDayCard({ data }: { data: Raw }) {
+function calendarEventTime(event: Raw, timeZone: string): string {
+  const start = str(event.start);
+  if (event.allDay === true || /^\d{4}-\d{2}-\d{2}$/.test(start)) return 'All day';
+  // Older cards saved the source clock (often UTC) alongside the timestamp.
+  // Recompute from an absolute instant in the same zone used for its day heading.
+  if (/(?:Z|[+-]\d{2}:\d{2})$/i.test(start) && Number.isFinite(Date.parse(start))) {
+    return timeRange(start, str(event.end), timeZone);
+  }
+  return str(event.time);
+}
+
+function CalendarDayCard({ data, timeZone }: { data: Raw; timeZone: string }) {
   const events = recs(data.events);
   return (
     <CardShell
@@ -403,7 +415,9 @@ function CalendarDayCard({ data }: { data: Raw }) {
               key={str(event.id) || index}
               className="grid min-w-0 grid-cols-[5.5rem_1fr] gap-3 border-t border-edge/55 pt-4 first:border-0 first:pt-0"
             >
-              <span className="font-mono text-xs font-semibold text-accent">{str(event.time)}</span>
+              <span className="font-mono text-xs font-semibold text-accent">
+                {calendarEventTime(event, timeZone)}
+              </span>
               <span className="min-w-0">
                 <span className="block text-sm font-semibold text-strong">{str(event.title)}</span>
                 {str(event.location) ? (
@@ -1079,7 +1093,7 @@ function ResponseCardView({
 }) {
   switch (data.kind) {
     case 'calendar-day':
-      return <CalendarDayCard data={data} />;
+      return <CalendarDayCard data={data} timeZone={timeZone} />;
     case 'calendar':
     case 'agenda':
       return <AgendaCard data={data} />;

@@ -41,5 +41,9 @@ export async function POST(
       { status: 409 },
     );
   }
-  return mobileJson({ ok: true, ...(result.taskId ? { taskId: result.taskId } : {}) });
+  return mobileJson({
+    ok: true,
+    ...(result.taskId ? { taskId: result.taskId } : {}),
+    ...(result.snoozedUntil ? { snoozedUntil: result.snoozedUntil } : {}),
+  });
 }

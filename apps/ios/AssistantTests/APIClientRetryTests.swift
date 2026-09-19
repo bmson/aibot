@@ -865,6 +865,49 @@ final class APIClientRetryTests: XCTestCase {
         XCTAssertTrue(StubURLProtocol.attempts.isEmpty)
     }
 
+    @MainActor
+    func testSuggestionAnswerCannotBeSubmittedTwiceWhileSaving() async {
+        StubURLProtocol.prime([.stream(body: Data())])
+        let model = AppModel(apiClient: makeClient(), initialMessages: [suggestionMessage()])
+        let first = Task { await model.decideSuggestion(id: "s1", decision: .dismissed) }
+        while StubURLProtocol.attempts.isEmpty { await Task.yield() }
+        XCTAssertEqual(model.messages.first?.suggestionParts.first?.suggestionStatus, .pending,
+            "A receipt must not claim success before the server confirms it")
+        let duplicate = await model.decideSuggestion(id: "s1", decision: .accepted)
+        XCTAssertEqual(duplicate, "Your answer is still being saved.")
+        XCTAssertEqual(StubURLProtocol.attempts, ["POST"])
+        first.cancel()
+        let failure = await first.value
+        XCTAssertEqual(failure, "Your answer could not be confirmed. Try again.")
+        XCTAssertEqual(model.messages.first?.suggestionParts.first?.suggestionStatus, .pending)
+    }
+
+    @MainActor
+    func testSnoozeSurvivesStaleReadsAfterTheDecisionRefresh() async throws {
+        let model = AppModel(apiClient: makeClient())
+        let conversation = ConversationView(
+            conversation: .init(id: "suggestion-chat", title: "Suggestions", modelOverride: nil,
+                archivedAt: nil, isPrimary: true),
+            agentName: "Assistant", agentTimezone: "UTC", messages: [suggestionMessage()],
+            models: [], goalTitle: nil, canArchive: false, cursor: nil, asyncTurn: nil)
+        let conversationBody = try JSONEncoder().encode(conversation)
+        StubURLProtocol.prime([.success(status: 200, body: conversationBody)])
+        _ = await model.openConversation(id: "suggestion-chat")
+        let stale = ChatUpdates(taskStatus: nil, messages: [], refreshed: [suggestionMessage(status: "pending")],
+            superseded: nil, nextCursor: nil, hasMore: false, activity: [])
+        let until = ISO8601DateFormatter.assistant.string(from: Date().addingTimeInterval(3600))
+        let result = SuggestionResult(ok: true, taskId: nil, snoozedUntil: until)
+        StubURLProtocol.prime([
+            .success(status: 200, body: try JSONEncoder().encode(result)),
+            .success(status: 200, body: try JSONEncoder().encode(stale)),
+            .success(status: 200, body: conversationBody)
+        ])
+        let failure = await model.decideSuggestion(id: "s1", decision: .snoozed)
+        XCTAssertNil(failure)
+        _ = await model.openConversation(id: "suggestion-chat")
+        XCTAssertEqual(model.messages.first?.suggestionParts.first?.suggestionStatus, .snoozed)
+    }
+
     func testCancellationIsControlFlowIncludingFoundationWrappers() {
         let cancellations: [Error] = [
             CancellationError(), URLError(.cancelled), APIError.transport(URLError(.cancelled)),

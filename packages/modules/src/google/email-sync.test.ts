@@ -313,8 +313,26 @@ describe('forwarded-ingest owner alerts', () => {
     });
     expect(text).toContain('Important email from alice@example.com');
     expect(text).toContain('Q3 invoice');
-    expect(text).toContain('Payment due Friday.');
+    expect(text).not.toContain('Payment due Friday.');
     expect(text).toContain('payment due (2026-08-28)');
+  });
+
+  it('does not expose internal scoring rationale or source newlines', () => {
+    const text = importantEmailNotice('Account\nsecurity', '  Login\nnotice  ', {
+      category: 'security',
+      importance: 5,
+      reason: 'The owner should verify; deserves attention but is not urgent.',
+      dates: [],
+    });
+    expect(text).toBe('Important email from Account security\n“Login notice”');
+    expect(
+      importantEmailNotice(' ', ' ', {
+        category: 'other',
+        importance: 4,
+        reason: 'internal',
+        dates: [],
+      }),
+    ).toBe('Important email from Unknown sender\n“(no subject)”');
   });
 
   it('pings the owner at or above the notify threshold, stays quiet below it', async (ctx) => {

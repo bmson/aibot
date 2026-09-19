@@ -39,6 +39,21 @@ describe('seedContext', () => {
     noticeIds.mockResolvedValue(new Set<string>());
   });
 
+  it('uses the accepted proposal as the instruction even when its delivery chat has other history', async () => {
+    seedHistory.mockResolvedValue([{ role: 'user', text: 'Find photos from my last trip.' }]);
+    const instruction = 'Read the billing alert and tell me whether anything needs attention.';
+    const suggestionTask = task({ type: 'adhoc', goalId: null });
+    suggestionTask.trust = 'owner';
+    suggestionTask.trigger = {
+      source: 'internal',
+      payload: { suggestionId: 'suggestion-1', instruction, taintedOrigin: true },
+    };
+    expect(await seedContext(repository, suggestionTask)).toEqual([
+      { role: 'user', content: instruction },
+    ]);
+    expect(seedHistory).not.toHaveBeenCalled();
+  });
+
   it('gives an owner follow-up historical card facts, but never exposes those rows to an external sender', async () => {
     seedHistory.mockResolvedValue([
       {

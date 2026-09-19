@@ -11,7 +11,7 @@ import {
   startDocumentIngest,
   TaskRateLimitError,
 } from '@assistant/core';
-import { truncateAtBoundary } from '@assistant/core/owner-text';
+import { collapseWhitespace, truncateAtBoundary } from '@assistant/core/owner-text';
 import {
   channelBindings,
   contacts,
@@ -565,10 +565,15 @@ export function importantEmailNotice(
     dates: { iso: string; what: string }[];
   },
 ): string {
-  const lines = [`Important email from ${from}`, `“${subject || '(no subject)'}”`, score.reason];
+  // Scoring rationale is an operator diagnostic, not a summary for the reader.
+  const sender = truncateAtBoundary(from, 120) || 'Unknown sender';
+  const title = truncateAtBoundary(subject, 200) || '(no subject)';
+  const lines = [`Important email from ${sender}`, `“${title}”`];
   const dates = score.dates.slice(0, 3);
   if (dates.length > 0) {
-    lines.push(`Dates: ${dates.map((d) => `${d.what} (${d.iso})`).join('; ')}`);
+    lines.push(
+      `Dates: ${dates.map((d) => `${truncateAtBoundary(d.what, 80)} (${collapseWhitespace(d.iso)})`).join('; ')}`,
+    );
   }
   return lines.join('\n');
 }

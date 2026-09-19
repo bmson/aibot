@@ -37,9 +37,11 @@ export async function decideSuggestionInline(
  */
 export async function snoozeSuggestionInline(
   suggestionId: string,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; snoozedUntil?: string; error?: string }> {
   await requireOwner();
   const result = await snoozeSuggestionUntil(getDb(), suggestionId);
   revalidatePath('/chat', 'layout');
-  return result.ok ? { ok: true } : { ok: false, error: result.reason };
+  return result.ok
+    ? { ok: true, snoozedUntil: result.snoozedUntil }
+    : { ok: false, error: result.reason };
 }

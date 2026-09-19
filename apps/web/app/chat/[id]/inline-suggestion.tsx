@@ -2,18 +2,19 @@
 
 import { Lightbulb, LoaderCircle } from 'lucide-react';
 import Link from 'next/link';
-import { useState, useTransition } from 'react';
+import { useRef, useState, useTransition } from 'react';
 import { decideSuggestionInline, snoozeSuggestionInline } from '@/app/suggestions/actions';
 import { btnSm } from '@/lib/ui';
 import { DecisionActions, DecisionCard, DecisionReceipt, DecisionReceipts } from './decision-card';
 
-export type SuggestionStatus =
-  | 'pending'
-  | 'accepted'
-  | 'dismissed'
-  | 'snoozed'
-  | 'expired'
-  | 'missing';
+import {
+  acceptedSuggestionLabel,
+  type SuggestionResolution,
+  type SuggestionStatus,
+  suggestionStatus,
+} from './suggestion-state';
+
+export type { SuggestionStatus } from './suggestion-state';
 
 export interface InlineSuggestionPart {
   type: 'suggestion';
@@ -22,6 +23,9 @@ export interface InlineSuggestionPart {
   proposedAction: string;
   status?: SuggestionStatus;
   acceptedTaskId?: string;
+  acceptedTaskStatus?: string;
+  acceptedTaskSummary?: string;
+  snoozedUntil?: string;
 }
 
 /**
@@ -36,23 +40,28 @@ export interface InlineSuggestionPart {
  * approval trains the owner to skim both.
  */
 export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
-  const [resolved, setResolved] = useState<Record<string, SuggestionStatus>>({});
+  const [resolved, setResolved] = useState<Record<string, SuggestionResolution>>({});
   const [taskIds, setTaskIds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<string | null>(null);
   const [busy, startTransition] = useTransition();
+  const inFlight = useRef(false);
+  const [activeDecision, setActiveDecision] = useState<SuggestionStatus | null>(null);
 
   const statusOf = (part: InlineSuggestionPart): SuggestionStatus =>
-    resolved[part.suggestionId] ?? part.status ?? 'pending';
+    suggestionStatus(part.status, resolved[part.suggestionId]);
 
   const decide = (suggestionId: string, decision: 'accepted' | 'dismissed') => {
-    if (busy) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setError(null);
     setActive(suggestionId);
+    setActiveDecision(decision);
     startTransition(async () => {
       try {
         const result = await decideSuggestionInline(suggestionId, decision);
         if (result.ok) {
-          setResolved((prev) => ({ ...prev, [suggestionId]: decision }));
+          setResolved((prev) => ({ ...prev, [suggestionId]: { status: decision } }));
           if (result.taskId) {
             setTaskIds((prev) => ({ ...prev, [suggestionId]: result.taskId as string }));
           }
@@ -63,19 +72,30 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
       } catch {
         setError('This suggestion could not be updated. Try again.');
       } finally {
+        inFlight.current = false;
         setActive(null);
+        setActiveDecision(null);
       }
     });
   };
 
   const snooze = (suggestionId: string) => {
-    if (busy) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setError(null);
     setActive(suggestionId);
+    setActiveDecision('snoozed');
     startTransition(async () => {
       try {
         const result = await snoozeSuggestionInline(suggestionId);
         if (result.ok) {
-          setResolved((prev) => ({ ...prev, [suggestionId]: 'snoozed' }));
+          setResolved((prev) => ({
+            ...prev,
+            [suggestionId]: {
+              status: 'snoozed',
+              snoozedUntil: result.snoozedUntil ?? new Date(Date.now() + 86_400_000).toISOString(),
+            },
+          }));
           setError(null);
         } else {
           setError(result.error ?? 'This suggestion could not be updated.');
@@ -83,7 +103,9 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
       } catch {
         setError('This suggestion could not be updated. Try again.');
       } finally {
+        inFlight.current = false;
         setActive(null);
+        setActiveDecision(null);
       }
     });
   };
@@ -100,32 +122,39 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
     const status = statusOf(part);
     const taskId = taskIds[part.suggestionId] ?? part.acceptedTaskId;
     return (
-      <div key={part.suggestionId} className="flex min-w-0 items-center gap-1.5">
-        <DecisionReceipt
-          outcome={
-            status === 'accepted' ? 'accepted' : status === 'dismissed' ? 'dismissed' : 'lapsed'
-          }
-          summary={part.summary}
-          verdict={
-            status === 'accepted'
-              ? 'Working on it'
-              : status === 'dismissed'
-                ? 'Dismissed'
-                : status === 'snoozed'
-                  ? 'Snoozed'
-                  : status === 'expired'
-                    ? 'Expired'
-                    : 'No longer available'
-          }
-          live={resolved[part.suggestionId] !== undefined}
-        />
-        {status === 'accepted' && taskId ? (
-          <Link
-            href={`/tasks/${taskId}`}
-            className="shrink-0 text-xs text-muted underline underline-offset-2"
-          >
-            View
-          </Link>
+      <div key={part.suggestionId} className="flex min-w-0 flex-col gap-1.5">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <DecisionReceipt
+            outcome={
+              status === 'accepted' ? 'accepted' : status === 'dismissed' ? 'dismissed' : 'lapsed'
+            }
+            summary={part.summary}
+            verdict={
+              status === 'accepted'
+                ? acceptedSuggestionLabel(part.acceptedTaskStatus)
+                : status === 'dismissed'
+                  ? 'Dismissed'
+                  : status === 'snoozed'
+                    ? 'Snoozed'
+                    : status === 'expired'
+                      ? 'Expired'
+                      : 'No longer available'
+            }
+            live={resolved[part.suggestionId] !== undefined}
+          />
+          {status === 'accepted' && taskId ? (
+            <Link
+              href={`/tasks/${taskId}`}
+              className="shrink-0 text-xs text-muted underline underline-offset-2"
+            >
+              View
+            </Link>
+          ) : null}
+        </div>
+        {status === 'accepted' && part.acceptedTaskSummary ? (
+          <p className="break-words text-sm leading-relaxed text-muted [overflow-wrap:anywhere]">
+            {part.acceptedTaskSummary}
+          </p>
         ) : null}
       </div>
     );
@@ -155,13 +184,13 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
                   disabled={busy}
                   onClick={() => decide(part.suggestionId, 'accepted')}
                 >
-                  {working ? (
+                  {working && activeDecision === 'accepted' ? (
                     <LoaderCircle
                       className="size-3.5 motion-safe:animate-spin"
                       aria-hidden="true"
                     />
                   ) : null}
-                  Yes, do it
+                  {working && activeDecision === 'accepted' ? 'Starting…' : 'Yes, do it'}
                 </button>
                 <button
                   type="button"
@@ -169,7 +198,7 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
                   disabled={busy}
                   onClick={() => snooze(part.suggestionId)}
                 >
-                  Later
+                  {working && activeDecision === 'snoozed' ? 'Saving…' : 'Later'}
                 </button>
                 <button
                   type="button"
@@ -177,7 +206,7 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
                   disabled={busy}
                   onClick={() => decide(part.suggestionId, 'dismissed')}
                 >
-                  No thanks
+                  {working && activeDecision === 'dismissed' ? 'Dismissing…' : 'No thanks'}
                 </button>
               </DecisionActions>
             </li>

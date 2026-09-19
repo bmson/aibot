@@ -6,6 +6,7 @@ import {
   goals,
   messages,
   suggestions,
+  tasks,
   watches,
   watchFires,
 } from '@assistant/db';
@@ -17,6 +18,7 @@ import {
   briefingBody,
   briefingHasNews,
   briefingHeadline,
+  briefingTaskSummary,
   findConflicts,
   runBriefing,
 } from './briefing.js';
@@ -199,10 +201,94 @@ describe('runBriefing', () => {
     // Inert: nothing is queued until the owner says yes.
     expect(row?.acceptedTaskId).toBeNull();
     expect(row?.proposedAction).toContain('no attendees');
+    const eventStart = /It starts at ([^ ]+)/
+      .exec(row?.proposedAction ?? '')?.[1]
+      ?.replace(/\.$/, '');
+    expect(eventStart).toBeDefined();
+    expect(row?.expiresAt.getTime()).toBe(Date.parse(eventStart as string));
     // A second run must not re-ask: the source ref is stable per date.
     const { router } = recordingRouter();
     const again = await runBriefing({ db, router });
     expect(again.suggested).toBe(0);
+  });
+
+  it('expires reminder proposals at the reminder time and skips past reminder times', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const now = new Date();
+    const due = new Date(now.getTime() + 3 * 86_400_000);
+    await addMail({
+      id: 'future-payment',
+      importance: 4,
+      category: 'financial',
+      subject: `${MARKER} Payment due`,
+      dates: [{ iso: due.toISOString(), what: `${MARKER} future payment` }],
+    });
+    await addMail({
+      id: 'near-payment',
+      importance: 4,
+      category: 'financial',
+      subject: `${MARKER} Payment tomorrow`,
+      dates: [
+        { iso: new Date(now.getTime() + 86_400_000).toISOString(), what: `${MARKER} near payment` },
+      ],
+    });
+    await runBriefing({ db, router: recordingRouter().router }, { now });
+    const proposed = await db
+      .select()
+      .from(suggestions)
+      .where(like(suggestions.summary, `%${MARKER}%payment%`));
+    expect(proposed).toHaveLength(1);
+    expect(proposed[0]?.expiresAt.getTime()).toBe(due.getTime() - 2 * 86_400_000);
+  });
+
+  it('omits old and archived stopped work and summarizes recent provider failures', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const now = new Date();
+    const rows = await db
+      .insert(tasks)
+      .values([
+        {
+          agentId,
+          type: 'adhoc',
+          status: 'needs_attention',
+          title: `${MARKER} old failure`,
+          updatedAt: new Date(now.getTime() - 3 * 86_400_000),
+        },
+        {
+          agentId,
+          type: 'adhoc',
+          status: 'needs_attention',
+          title: `${MARKER} hidden failure`,
+          updatedAt: now,
+          archivedAt: now,
+        },
+        {
+          agentId,
+          type: 'adhoc',
+          status: 'needs_attention',
+          title: `${MARKER} recent failure`,
+          updatedAt: now,
+          progress: 'Attempt 8: AI_APICallError: provider/model unavailable',
+        },
+      ])
+      .returning({ id: tasks.id });
+    try {
+      const { router, prompts } = recordingRouter();
+      await runBriefing({ db, router }, { now });
+      expect(prompts[0]).toContain(
+        `${MARKER} recent failure: Paused because a service request failed.`,
+      );
+      expect(prompts[0]).not.toContain(`${MARKER} old failure`);
+      expect(prompts[0]).not.toContain(`${MARKER} hidden failure`);
+      expect(prompts[0]).not.toContain('AI_APICallError');
+    } finally {
+      await db.delete(tasks).where(
+        inArray(
+          tasks.id,
+          rows.map((row) => row.id),
+        ),
+      );
+    }
   });
 
   it('does not propose anything for a date that is only marketing', async (ctx) => {
@@ -605,5 +691,15 @@ describe('briefing substance', () => {
   );
   it('preserves a substantive digest', () => {
     expect(briefingBody('Practice starts at 5 PM.', ['notes'])).toBe('Practice starts at 5 PM.');
+  });
+});
+
+describe('briefing task summaries', () => {
+  it('keeps provider failures out of readable digest prose', () => {
+    expect(
+      briefingTaskSummary('Attempt 8: AI_APICallError: provider/model not found, raw request body'),
+    ).toBe('Paused because a service request failed. Open the task for details.');
+    expect(briefingTaskSummary('Which city should I use?')).toBe('Which city should I use?');
+    expect(briefingTaskSummary('')).toBe('Open the task to review what is needed.');
   });
 });

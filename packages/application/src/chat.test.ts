@@ -239,6 +239,9 @@ describe('hydrateChatApprovals', () => {
         expiresAt: later,
         snoozedUntil: null,
         acceptedTaskId: '66666666-6666-4666-8666-666666666666',
+        acceptedTaskStatus: 'done',
+        acceptedTaskProgress: 'The alert needs no reply.',
+        acceptedTaskConversationId: null,
       },
       {
         id: id(2),
@@ -258,7 +261,7 @@ describe('hydrateChatApprovals', () => {
       { id: id(4), status: 'pending', expiresAt: now, snoozedUntil: null, acceptedTaskId: null },
     ]);
     const db = {
-      select: vi.fn(() => ({ from: vi.fn(() => ({ where })) })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ leftJoin: vi.fn(() => ({ where })) })) })),
     } as unknown as Db;
     const suggestion = (n: number) => ({
       type: 'suggestion',
@@ -289,9 +292,11 @@ describe('hydrateChatApprovals', () => {
         ...suggestion(1),
         status: 'accepted',
         acceptedTaskId: '66666666-6666-4666-8666-666666666666',
+        acceptedTaskStatus: 'done',
+        acceptedTaskSummary: 'The alert needs no reply.',
       },
-      { ...suggestion(2), status: 'snoozed' },
-      { ...suggestion(3), status: 'pending' },
+      { ...suggestion(2), status: 'snoozed', snoozedUntil: '2026-09-19T12:00:00.000Z' },
+      { ...suggestion(3), status: 'pending', snoozedUntil: '2026-09-18T11:00:00.000Z' },
       { ...suggestion(4), status: 'expired' },
       { ...suggestion(5), status: 'missing' },
     ]);
