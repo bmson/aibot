@@ -260,6 +260,14 @@ struct APIClient: Sendable {
         try await get("api/mobile/v1/cards")
     }
 
+    func refreshCard(id: String) async throws -> CardRefreshResult {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/cards/\(id)"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["action": "refresh"])
+        return try await perform(request, as: CardRefreshResult.self)
+    }
+
     func situationPacks() async throws -> SituationOverview {
         try await get("api/mobile/v1/packs")
     }

@@ -181,3 +181,46 @@ it('preserves legitimate email summaries and unmatched suggestion copy', () => {
   const parts = [{ type: 'suggestion', summary: 'Deal with "something" from someone?' }];
   expect(compactChatMessageParts('', parts)).toBe(parts);
 });
+
+it('pairs only an unambiguous same-message alert and suggestion without dropping legacy data', () => {
+  const card = {
+    kind: 'proactive-alert',
+    id: 'mail-action:1',
+    category: 'email',
+    title: 'School report',
+    details: [{ label: 'From', value: 'school@example.com' }],
+  };
+  const decision = {
+    type: 'suggestion',
+    suggestionId: 's1',
+    summary: 'Review this?',
+    proposedAction: 'Read the email identified by this source data: {}',
+  };
+  const parts = [{ type: 'data-card', data: card }, decision];
+  const result = compactChatMessageParts('', parts);
+  expect(result[0]).toBe(parts[0]);
+  expect(result[1]).toMatchObject({
+    contextCard: card,
+    actionLabel: 'Review email',
+    proposedAction: decision.proposedAction,
+  });
+  expect(decision).not.toHaveProperty('contextCard');
+  expect(compactChatMessageParts('', result)).toBe(result);
+  const ambiguous = compactChatMessageParts('', [...parts, { ...decision, suggestionId: 's2' }]);
+  expect(ambiguous[1]).not.toHaveProperty('contextCard');
+  expect(ambiguous[2]).not.toHaveProperty('contextCard');
+});
+
+it('uses specific labels only for known action templates, not source text containing action words', () => {
+  const action = (proposedAction: string) =>
+    compactChatMessageParts('', [{ type: 'suggestion', suggestionId: 's', proposedAction }])[0];
+  expect(
+    action("Create a calendar event on the owner's own calendar with no attendees for: Game"),
+  ).toMatchObject({ actionLabel: 'Add to calendar' });
+  expect(action('Set a reminder two days before 2026-10-01 about: Picture day')).toMatchObject({
+    actionLabel: 'Set reminder',
+  });
+  expect(action('Read this message: Create a calendar event')).toMatchObject({
+    actionLabel: 'Start task',
+  });
+});

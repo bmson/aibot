@@ -19,6 +19,7 @@
 import type { UIMessage } from 'ai';
 import Link from 'next/link';
 import { memo } from 'react';
+import { refreshSavedCardInline } from '@/app/cards/actions';
 import { chipsOf } from '@/lib/chat-cues';
 import {
   approvalSummaryOf,
@@ -57,6 +58,7 @@ import {
   rendersAllCards,
   responseCardPayloads,
 } from './response-card';
+import { standaloneResponseCards } from './suggestion-context';
 
 interface ChatMessageRowProps {
   message: UIMessage;
@@ -103,7 +105,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
     (part): part is InlineBudgetRequestPart => part.type === 'budget-request',
   );
   const suggestionParts = parts.filter(
-    (part): part is InlineSuggestionPart => part.type === 'suggestion',
+    (part): part is InlineSuggestionPart =>
+      part.type === 'suggestion' &&
+      typeof part.suggestionId === 'string' &&
+      !!part.suggestionId.trim() &&
+      typeof part.summary === 'string' &&
+      typeof part.proposedAction === 'string',
   );
   // A streamed draft the response contract replaced renders as the
   // replacement — the text the server actually persisted — so reloading
@@ -164,12 +171,14 @@ const ChatMessageRow = memo(function ChatMessageRow({
   // this surface can't render keeps the prose fallback instead
   // (parity with the iOS bubble). So does a card read out of the
   // reply itself, which summarizes an answer rather than being one.
-  const cards = message.role === 'assistant' ? responseCardPayloads(parts) : [];
+  const allCards = message.role === 'assistant' ? responseCardPayloads(parts) : [];
+  const cards = standaloneResponseCards(allCards, suggestionParts);
   const renderCards = cards.length > 0 && rendersAllCards(cards) && noticeKind === null;
+  const richAnswer = allCards.length > 0 && rendersAllCards(allCards) && noticeKind === null;
   const hasText =
     renderedTextParts.length > 0 &&
     noticeKind === null &&
-    !(renderCards && cardsReplaceProse(cards));
+    !(richAnswer && cardsReplaceProse(allCards));
 
   // A "run" is a streak of turns from the same speaker. Handing
   // over gets a clear break; a follow-on from the same speaker
@@ -302,9 +311,14 @@ const ChatMessageRow = memo(function ChatMessageRow({
       {budgetParts.map((part) => (
         <InlineBudgetRequest key={part.taskId} part={part} />
       ))}
-      <SuggestionCard parts={suggestionParts} />
+      <SuggestionCard parts={suggestionParts} timeZone={agentTimezone} />
       {renderCards ? (
-        <ResponseCards cards={cards} timeZone={agentTimezone} onSend={onSend} />
+        <ResponseCards
+          cards={cards}
+          timeZone={agentTimezone}
+          onSend={onSend}
+          onRefresh={refreshSavedCardInline}
+        />
       ) : null}
       {offCourse ? (
         <OffCourseCard

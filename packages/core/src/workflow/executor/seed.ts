@@ -28,12 +28,16 @@ export async function seedContext(
   task: TaskRow,
 ): Promise<ModelMessage[]> {
   const repository = executionContextRepository(db);
-  const trigger = task.trigger as { source?: string; payload?: { suggestionId?: unknown } } | null;
+  const trigger = task.trigger as {
+    source?: string;
+    payload?: { suggestionId?: unknown; refreshCardId?: unknown };
+  } | null;
   if (
     task.type === 'adhoc' &&
     task.trust === 'owner' &&
     trigger?.source === 'internal' &&
-    typeof trigger.payload?.suggestionId === 'string'
+    (typeof trigger.payload?.suggestionId === 'string' ||
+      typeof trigger.payload?.refreshCardId === 'string')
   ) {
     const instruction = triggerInstruction(task);
     // The chat is a delivery destination. Tapping a suggestion asks for its

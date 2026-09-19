@@ -14,6 +14,7 @@
  */
 import type { UIMessage } from 'ai';
 import { type Dispatch, type RefObject, type SetStateAction, useEffect } from 'react';
+import { CARD_REFRESH_EVENT } from './card-refresh-events';
 import {
   type RecallSource,
   recallSourcesOf,
@@ -140,8 +141,27 @@ export function mergeChatLog(
  * Approve/Decline here until a reload — the log saying something that is no
  * longer true.
  */
-function unresolvedDecisionIds(log: UIMessage[]): string[] {
-  const ids: string[] = [];
+export function unresolvedDecisionIds(
+  log: UIMessage[],
+  priorityCardIds: ReadonlySet<string> = new Set(),
+): string[] {
+  const ids: string[] = log
+    .filter((message) =>
+      (
+        message.parts as Array<{
+          type?: string;
+          data?: { id?: string; kind?: string; refreshState?: string };
+        }>
+      ).some(
+        (part) =>
+          part.type === 'data-card' &&
+          !!part.data?.id &&
+          (priorityCardIds.has(part.data.id) ||
+            (part.data.kind === 'generated-card' && part.data.refreshState === 'refreshing')),
+      ),
+    )
+    .map((message) => message.id)
+    .slice(-MAX_REFRESH_IDS);
   // Newest first: a thread can hold more open cards than one poll may carry,
   // and the ones the reader is looking at are the recent ones.
   for (let index = log.length - 1; index >= 0 && ids.length < MAX_REFRESH_IDS; index -= 1) {
@@ -152,6 +172,7 @@ function unresolvedDecisionIds(log: UIMessage[]): string[] {
         status?: string;
         pendingCount?: number;
         acceptedTaskStatus?: string;
+        data?: { kind?: string; refreshState?: string; spec?: { refreshable?: boolean } };
       }>
     ).some((part) => {
       // The approval summary carries no status of its own — it is open while
@@ -163,6 +184,9 @@ function unresolvedDecisionIds(log: UIMessage[]): string[] {
       if (part?.type === 'suggestion' && part.status === 'accepted') {
         return suggestionTaskIsActive(part.acceptedTaskStatus);
       }
+      if (part?.type === 'data-card' && part.data?.kind === 'generated-card') {
+        return part.data.refreshState === 'refreshing' || part.data.spec?.refreshable === true;
+      }
       return (
         (part?.type === 'approval' ||
           part?.type === 'budget-request' ||
@@ -170,7 +194,7 @@ function unresolvedDecisionIds(log: UIMessage[]): string[] {
         (part.status === undefined || part.status === 'pending' || part.status === 'snoozed')
       );
     });
-    if (open) ids.push(message.id);
+    if (open && !ids.includes(message.id)) ids.push(message.id);
   }
   return ids;
 }
@@ -276,6 +300,7 @@ export function useChatPolling({
     let cancelled = false;
     let timer = 0;
     let pollFailures = 0;
+    const requestedCards = new Map<string, { taskId?: string; expires: number }>();
     // Kept locally too, so React is only poked when the state actually flips.
     let trouble: PollTrouble = null;
     const setTrouble = (next: PollTrouble) => {
@@ -347,7 +372,26 @@ export function useChatPolling({
         const query = new URLSearchParams({ conversationId });
         if (turn) query.set('taskId', turn.taskId);
         if (cursorRef.current) query.set('cursor', cursorRef.current);
-        const refreshIds = unresolvedDecisionIds(logRef.current);
+        for (const [id, request] of requestedCards) {
+          const settled = logRef.current.some((message) =>
+            (
+              message.parts as Array<{
+                type?: string;
+                data?: { id?: string; refreshTaskId?: string; refreshState?: string };
+              }>
+            ).some(
+              (part) =>
+                part.type === 'data-card' &&
+                part.data?.id === id &&
+                !!request.taskId &&
+                part.data.refreshTaskId === request.taskId &&
+                ['idle', 'failed'].includes(part.data.refreshState ?? ''),
+            ),
+          );
+          if (settled || (!request.taskId && request.expires < Date.now()))
+            requestedCards.delete(id);
+        }
+        const refreshIds = unresolvedDecisionIds(logRef.current, new Set(requestedCards.keys()));
         if (refreshIds.length > 0) query.set('refresh', refreshIds.join(','));
         query.set('wait', String(POLL_HOLD_MS));
         // Still bounded, because poll() awaits this before rescheduling: the
@@ -474,12 +518,24 @@ export function useChatPolling({
       void tick();
     };
     document.addEventListener('visibilitychange', onVisible);
+    const onCardRefresh = (event: Event) => {
+      const detail = (event as CustomEvent<{ cardId?: unknown; taskId?: unknown }>).detail;
+      const id = detail?.cardId;
+      if (typeof id !== 'string') return;
+      requestedCards.set(id, {
+        taskId: typeof detail.taskId === 'string' ? detail.taskId : undefined,
+        expires: Date.now() + TURN_TIMEOUT_MS,
+      });
+      onVisible();
+    };
+    window.addEventListener(CARD_REFRESH_EVENT, onCardRefresh);
     pokePollRef.current = onVisible;
     void tick();
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener(CARD_REFRESH_EVENT, onCardRefresh);
       pokePollRef.current = null;
     };
   }, [conversationId, setMessages]);

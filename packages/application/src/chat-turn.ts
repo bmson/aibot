@@ -40,6 +40,7 @@ import {
 } from 'ai';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { requestSavedCardRefresh, savedCardRefreshId } from './cards.js';
 import { budgetReplyTarget, isApprovalReply } from './chat-budget-reply.js';
 import { pumpWithCues, type StreamChunk } from './chat-cue-stream.js';
 import { guardDraft } from './chat-guard.js';
@@ -368,6 +369,16 @@ export async function handleChatTurn(
   });
   if (!persistedUser) throw new Error('failed to persist chat message');
   const messageCursor = encodeMessageCursor(persistedUser);
+  const refreshCardId = savedCardRefreshId(userText);
+  if (refreshCardId) {
+    const result = await requestSavedCardRefresh(db, agent.id, refreshCardId, conversation.id);
+    if (!result.ok) return Response.json({ error: result.error }, { status: result.status });
+    return acceptedStreamResponse(result.taskId, {
+      'x-conversation-id': conversation.id,
+      'x-async-task': result.taskId,
+      'x-message-cursor': messageCursor,
+    });
+  }
   const historyRows = await listMessages(db, conversation.id, {
     limit: MODEL_HISTORY_LIMIT,
   });

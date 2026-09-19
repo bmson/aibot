@@ -178,6 +178,8 @@ final class AppModel: ObservableObject {
     /// deadline, so an older poll cannot make Later immediately reappear.
     private var suggestionAnswers: [String: SuggestionAnswer] = [:]
     private var suggestionsBeingAnswered: Set<String> = []
+    private var cardsBeingRefreshed: Set<String> = []
+    private var cardRefreshMarkers: [String: CardRefreshMarker] = [:]
     private var pollTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
     /// The turn in flight, kept so returning to the foreground can pick the
@@ -523,6 +525,7 @@ final class AppModel: ObservableObject {
             client = APIClient(configuration: configuration)
             acceptedApprovalDecisions.removeAll()
             suggestionAnswers.removeAll()
+            cardRefreshMarkers.removeAll()
             await connect()
             if bootstrap != nil {
                 showingConnection = false
@@ -971,12 +974,54 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func refreshCards() async {
-        guard let client else { return }
+    @discardableResult
+    func refreshCards(reportFailure: Bool = true) async -> Bool {
+        guard let client else { return false }
         do {
-            savedCards = try await client.cards().cards
+            savedCards = try await client.cards().cards.map { card in
+                var result = card
+                if let marker = cardRefreshMarkers[card.id],
+                   marker.holds(revisionId: card.revisionId, updatedAt: card.updatedAt, state: card.refreshState,
+                                refreshTaskId: card.refreshTaskId) {
+                    result.refreshState = "refreshing"
+                    result.refreshError = nil
+                }
+                return result
+            }
+            return true
         } catch {
-            reportError(error)
+            if reportFailure { reportError(error) }
+            return false
+        }
+    }
+
+    func refreshSavedCard(id: String) async -> String? {
+        guard let client else { return "Connect to your assistant to refresh this card." }
+        guard cardsBeingRefreshed.insert(id).inserted else { return "This card is already refreshing." }
+        defer { cardsBeingRefreshed.remove(id) }
+        let data = messages.lazy.flatMap(\.parts).compactMap { part -> [String: JSONValue]? in
+            guard part.type == "data-card", case let .object(data)? = part.data,
+                  data["kind"] == .string("generated-card"), data["id"] == .string(id) else { return nil }
+            return data
+        }.first
+        let saved = savedCards.first { $0.id == id }
+        var marker = CardRefreshMarker(revisionId: data?["revisionId"]?.string ?? saved?.revisionId,
+            updatedAt: data?["updatedAt"]?.string ?? saved?.updatedAt)
+        do {
+            let result = try await client.refreshCard(id: id)
+            guard result.ok else { return "The refresh could not be started. Try again." }
+            marker.taskId = result.taskId
+            cardRefreshMarkers[id] = marker
+            messages = messages.map { $0.applyingCardRefreshes([id: marker]) }
+            if let index = savedCards.firstIndex(where: { $0.id == id }) {
+                savedCards[index].refreshState = "refreshing"
+                savedCards[index].refreshError = nil
+            }
+            await refreshDecisionMessages(refreshingCard: id)
+            if !savedCards.isEmpty { await refreshCards(reportFailure: false) }
+            return nil
+        } catch {
+            return isRequestCancellation(error) ? "The refresh could not be confirmed. Try again." : error.localizedDescription
         }
     }
 
@@ -1814,6 +1859,7 @@ final class AppModel: ObservableObject {
         message
             .applyingApprovalDecisions(acceptedApprovalDecisions)
             .applyingSuggestionAnswers(suggestionAnswers)
+            .applyingCardRefreshes(cardRefreshMarkers)
     }
 
     /// Legacy summaries may have only a task ID. Ask the server to hydrate
@@ -1821,15 +1867,21 @@ final class AppModel: ObservableObject {
     /// not replace the whole transcript or advance a concurrent poll's cursor.
     /// A suggestion just answered joins them by id: a day of briefings holds
     /// plenty of settled ones that must not crowd approvals out of the ten.
-    private func refreshDecisionMessages(answeringSuggestion suggestionId: String? = nil) async {
+    private func refreshDecisionMessages(answeringSuggestion suggestionId: String? = nil, refreshingCard cardId: String? = nil) async {
         guard let client, let conversationId else { return }
-        let ids = messages.reversed().filter { message in
-            !message.decisionParts.isEmpty || message.approvalSummary != nil
-                || (suggestionId != nil && message.suggestionParts.contains { $0.suggestionId == suggestionId })
-        }.prefix(10).map(\.id)
+        let targets = messages.reversed().filter { message in
+            (suggestionId != nil && message.suggestionParts.contains { $0.suggestionId == suggestionId })
+                || (cardId != nil && message.parts.contains { part in
+                    guard case let .object(data)? = part.data else { return false }
+                    return data["kind"] == .string("generated-card") && data["id"]?.string == cardId
+                })
+        }
+        let decisions = messages.reversed().filter { !$0.decisionParts.isEmpty || $0.approvalSummary != nil }
+        var seen = Set<String>()
+        let ids = (targets + decisions).map(\.id).filter { seen.insert($0).inserted }.prefix(10)
         guard !ids.isEmpty else { return }
         guard let updates = try? await client.updates(conversationId: conversationId, taskId: nil,
-            cursor: cursor, refreshIds: ids), self.conversationId == conversationId else { return }
+            cursor: cursor, refreshIds: Array(ids)), self.conversationId == conversationId else { return }
         merge(updates.refreshed)
     }
 
@@ -2236,8 +2288,9 @@ final class AppModel: ObservableObject {
     /// web, or a snooze lapsing back into a question — without ever counting
     /// as a pending decision.
     private var unresolvedDecisionMessageIDs: [String] {
-        messages.reversed()
-            .filter { $0.hasPendingDecision || $0.hasUnsettledSuggestion }
+        let refreshing = messages.reversed().filter(\.hasRefreshingCard)
+        let decisions = messages.reversed().filter { !$0.hasRefreshingCard && ($0.hasPendingDecision || $0.hasUnsettledSuggestion) }
+        return (refreshing + decisions)
             .prefix(10)
             .map(\.id)
     }

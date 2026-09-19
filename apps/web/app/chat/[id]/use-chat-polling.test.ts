@@ -1,8 +1,50 @@
 import type { UIMessage } from 'ai';
 import { describe, expect, it } from 'vitest';
-import { mergeChatLog, nextPollDelayMs } from './use-chat-polling';
+import { mergeChatLog, nextPollDelayMs, unresolvedDecisionIds } from './use-chat-polling';
 
 const NOT_STREAMING = { streaming: false, retracted: new Set<string>() };
+
+it('refreshes saved cards in place and prioritizes an explicitly refreshed old card beyond the cap', () => {
+  const log = Array.from(
+    { length: 14 },
+    (_, index) =>
+      ({
+        id: `message-${index}`,
+        role: 'assistant',
+        parts: [
+          {
+            type: 'data-card',
+            data: {
+              kind: 'generated-card',
+              id: `card-${index}`,
+              spec: { refreshable: true },
+              refreshState: 'idle',
+            },
+          },
+        ],
+      }) as unknown as UIMessage,
+  );
+  expect(unresolvedDecisionIds(log)).toHaveLength(10);
+  expect(unresolvedDecisionIds(log)).not.toContain('message-0');
+  const requested = unresolvedDecisionIds(log, new Set(['card-0']));
+  expect(requested).toContain('message-0');
+  expect(requested).toHaveLength(10);
+  expect(new Set(requested).size).toBe(10);
+  expect(
+    unresolvedDecisionIds([
+      {
+        id: 'plain',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'data-card',
+            data: { kind: 'generated-card', spec: { refreshable: false }, refreshState: 'idle' },
+          },
+        ],
+      } as unknown as UIMessage,
+    ]),
+  ).toEqual([]);
+});
 
 /** A message as the server sends it: real id, persisted timestamp. */
 function durable(

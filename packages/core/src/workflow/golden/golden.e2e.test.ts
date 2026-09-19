@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   approvals,
   conversations,
@@ -82,6 +83,144 @@ const workflowPlan = {
 };
 
 describe('golden tasks', () => {
+  it('prefers the grounded shipment answer to the raw email lookup card', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const card = GenerativeCardSpecV1Schema.parse({
+      version: 1,
+      title: 'Shipment A123',
+      accessibilityLabel: 'Shipment A123 status',
+      sourceLabel: 'Shipping email',
+      facts: [{ id: 'status', value: 'Delivered', source: 'gmail.read_thread' }],
+      blocks: [{ type: 'facts', factIds: ['status'] }],
+    });
+    const result = await runGoldenTask(db, agentId, {
+      name: 'implicit-shipment-answer-card',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'What is the status of my shipment A123?' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      card,
+      script: [
+        { toolCalls: [{ toolName: 'gmail.read_thread', input: { threadId: 'shipment-a123' } }] },
+        { text: 'Shipment A123: Delivered.' },
+      ],
+      tools: {
+        'gmail.read_thread': {
+          schema: z.object({ threadId: z.string() }),
+          execute: async () => ({ messages: [{ subject: 'Shipment A123', text: 'Delivered' }] }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, result.taskId));
+    const cards = TaskStateSchema.parse(task?.state).pendingFinal?.responseCards ?? [];
+    for (const saved of cards)
+      if (saved.kind === 'generated-card') createdCardIds.push(String(saved.id));
+    expect(cards.map((saved) => saved.kind)).toEqual(['generated-card']);
+    expect(cards[0]).toMatchObject({ spec: { facts: [{ value: 'Delivered' }] } });
+  });
+
+  it('refreshes the same saved card from a new read without posting a duplicate card', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner' })
+      .returning();
+    if (!conversation) throw new Error('conversation missing');
+    createdConversationIds.push(conversation.id);
+    const card = (value: string) =>
+      GenerativeCardSpecV1Schema.parse({
+        version: 1,
+        title: 'Shipment A456',
+        accessibilityLabel: 'Shipment A456 status',
+        sourceLabel: 'Shipping email',
+        facts: [{ id: 'status', value, source: 'gmail.read_thread' }],
+        blocks: [{ type: 'facts', factIds: ['status'] }],
+      });
+    const saved = await generatedCardModule.persistGeneratedCard(db, {
+      agentId,
+      conversationId: conversation.id,
+      sourceText: 'What is the status of my shipment A456?',
+      payload: {
+        kind: 'generated-card',
+        id: randomUUID(),
+        revisionId: randomUUID(),
+        sourceFingerprint: randomUUID(),
+        grounding: 'evidence',
+        spec: card('In transit'),
+      },
+      evidence: [
+        {
+          toolName: 'gmail.read_thread',
+          status: 'succeeded',
+          args: { threadId: 'shipment-a456' },
+          result: { messages: [{ subject: 'Shipment A456', text: 'In transit' }] },
+        },
+      ],
+    });
+    createdCardIds.push(saved.id);
+    await db.insert(messages).values({
+      conversationId: conversation.id,
+      role: 'assistant',
+      origin: 'assistant',
+      text: 'In transit',
+      parts: [{ type: 'data-card', data: saved }],
+    });
+    const result = await runGoldenTask(db, agentId, {
+      name: 'saved-shipment-source-refresh',
+      event: {
+        source: 'internal',
+        trust: 'owner',
+        conversationId: conversation.id,
+        payload: {
+          refreshCardId: saved.id,
+          instruction: `Refresh saved card ${saved.id} using gmail.read_thread with threadId shipment-a456.`,
+          taintedOrigin: true,
+        },
+      },
+      taskType: 'adhoc',
+      plan: workflowPlan,
+      card: card('Delivered'),
+      script: [
+        { toolCalls: [{ toolName: 'gmail.read_thread', input: { threadId: 'shipment-a456' } }] },
+        {
+          text: `The shipping email now says Delivered.\n\n${'The source says Delivered. '.repeat(80)}`,
+        },
+      ],
+      tools: {
+        'gmail.read_thread': {
+          schema: z.object({ threadId: z.string() }),
+          execute: async () => ({ messages: [{ subject: 'Shipment A456', text: 'Delivered' }] }),
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+    expect(result.status).toBe('done');
+    expect(result.finalText).toContain('Refreshed');
+    expect(result.finalText.length).toBeLessThan(650);
+    const [current] = await db.select().from(generatedCards).where(eq(generatedCards.id, saved.id));
+    expect(current?.currentRevisionId).not.toBe(saved.revisionId);
+    const [revision] = await db
+      .select()
+      .from(generatedCardRevisions)
+      .where(eq(generatedCardRevisions.id, current?.currentRevisionId ?? ''));
+    expect(revision?.spec).toMatchObject({ facts: [{ value: 'Delivered' }] });
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, result.taskId));
+    expect(TaskStateSchema.parse(task?.state).pendingFinal?.responseCards ?? []).toEqual([]);
+    const rows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conversation.id));
+    expect(
+      rows.flatMap((row) =>
+        (row.parts as Array<{ type: string }>).filter((part) => part.type === 'data-card'),
+      ),
+    ).toHaveLength(1);
+  });
+
   it('does not revive the original checklist when a newer owner message changes the request', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const [conversation] = await db

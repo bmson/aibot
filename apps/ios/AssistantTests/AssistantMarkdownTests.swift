@@ -689,6 +689,55 @@ final class AssistantMarkdownTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testUnifiedSuggestionAndLiveRichCardSnapshots() throws {
+        var dismissed = RichMessageFixture.suggestion
+        dismissed.suggestionId = "dismissed"
+        dismissed.status = "dismissed"
+        var completed = RichMessageFixture.suggestion
+        completed.suggestionId = "completed"
+        completed.status = "accepted"
+        completed.acceptedTaskId = "task-1"
+        completed.acceptedTaskStatus = "done"
+        completed.acceptedTaskSummary = "Reviewed the report and highlighted Friday’s test."
+        let open = ChatMessage(id: "unified", role: .assistant, parts: [
+            RichMessageFixture.suggestion, .init(type: "data-card", data: RichMessageFixture.alert)
+        ])
+        let settled = ChatMessage(id: "settled", role: .assistant, parts: [dismissed, completed])
+        for (name, scheme, size, width) in [
+            ("light", ColorScheme.light, DynamicTypeSize.large, CGFloat(390)),
+            ("dark", .dark, .large, 390),
+            ("narrow", .light, .xxxLarge, 320),
+            ("accessible", .light, .accessibility3, 390)
+        ] {
+            let view = VStack(spacing: 14) {
+                ForEach([open, settled]) { message in
+                    MessageBubble(message: message, userPrompt: nil, isCurrentAnswer: false,
+                        isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil,
+                        decideSuggestion: { _, _ in nil }, openActivity: {})
+                }
+                ForEach(["idle", "refreshing", "failed"], id: \.self) { state in
+                    if let card = MessageResponseCard(part: RichMessageFixture.generated(state: state, stale: true)) {
+                        RichResponseCards(cards: [card], onRefresh: { _ in nil })
+                    }
+                }
+            }
+            .padding(16).frame(width: width).background(AssistantTheme.stage)
+            .environment(\.colorScheme, scheme)
+            .environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            renderer.proposedSize = ProposedViewSize(width: width, height: nil)
+            let image = try XCTUnwrap(renderer.uiImage)
+            XCTAssertEqual(image.size.width, width)
+            XCTAssertGreaterThan(image.size.height, 500)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "unified-rich-card-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     func testSpreadsheetPasteKeepsFirstRowAndMissingValues() {
         let source = "Family birthdays\n\nAda\tApril 20, 1918\tMonkey\n\t\t\nBaby\t\tHorse"
         let blocks = AssistantMarkdown.blocks(in: source)

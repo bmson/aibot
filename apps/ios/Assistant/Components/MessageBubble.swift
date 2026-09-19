@@ -24,6 +24,7 @@ struct MessageBubble: View {
     /// Where an accepted suggestion's task can be seen. The phone has no page
     /// for a single task, so this is Activity.
     var openActivity: (() -> Void)? = nil
+    var refreshCard: ((String) async -> String?)? = nil
     /// Take this card out of the log. Nil while the row is still in flight —
     /// there is nothing for the server to hide until the turn has settled —
     /// and nil wherever a bubble is rendered outside the log, as in snapshots.
@@ -132,7 +133,7 @@ struct MessageBubble: View {
             }
 
             if message.role == .assistant, !responseCards.isEmpty, !message.hasSupportingResultCards {
-                RichResponseCards(cards: responseCards, onSend: retry)
+                RichResponseCards(cards: responseCards, onSend: retry, onRefresh: refreshCard)
             }
 
             if message.role == .assistant, message.isOffCourse, !isStreaming {
@@ -306,7 +307,7 @@ struct MessageBubble: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if showsSources {
-                AnswerSourcesFooter(cards: responseCards, onSend: retry)
+                AnswerSourcesFooter(cards: responseCards, onSend: retry, onRefresh: refreshCard)
             }
         }
             // The header is a rectangular band inside the paper, not another
@@ -442,7 +443,7 @@ struct MessageBubble: View {
     /// already thought of, and re-derived it on every scroll.
     private var responseCards: [MessageResponseCard] {
         let explicit = message.parts.compactMap(MessageResponseCard.init(part:))
-        guard explicit.isEmpty else { return explicit }
+        guard explicit.isEmpty else { return message.standaloneResponseCards }
 
         // One exception, and it is not prose interpretation: the proactive
         // pulse still phrases an event alert as a sentence, in an exact
@@ -454,7 +455,7 @@ struct MessageBubble: View {
         // An answer card avoids a duplicate answer. Raw lookup results never
         // replace the explanation, and neither does a card read off the reply.
         guard message.role == .assistant, !message.hasSupportingResultCards else { return false }
-        return MessageResponseCard.replacesProse(responseCards)
+        return MessageResponseCard.replacesProse(responseCards + message.suggestionParts.compactMap(\.suggestionContext))
     }
 
     private func decisionCard(_ part: MessagePart) -> some View {
@@ -835,6 +836,39 @@ struct MessageBubble: View {
 /// The chat transport can send a `data-card` part when the result already has
 /// shape. A conservative text fallback covers existing servers while keeping
 /// unrelated prose as prose. Both paths share the same visual system below.
+extension MessagePart {
+    var suggestionContext: MessageResponseCard? {
+        guard type == "suggestion", let contextCard,
+              case let .object(data) = contextCard,
+              data["kind"]?.string == "proactive-alert",
+              let id = data["id"]?.string, !id.isEmpty,
+              let title = data["title"]?.string, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let card = MessageResponseCard(part: .init(type: "data-card", data: contextCard)),
+              case .proactiveAlert = card else { return nil }
+        return card
+    }
+
+    var suggestionActionLabel: String {
+        let label = actionLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return label.isEmpty ? "Start task" : label
+    }
+
+    var suggestionTitle: String {
+        if case let .proactiveAlert(_, _, _, title, _, _, _, _)? = suggestionContext { return title }
+        return summary ?? "Suggestion"
+    }
+}
+
+extension ChatMessage {
+    var standaloneResponseCards: [MessageResponseCard] {
+        let paired = Set(suggestionParts.compactMap { $0.suggestionContext?.id })
+        return parts.compactMap(MessageResponseCard.init(part:)).filter { card in
+            if case .proactiveAlert = card { return !paired.contains(card.id) }
+            return true
+        }
+    }
+}
+
 enum MessageResponseCard: Identifiable {
     struct AgendaItem: Identifiable {
         let time: String
@@ -981,6 +1015,32 @@ enum MessageResponseCard: Identifiable {
         let blocks: [GeneratedBlock]
         let actions: [GeneratedAction]
         let steps: [CardStep]
+        var updatedAt: String? = nil
+        var stale: Bool? = nil
+        var refreshState: String? = nil
+        var refreshError: String? = nil
+        var refreshable: Bool = false
+
+        var blockSections: (preview: [GeneratedBlock], details: [GeneratedBlock]) {
+            var preview: [GeneratedBlock] = []
+            var details: [GeneratedBlock] = []
+            for block in blocks {
+                guard preview.count < 2 else { details.append(block); continue }
+                let ids = block.values["factIds"]?.arrayStrings ?? []
+                if ["facts", "timeline"].contains(block.type), ids.count > 4 {
+                    var first = block.values
+                    first["factIds"] = .array(ids.prefix(4).map(JSONValue.string))
+                    preview.append(.init(id: block.id, type: block.type, values: first))
+                    var remaining = block.values
+                    remaining["factIds"] = .array(ids.dropFirst(4).map(JSONValue.string))
+                    remaining["startIndex"] = .number(5)
+                    details.append(.init(id: block.id + "-continued", type: block.type, values: remaining))
+                } else {
+                    preview.append(block)
+                }
+            }
+            return (preview, details)
+        }
     }
 
     case agenda(title: String, subtitle: String, items: [AgendaItem])
@@ -1425,7 +1485,12 @@ enum MessageResponseCard: Identifiable {
                 facts: facts,
                 blocks: blocks,
                 actions: actions,
-                steps: steps
+                steps: steps,
+                updatedAt: data["updatedAt"]?.string,
+                stale: data["stale"]?.boolValue,
+                refreshState: data["refreshState"]?.string,
+                refreshError: data["refreshError"]?.string,
+                refreshable: spec["refreshable"]?.boolValue ?? actions.contains { $0.type == "refresh" }
             ))
         default:
             return nil
@@ -1796,7 +1861,80 @@ enum CalendarEventPresentation {
     }
 }
 
+enum CardFreshnessPresentation {
+    static func label(stale: Bool?, state: String?, hasTimestamp: Bool) -> String {
+        if state == "refreshing" { return "Refreshing…" }
+        if state == "failed" { return "Refresh failed" }
+        if stale == true { return "May be out of date" }
+        if stale == false && hasTimestamp { return "Current" }
+        return "Saved snapshot"
+    }
+}
+
+struct GeneratedCardFreshness: View {
+    let card: MessageResponseCard.GeneratedCard
+    let refresh: ((String) async -> String?)?
+    @State private var requesting = false
+    @State private var failure: String?
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var refreshing: Bool { requesting || card.refreshState == "refreshing" }
+
+    var body: some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 8))
+        VStack(alignment: .leading, spacing: 7) {
+            layout {
+                HStack(alignment: .center, spacing: 8) {
+                    if refreshing { ProgressView().controlSize(.small) }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(requesting ? "Starting refresh…" : CardFreshnessPresentation.label(
+                            stale: card.stale, state: card.refreshState,
+                            hasTimestamp: card.updatedAt.flatMap(CalendarEventPresentation.timestamp) != nil))
+                            .font(.caption.weight(.semibold))
+                        if let stamp = card.updatedAt, let date = CalendarEventPresentation.timestamp(stamp) {
+                            Text("Checked \(date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
+                                .font(.caption2)
+                        }
+                    }
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 4) }
+                if let refresh, card.refreshable {
+                    Button {
+                        guard !refreshing else { return }
+                        requesting = true
+                        failure = nil
+                        Task {
+                            failure = await refresh(card.id)
+                            requesting = false
+                        }
+                    } label: {
+                        Text(card.refreshState == "failed" || failure != nil ? "Try again" : "Refresh")
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .buttonStyle(AssistantActionButtonStyle(kind: .neutral, compact: true))
+                    .disabled(refreshing)
+                    .accessibilityIdentifier("assistant.card.\(card.id).refresh")
+                    .accessibilityHint("Checks the source again and updates this card in place.")
+                }
+            }
+            if let error = failure ?? card.refreshError, !error.isEmpty {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
 struct RichResponseCards: View {
+    @State private var copiedAction: String?
     private struct EventRow: Identifiable {
         let id: String
         let start: String
@@ -1830,10 +1968,13 @@ struct RichResponseCards: View {
 
     let cards: [MessageResponseCard]
     let onSend: ((String) -> Void)?
+    let onRefresh: ((String) async -> String?)?
 
-    init(cards: [MessageResponseCard], onSend: ((String) -> Void)? = nil) {
+    init(cards: [MessageResponseCard], onSend: ((String) -> Void)? = nil,
+         onRefresh: ((String) async -> String?)? = nil) {
         self.cards = cards
         self.onSend = onSend
+        self.onRefresh = onRefresh
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -3023,66 +3164,14 @@ struct RichResponseCards: View {
         dueAt: String,
         details: [MessageResponseCard.Detail]
     ) -> some View {
-        let symbol = switch category {
-        case "email": "envelope.badge.fill"
-        case "commitment": "bell.badge.fill"
-        default: "calendar.badge.clock"
-        }
-        let temporal = startsAt.isEmpty ? dueAt : startsAt
-        let temporalLabel = startsAt.isEmpty ? "Due" : "Starts"
-        let visibleDetails = details.filter { !($0.label == "Due" && !dueAt.isEmpty) }
-        let accessibilityDetails = visibleDetails.map { "\($0.label), \($0.value)" }
-        let accessibilityTemporal = temporal.isEmpty ? [] : ["\(temporalLabel), \(cardDate(temporal))"]
-        return VStack(alignment: .leading, spacing: 12) {
-            Label(urgency.replacingOccurrences(of: "_", with: " "), systemImage: symbol)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-            Text(AssistantMarkdown.inlineAttributed(title))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                .fixedSize(horizontal: false, vertical: true)
-            if !summary.isEmpty {
-                Text(AssistantMarkdown.inlineAttributed(summary))
-                    .font(.subheadline)
-                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !temporal.isEmpty {
-                Label(startsAt.isEmpty ? "Due \(cardDate(temporal))" : cardDate(temporal), systemImage: "clock")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-            }
-            if !visibleDetails.isEmpty {
-                Divider()
-                VStack(alignment: .leading, spacing: 9) {
-                    ForEach(visibleDetails) { detail in
-                        if detail.label.lowercased() == "location" || detail.label.lowercased() == "calendar" {
-                            Label(detail.value, systemImage: detail.label.lowercased() == "location" ? "mappin.and.ellipse" : "calendar")
-                                .font(.caption)
-                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                .fixedSize(horizontal: false, vertical: true)
-                        } else {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(detail.label).font(.caption.weight(.medium))
-                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                                Text(detail.value).font(.subheadline)
-                                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            ([urgency, title, summary].filter { !$0.isEmpty } + accessibilityTemporal + accessibilityDetails)
-                .joined(separator: ", ")
-        )
+        ProactiveAlertContent(category: category, urgency: urgency, title: title, summary: summary,
+            startsAt: startsAt, dueAt: dueAt, details: details)
+            .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
     }
 
     private func generatedCard(_ card: MessageResponseCard.GeneratedCard) -> some View {
-        let facts = Dictionary(uniqueKeysWithValues: card.facts.map { ($0.id, $0) })
+        let facts = Dictionary(card.facts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let sections = card.blockSections
         return VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: generatedSymbol(card.icon))
@@ -3108,14 +3197,27 @@ struct RichResponseCards: View {
                 }
             }
 
-            ForEach(card.blocks) { block in
+            ForEach(sections.preview) { block in
                 generatedBlock(block, facts: facts)
             }
+            if !sections.details.isEmpty {
+                DisclosureGroup("More details") {
+                    VStack(alignment: .leading, spacing: 16) {
+                        ForEach(sections.details) { block in generatedBlock(block, facts: facts) }
+                    }
+                    .padding(.top, 12)
+                }
+                .font(.caption.weight(.semibold))
+                .tint(AssistantTheme.accent(for: colorScheme))
+            }
 
-            if !card.actions.isEmpty {
+            GeneratedCardFreshness(card: card, refresh: onRefresh)
+
+            let actions = card.actions.filter { $0.type != "refresh" }
+            if !actions.isEmpty {
                 Divider()
                 AssistantFlowLayout(spacing: 8) {
-                    ForEach(card.actions) { action in
+                    ForEach(actions) { action in
                         generatedAction(action, card: card, facts: facts)
                     }
                 }
@@ -3153,7 +3255,7 @@ struct RichResponseCards: View {
                 .overlay(alignment: .top) { Divider() }
                 .overlay(alignment: .bottom) { Divider() }
             }
-        case "facts", "timeline":
+        case "facts":
             let ids = block.values["factIds"]?.arrayStrings ?? []
             // A lone fact owns the row. At large text sizes, keep each value
             // readable instead of squeezing a reference into half a card.
@@ -3168,6 +3270,38 @@ struct RichResponseCards: View {
                                 .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                             generatedFactValue(fact, prominent: false)
                         }
+                    }
+                }
+            }
+        case "timeline":
+            let ids = block.values["factIds"]?.arrayStrings ?? []
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(ids.enumerated()), id: \.offset) { index, id in
+                    if let fact = facts[id] {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(spacing: 0) {
+                                Text("\((block.values["startIndex"]?.integerValue ?? 1) + index)")
+                                    .font(.caption2.monospacedDigit().weight(.semibold))
+                                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                                    .frame(width: 22, height: 22)
+                                    .background(AssistantTheme.accent(for: colorScheme).opacity(0.1), in: Circle())
+                                    .accessibilityHidden(true)
+                                if index < ids.count - 1 {
+                                    Rectangle().fill(AssistantTheme.accent(for: colorScheme).opacity(0.2))
+                                        .frame(width: 1)
+                                }
+                            }
+                            .padding(.top, 5)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(CardText.presentationLabel(fact.label))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                generatedFactValue(fact, prominent: false)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.bottom, index < ids.count - 1 ? 16 : 0)
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -3191,6 +3325,21 @@ struct RichResponseCards: View {
             if let id = block.values["factId"]?.string, let fact = facts[id] {
                 generatedFactValue(fact, prominent: false)
             }
+        case "image":
+            if let id = block.values["urlFact"]?.string, let fact = facts[id] {
+                if fact.sensitive {
+                    SensitiveCardValue(fact: fact, format: "")
+                } else if let url = URL(string: fact.value),
+                          ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+                    let alt = block.values["altFact"]?.string.flatMap { facts[$0] }
+                    let label = alt.map { $0.sensitive ? "Open image" : "Open image: \($0.value)" } ?? "Open image"
+                    Link(destination: url) { Label(label, systemImage: "photo") }
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                        .frame(minHeight: 44, alignment: .leading)
+                        .accessibilityHint("Opens the source image.")
+                }
+            }
         default:
             EmptyView()
         }
@@ -3206,6 +3355,7 @@ struct RichResponseCards: View {
             Text(fact.value)
                 .font(prominent ? .title3.weight(.semibold) : .callout.weight(.medium))
                 .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
     }
@@ -3249,23 +3399,22 @@ struct RichResponseCards: View {
             Link(action.label, destination: url)
                 .font(.caption.weight(.semibold))
                 .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-        } else {
-            Button(action.label) {
-                switch action.type {
-                case "copy_value":
-                    if let value = fact?.value { UIPasteboard.general.string = value }
-                case "ask_assistant":
-                    if let prompt = action.prompt { onSend?(prompt) }
-                case "refresh":
-                    onSend?("Refresh saved card \(card.id) (“\(card.title)”) using current source data.")
-                default:
-                    break
-                }
+        } else if action.type == "reveal_sensitive", let fact {
+            SensitiveCardValue(fact: fact, format: "")
+        } else if action.type == "copy_value", let fact {
+            Button(copiedAction == "\(card.id)-\(action.id)" ? "Copied" : action.label) {
+                UIPasteboard.general.string = fact.value
+                copiedAction = "\(card.id)-\(action.id)"
+                AccessibilityNotification.Announcement("Copied").post()
             }
             .font(.caption.weight(.semibold))
             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+        } else if action.type == "ask_assistant", let prompt = action.prompt, !prompt.isEmpty {
+            Button(action.label) { onSend?(prompt) }
+            .font(.caption.weight(.semibold))
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
             .disabled(
-                (action.type == "ask_assistant" || action.type == "refresh") && onSend == nil
+                onSend == nil
             )
         }
     }
@@ -3736,6 +3885,84 @@ enum SuggestionTaskReceipt {
     }
 }
 
+/// The same grounded context appears alone or above its suggested action.
+/// Details expand within the paper, without repeating the alert in a second card.
+struct ProactiveAlertContent: View {
+    let category: String
+    let urgency: String
+    let title: String
+    let summary: String
+    let startsAt: String
+    let dueAt: String
+    let details: [MessageResponseCard.Detail]
+    var actionSummary: String? = nil
+    @State private var expanded = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var symbol: String {
+        switch category {
+        case "email": "envelope.badge.fill"
+        case "commitment": "bell.badge.fill"
+        default: "calendar.badge.clock"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(urgency.isEmpty ? "For your attention" : urgency.replacingOccurrences(of: "_", with: " "), systemImage: symbol)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+            Text(AssistantMarkdown.inlineAttributed(title))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+            if !summary.isEmpty {
+                Text(AssistantMarkdown.inlineAttributed(summary))
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .lineLimit(expanded || dynamicTypeSize.isAccessibilitySize ? nil : 3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            let temporal = startsAt.isEmpty ? dueAt : startsAt
+            if !temporal.isEmpty {
+                let date = CalendarEventPresentation.timestamp(temporal)
+                Label("\(startsAt.isEmpty ? "Due" : "Starts") \(date?.formatted(.dateTime.month(.abbreviated).day().hour().minute()) ?? temporal)", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            }
+            if !details.isEmpty || !summary.isEmpty || actionSummary != nil {
+                DisclosureGroup("Details", isExpanded: $expanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let actionSummary, !actionSummary.isEmpty, actionSummary != summary, actionSummary != title {
+                            Text(AssistantMarkdown.inlineAttributed(actionSummary))
+                                .font(.subheadline)
+                                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        ForEach(Array(details.enumerated()), id: \.offset) { _, detail in
+                            if !(detail.label == "Due" && !dueAt.isEmpty) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(detail.label).font(.caption.weight(.medium))
+                                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                    Text(AssistantMarkdown.inlineAttributed(detail.value)).font(.subheadline)
+                                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+                .font(.caption.weight(.semibold))
+                .tint(AssistantTheme.accent(for: colorScheme))
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
 struct SuggestionCard: View {
     let parts: [MessagePart]
     let decide: ((String, SuggestionDecision) async -> String?)?
@@ -3745,6 +3972,7 @@ struct SuggestionCard: View {
     @State private var answering = false
     /// Why the last answer did not land, shown beside the controls.
     @State private var failure: String?
+    @State private var expandedReceipts: Set<String> = []
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -3758,12 +3986,11 @@ struct SuggestionCard: View {
             // approval does, so the log reads as one surface.
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(parts, id: \.suggestionId) { part in
-                    VStack(alignment: .leading, spacing: 0) {
-                        let receipt = receipt(for: part.suggestionStatus, taskStatus: part.acceptedTaskStatus)
-                        DecisionReceiptCard(title: receipt.title, summary: part.summary ?? receipt.detail,
-                            detail: receiptDetail(part, fallback: receipt.detail), code: nil, symbol: receipt.symbol, tint: receipt.tint)
-                        taskLink(part, onPaper: false)
-                    }
+                    settledRow(part)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(AssistantTheme.bubblePaper(for: colorScheme),
+                            in: RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous))
                 }
             }
         }
@@ -3773,10 +4000,12 @@ struct SuggestionCard: View {
         let accent = AssistantTheme.accent(for: colorScheme)
         let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
         return VStack(alignment: .leading, spacing: 14) {
-            Label(parts.count == 1 ? "A suggestion" : "\(parts.count) suggestions", systemImage: "lightbulb.fill")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(accent)
-                .accessibilityAddTraits(.isHeader)
+            if parts.count != 1 || parts.first?.suggestionContext == nil {
+                Label(parts.count == 1 ? "A suggestion" : "\(parts.count) suggestions", systemImage: "lightbulb.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(accent)
+                    .accessibilityAddTraits(.isHeader)
+            }
 
             ForEach(parts, id: \.suggestionId) { part in
                 if part.suggestionStatus.isOpen {
@@ -3816,25 +4045,30 @@ struct SuggestionCard: View {
     private func question(_ part: MessagePart) -> some View {
         let id = part.suggestionId ?? ""
         return VStack(alignment: .leading, spacing: 10) {
-            Text(part.summary ?? part.proposedAction ?? "The assistant has a suggestion.")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
+            if case let .proactiveAlert(_, category, urgency, title, summary, startsAt, dueAt, details)? = part.suggestionContext {
+                ProactiveAlertContent(category: category, urgency: urgency, title: title, summary: summary,
+                    startsAt: startsAt, dueAt: dueAt, details: details, actionSummary: part.summary)
+            } else {
+                Text(AssistantMarkdown.inlineAttributed(part.summary ?? part.proposedAction ?? "The assistant has a suggestion."))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             // Wrapping keeps all three at their full 44pt size on a narrow
             // column; accessibility sizes stack them full width instead.
             if dynamicTypeSize.isAccessibilitySize {
-                VStack(spacing: 8) { answers(for: id, fillsWidth: true) }
+                VStack(spacing: 8) { answers(for: id, actionLabel: part.suggestionActionLabel, fillsWidth: true) }
             } else {
-                AssistantFlowLayout(spacing: 8) { answers(for: id, fillsWidth: false) }
+                AssistantFlowLayout(spacing: 8) { answers(for: id, actionLabel: part.suggestionActionLabel, fillsWidth: false) }
             }
         }
     }
 
     @ViewBuilder
-    private func answers(for id: String, fillsWidth: Bool) -> some View {
-        answerButton("Yes, do it", id: id, decision: .accepted, kind: .primary, fillsWidth: fillsWidth,
+    private func answers(for id: String, actionLabel: String, fillsWidth: Bool) -> some View {
+        answerButton(actionLabel, id: id, decision: .accepted, kind: .primary, fillsWidth: fillsWidth,
             hint: "Hands this to the assistant as a task. Anything that reaches another person still asks you first.")
         answerButton("Later", id: id, decision: .snoozed, kind: .neutral, fillsWidth: fillsWidth,
             hint: "Puts this aside and asks again later.")
@@ -3873,27 +4107,43 @@ struct SuggestionCard: View {
     /// a second sheet of paper inside the first.
     private func settledRow(_ part: MessagePart) -> some View {
         let receipt = receipt(for: part.suggestionStatus, taskStatus: part.acceptedTaskStatus)
-        return VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 3) {
-                Label(receipt.title, systemImage: receipt.symbol)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(receipt.tint)
-                Text(part.summary ?? receipt.detail)
-                    .font(.subheadline)
-                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .accessibilityElement(children: .combine)
-            if part.suggestionStatus == .accepted, let update = part.acceptedTaskSummary, !update.isEmpty {
-                Text("Latest update: \(update)")
+        let id = part.suggestionId ?? ""
+        return DisclosureGroup(isExpanded: Binding(
+            get: { expandedReceipts.contains(id) },
+            set: { if $0 { expandedReceipts.insert(id) } else { expandedReceipts.remove(id) } }
+        )) {
+            VStack(alignment: .leading, spacing: 10) {
+                if case let .proactiveAlert(_, category, urgency, title, summary, startsAt, dueAt, details)? = part.suggestionContext {
+                    ProactiveAlertContent(category: category, urgency: urgency, title: title, summary: summary,
+                        startsAt: startsAt, dueAt: dueAt, details: details, actionSummary: part.summary)
+                } else if let summary = part.summary {
+                    Text(AssistantMarkdown.inlineAttributed(summary))
+                        .font(.subheadline)
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(receiptDetail(part, fallback: receipt.detail))
                     .font(.caption)
                     .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 6)
+                taskLink(part, onPaper: true)
             }
-            taskLink(part, onPaper: true)
+            .padding(.top, 10)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Label(receipt.title, systemImage: receipt.symbol)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(receipt.tint)
+                Text(AssistantMarkdown.inlineAttributed(part.suggestionTitle))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(minHeight: 44, alignment: .leading)
         }
+        .tint(AssistantTheme.inkMuted(for: colorScheme))
+        .accessibilityIdentifier("assistant.suggestion.\(id).receipt")
     }
 
     private func receiptDetail(_ part: MessagePart, fallback: String) -> String {
@@ -4025,6 +4275,7 @@ struct SensitiveCardValue: View {
 struct AnswerSourcesFooter: View {
     let cards: [MessageResponseCard]
     var onSend: ((String) -> Void)? = nil
+    var onRefresh: ((String) async -> String?)? = nil
     @State private var expanded = false
     @Environment(\.colorScheme) private var colorScheme
 
@@ -4033,7 +4284,7 @@ struct AnswerSourcesFooter: View {
             Divider().padding(.horizontal, 20)
             sourceControl(bottom: false)
             if expanded {
-                RichResponseCards(cards: cards, onSend: onSend)
+                RichResponseCards(cards: cards, onSend: onSend, onRefresh: onRefresh)
                     .environment(\.responseCardIsEmbedded, true)
                 sourceControl(bottom: true)
             }
@@ -5312,6 +5563,7 @@ extension MessageBubble: Equatable {
             && (lhs.decideApproval == nil) == (rhs.decideApproval == nil)
             && (lhs.decideSuggestion == nil) == (rhs.decideSuggestion == nil)
             && (lhs.openActivity == nil) == (rhs.openActivity == nil)
+            && (lhs.refreshCard == nil) == (rhs.refreshCard == nil)
             && (lhs.hide == nil) == (rhs.hide == nil)
     }
 }

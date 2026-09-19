@@ -1,11 +1,16 @@
 'use client';
 
-import { Lightbulb, LoaderCircle } from 'lucide-react';
+import { ChevronDown, Lightbulb, LoaderCircle, Mail } from 'lucide-react';
 import Link from 'next/link';
 import { useRef, useState, useTransition } from 'react';
 import { decideSuggestionInline, snoozeSuggestionInline } from '@/app/suggestions/actions';
-import { btnSm } from '@/lib/ui';
+import { btnSm, focusRing } from '@/lib/ui';
 import { DecisionActions, DecisionCard, DecisionReceipt, DecisionReceipts } from './decision-card';
+import {
+  SuggestionContextContent,
+  suggestionContext,
+  suggestionWakeLabel,
+} from './suggestion-context';
 
 import {
   acceptedSuggestionLabel,
@@ -26,6 +31,8 @@ export interface InlineSuggestionPart {
   acceptedTaskStatus?: string;
   acceptedTaskSummary?: string;
   snoozedUntil?: string;
+  actionLabel?: string;
+  contextCard?: unknown;
 }
 
 /**
@@ -39,7 +46,13 @@ export interface InlineSuggestionPart {
  * surface, but never the amber tone, because a card that looks like an
  * approval trains the owner to skim both.
  */
-export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
+export function SuggestionCard({
+  parts,
+  timeZone = 'UTC',
+}: {
+  parts: InlineSuggestionPart[];
+  timeZone?: string;
+}) {
   const [resolved, setResolved] = useState<Record<string, SuggestionResolution>>({});
   const [taskIds, setTaskIds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -121,42 +134,64 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
   const receiptOf = (part: InlineSuggestionPart) => {
     const status = statusOf(part);
     const taskId = taskIds[part.suggestionId] ?? part.acceptedTaskId;
+    const context = suggestionContext(part.contextCard);
+    const verdict =
+      status === 'accepted'
+        ? acceptedSuggestionLabel(part.acceptedTaskStatus)
+        : status === 'dismissed'
+          ? 'Dismissed'
+          : status === 'snoozed'
+            ? 'Snoozed'
+            : status === 'expired'
+              ? 'Expired'
+              : 'No longer available';
+    const wake = suggestionWakeLabel(
+      resolved[part.suggestionId]?.snoozedUntil ?? part.snoozedUntil,
+      timeZone,
+    );
     return (
-      <div key={part.suggestionId} className="flex min-w-0 flex-col gap-1.5">
-        <div className="flex min-w-0 items-center gap-1.5">
+      <details key={part.suggestionId} className="group/receipt min-w-0">
+        <summary
+          aria-label={`${context?.title ?? part.summary} — ${verdict}`}
+          className={`flex min-w-0 cursor-pointer list-none items-center justify-between gap-2 rounded [&::-webkit-details-marker]:hidden ${focusRing}`}
+        >
           <DecisionReceipt
             outcome={
               status === 'accepted' ? 'accepted' : status === 'dismissed' ? 'dismissed' : 'lapsed'
             }
-            summary={part.summary}
-            verdict={
-              status === 'accepted'
-                ? acceptedSuggestionLabel(part.acceptedTaskStatus)
-                : status === 'dismissed'
-                  ? 'Dismissed'
-                  : status === 'snoozed'
-                    ? 'Snoozed'
-                    : status === 'expired'
-                      ? 'Expired'
-                      : 'No longer available'
-            }
+            summary={context?.title ?? part.summary}
+            verdict={verdict}
             live={resolved[part.suggestionId] !== undefined}
           />
+          <ChevronDown
+            aria-hidden="true"
+            className="size-3.5 shrink-0 text-muted motion-safe:transition-transform group-open/receipt:rotate-180"
+          />
+        </summary>
+        <div className="space-y-2 pt-2 pb-1">
+          {context ? (
+            <SuggestionContextContent context={context} timeZone={timeZone} />
+          ) : (
+            <p className="text-sm leading-6 text-strong">{part.summary}</p>
+          )}
+          {status === 'snoozed' && wake ? (
+            <p className="text-xs text-muted">Returns {wake}</p>
+          ) : null}
           {status === 'accepted' && taskId ? (
             <Link
               href={`/tasks/${taskId}`}
               className="shrink-0 text-xs text-muted underline underline-offset-2"
             >
-              View
+              View result
             </Link>
           ) : null}
+          {status === 'accepted' && part.acceptedTaskSummary ? (
+            <p className="break-words text-sm leading-relaxed text-muted [overflow-wrap:anywhere]">
+              {part.acceptedTaskSummary}
+            </p>
+          ) : null}
         </div>
-        {status === 'accepted' && part.acceptedTaskSummary ? (
-          <p className="break-words text-sm leading-relaxed text-muted [overflow-wrap:anywhere]">
-            {part.acceptedTaskSummary}
-          </p>
-        ) : null}
-      </div>
+      </details>
     );
   };
 
@@ -164,19 +199,28 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
     return <DecisionReceipts>{parts.map(receiptOf)}</DecisionReceipts>;
   }
 
+  const singleContext = parts.length === 1 ? suggestionContext(parts[0]?.contextCard) : undefined;
   return (
     <DecisionCard
       tone="info"
-      icon={Lightbulb}
-      label={parts.length === 1 ? 'A suggestion' : `${parts.length.toString()} suggestions`}
+      icon={singleContext?.category === 'email' ? Mail : Lightbulb}
+      label={
+        singleContext?.urgencyLabel ||
+        (parts.length === 1 ? 'Suggested next step' : `${parts.length.toString()} suggestions`)
+      }
     >
       <ul className="flex flex-col gap-3">
         {parts.map((part) => {
           if (!isOpen(part)) return <li key={part.suggestionId}>{receiptOf(part)}</li>;
           const working = busy && active === part.suggestionId;
+          const context = suggestionContext(part.contextCard);
           return (
             <li key={part.suggestionId} className="min-w-0 text-sm leading-relaxed">
-              <p className="break-words [overflow-wrap:anywhere]">{part.summary}</p>
+              {context ? (
+                <SuggestionContextContent context={context} timeZone={timeZone} />
+              ) : (
+                <p className="break-words [overflow-wrap:anywhere]">{part.summary}</p>
+              )}
               <DecisionActions>
                 <button
                   type="button"
@@ -190,7 +234,9 @@ export function SuggestionCard({ parts }: { parts: InlineSuggestionPart[] }) {
                       aria-hidden="true"
                     />
                   ) : null}
-                  {working && activeDecision === 'accepted' ? 'Starting…' : 'Yes, do it'}
+                  {working && activeDecision === 'accepted'
+                    ? 'Starting…'
+                    : part.actionLabel || 'Start task'}
                 </button>
                 <button
                   type="button"

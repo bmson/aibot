@@ -38,6 +38,7 @@ import {
   or,
   sql,
 } from 'drizzle-orm';
+import { listSavedCards } from './cards.js';
 
 const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
 /** A task in one of these is not going to produce more output on its own. */
@@ -388,6 +389,51 @@ export async function hydrateChatApprovals(
   messages: UIMessage[],
   now: Date = new Date(),
 ): Promise<UIMessage[]> {
+  const generatedIds = [
+    ...new Set(
+      messages.flatMap((message) =>
+        (message.parts as unknown[]).flatMap((part) => {
+          const data = part as { type?: string; data?: { kind?: string; id?: string } } | null;
+          return data?.type === 'data-card' &&
+            data.data?.kind === 'generated-card' &&
+            typeof data.data.id === 'string' &&
+            UUID_RE.test(data.data.id)
+            ? [data.data.id]
+            : [];
+        }),
+      ),
+    ),
+  ];
+  if (generatedIds.length) {
+    const agent = await getAgent(db);
+    const current = new Map(
+      (await listSavedCards(db, agent.id, generatedIds)).map((card) => [card.id, card]),
+    );
+    messages = messages.map((message) => ({
+      ...message,
+      parts: message.parts.map((part) => {
+        const candidate = part as unknown as { type: string; data?: Record<string, unknown> };
+        const card =
+          candidate.type === 'data-card' && candidate.data?.kind === 'generated-card'
+            ? current.get(String(candidate.data.id))
+            : undefined;
+        if (!card) return part;
+        return {
+          ...candidate,
+          data: {
+            ...candidate.data,
+            revisionId: card.revisionId,
+            spec: card.spec,
+            updatedAt: card.updatedAt.toISOString(),
+            stale: card.stale,
+            refreshState: card.refreshState,
+            refreshTaskId: card.refreshTaskId,
+            refreshError: card.refreshError,
+          },
+        } as unknown as typeof part;
+      }),
+    }));
+  }
   const approvalIds = [
     ...new Set(
       messages.flatMap((message) =>
