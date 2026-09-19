@@ -19,14 +19,26 @@ export type ChatUpdates = NonNullable<Awaited<ReturnType<typeof getChatUpdates>>
 export const MAX_CHAT_WAIT_MS = 25_000;
 
 /**
- * How often a held poll re-reads while it waits. A thread with a live task is
- * about to produce something a person is watching for, so it is worth checking
- * often; an idle thread is waiting on a schedule or an inbound message and can
- * afford to look rarely. Either way this is the server's own loop — the client
- * spends one request on it, not one per interval.
+ * How often a held poll re-reads while it waits.
+ *
+ * This is the server's own loop — the client spends one request on it rather
+ * than one per interval — but the reads are not free, and moving the loop
+ * server-side moved the load with it. Each re-read is a handful of queries,
+ * so the interval is what decides how much standing database work an open
+ * thread costs.
+ *
+ * The idle figure is deliberately conservative. It replaces a client poll that
+ * ran every 12s, so 2s would have been six times the reads for a thread where
+ * nothing is happening — and every open tab pays it, for as long as it is
+ * open. At 5s an assistant-initiated message still surfaces in less than half
+ * the time it used to, for roughly a third of the queries 2s would have cost.
+ *
+ * A thread with a live task is the opposite case: something is about to land
+ * that a person is watching for, and the window is seconds rather than hours,
+ * so it is worth checking often for as long as it lasts.
  */
 const ACTIVE_RECHECK_MS = 500;
-const IDLE_RECHECK_MS = 2_000;
+const IDLE_RECHECK_MS = 5_000;
 
 function activityFingerprint(activity: ChatUpdates['activity']): string {
   return activity.map((entry) => `${entry.step}:${entry.toolName}:${entry.status}`).join('|');
