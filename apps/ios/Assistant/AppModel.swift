@@ -255,7 +255,7 @@ final class AppModel: ObservableObject {
                 accuracyM: location.horizontalAccuracy >= 0
                     ? Int(location.horizontalAccuracy.rounded())
                     : nil,
-                capturedAt: ISO8601DateFormatter().string(from: location.timestamp),
+                capturedAt: AssistantFormatters.internetDateTime.string(from: location.timestamp),
                 timeZone: TimeZone.current.identifier,
                 source: "ios-app-background"
             ))
@@ -492,7 +492,7 @@ final class AppModel: ObservableObject {
             accuracyM: place.location.horizontalAccuracy >= 0
                 ? Int(place.location.horizontalAccuracy.rounded())
                 : nil,
-            capturedAt: ISO8601DateFormatter().string(from: place.location.timestamp),
+            capturedAt: AssistantFormatters.internetDateTime.string(from: place.location.timestamp),
             timeZone: TimeZone.current.identifier,
             source: "ios-app"
         )

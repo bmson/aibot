@@ -1973,6 +1973,69 @@ struct SendReceipt: Sendable {
     let conversationId: String
 }
 
+/// Formatters shared across the app, built once.
+///
+/// Constructing a `DateFormatter` is expensive — it resolves a locale, a
+/// calendar and a format — and these are read while drawing rows, so a new one
+/// per call showed up as scroll and streaming cost rather than as a slow screen.
+///
+/// The locale-sensitive ones take `Locale.autoupdatingCurrent`, but a formatter
+/// resolves its format once, so a region changed while the app is running may
+/// not reach a shared instance the way a fresh one would. iOS relaunches an app
+/// when the region changes, which is what makes that an acceptable trade for
+/// not rebuilding a formatter per row. Anything keyed to a fixed wire format
+/// pins `en_US_POSIX` instead, and must not be given the device's locale.
+enum AssistantFormatters {
+    /// Whole-second internet timestamps. `ISO8601DateFormatter.assistant`
+    /// expects fractional seconds; both are valid server dates, so a value that
+    /// misses one is retried against the other.
+    static let internetDateTime: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    static let relative: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = .autoupdatingCurrent
+        return formatter
+    }()
+
+    static let mediumDate: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.dateStyle = .medium
+        return formatter
+    }()
+
+    /// A month and day in the reader's own order — "April 7" or "7 April".
+    static let monthAndDay: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate("MMMMd")
+        return formatter
+    }()
+
+    /// Month names, indexed from zero. Read through a shared formatter rather
+    /// than building one per name: these are drawn in pickers and lists.
+    static var monthSymbols: [String] { monthNames.monthSymbols }
+
+    private static let monthNames: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        return formatter
+    }()
+
+    /// `yyyy-MM-dd`, as a calendar date with no time or zone of its own.
+    static let calendarDay: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+}
+
 extension ISO8601DateFormatter {
     static let assistant: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
