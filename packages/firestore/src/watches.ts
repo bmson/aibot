@@ -311,7 +311,22 @@ export class FirestoreWatchRepository implements WatchRepository {
       )
         return null;
 
-      let conversationId = watch.conversationId ?? existingSuggestion?.conversationId ?? null;
+      let conversationId: string | null = null;
+      const candidateIds = [existingSuggestion?.conversationId, watch.conversationId].filter(
+        (id, index, all): id is string => Boolean(id) && all.indexOf(id) === index,
+      );
+      for (const candidateId of candidateIds) {
+        const conversationDoc = await tx.get(this.store.doc('conversations', candidateId));
+        if (!conversationDoc.exists) continue;
+        const conversation = decodeRecord<Records['conversations']>(conversationDoc.data());
+        if (
+          documentKey(conversation.id) === conversationDoc.id &&
+          conversation.agentId === input.agentId
+        ) {
+          conversationId = conversation.id;
+          break;
+        }
+      }
       let notificationRef: FirebaseFirestore.DocumentReference | undefined;
       if (!conversationId) {
         const notifications = await tx.get(
@@ -333,6 +348,13 @@ export class FirestoreWatchRepository implements WatchRepository {
       }
 
       const now = input.now ?? this.store.now();
+      const suggestionGeneration = watchDoc.get('suggestionGeneration');
+      tx.update(watchRef, {
+        suggestionGeneration:
+          typeof suggestionGeneration === 'number' && Number.isSafeInteger(suggestionGeneration)
+            ? suggestionGeneration + 1
+            : 1,
+      });
       if (notificationRef)
         tx.create(
           notificationRef,

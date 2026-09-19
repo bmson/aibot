@@ -196,4 +196,62 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore watches', () =>
       await disposeStore(store);
     }
   });
+
+  it('serializes suggestion commits and rejects a foreign conversation reference', async () => {
+    const store = emulatorStore();
+    try {
+      const repository = new FirestoreWatchRepository(store);
+      const now = new Date('2026-09-19T12:00:00Z');
+      const watch = await repository.create({
+        agentId: 'agent-a',
+        kind: 'email',
+        tier: 'suggest',
+        name: 'Suggestion race',
+        match: {},
+        maxFires: null,
+        expiresAt: new Date('2026-09-20T12:00:00Z'),
+      });
+      await store.doc('conversations', 'foreign').set({
+        id: 'foreign',
+        agentId: 'agent-b',
+        channel: 'chat',
+        trust: 'owner',
+        title: 'Foreign',
+        archived: false,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await store.doc('watches', watch.id).update({ conversationId: 'foreign' });
+      await repository.recordFire({
+        watchId: watch.id,
+        agentId: 'agent-a',
+        triggerRef: 'gmail:race',
+        summary: 'race',
+        excerpt: 'reply requested',
+        now,
+      });
+      const input = {
+        agentId: 'agent-a',
+        watchId: watch.id,
+        triggerRef: 'gmail:race',
+        summary: 'Reply?',
+        proposedAction: 'Draft a reply.',
+        now,
+      };
+      const results = await Promise.all([
+        repository.commitSuggestion(input),
+        repository.commitSuggestion(input),
+      ]);
+      expect(results[0]?.suggestion.id).toBe(results[1]?.suggestion.id);
+      expect(results[0]?.conversationId).not.toBe('foreign');
+      const destination = await store.doc('conversations', results[0]?.conversationId ?? '').get();
+      expect(destination.get('agentId')).toBe('agent-a');
+      expect(destination.get('title')).toBe('Notifications');
+      expect(
+        (await store.collection('suggestions').where('agentId', '==', 'agent-a').get()).size,
+      ).toBe(1);
+    } finally {
+      await disposeStore(store);
+    }
+  });
 });

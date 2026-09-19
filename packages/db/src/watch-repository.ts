@@ -230,7 +230,8 @@ export function createPostgresWatchRepository(db: Db): WatchRepository {
           .select()
           .from(watches)
           .where(and(eq(watches.id, fire.watchId), eq(watches.agentId, input.agentId)))
-          .limit(1);
+          .limit(1)
+          .for('update');
         if (!watch) return null;
         if (watch.tier !== 'suggest') return null;
 
@@ -240,8 +241,24 @@ export function createPostgresWatchRepository(db: Db): WatchRepository {
           .from(suggestions)
           .where(and(eq(suggestions.agentId, input.agentId), eq(suggestions.sourceRef, sourceRef)))
           .limit(1);
-        let conversationId = watch.conversationId ?? priorSuggestion?.conversationId ?? null;
+        let conversationId: string | null = null;
+        const candidateIds = [priorSuggestion?.conversationId, watch.conversationId].filter(
+          (id, index, all): id is string => Boolean(id) && all.indexOf(id) === index,
+        );
+        for (const candidateId of candidateIds) {
+          const [owned] = await tx
+            .select({ id: conversations.id })
+            .from(conversations)
+            .where(and(eq(conversations.id, candidateId), eq(conversations.agentId, input.agentId)))
+            .limit(1);
+          if (owned) {
+            conversationId = owned.id;
+            break;
+          }
+        }
         if (!conversationId) {
+          const notificationLock = `watch-notifications:${input.agentId}`;
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${notificationLock}))`);
           const [existing] = await tx
             .select({ id: conversations.id })
             .from(conversations)
@@ -293,7 +310,7 @@ export function createPostgresWatchRepository(db: Db): WatchRepository {
             .limit(1);
         }
         if (!suggestion) return null;
-        if (!suggestion.conversationId) {
+        if (suggestion.conversationId !== conversationId) {
           await tx
             .update(suggestions)
             .set({ conversationId, updatedAt: now })
