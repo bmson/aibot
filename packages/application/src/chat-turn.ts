@@ -15,6 +15,7 @@ import {
 } from '@assistant/core/chat';
 import { createCueScanner, spokenReplyLines, stripCueTags } from '@assistant/core/chat-cues';
 import { conversationMessageTexts } from '@assistant/core/conversation-context';
+import { TRIAGED_ACTIONABLE } from '@assistant/core/events';
 import { getAmbientBlock } from '@assistant/core/memory/ambient';
 import { listOpenCommitments, renderOpenCommitments } from '@assistant/core/memory/commitments';
 import { getOwnerCard } from '@assistant/core/memory/consolidation';
@@ -405,6 +406,11 @@ export async function handleChatTurn(
   // On triage failure default to the executor — a slow honest answer beats a
   // fast hallucinated one.
   let needsAction = true;
+  // Whether anything actually *concluded* "action", as opposed to the default
+  // above standing because triage could not answer. Only a real ruling travels
+  // to the executor (see TRIAGED_ACTIONABLE), because only a real ruling is
+  // worth letting the planner skip its own version of this question.
+  let ruledOnAction = false;
   // A deterministic gate first: a clear imperative ("add lunch Friday noon")
   // must reach the tools path even when the cheap classify model misreads it as
   // conversation. Failed-action follow-ups also return to the executor when
@@ -428,6 +434,7 @@ export async function handleChatTurn(
     // A free-range request must run through the executor (which honors the grant
     // and its floor) — never the tool-less streaming path.
     needsAction = true;
+    ruledOnAction = true;
   } else {
     try {
       // Prior turns are context only; the latest message is what we classify.
@@ -445,7 +452,10 @@ export async function handleChatTurn(
           ? `Prior turns (context only):\n${context}\n\nLATEST USER MESSAGE (classify this):\n${userText}`
           : `LATEST USER MESSAGE (classify this):\n${userText}`,
       });
-      if (triage.ok) needsAction = triage.object.needsAction;
+      if (triage.ok) {
+        needsAction = triage.object.needsAction;
+        ruledOnAction = true;
+      }
     } catch (err) {
       console.error('chat triage failed — routing to executor', err);
     }
@@ -483,7 +493,7 @@ export async function handleChatTurn(
           agentId: agent.id,
           conversationId: conversation.id,
           trust: 'owner',
-          payload: { text: userText },
+          payload: { text: userText, ...(ruledOnAction ? { [TRIAGED_ACTIONABLE]: true } : {}) },
         },
         type: 'chat_turn',
         goalId,

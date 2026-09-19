@@ -47,7 +47,11 @@ import { responseCardsForFinal } from '../response-cards.js';
 import { type ActionEvidence, enforceResponseContract } from '../response-contract.js';
 import { refreshRequestChecklist } from './checklist.js';
 import { isUnattendedGoalSession, KNOWN_SENDER_REPLY_KIND } from './context-helpers.js';
-import { notifyOwnerAndConversation, recordGoalBlocked } from './notices.js';
+import {
+  notifyOwnerAndConversation,
+  notifyOwnerOfDeliveredAnswer,
+  recordGoalBlocked,
+} from './notices.js';
 import { type ExecuteResult, type ExecutorDeps, LOST_LEASE } from './types.js';
 import { compact, latestUserText } from './util.js';
 
@@ -228,6 +232,18 @@ export async function finalizePendingResponse(
     await markAttentionNotified(deps.persistence?.tasks ?? deps.db, task.id).catch((err) =>
       console.error('attention stamp failed', err),
     );
+  }
+  // A dashboard chat turn is the one owner-facing type no channel delivers, so
+  // without this its answer lands in the thread and tells nobody. Excludes
+  // needs_attention, which has already pinged the owner through the louder
+  // notifyOwnerAndConversation path and must not buzz twice for one turn.
+  if (
+    conversationDelivered &&
+    task.trust === 'owner' &&
+    task.type === 'chat_turn' &&
+    pending.terminalStatus !== 'needs_attention'
+  ) {
+    await notifyOwnerOfDeliveredAnswer(deps, task, pending.text);
   }
   return { outcome: pending.outcome, detail: pending.progress.slice(0, 200) };
 }

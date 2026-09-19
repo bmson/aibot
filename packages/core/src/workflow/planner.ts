@@ -4,7 +4,7 @@ import type { TaskLease, TaskRepository } from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { type Plan, PlanSchema } from '../events.js';
+import { type Plan, PlanSchema, wasTriagedActionable } from '../events.js';
 import { type ModelRouter, TruncatedObjectError } from '../model-router/router.js';
 import { detectPersonalReadRequest, type PersonalReadRequest } from './read-intent.js';
 
@@ -233,7 +233,15 @@ export async function planTask(
   // Only owner chat/SMS short-circuit as trivial. Email deliberately does NOT:
   // mis-classifying an actionable email as trivial would skip the plan, and
   // with it the forced first-step tool call, reviving the zero-tool-call path.
-  if (task.type === 'chat_turn' || task.type === 'sms_turn') {
+  //
+  // A turn the chat route already ruled an action skips this: that ruling
+  // answers the same question, and a second round trip in front of work the
+  // owner is waiting on buys nothing. Its "action" default on a failed triage
+  // carries no ruling, so those still ask here — see TRIAGED_ACTIONABLE.
+  if (
+    (task.type === 'chat_turn' || task.type === 'sms_turn') &&
+    !wasTriagedActionable(task.trigger)
+  ) {
     const triage = await deps.router.object<z.infer<typeof TrivialSchema>>('classify', {
       taskId: task.id,
       schema: TrivialSchema,

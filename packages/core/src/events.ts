@@ -36,6 +36,29 @@ export const InboundEventSchema = z.object({
 });
 export type InboundEvent = z.infer<typeof InboundEventSchema>;
 
+/**
+ * Payload key recording that the chat route's own triage ruled this turn an
+ * action before handing it to the executor.
+ *
+ * The planner opens with nearly the same question — "does this need
+ * planning/tools, or is it trivial chat?" — so asking a second model costs a
+ * round trip in front of work the owner is waiting on, for an answer already
+ * in hand.
+ *
+ * Only an AFFIRMATIVE ruling is recorded. That route also lands on "action" as
+ * its safe default when its own triage fails to answer, and that default is
+ * not evidence of anything: skipping the planner's check there would send a
+ * possibly-trivial message straight to the planner's slow model, which is
+ * worse than the cheap classify it replaced. Absent the key, nothing changes.
+ */
+export const TRIAGED_ACTIONABLE = 'triagedActionable';
+
+/** Did the chat route affirmatively rule this task's turn an action? */
+export function wasTriagedActionable(trigger: unknown): boolean {
+  const payload = (trigger as { payload?: Record<string, unknown> } | null | undefined)?.payload;
+  return payload?.[TRIAGED_ACTIONABLE] === true;
+}
+
 /** Planner output — the planner decides, it never executes. */
 export const PlanSchema = z.object({
   action: z.enum(['reply', 'workflow', 'mission', 'schedule', 'clarify']),
