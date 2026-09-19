@@ -179,6 +179,22 @@ function materialize(
   return data;
 }
 
+function projectRecord(
+  record: MigrationRecord,
+  bundle: MigrationBundle,
+  memoryAgentIds: ReadonlyMap<string, string>,
+): Record<string, unknown> {
+  const data = materialize(record, bundle.manifest.source.embeddingSpace);
+  if (bundle.manifest.formatVersion >= 3 && record.table === 'knowledge_graph_sources') {
+    const memoryId = data.memoryId;
+    const agentId = typeof memoryId === 'string' ? memoryAgentIds.get(memoryId) : undefined;
+    if (!agentId)
+      throw new Error(`Knowledge graph source is missing its owned memory: ${record.id}`);
+    data.agentId = agentId;
+  }
+  return data;
+}
+
 function canonical(value: unknown, compare: (left: string, right: string) => number): unknown {
   if (Array.isArray(value)) return value.map((item) => canonical(item, compare));
   if (value && typeof value === 'object' && !(value instanceof Date))
@@ -448,6 +464,14 @@ export async function importWorkspaceBundle(
   const records = [...bundle.records].sort((a, b) =>
     recordCompare(`${a.collection}:${a.id}`, `${b.collection}:${b.id}`),
   );
+  const memoryAgentIds = new Map(
+    records
+      .filter((record) => record.table === 'memories')
+      .flatMap((record) => {
+        const agentId = record.data.agentId;
+        return typeof agentId === 'string' ? [[record.id, agentId] as const] : [];
+      }),
+  );
   const derived = derivedRecords(bundle, options.target);
   const dataDerived = derived.filter(
     (record) => !(record.collection === 'coordination' && record.id === 'migration'),
@@ -457,10 +481,7 @@ export async function importWorkspaceBundle(
       collection: record.collection,
       id: record.id,
       data: encodeRecord(
-        materializeValue(materialize(record, bundle.manifest.source.embeddingSpace)) as Record<
-          string,
-          unknown
-        >,
+        materializeValue(projectRecord(record, bundle, memoryAgentIds)) as Record<string, unknown>,
       ),
     })),
     ...dataDerived.map((record) => ({

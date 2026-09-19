@@ -75,7 +75,6 @@ describe.skipIf(!enabled)('Firestore profile memory maintenance', () => {
       for (const [id, entityId, owner] of [
         ['orphan-alias', 'orphan', agentId],
         ['shared-alias', 'shared', agentId],
-        ['dangling-alias', 'missing', agentId],
         ['foreign-alias', 'foreign', foreignAgentId],
       ] as const)
         await store.doc('knowledgeGraphEntityAliases', id).set({ id, entityId, agentId: owner });
@@ -96,17 +95,38 @@ describe.skipIf(!enabled)('Firestore profile memory maintenance', () => {
         subjectEntityId: 'shared',
         objectEntityId: 'retained',
       });
+      const unrelated = store.db.batch();
+      for (let index = 0; index < 160; index++) {
+        const id = `unrelated-${index}`;
+        unrelated.set(store.doc('knowledgeGraphEntities', id), { id, agentId });
+      }
+      for (let index = 1; index < 125; index++) {
+        const id = `forgotten-${index}`;
+        unrelated.set(store.doc('knowledgeGraphRelations', id), {
+          id,
+          agentId,
+          sourceMemoryId: memoryId,
+          subjectEntityId: 'orphan',
+          objectEntityId: 'shared',
+        });
+      }
+      await unrelated.commit();
 
       await repository.removeOrphanedGraphEntities({ agentId, memoryId });
       await repository.removeOrphanedGraphEntities({ agentId, memoryId });
 
       expect((await store.doc('knowledgeGraphSources', memoryId).get()).exists).toBe(false);
       expect((await store.doc('knowledgeGraphRelations', 'forgotten').get()).exists).toBe(false);
+      expect(
+        (
+          await store
+            .collection('knowledgeGraphRelations')
+            .where('sourceMemoryId', '==', memoryId)
+            .get()
+        ).empty,
+      ).toBe(true);
       expect((await store.doc('knowledgeGraphEntities', 'orphan').get()).exists).toBe(false);
       expect((await store.doc('knowledgeGraphEntityAliases', 'orphan-alias').get()).exists).toBe(
-        false,
-      );
-      expect((await store.doc('knowledgeGraphEntityAliases', 'dangling-alias').get()).exists).toBe(
         false,
       );
       expect((await store.doc('knowledgeGraphEntities', 'shared').get()).exists).toBe(true);
@@ -117,6 +137,7 @@ describe.skipIf(!enabled)('Firestore profile memory maintenance', () => {
       expect((await store.doc('knowledgeGraphEntityAliases', 'foreign-alias').get()).exists).toBe(
         true,
       );
+      expect((await store.doc('knowledgeGraphEntities', 'unrelated-159').get()).exists).toBe(true);
     } finally {
       await disposeStore(store);
     }

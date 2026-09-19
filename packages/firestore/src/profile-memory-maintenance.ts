@@ -6,7 +6,8 @@ import {
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 import { createTask } from './task-creation.js';
 
-const CLEANUP_BOUND = 150;
+const RELATION_DELETE_PAGE = 100;
+const ENTITY_ALIAS_BOUND = 400;
 
 export class FirestoreProfileMemoryMaintenance implements ProfileMemoryMaintenance {
   readonly kind = 'profile-memory-maintenance' as const;
@@ -55,72 +56,94 @@ export class FirestoreProfileMemoryMaintenance implements ProfileMemoryMaintenan
   }
 
   async removeOrphanedGraphEntities(input: { agentId: string; memoryId: string }): Promise<void> {
-    await this.store.db.runTransaction(async (tx) => {
-      const [memory, source, sourceRelations, agentRelations, entities, aliases] =
-        await Promise.all([
+    const candidateEntityIds = new Set<string>();
+    let ownershipProven = false;
+    for (;;) {
+      const page = await this.store.db.runTransaction(async (tx) => {
+        const [memory, source, relations] = await Promise.all([
           tx.get(this.store.doc('memories', input.memoryId)),
           tx.get(this.store.doc('knowledgeGraphSources', input.memoryId)),
           tx.get(
             this.store
               .collection('knowledgeGraphRelations')
               .where('sourceMemoryId', '==', input.memoryId)
-              .limit(CLEANUP_BOUND + 1),
+              .limit(RELATION_DELETE_PAGE),
+          ),
+        ]);
+        if (memory.exists && memory.get('agentId') !== input.agentId)
+          throw new Error('Graph source belongs to another agent');
+        let pageOwnershipProven = source.exists && source.get('agentId') === input.agentId;
+        const ids: string[] = [];
+        for (const relation of relations.docs) {
+          if (relation.get('agentId') !== input.agentId)
+            throw new Error('Graph source belongs to another agent');
+          pageOwnershipProven = true;
+          for (const field of ['subjectEntityId', 'objectEntityId']) {
+            const id = relation.get(field);
+            if (typeof id !== 'string' || !id) throw new Error('Invalid graph relation endpoint');
+            ids.push(id);
+          }
+          tx.delete(relation.ref);
+        }
+        return { ids, ownershipProven: pageOwnershipProven };
+      });
+      ownershipProven ||= page.ownershipProven;
+      for (const id of page.ids) candidateEntityIds.add(id);
+      if (page.ids.length > 0) continue;
+
+      const sourceRemoved = await this.store.db.runTransaction(async (tx) => {
+        const [source, relation] = await Promise.all([
+          tx.get(this.store.doc('knowledgeGraphSources', input.memoryId)),
+          tx.get(
+            this.store
+              .collection('knowledgeGraphRelations')
+              .where('sourceMemoryId', '==', input.memoryId)
+              .limit(1),
+          ),
+        ]);
+        if (!relation.empty) return false;
+        if (!source.exists) return true;
+        if (!ownershipProven && source.get('agentId') !== input.agentId)
+          throw new Error('Cannot prove graph source ownership');
+        tx.delete(source.ref);
+        return true;
+      });
+      if (sourceRemoved) break;
+    }
+
+    for (const entityId of candidateEntityIds) {
+      await this.store.db.runTransaction(async (tx) => {
+        const entityRef = this.store.doc('knowledgeGraphEntities', entityId);
+        const [entity, subjects, objects, aliases] = await Promise.all([
+          tx.get(entityRef),
+          tx.get(
+            this.store
+              .collection('knowledgeGraphRelations')
+              .where('subjectEntityId', '==', entityId)
+              .limit(1),
           ),
           tx.get(
             this.store
               .collection('knowledgeGraphRelations')
-              .where('agentId', '==', input.agentId)
-              .limit(CLEANUP_BOUND + 1),
-          ),
-          tx.get(
-            this.store
-              .collection('knowledgeGraphEntities')
-              .where('agentId', '==', input.agentId)
-              .limit(CLEANUP_BOUND + 1),
+              .where('objectEntityId', '==', entityId)
+              .limit(1),
           ),
           tx.get(
             this.store
               .collection('knowledgeGraphEntityAliases')
-              .where('agentId', '==', input.agentId)
-              .limit(CLEANUP_BOUND + 1),
+              .where('entityId', '==', entityId)
+              .limit(ENTITY_ALIAS_BOUND + 1),
           ),
         ]);
-      if (memory.exists && memory.get('agentId') !== input.agentId)
-        throw new Error('Graph source belongs to another agent');
-      if (
-        [sourceRelations, agentRelations, entities, aliases].some(
-          (rows) => rows.size > CLEANUP_BOUND,
-        )
-      )
-        throw new Error('Graph cleanup bound reached');
-      if (sourceRelations.docs.some((doc) => doc.get('agentId') !== input.agentId))
-        throw new Error('Graph source belongs to another agent');
-      const sourceOwned =
-        !source.exists ||
-        source.get('agentId') === input.agentId ||
-        sourceRelations.docs.length > 0;
-      if (!sourceOwned) throw new Error('Cannot prove graph source ownership');
-
-      const removedRelationIds = new Set(sourceRelations.docs.map((doc) => doc.id));
-      const referenced = new Set<string>();
-      for (const doc of agentRelations.docs) {
-        if (removedRelationIds.has(doc.id)) continue;
-        for (const field of ['subjectEntityId', 'objectEntityId']) {
-          const id = doc.get(field);
-          if (typeof id === 'string') referenced.add(id);
-        }
-      }
-      const entityIds = new Set(entities.docs.map((doc) => String(doc.get('id'))));
-      const orphanIds = new Set(
-        entities.docs.map((doc) => String(doc.get('id'))).filter((id) => !referenced.has(id)),
-      );
-      if (source.exists) tx.delete(source.ref);
-      for (const doc of sourceRelations.docs) tx.delete(doc.ref);
-      for (const doc of entities.docs) if (orphanIds.has(String(doc.get('id')))) tx.delete(doc.ref);
-      for (const doc of aliases.docs) {
-        const entityId = String(doc.get('entityId'));
-        if (!entityIds.has(entityId) || orphanIds.has(entityId)) tx.delete(doc.ref);
-      }
-    });
+        if (!entity.exists || !subjects.empty || !objects.empty) return;
+        if (entity.get('agentId') !== input.agentId)
+          throw new Error('Graph entity belongs to another agent');
+        if (aliases.size > ENTITY_ALIAS_BOUND) throw new Error('Graph entity alias bound reached');
+        if (aliases.docs.some((alias) => alias.get('agentId') !== input.agentId))
+          throw new Error('Graph entity alias belongs to another agent');
+        for (const alias of aliases.docs) tx.delete(alias.ref);
+        tx.delete(entityRef);
+      });
+    }
   }
 }
