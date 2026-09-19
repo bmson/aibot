@@ -54,7 +54,25 @@ export function profileMemoryCommands(
     'kind' in store && store.kind === 'profile-memory-command-persistence'
       ? (store as ProfileMemoryCommandPersistence)
       : createPostgresProfileMemoryCommandPersistence(store as Db);
-  return createProfileMemoryCommands(persistence, router);
+  const commands = createProfileMemoryCommands(persistence, router);
+  if ('kind' in store && store.kind === 'profile-memory-command-persistence') return commands;
+  // Legacy callers silently ignore missing/foreign facts. Keep that behavior
+  // while transactional adapters enforce the single-owner invariant themselves.
+  const existing = async (id: string, run: () => Promise<void>): Promise<void> => {
+    if (await persistence.memories.get(id)) await run();
+  };
+  return {
+    ...commands,
+    confirmMemory: (id: string) => existing(id, () => commands.confirmMemory(id)),
+    restoreMemory: (id: string) => existing(id, () => commands.restoreMemory(id)),
+    forgetMemory: (id: string) => existing(id, () => commands.forgetMemory(id)),
+    setMemoryProminence: (id: string, level: ProminenceLevel) =>
+      existing(id, () => commands.setMemoryProminence(id, level)),
+    approveQuarantinedMemory: (id: string) =>
+      existing(id, () => commands.approveQuarantinedMemory(id)),
+    rejectQuarantinedMemory: (id: string) =>
+      existing(id, () => commands.rejectQuarantinedMemory(id)),
+  };
 }
 
 export interface EmbeddingPort {
