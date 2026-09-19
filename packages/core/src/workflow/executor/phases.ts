@@ -114,6 +114,7 @@ export async function runCodeJobPhase(
         documentProcessor: deps.documentProcessor,
         calendarReader: deps.calendarReader,
         notifyOwner: deps.notifyOwner,
+        persistence: deps.persistence,
         jobUnavailable: deps.jobUnavailable,
         heartbeat: async () => {
           if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease)))

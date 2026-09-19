@@ -23,6 +23,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore watch smoke', (
         emailCandidates: 1,
         webClaims: 1,
         fires: 1,
+        suggestions: 1,
         expired: 2,
       });
     } finally {

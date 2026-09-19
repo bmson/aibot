@@ -100,7 +100,7 @@ describe('runWatchSuggest', () => {
     await addFire('gmail:msg-a');
     const result = await runWatchSuggest(
       { db, router: fakeRouter(GOOD_DRAFT) },
-      { watchId, triggerRef: 'gmail:msg-a' },
+      { agentId, watchId, triggerRef: 'gmail:msg-a' },
     );
     expect(result.suggested).toBe(true);
 
@@ -130,7 +130,7 @@ describe('runWatchSuggest', () => {
     // and posts no second message — the sourceRef and channelMessageId fences.
     const result = await runWatchSuggest(
       { db, router: fakeRouter(GOOD_DRAFT) },
-      { watchId, triggerRef: 'gmail:msg-a' },
+      { agentId, watchId, triggerRef: 'gmail:msg-a' },
     );
     const posted = await db
       .select()
@@ -148,7 +148,7 @@ describe('runWatchSuggest', () => {
         db,
         router: fakeRouter({ worthSuggesting: false, summary: '', proposedAction: '' }),
       },
-      { watchId, triggerRef: 'gmail:msg-b' },
+      { agentId, watchId, triggerRef: 'gmail:msg-b' },
     );
     expect(result.suggested).toBe(false);
     const [row] = await db
@@ -163,7 +163,7 @@ describe('runWatchSuggest', () => {
     await addFire('gmail:msg-c', '');
     const result = await runWatchSuggest(
       { db, router: fakeRouter(GOOD_DRAFT) },
-      { watchId, triggerRef: 'gmail:msg-c' },
+      { agentId, watchId, triggerRef: 'gmail:msg-c' },
     );
     expect(result.suggested).toBe(false);
   });

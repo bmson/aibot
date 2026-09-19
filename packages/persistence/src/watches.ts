@@ -1,6 +1,10 @@
 import type { Records } from './records.js';
 
 export type WatchRecord = Records['watches'];
+export type WatchSuggestionContext = {
+  watch: WatchRecord;
+  fire: Records['watchFires'];
+};
 
 export interface WatchCreateInput {
   agentId: string;
@@ -45,4 +49,22 @@ export interface WatchRepository {
     state?: unknown;
     expectedNextPollAt?: Date;
   }): Promise<{ recorded: boolean; watch: WatchRecord | null }>;
+  getSuggestionContext(input: {
+    agentId: string;
+    watchId: string;
+    triggerRef: string;
+  }): Promise<WatchSuggestionContext | null>;
+  commitSuggestion(input: {
+    agentId: string;
+    watchId: string;
+    triggerRef: string;
+    summary: string;
+    proposedAction: string;
+    now?: Date;
+  }): Promise<{
+    suggestion: Records['suggestions'];
+    conversationId: string;
+    fireId: string;
+    watchName: string;
+  } | null>;
 }

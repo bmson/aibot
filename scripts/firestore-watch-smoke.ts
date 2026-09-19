@@ -14,7 +14,7 @@ export async function firestoreWatchSmoke(store: InstallationStore) {
   const email = await repository.create({
     agentId,
     kind: 'email',
-    tier: 'notify',
+    tier: 'suggest',
     name: 'Firestore validation email watch',
     match: { expectedSenderEmails: ['validation@example.com'] },
     maxFires: null,
@@ -85,6 +85,30 @@ export async function firestoreWatchSmoke(store: InstallationStore) {
   assert.equal((await repository.recordFire(fire)).recorded, true);
   // This second call exercises the equality-only watchFires lookup used for deduplication.
   assert.equal((await repository.recordFire(fire)).recorded, false);
+  assert.equal(
+    (
+      await repository.getSuggestionContext({
+        agentId,
+        watchId: email.id,
+        triggerRef: fire.triggerRef,
+      })
+    )?.fire.triggerRef,
+    fire.triggerRef,
+  );
+  const suggestion = {
+    agentId,
+    watchId: email.id,
+    triggerRef: fire.triggerRef,
+    summary: 'Synthetic next step?',
+    proposedAction: 'Draft a synthetic reply.',
+    now,
+  };
+  assert.ok(await repository.commitSuggestion(suggestion));
+  assert.ok(await repository.commitSuggestion(suggestion));
+  assert.equal(
+    (await store.collection('suggestions').where('agentId', '==', agentId).get()).size,
+    1,
+  );
 
   assert.equal(await repository.expire(agentId, now), 1);
   assert.equal(await repository.expire(null, now), 1);
@@ -99,6 +123,7 @@ export async function firestoreWatchSmoke(store: InstallationStore) {
     emailCandidates: 1,
     webClaims: 1,
     fires: 1,
+    suggestions: 1,
     expired: 2,
   };
 }

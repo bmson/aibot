@@ -243,4 +243,143 @@ export class FirestoreWatchRepository implements WatchRepository {
       return { recorded: true, watch: updated };
     });
   }
+
+  async getSuggestionContext(input: Parameters<WatchRepository['getSuggestionContext']>[0]) {
+    const fires = await this.store
+      .collection('watchFires')
+      .where('agentId', '==', input.agentId)
+      .where('watchId', '==', input.watchId)
+      .where('triggerRef', '==', input.triggerRef)
+      .limit(1)
+      .get();
+    const fireDoc = fires.docs[0];
+    if (!fireDoc) return null;
+    const fire = decodeRecord<Records['watchFires']>(fireDoc.data());
+    if (documentKey(fire.id) !== fireDoc.id) return null;
+    const watchDoc = await this.store.doc('watches', fire.watchId).get();
+    if (!watchDoc.exists) return null;
+    const watch = decodeRecord<Watch>(watchDoc.data());
+    if (
+      watch.agentId !== input.agentId ||
+      documentKey(watch.id) !== watchDoc.id ||
+      watch.id !== input.watchId
+    )
+      return null;
+    return { watch, fire };
+  }
+
+  async commitSuggestion(input: Parameters<WatchRepository['commitSuggestion']>[0]) {
+    return this.store.db.runTransaction(async (tx) => {
+      const fires = await tx.get(
+        this.store
+          .collection('watchFires')
+          .where('agentId', '==', input.agentId)
+          .where('watchId', '==', input.watchId)
+          .where('triggerRef', '==', input.triggerRef)
+          .limit(1),
+      );
+      const fireDoc = fires.docs[0];
+      if (!fireDoc) return null;
+      const fire = decodeRecord<Records['watchFires']>(fireDoc.data());
+      if (documentKey(fire.id) !== fireDoc.id) return null;
+      const watchRef = this.store.doc('watches', fire.watchId);
+      const watchDoc = await tx.get(watchRef);
+      if (!watchDoc.exists) return null;
+      const watch = decodeRecord<Watch>(watchDoc.data());
+      if (
+        watch.agentId !== input.agentId ||
+        documentKey(watch.id) !== watchDoc.id ||
+        watch.tier !== 'suggest'
+      )
+        return null;
+
+      const sourceRef = `watch:${watch.id}:${fire.triggerRef}`;
+      const existingSuggestions = await tx.get(
+        this.store
+          .collection('suggestions')
+          .where('agentId', '==', input.agentId)
+          .where('sourceRef', '==', sourceRef)
+          .limit(1),
+      );
+      const existingSuggestionDoc = existingSuggestions.docs[0];
+      const existingSuggestion = existingSuggestionDoc
+        ? decodeRecord<Records['suggestions']>(existingSuggestionDoc.data())
+        : null;
+      if (
+        existingSuggestionDoc &&
+        (!existingSuggestion || documentKey(existingSuggestion.id) !== existingSuggestionDoc.id)
+      )
+        return null;
+
+      let conversationId = watch.conversationId ?? existingSuggestion?.conversationId ?? null;
+      let notificationRef: FirebaseFirestore.DocumentReference | undefined;
+      if (!conversationId) {
+        const notifications = await tx.get(
+          this.store
+            .collection('conversations')
+            .where('agentId', '==', input.agentId)
+            .where('title', '==', 'Notifications')
+            .limit(1),
+        );
+        const existing = notifications.docs[0];
+        if (existing) {
+          const conversation = decodeRecord<Records['conversations']>(existing.data());
+          if (documentKey(conversation.id) !== existing.id) return null;
+          conversationId = conversation.id;
+        } else {
+          conversationId = randomUUID();
+          notificationRef = this.store.doc('conversations', conversationId);
+        }
+      }
+
+      const now = input.now ?? this.store.now();
+      if (notificationRef)
+        tx.create(
+          notificationRef,
+          encodeRecord({
+            id: conversationId,
+            agentId: input.agentId,
+            channel: 'chat',
+            trust: 'assistant',
+            title: 'Notifications',
+            isPrimary: false,
+            archived: false,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            modelOverride: null,
+            metadata: {},
+            lastReadAt: null,
+          }),
+        );
+
+      let suggestion = existingSuggestion;
+      if (!suggestion) {
+        const id = randomUUID();
+        suggestion = {
+          id,
+          agentId: input.agentId,
+          conversationId,
+          summary: input.summary.slice(0, 500),
+          proposedAction: input.proposedAction.slice(0, 2000),
+          origin: 'watch',
+          sourceRef,
+          status: 'pending',
+          acceptedTaskId: null,
+          snoozedUntil: null,
+          expiresAt: new Date(now.getTime() + 7 * 24 * 3600 * 1000),
+          createdAt: now,
+          updatedAt: now,
+        };
+        tx.create(this.store.doc('suggestions', id), encodeRecord(suggestion));
+      } else if (!suggestion.conversationId) {
+        suggestion = { ...suggestion, conversationId, updatedAt: now };
+        tx.update(
+          this.store.doc('suggestions', suggestion.id),
+          encodeRecord({ conversationId, updatedAt: now }),
+        );
+      }
+      return { suggestion, conversationId, fireId: fire.id, watchName: watch.name };
+    });
+  }
 }

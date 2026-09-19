@@ -1,11 +1,14 @@
-import { type Db, suggestions, watches, watchFires } from '@assistant/db';
-import { and, eq } from 'drizzle-orm';
+import {
+  createPostgresExecutionContextRepository,
+  createPostgresMessageRepository,
+  createPostgresWatchRepository,
+  type Db,
+} from '@assistant/db';
+import type { ExecutionPersistence } from '@assistant/persistence';
 import { z } from 'zod';
-import { getAgent, persistMessage, postOwnerNotice } from '../chat.js';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
-import { createSuggestion } from './suggestions.js';
 
 /**
  * The suggest tier of a watch (anticipation layer, phase 2): a firing watch
@@ -47,18 +50,28 @@ export interface WatchSuggestResult {
 }
 
 export async function runWatchSuggest(
-  deps: { db: Db; router: ModelRouter; heartbeat?: () => Promise<void> },
-  opts: { taskId?: string; watchId: string; triggerRef: string },
+  deps: {
+    db: Db;
+    router: ModelRouter;
+    persistence?: Pick<ExecutionPersistence, 'executionContext' | 'messages' | 'watches'>;
+    heartbeat?: () => Promise<void>;
+  },
+  opts: { agentId: string; taskId?: string; watchId: string; triggerRef: string },
 ): Promise<WatchSuggestResult> {
   const { db, router } = deps;
   return withSpan('workflow.watch_suggest', {}, async () => {
-    const [fire] = await db
-      .select()
-      .from(watchFires)
-      .where(and(eq(watchFires.watchId, opts.watchId), eq(watchFires.triggerRef, opts.triggerRef)))
-      .limit(1);
-    if (!fire) return { suggested: false, summary: 'watch.suggest: fire row gone' };
-    const [watch] = await db.select().from(watches).where(eq(watches.id, fire.watchId)).limit(1);
+    const watches = deps.persistence?.watches ?? createPostgresWatchRepository(db);
+    const messages = deps.persistence?.messages ?? createPostgresMessageRepository(db);
+    const context =
+      deps.persistence?.executionContext ?? createPostgresExecutionContextRepository(db);
+    const agentId = opts.agentId;
+    const suggestContext = await watches.getSuggestionContext({
+      agentId,
+      watchId: opts.watchId,
+      triggerRef: opts.triggerRef,
+    });
+    if (!suggestContext) return { suggested: false, summary: 'watch.suggest: fire row gone' };
+    const { fire, watch } = suggestContext;
     if (watch?.tier !== 'suggest') {
       return { suggested: false, summary: 'watch.suggest: not a suggest-tier watch' };
     }
@@ -66,7 +79,8 @@ export async function runWatchSuggest(
       return { suggested: false, summary: 'watch.suggest: fire has no excerpt to compose from' };
     }
 
-    const agent = await getAgent(db);
+    const agent = await context.getAgent(agentId);
+    if (!agent) return { suggested: false, summary: 'watch.suggest: owner row gone' };
     await deps.heartbeat?.();
     const composed = await router
       .object<z.infer<typeof SuggestDraftSchema>>('draft', {
@@ -104,23 +118,15 @@ export async function runWatchSuggest(
     // Idempotent on (agent, sourceRef): a redelivered trigger re-proposes
     // nothing. The message post carries its own channelMessageId fence, so a
     // crash between the two still converges on exactly one card.
-    const sourceRef = `watch:${watch.id}:${fire.triggerRef}`;
-    const created = await createSuggestion(db, {
-      agentId: watch.agentId,
-      conversationId: watch.conversationId ?? undefined,
+    const committed = await watches.commitSuggestion({
+      agentId,
+      watchId: watch.id,
+      triggerRef: fire.triggerRef,
       summary: draft.summary.trim(),
       proposedAction: draft.proposedAction.trim(),
-      sourceRef,
-      origin: 'watch',
     });
-    const [suggestion] = created
-      ? [created]
-      : await db
-          .select()
-          .from(suggestions)
-          .where(and(eq(suggestions.agentId, watch.agentId), eq(suggestions.sourceRef, sourceRef)))
-          .limit(1);
-    if (!suggestion) return { suggested: false, summary: 'watch.suggest: proposal vanished' };
+    if (!committed) return { suggested: false, summary: 'watch.suggest: proposal vanished' };
+    const { suggestion, conversationId } = committed;
 
     const text = `One more thing from your "${watch.name}" watch:`;
     const parts: unknown[] = [
@@ -132,27 +138,15 @@ export async function runWatchSuggest(
         proposedAction: suggestion.proposedAction,
       },
     ];
-    if (watch.conversationId) {
-      await persistMessage(db, {
-        conversationId: watch.conversationId,
-        ...(opts.taskId ? { taskId: opts.taskId } : {}),
-        role: 'assistant',
-        origin: 'assistant',
-        parts,
-        text,
-        channelMessageId: `watch-suggest:${fire.id}`,
-      });
-    } else {
-      await postOwnerNotice(db, {
-        agentId: watch.agentId,
-        text,
-        ...(opts.taskId ? { taskId: opts.taskId } : {}),
-        extraParts: parts.slice(1),
-        // A watch fire is background activity, not a conversation starter —
-        // keep the primary thread conversational.
-        destination: 'notifications',
-      });
-    }
+    await messages.append({
+      conversationId,
+      ...(opts.taskId ? { taskId: opts.taskId } : {}),
+      role: 'assistant',
+      origin: 'assistant',
+      parts,
+      text,
+      channelMessageId: `watch-suggest:${fire.id}`,
+    });
     return {
       suggested: true,
       summary: `watch.suggest: proposed "${suggestion.summary.slice(0, 80)}"`,

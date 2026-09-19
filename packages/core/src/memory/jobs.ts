@@ -1,4 +1,5 @@
 import { type Db, type ScheduleRow, schedules, type TaskRow } from '@assistant/db';
+import type { ExecutionPersistence } from '@assistant/persistence';
 import { and, eq, sql } from 'drizzle-orm';
 import { getOrCreateNotificationsConversation, persistMessage } from '../chat.js';
 import { loadConfig } from '../config.js';
@@ -133,6 +134,7 @@ export async function runCodeJob(
      * open the app to find it, which is exactly the silence this exists to fix.
      */
     notifyOwner?: ProactiveNotifier;
+    persistence?: ExecutionPersistence;
     heartbeat?: () => Promise<void>;
     /**
      * Supplied by the composition root: returns a completion summary when the
@@ -468,8 +470,18 @@ export async function runCodeJob(
         return { done: true, summary: 'watch.suggest: malformed payload' };
       }
       const r = await runWatchSuggest(
-        { db: deps.db, router: deps.router, heartbeat: deps.heartbeat },
-        { taskId: task.id, watchId: payload.watchId, triggerRef: payload.triggerRef },
+        {
+          db: deps.db,
+          router: deps.router,
+          persistence: deps.persistence,
+          heartbeat: deps.heartbeat,
+        },
+        {
+          agentId: task.agentId,
+          taskId: task.id,
+          watchId: payload.watchId,
+          triggerRef: payload.triggerRef,
+        },
       );
       return { done: true, summary: r.summary };
     }
