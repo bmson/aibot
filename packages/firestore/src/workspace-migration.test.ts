@@ -444,6 +444,16 @@ describe.skipIf(!enabled)('Firestore workspace migration import', () => {
         }),
       ).rejects.toThrow('checksum mismatch');
       await graphSource.update({ agentId: source.manifest.source.agentId });
+      const deletionHash = `deleted-${memoryId}`;
+      await Promise.all([
+        store.doc('graphDeletionIntents', memoryId).set({
+          memoryId,
+          agentId: source.manifest.source.agentId,
+          contentHash: deletionHash,
+          cleanupCompletedAt: null,
+        }),
+        store.doc('memoryTombstones', deletionHash).set({ contentHash: deletionHash }),
+      ]);
       await store.doc('memories', memoryId).delete();
       await new FirestoreProfileMemoryMaintenance(store).removeOrphanedGraphEntities({
         agentId: source.manifest.source.agentId,

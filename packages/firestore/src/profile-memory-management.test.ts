@@ -280,6 +280,14 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect(await repository.forget(rejected.id, 'quarantine_reject')).toMatchObject({
         status: 'updated',
       });
+      expect(await repository.forget(forgotten.id, 'owner_forget')).toEqual({
+        status: 'updated',
+        memory: {
+          id: forgotten.id,
+          agentId,
+          contentHash: forgotten.contentHash,
+        },
+      });
       for (const [row, reason] of [
         [forgotten, 'owner_forget'],
         [rejected, 'quarantine_reject'],
@@ -289,6 +297,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
         expect((await store.doc('memoryTombstones', row.contentHash).get()).get('reason')).toBe(
           reason,
         );
+        expect((await store.doc('graphDeletionIntents', row.id).get()).data()).toMatchObject({
+          memoryId: row.id,
+          agentId,
+          contentHash: row.contentHash,
+          cleanupCompletedAt: null,
+        });
       }
       expect((await store.doc('ownerCards', agentId).get()).get('content')).toBe('');
     });

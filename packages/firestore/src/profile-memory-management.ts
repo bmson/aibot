@@ -196,9 +196,26 @@ export class FirestoreProfileMemoryManagementRepository
   async forget(memoryId: string, reason: MemoryForgetReason): Promise<MemoryMutation> {
     return this.store.db.runTransaction(async (tx) => {
       const agentId = await this.configuredAgent(tx);
-      const snapshot = await tx.get(this.store.doc('memories', memoryId));
+      const intentRef = this.store.doc('graphDeletionIntents', memoryId);
+      const [snapshot, existingIntent] = await tx.getAll(
+        this.store.doc('memories', memoryId),
+        intentRef,
+      );
+      if (!snapshot || !existingIntent) throw new Error('Memory deletion fence read is incomplete');
       const row = this.owned(snapshot, agentId);
-      if (!row) return { status: 'not-found' };
+      if (!row) {
+        if (
+          existingIntent.exists &&
+          existingIntent.get('memoryId') === memoryId &&
+          existingIntent.get('agentId') === agentId &&
+          typeof existingIntent.get('contentHash') === 'string'
+        )
+          return {
+            status: 'updated',
+            memory: { id: memoryId, agentId, contentHash: existingIntent.get('contentHash') },
+          };
+        return { status: 'not-found' };
+      }
       const tombstoneRef = this.store.doc('memoryTombstones', row.contentHash);
       const hashRef = this.store.doc('memoryContentHashes', row.contentHash);
       const [tombstone, hash] = await tx.getAll(tombstoneRef, hashRef);
@@ -214,6 +231,20 @@ export class FirestoreProfileMemoryManagementRepository
           }),
         );
       if (hash?.exists && hash.get('memoryId') === row.id) tx.delete(hashRef);
+      // This intent is the durable per-memory deletion fence. Every Firestore
+      // graph projection writer must read it in the same transaction and refuse
+      // writes while it exists; that writer port remains a cutover prerequisite.
+      tx.set(
+        intentRef,
+        encodeRecord({
+          memoryId: row.id,
+          agentId,
+          contentHash: row.contentHash,
+          reason,
+          createdAt: now,
+          cleanupCompletedAt: null,
+        }),
+      );
       tx.delete(snapshot.ref);
       this.invalidateOwnerCard(tx, agentId, now);
       return { status: 'updated', memory: managed(row) };
