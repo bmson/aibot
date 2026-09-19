@@ -2060,9 +2060,11 @@ final class AppModel: ObservableObject {
                 let assistantAfter = messages.filter { !$0.id.hasPrefix("stream-") && $0.role == .assistant }.count
                 gapMilliseconds = PollingPolicy.gapMilliseconds(
                     elapsedMilliseconds: elapsedMilliseconds,
+                    // `superseded` is optional on the wire — a server that sent
+                    // no retractions omits it entirely.
                     carriedNews: assistantAfter > assistantBefore
                         || !updates.messages.isEmpty
-                        || !updates.superseded.isEmpty,
+                        || !(updates.superseded?.isEmpty ?? true),
                     attempt: attempt,
                     hasTaskID: taskId != nil
                 )

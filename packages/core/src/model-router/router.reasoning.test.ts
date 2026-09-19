@@ -209,8 +209,13 @@ function repository() {
   return { repo, role, model, totals };
 }
 
-describe('routing configuration cache', () => {
-  it('reads near-static role and model rows once, not once per call', async () => {
+describe('routing configuration is never cached', () => {
+  it('re-reads the role and model rows on every call', async () => {
+    // Deliberate. These rows are a safety control as well as configuration:
+    // route() refuses a disabled model so a retired provider is never billed,
+    // and the owner expects a model switch to take on the next message. A TTL
+    // makes both "eventually", and the router runs in more than one process,
+    // so nothing in-process can invalidate a change made elsewhere.
     const { repo, role, model } = repository();
     const router = new ModelRouter(repo, 'unused', 'off', provider());
 
@@ -218,11 +223,11 @@ describe('routing configuration cache', () => {
     await router.route('draft');
     await router.route('draft');
 
-    expect(role).toHaveBeenCalledTimes(1);
-    expect(model).toHaveBeenCalledTimes(1);
+    expect(role).toHaveBeenCalledTimes(3);
+    expect(model).toHaveBeenCalledTimes(3);
   });
 
-  it('never caches spend, which the calls being routed are themselves changing', async () => {
+  it('re-reads spend too, which the calls being routed are themselves changing', async () => {
     const { repo, totals } = repository();
     const router = new ModelRouter(repo, 'unused', 'off', provider());
 
@@ -230,17 +235,6 @@ describe('routing configuration cache', () => {
     await router.route('draft');
 
     expect(totals).toHaveBeenCalledTimes(2);
-  });
-
-  it('re-reads after an explicit clear, so a process that rewrote the rows sees them', async () => {
-    const { repo, role } = repository();
-    const router = new ModelRouter(repo, 'unused', 'off', provider());
-
-    await router.route('draft');
-    router.clearRoutingCache();
-    await router.route('draft');
-
-    expect(role).toHaveBeenCalledTimes(2);
   });
 
   it('does not re-read an override the caller already resolved', async () => {
