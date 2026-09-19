@@ -35,6 +35,8 @@ export interface ScheduleRepository {
   /** Create once per agent/name; an existing schedule is returned unchanged. */
   ensure(input: ScheduleCreateInput): Promise<ScheduleRecord>;
   getByName(agentId: string, name: string): Promise<ScheduleRecord | null>;
+  /** Owner settings mutation. Reminder schedules are excluded by every adapter. */
+  setOwnerEnabled(agentId: string, scheduleId: string, enabled: boolean): Promise<boolean>;
   listUninitialized(limit?: number): Promise<ScheduleRecord[]>;
   listDue(now: Date, limit?: number): Promise<ScheduleRecord[]>;
   initialize(expected: ScheduleRecord, nextRunAt: Date, now: Date): Promise<boolean>;

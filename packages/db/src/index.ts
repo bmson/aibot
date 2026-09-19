@@ -30,6 +30,7 @@ export { createPostgresRecallMetricsRepository } from './recall-metrics-reposito
 export { createPostgresReminderRepository } from './reminder-repository.js';
 export { createPostgresScheduleRepository } from './schedule-repository.js';
 export * from './schema.js';
+export { createPostgresSettingsRepository } from './settings-repository.js';
 export { createPostgresSkillContextRepository } from './skill-context-repository.js';
 export { createPostgresTaskLeaseRepository } from './task-lease-repository.js';
 export { createPostgresTaskRepository } from './task-lifecycle-repository.js';

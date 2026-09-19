@@ -144,6 +144,23 @@ export class FirestoreScheduleRepository implements ScheduleRepository {
     return null;
   }
 
+  async setOwnerEnabled(agentId: string, scheduleId: string, enabled: boolean): Promise<boolean> {
+    const ref = this.store.doc('schedules', scheduleId);
+    return this.store.db.runTransaction(async (tx) => {
+      const snapshot = await tx.get(ref);
+      if (!snapshot.exists) return false;
+      const row = decodeSchedule(snapshot.data());
+      if (row.id !== scheduleId || row.agentId !== agentId || row.name.startsWith('reminder:'))
+        return false;
+      tx.update(ref, {
+        enabled,
+        ...(enabled ? { nextRunAt: null } : {}),
+        updatedAt: this.store.now(),
+      });
+      return true;
+    });
+  }
+
   async listPage(
     agentId: string,
     options: { afterId?: string; limit?: number } = {},
