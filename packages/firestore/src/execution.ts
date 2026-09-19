@@ -13,6 +13,7 @@ import { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 import { FirestoreMemoryToolRepository } from './memory-tools.js';
 import { FirestoreMessageRepository } from './messages.js';
 import { FirestoreModelRoutingRepository } from './model-routing.js';
+import { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 import { FirestoreOwnerContextRepository } from './owner-context.js';
 import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
@@ -41,6 +42,7 @@ export function createFirestoreExecutionPersistence(
     executionJobs: new FirestoreExecutionJobRepository(store),
     executionEvidence: new FirestoreExecutionEvidenceRepository(store),
     ownerContext: new FirestoreOwnerContextRepository(store),
+    ownerCardCompilation: new FirestoreOwnerCardCompilationRepository(store),
     skills: new FirestoreSkillContextRepository(store, skillEmbeddingSpace),
     history: new FirestoreHistoryRecallRepository(store, skillEmbeddingSpace),
     graph: new FirestoreGraphRecallRepository(store, skillEmbeddingSpace),

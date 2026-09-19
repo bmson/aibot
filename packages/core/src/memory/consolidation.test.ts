@@ -1,5 +1,14 @@
 import { createHash } from 'node:crypto';
-import { contacts, createDb, type Db, memories, occasions, ownerCard } from '@assistant/db';
+import {
+  contacts,
+  createDb,
+  createPostgresOwnerCardCompilationRepository,
+  type Db,
+  memories,
+  memoryTombstones,
+  occasions,
+  ownerCard,
+} from '@assistant/db';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
@@ -351,6 +360,36 @@ describe('memory consolidation (integration)', () => {
 });
 
 describe('compileOwnerCard pinning (integration)', () => {
+  it('the PostgreSQL compilation port preserves the compatibility wrapper output', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const now = new Date();
+    const legacy = await compileOwnerCard(db, now);
+    const ported = await compileOwnerCard(
+      createPostgresOwnerCardCompilationRepository(db),
+      agentId,
+      now,
+    );
+    expect(ported).toBe(legacy);
+  });
+
+  it('does not publish an owner-erased tombstoned fact', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const content = `${MARKER}: erased private card fact`;
+    await insertFact('cardTombstoned', {
+      content,
+      confidence: '0.99',
+      domain: 'identity',
+      importance: 5,
+    });
+    const contentHash = createHash('sha256').update(content).digest('hex');
+    await db.insert(memoryTombstones).values({ contentHash, reason: 'owner_forget' });
+    try {
+      expect(await compileOwnerCard(db)).not.toContain('erased private card fact');
+    } finally {
+      await db.delete(memoryTombstones).where(eq(memoryTombstones.contentHash, contentHash));
+    }
+  });
+
   it('pinned facts always make the card; unpinned facts beyond the per-domain cap do not', async (ctx) => {
     if (!dbUp) return ctx.skip();
 

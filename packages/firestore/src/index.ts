@@ -22,6 +22,7 @@ export {
   type WakeIntent,
   wakeIntentId,
 } from './outbox.js';
+export { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 export { FirestoreOwnerContextRepository } from './owner-context.js';
 export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 export { FirestoreReminderRepository } from './reminders.js';
