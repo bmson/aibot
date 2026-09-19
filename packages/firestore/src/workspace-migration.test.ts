@@ -1,6 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   checksum,
+  checksumV3,
+  deterministicMigrationCompare,
   type MigrationBundle,
   type MigrationRecord,
   serializeMigrationTimestamp,
@@ -8,7 +10,7 @@ import {
   serializeMigrationVector,
 } from '@assistant/persistence';
 import { Timestamp } from '@google-cloud/firestore';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { embeddingSpaceKey } from './memory.js';
 import { FirestoreScheduleRepository } from './schedules.js';
 import { decodeRecord } from './store.js';
@@ -131,6 +133,19 @@ function addApproval(source: MigrationBundle, shortCode: string): void {
   });
 }
 
+function upgradeFixtureToV3(source: MigrationBundle): void {
+  source.manifest.formatVersion = 3;
+  for (const record of source.records) record.checksum = checksumV3(record.data);
+  source.records.sort((left, right) =>
+    deterministicMigrationCompare(`${left.table}:${left.id}`, `${right.table}:${right.id}`),
+  );
+  for (const [table, summary] of Object.entries(source.manifest.tables)) {
+    const records = source.records.filter((record) => record.table === table);
+    summary.checksum = checksumV3(records);
+  }
+  source.manifest.bundleChecksum = checksumV3(source.records);
+}
+
 describe('Firestore migration preview', () => {
   const target = {
     projectId: 'demo-assistant-test',
@@ -138,6 +153,20 @@ describe('Firestore migration preview', () => {
     installationId: 'preview',
   };
   const previewStore = {} as Parameters<typeof importWorkspaceBundle>[0];
+
+  it('previews a deterministic v3 bundle with Unicode data', async () => {
+    const source = bundle(target);
+    const owner = source.records[0];
+    if (!owner) throw new Error('fixture owner missing');
+    owner.data.äther = { é: true, e: false };
+    upgradeFixtureToV3(source);
+    await expect(
+      importWorkspaceBundle(previewStore, source, {
+        sourceAgentId: source.manifest.source.agentId,
+        target,
+      }),
+    ).resolves.toMatchObject({ mode: 'preview', records: 2 });
+  });
 
   it('accepts historical approval suffix variants and repeated numeric prefixes', async () => {
     const source = bundle(target);
@@ -193,6 +222,72 @@ describe('Firestore migration preview', () => {
 });
 
 describe.skipIf(!enabled)('Firestore workspace migration import', () => {
+  it('derives v3 approval policy keys with runtime code-unit ordering', async () => {
+    const store = emulatorStore();
+    const target = {
+      projectId: 'demo-assistant-test',
+      databaseId: '(default)',
+      installationId: store.installationId,
+    };
+    try {
+      const source = bundle(target);
+      const policyId = randomUUID();
+      const policy = {
+        id: policyId,
+        agentId: source.manifest.source.agentId,
+        toolName: 'unicode.tool',
+        templateKey: 'unicode',
+        effect: 'allow',
+        match: { z: true, ä: { é: 1, e: 2 } },
+      };
+      addRecord(source, {
+        table: 'approval_policies',
+        collection: 'approvalPolicies',
+        id: policyId,
+        data: policy,
+        checksum: '',
+      });
+      upgradeFixtureToV3(source);
+      const localeCompare = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(() => {
+        throw new Error('locale-dependent policy ordering used');
+      });
+      const result = await importWorkspaceBundle(store, source, {
+        sourceAgentId: source.manifest.source.agentId,
+        target,
+        mode: 'write',
+      });
+      localeCompare.mockRestore();
+      expect(result.verified).toBe(true);
+      const canonical = (value: unknown): unknown => {
+        if (Array.isArray(value)) return value.map(canonical);
+        if (value && typeof value === 'object')
+          return Object.fromEntries(
+            Object.entries(value)
+              .filter(([, item]) => item !== undefined)
+              .sort(([left], [right]) => deterministicMigrationCompare(left, right))
+              .map(([key, item]) => [key, canonical(item)]),
+          );
+        return value;
+      };
+      const requested = {
+        agentId: policy.agentId,
+        toolName: policy.toolName,
+        templateKey: policy.templateKey,
+        effect: policy.effect,
+        match: policy.match,
+      };
+      const expectedKey = createHash('sha256')
+        .update(JSON.stringify(canonical(requested)))
+        .digest('hex');
+      expect((await store.doc('approvalPolicyKeys', expectedKey).get()).get('policyId')).toBe(
+        policyId,
+      );
+    } finally {
+      vi.restoreAllMocks();
+      await disposeStore(store);
+    }
+  });
+
   it('imports without outbox work and keeps tasks gated until activation', async () => {
     const store = emulatorStore();
     const target = {

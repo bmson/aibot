@@ -1,13 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   assertSupportedMigrationTables,
   checksum,
+  checksumForMigrationVersion,
+  checksumV3,
   deserializeMigrationValue,
   type MigrationBundle,
   type MigrationRecord,
   type SerializedValue,
   serializeMigrationTimestamp,
   serializeMigrationValue,
+  serializeMigrationValueV3,
   validateMigrationBundle,
   validateMigrationReferences,
 } from './migration.js';
@@ -34,6 +37,29 @@ describe('workspace migration format', () => {
       },
     );
     expect(checksum({ b: 1, a: 2 })).toBe(checksum({ a: 2, b: 1 }));
+  });
+
+  it('keeps v1/v2 checksums legacy while v3 Unicode ordering is locale-independent', () => {
+    expect(checksum({ a: 1, b: { c: 'legacy' } })).toBe(
+      '07c644bf9c61f72f5a668e2562e720f6d38fd8702977141dbb26bf7446644c2f',
+    );
+    const value = { z: 1, ä: 2, a: { é: 3, e: 4 } };
+    const legacy = checksum(value);
+    const localeCompare = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(function (
+      this: string,
+      other,
+    ) {
+      return String(this) < other ? 1 : -1;
+    });
+    expect(checksumForMigrationVersion(value, 2)).not.toBe(legacy);
+    expect(() => serializeMigrationValueV3(value)).not.toThrow();
+    expect(checksumForMigrationVersion(value, 3)).toBe(checksumV3(value));
+    localeCompare.mockRestore();
+    expect(serializeMigrationValueV3(value)).toEqual({
+      a: { e: 4, é: 3 },
+      z: 1,
+      ä: 2,
+    });
   });
 
   it('preserves PostgreSQL microseconds while accepting legacy millisecond dates', () => {
@@ -161,6 +187,21 @@ describe('migration format integrity', () => {
     input.manifest.recordCount--;
     input.manifest.tables.agents.checksum = 'incorrect';
     expect(() => validate(input)).toThrow('summary mismatch');
+  });
+  it('validates v3 bundles with deterministic Unicode checksums', () => {
+    const input = bundle();
+    input.manifest.formatVersion = 3;
+    const record = input.records[0];
+    if (!record) throw new Error('Missing fixture record');
+    record.data.äther = 'unicode';
+    record.checksum = checksumV3(record.data);
+    input.manifest.tables.agents = {
+      collection: 'agents',
+      count: 1,
+      checksum: checksumV3([record]),
+    };
+    input.manifest.bundleChecksum = checksumV3([record]);
+    expect(() => validate(input)).not.toThrow();
   });
   it('rejects duplicate records even with newly recomputed bundle and table checksums', () => {
     const input = bundle();

@@ -162,9 +162,9 @@ export type MigrationManifest = {
   /**
    * v1 encoded driver-parsed Dates and therefore cannot recover PostgreSQL
    * microseconds already discarded. It remains readable for old snapshots;
-   * final cutover snapshots must be freshly exported as v2.
+   * final cutover snapshots must be freshly exported as v3.
    */
-  formatVersion: 1 | 2;
+  formatVersion: 1 | 2 | 3;
   mode: 'preview' | 'export';
   source: {
     kind: 'postgresql';
@@ -203,7 +203,15 @@ export function assertSupportedMigrationTables(tables: readonly string[]): Migra
 }
 
 /** Stable JSON encoding. Only a reserved-key collision needs an object envelope. */
-export function serializeMigrationValue(value: unknown): SerializedValue {
+type MigrationComparator = (left: string, right: string) => number;
+const legacyMigrationCompare: MigrationComparator = (left, right) => left.localeCompare(right);
+export const deterministicMigrationCompare: MigrationComparator = (left, right) =>
+  left < right ? -1 : left > right ? 1 : 0;
+
+function serializeMigrationValueWith(
+  value: unknown,
+  compare: MigrationComparator,
+): SerializedValue {
   function visit(input: unknown, depth: number): SerializedValue {
     if (depth > 64) throw new Error('Migration value exceeds the nesting limit');
     if (input === null || typeof input === 'string' || typeof input === 'boolean') return input;
@@ -223,7 +231,7 @@ export function serializeMigrationValue(value: unknown): SerializedValue {
     if (Array.isArray(input)) return input.map((item) => visit(item, depth + 1));
     if (input && typeof input === 'object') {
       const entries = Object.entries(input)
-        .sort(([a], [b]) => a.localeCompare(b))
+        .sort(([a], [b]) => compare(a, b))
         .map(([key, item]) => [key, visit(item, depth + 1)] as [string, SerializedValue]);
       if (Object.hasOwn(input, '$assistantMigration'))
         return { $assistantMigration: ['object', entries] };
@@ -232,6 +240,16 @@ export function serializeMigrationValue(value: unknown): SerializedValue {
     throw new Error(`Cannot migrate value of type ${typeof input}`);
   }
   return visit(value, 0);
+}
+
+/** Legacy v1/v2 encoding. Locale ordering is retained solely for checksum compatibility. */
+export function serializeMigrationValue(value: unknown): SerializedValue {
+  return serializeMigrationValueWith(value, legacyMigrationCompare);
+}
+
+/** Locale-independent encoding for v3 and newer snapshots. */
+export function serializeMigrationValueV3(value: unknown): SerializedValue {
+  return serializeMigrationValueWith(value, deterministicMigrationCompare);
 }
 
 /** Exact PostgreSQL timestamp retained beyond JavaScript Date's millisecond precision. */
@@ -270,6 +288,21 @@ export function canonicalJson(value: unknown): string {
 
 export function checksum(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
+}
+
+export function canonicalJsonV3(value: unknown): string {
+  return JSON.stringify(serializeMigrationValueV3(value));
+}
+
+export function checksumV3(value: unknown): string {
+  return createHash('sha256').update(canonicalJsonV3(value)).digest('hex');
+}
+
+export function checksumForMigrationVersion(
+  value: unknown,
+  version: MigrationManifest['formatVersion'],
+): string {
+  return version >= 3 ? checksumV3(value) : checksum(value);
 }
 
 export function snakeToCamel(value: string): string {
@@ -347,10 +380,15 @@ export function validateMigrationBundle(
 ): void {
   if (
     bundle.manifest.format !== 'assistant-workspace-migration' ||
-    ![1, 2].includes(bundle.manifest.formatVersion)
+    ![1, 2, 3].includes(bundle.manifest.formatVersion)
   )
     throw new Error('Unsupported migration bundle format');
   const manifest = bundle.manifest;
+  const versionChecksum = (value: unknown) =>
+    checksumForMigrationVersion(value, manifest.formatVersion);
+  const versionCanonicalJson = manifest.formatVersion >= 3 ? canonicalJsonV3 : canonicalJson;
+  const versionCompare =
+    manifest.formatVersion >= 3 ? deterministicMigrationCompare : legacyMigrationCompare;
   if (
     manifest.source.kind !== 'postgresql' ||
     manifest.source.scope !== 'installation' ||
@@ -363,8 +401,8 @@ export function validateMigrationBundle(
   if (
     typeof manifest.coverage?.complete !== 'boolean' ||
     !Array.isArray(manifest.coverage.supportedTables) ||
-    canonicalJson([...manifest.coverage.supportedTables].sort()) !==
-      canonicalJson(selectedTables) ||
+    versionCanonicalJson([...manifest.coverage.supportedTables].sort()) !==
+      versionCanonicalJson(selectedTables) ||
     !Array.isArray(manifest.coverage.omittedTables) ||
     manifest.coverage.omittedTables.some(
       (table) => typeof table !== 'string' || selectedTables.includes(table),
@@ -407,21 +445,21 @@ export function validateMigrationBundle(
   }
   if (bundle.manifest.source.agentId !== expected.sourceAgentId)
     throw new Error('Migration source agent does not match the requested workspace');
-  if (canonicalJson(bundle.manifest.target) !== canonicalJson(expected.target))
+  if (versionCanonicalJson(bundle.manifest.target) !== versionCanonicalJson(expected.target))
     throw new Error('Migration target identity does not match the requested installation');
   const sorted = [...bundle.records].sort((a, b) =>
-    `${a.table}:${a.id}`.localeCompare(`${b.table}:${b.id}`),
+    versionCompare(`${a.table}:${a.id}`, `${b.table}:${b.id}`),
   );
   if (bundle.manifest.recordCount !== sorted.length)
     throw new Error('Migration record count mismatch');
   const seen = new Set<string>();
-  if (checksum(sorted) !== bundle.manifest.bundleChecksum)
+  if (versionChecksum(sorted) !== bundle.manifest.bundleChecksum)
     throw new Error('Migration bundle checksum mismatch');
   for (const record of sorted) {
     const key = `${record.table}:${record.id}`;
     if (seen.has(key)) throw new Error(`Duplicate migration record: ${key}`);
     seen.add(key);
-    if (record.checksum !== checksum(record.data))
+    if (record.checksum !== versionChecksum(record.data))
       throw new Error(`Record checksum mismatch: ${record.table}/${record.id}`);
     if (tableDefinition(record.table)?.collection !== record.collection)
       throw new Error(`Invalid collection mapping for ${record.table}`);
@@ -458,7 +496,7 @@ export function validateMigrationBundle(
     if (tableDefinition(table)?.collection !== summary.collection)
       throw new Error(`Unsupported migration table summary: ${table}`);
     const selected = sorted.filter((record) => record.table === table);
-    if (summary.count !== selected.length || summary.checksum !== checksum(selected))
+    if (summary.count !== selected.length || summary.checksum !== versionChecksum(selected))
       throw new Error(`Table summary mismatch: ${table}`);
   }
   const owner = sorted.find(
