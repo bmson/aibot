@@ -119,10 +119,13 @@ export function createProfileMemoryCommands(
           ? input.domain
           : undefined,
       });
-      if (result.status !== 'updated')
+      if (result.status !== 'updated') {
+        if (result.status === 'duplicate' && result.memory)
+          await compileOwnerCard(ownerCards, result.memory.agentId);
         return {
           error: result.status === 'not-found' ? 'Invalid subject.' : mutationError(result),
         };
+      }
       await finish(result);
       return {};
     },

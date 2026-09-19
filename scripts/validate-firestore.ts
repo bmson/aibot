@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
+import { InstallationStore } from '@assistant/firestore';
 import {
   explainDueTaskQuery,
   type ValidationFieldOverride,
@@ -69,7 +70,7 @@ if (!values.run) {
         database: 'new assistant-validation-* database; never (default)',
         indexes: indexes.length,
         fieldOverrides: input.fieldOverrides.length,
-        data: 'synthetic tasks, reminders, approvals and routing telemetry; no model requests',
+        data: 'synthetic tasks, reminders, approvals, profile memory and routing telemetry; no model requests',
         cleanup: 'delete the database after success or failure',
         authentication: values['gcloud-auth']
           ? 'Active gcloud CLI account, pinned in memory for this development-only run'
@@ -86,16 +87,25 @@ if (!values.run) {
   process.env.CHAT_RECALL_ENABLED = 'true';
   process.env.GRAPH_RAG_ENABLED = 'true';
   const authClient = values['gcloud-auth'] ? await createGcloudAuthClient() : undefined;
-  const report = await withValidationDatabase({ ...input, authClient }, async (store) => ({
-    ...(await firestoreTaskSmoke(store)),
-    dueTaskQueryExplain: await explainDueTaskQuery(store),
-    schedules: await firestoreScheduleSmoke(store),
-    approvals: await firestoreApprovalSmoke(store),
-    runtime: await firestoreRuntimeSmoke(store),
-    executor: await firestoreExecutorSmoke(store),
-    chat: await firestoreChatSmoke(store, { recall: true }),
-    application: await firestoreApplicationSmoke(store),
-    watches: await firestoreWatchSmoke(store),
-  }));
+  const report = await withValidationDatabase({ ...input, authClient }, async (store) => {
+    const applicationStore = new InstallationStore(
+      store.db,
+      `${store.installationId}-application`,
+      store.now,
+      store.projectId,
+      store.databaseId,
+    );
+    return {
+      ...(await firestoreTaskSmoke(store)),
+      dueTaskQueryExplain: await explainDueTaskQuery(store),
+      schedules: await firestoreScheduleSmoke(store),
+      approvals: await firestoreApprovalSmoke(store),
+      runtime: await firestoreRuntimeSmoke(store),
+      executor: await firestoreExecutorSmoke(store),
+      chat: await firestoreChatSmoke(store, { recall: true }),
+      application: await firestoreApplicationSmoke(applicationStore),
+      watches: await firestoreWatchSmoke(store),
+    };
+  });
   console.log(JSON.stringify({ stage: 'complete', ...report }, null, 2));
 }

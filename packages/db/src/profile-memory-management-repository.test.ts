@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createDb, type Db } from './client.js';
 import { createPostgresProfileMemoryManagementRepository } from './profile-memory-management-repository.js';
-import { agents, memories, memoryTombstones } from './schema.js';
+import { agents, contacts, memories, memoryTombstones } from './schema.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:55432/assistant_test';
@@ -17,6 +17,45 @@ async function close(db: Db): Promise<void> {
 }
 
 describe('PostgreSQL profile memory management repository', () => {
+  it('returns the owned duplicate for card recovery and approves idempotently', async () => {
+    const db = createDb(DATABASE_URL);
+    const contactId = randomUUID();
+    const contentHash = `profile-memory-duplicate-${randomUUID()}`;
+    try {
+      const configured = await db.select({ id: agents.id }).from(agents).limit(2);
+      if (configured.length !== 1 || !configured[0])
+        throw new Error('Profile memory test requires the seeded single-agent test database');
+      await db.insert(contacts).values({ id: contactId, name: 'Profile memory subject' });
+      const repository = createPostgresProfileMemoryManagementRepository(db);
+      const input = {
+        content: 'A profile memory duplicate',
+        contentHash,
+        embedding: unitVector(),
+        importance: 4,
+        pinned: false,
+        subjectContactId: contactId,
+      };
+      const created = await repository.create(input);
+      if (created.status !== 'updated') throw new Error('Profile memory was not created');
+      expect(await repository.create(input)).toEqual({
+        status: 'duplicate',
+        memory: created.memory,
+      });
+      expect(await repository.approveQuarantined(created.memory.id)).toEqual({
+        status: 'updated',
+        memory: created.memory,
+      });
+      expect(await repository.approveQuarantined(created.memory.id)).toEqual({
+        status: 'updated',
+        memory: created.memory,
+      });
+    } finally {
+      await db.delete(memories).where(eq(memories.contentHash, contentHash));
+      await db.delete(contacts).where(eq(contacts.id, contactId));
+      await close(db);
+    }
+  });
+
   it('locks the source row so a stale correction cannot commit a tombstone', async () => {
     const repositoryDb = createDb(DATABASE_URL);
     const legacyDb = createDb(DATABASE_URL);

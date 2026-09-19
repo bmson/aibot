@@ -126,6 +126,38 @@ describe('portable profile memory commands', () => {
     expect(f.events).toEqual(['mutate', 'retry', 'queue', 'compile']);
   });
 
+  it('retries follow-ups for an already-approved fact after an earlier failure', async () => {
+    const f = fixture();
+    vi.mocked(f.persistence.maintenance.queueGraphSync).mockRejectedValueOnce(
+      new Error('queue unavailable'),
+    );
+    await expect(f.commands.approveQuarantinedMemory('fact')).rejects.toThrow('queue unavailable');
+    await f.commands.approveQuarantinedMemory('fact');
+    expect(f.mutate).toHaveBeenCalledTimes(2);
+    expect(f.persistence.maintenance.retryBlockedGraphSource).toHaveBeenCalledTimes(2);
+    expect(f.persistence.maintenance.queueGraphSync).toHaveBeenCalledTimes(2);
+    expect(f.persistence.ownerCards.compile).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebuilds an invalidated card when a persisted create is retried as a duplicate', async () => {
+    const f = fixture();
+    const input = {
+      content: 'new fact',
+      domain: 'other',
+      importance: '3',
+      pinned: false,
+      subjectContactId: '11111111-1111-4111-8111-111111111111',
+    };
+    vi.mocked(f.persistence.ownerCards.compile).mockRejectedValueOnce(
+      new Error('compile unavailable'),
+    );
+    await expect(f.commands.createMemory(input)).rejects.toThrow('compile unavailable');
+    f.mutate.mockResolvedValueOnce({ status: 'duplicate', memory });
+    expect(await f.commands.createMemory(input)).toEqual({ error: 'That fact is already saved.' });
+    expect(f.mutate).toHaveBeenCalledTimes(2);
+    expect(f.persistence.ownerCards.compile).toHaveBeenCalledTimes(2);
+  });
+
   it('validates creation without an embedding call and maps missing subjects distinctly', async () => {
     const f = fixture();
     const input = {

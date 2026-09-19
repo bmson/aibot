@@ -4,6 +4,7 @@ import { compileOwnerCard } from '@assistant/core/memory/consolidation';
 import {
   createFirestoreCardRefreshRepository,
   createFirestoreExecutionPersistence,
+  createFirestoreProfileMemoryCommandPersistence,
   embeddingSpaceKey,
   FirestoreApplicationChatPersistence,
   FirestoreGeneratedCardRepository,
@@ -11,6 +12,7 @@ import {
 } from '@assistant/firestore';
 import type { EmbeddingSpace, Records } from '@assistant/persistence';
 import { FieldValue } from '@google-cloud/firestore';
+import { createProfileMemoryCommands } from '../packages/application/src/profile/memory-commands.js';
 
 const APPLICATION_SMOKE_SPACE: EmbeddingSpace = {
   provider: 'synthetic',
@@ -56,7 +58,9 @@ function smokeMemory(
 }
 
 /** Synthetic application-query smoke shared by emulator CI and real-cloud validation. */
-export async function firestoreApplicationSmoke(store: InstallationStore): Promise<void> {
+export async function firestoreApplicationSmoke(
+  store: InstallationStore,
+): Promise<{ profileMemoryCommands: 'passed' }> {
   const agentId = randomUUID();
   const foreignAgentId = randomUUID();
   const now = new Date();
@@ -105,7 +109,11 @@ export async function firestoreApplicationSmoke(store: InstallationStore): Promi
       ...memory,
       embedding: FieldValue.vector(memory.embedding as number[]),
       embeddingSpace: embeddingSpaceKey(APPLICATION_SMOKE_SPACE),
+      retrievalRevision: randomUUID(),
     });
+    await store
+      .doc('memoryContentHashes', memory.contentHash)
+      .set({ memoryId: memory.id, createdAt: now });
   }
   const compiled = await compileOwnerCard(execution.ownerCardCompilation, agentId, now);
   assert.match(compiled, /Oldtown/);
@@ -123,6 +131,103 @@ export async function firestoreApplicationSmoke(store: InstallationStore): Promi
   assert.doesNotMatch(recompiled, /Oldtown/);
   assert.match(recompiled, /Newtown/);
   assert.equal((await execution.ownerContext.getOwnerCard(agentId))?.content, recompiled);
+
+  const profilePersistence = createFirestoreProfileMemoryCommandPersistence(
+    store,
+    APPLICATION_SMOKE_SPACE,
+  );
+  const correctedContent = 'Synthetic owner lives in Correctedtown';
+  const correctedHash = createHash('sha256').update(correctedContent).digest('hex');
+  let embeddingAvailable = false;
+  const profileCommands = createProfileMemoryCommands(profilePersistence, {
+    async embed() {
+      if (!embeddingAvailable) throw new Error('synthetic embedding failure');
+      return [[0, 1, ...new Array(APPLICATION_SMOKE_SPACE.dimensions - 2).fill(0)]];
+    },
+  });
+  const tasksBeforeFailure = (await store.collection('tasks').count().get()).data().count;
+  const outboxBeforeFailure = (await store.collection('outbox').count().get()).data().count;
+  await assert.rejects(
+    profileCommands.correctMemory(replacement.id, correctedContent),
+    /synthetic embedding failure/,
+  );
+  assert.equal(
+    (await store.doc('memories', replacement.id).get()).get('content'),
+    replacement.content,
+  );
+  assert.equal((await store.doc('memoryTombstones', replacement.contentHash).get()).exists, false);
+  assert.equal((await execution.ownerContext.getOwnerCard(agentId))?.content, recompiled);
+  assert.equal((await store.collection('tasks').count().get()).data().count, tasksBeforeFailure);
+  assert.equal((await store.collection('outbox').count().get()).data().count, outboxBeforeFailure);
+
+  embeddingAvailable = true;
+  assert.deepEqual(await profileCommands.correctMemory(replacement.id, correctedContent), {});
+  const corrected = await store.doc('memories', replacement.id).get();
+  assert.equal(corrected.get('content'), correctedContent);
+  assert.equal(corrected.get('contentHash'), correctedHash);
+  assert.equal(corrected.get('source'), replacement.source);
+  assert.equal(corrected.get('subjectContactId'), ownerContactId);
+  assert.equal(
+    (await store.doc('memoryTombstones', replacement.contentHash).get()).get('reason'),
+    'owner_correct',
+  );
+  assert.equal(
+    (await store.doc('memoryContentHashes', replacement.contentHash).get()).exists,
+    false,
+  );
+  assert.equal(
+    (await store.doc('memoryContentHashes', correctedHash).get()).get('memoryId'),
+    replacement.id,
+  );
+  const correctedCard = (await execution.ownerContext.getOwnerCard(agentId))?.content ?? '';
+  assert.match(correctedCard, /Correctedtown/);
+  assert.doesNotMatch(correctedCard, /Newtown/);
+  const graphTasks = await store
+    .collection('tasks')
+    .where('agentId', '==', agentId)
+    .where('trigger.payload.job', '==', 'memory.graph_sync')
+    .get();
+  assert.equal(graphTasks.size, 1);
+  const graphTask = graphTasks.docs[0];
+  assert.ok(graphTask);
+  assert.match(
+    String(graphTask.get('externalEventId')),
+    new RegExp(`^profile:graph-sync:${replacement.id}:`),
+  );
+  assert.equal(
+    (await store.collection('outbox').where('taskId', '==', graphTask.get('id')).limit(1).get())
+      .size,
+    1,
+  );
+
+  await store.doc('knowledgeGraphSources', replacement.id).set({
+    memoryId: replacement.id,
+    agentId,
+    contentHash: correctedHash,
+    subjectContactId: ownerContactId,
+    status: 'ready',
+    extractionVersion: 3,
+    nextRetryAt: null,
+    attempts: 0,
+    lastError: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await profileCommands.forgetMemory(replacement.id);
+  assert.equal((await store.doc('memories', replacement.id).get()).exists, false);
+  assert.equal((await store.doc('memoryContentHashes', correctedHash).get()).exists, false);
+  assert.equal(
+    (await store.doc('memoryTombstones', correctedHash).get()).get('reason'),
+    'owner_forget',
+  );
+  assert.equal((await store.doc('knowledgeGraphSources', replacement.id).get()).exists, false);
+  assert.ok(
+    (await store.doc('graphDeletionIntents', replacement.id).get()).get('cleanupCompletedAt'),
+  );
+  assert.doesNotMatch(
+    (await execution.ownerContext.getOwnerCard(agentId))?.content ?? '',
+    /Correctedtown/,
+  );
 
   const chat = new FirestoreApplicationChatPersistence(store);
   const first = await chat.createConversation(agentId);
@@ -346,4 +451,5 @@ export async function firestoreApplicationSmoke(store: InstallationStore): Promi
   assert.equal(await cards.dismiss(foreignAgentId, cardId), false);
   assert.equal(await cards.dismiss(agentId, cardId), true);
   assert.equal(await cards.get(agentId, cardId), null);
+  return { profileMemoryCommands: 'passed' as const };
 }

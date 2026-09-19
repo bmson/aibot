@@ -135,7 +135,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
 
       await store.doc('memories', id).update({ quarantined: true });
       expect(await repository.approveQuarantined(id)).toMatchObject({ status: 'updated' });
-      expect(await repository.approveQuarantined(id)).toEqual({ status: 'not-found' });
+      expect(await repository.approveQuarantined(id)).toMatchObject({ status: 'updated' });
       await store.doc('memoryTombstones', row.contentHash).set({ contentHash: row.contentHash });
       expect(await repository.get(id)).toBeNull();
       expect(await repository.confirm(id)).toEqual({ status: 'tombstoned' });
@@ -337,7 +337,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       const results = await Promise.all([repository.create(input), repository.create(input)]);
       expect(results.map((result) => result.status).sort()).toEqual(['duplicate', 'updated']);
       const saved = results.find((result) => result.status === 'updated');
+      const duplicate = results.find((result) => result.status === 'duplicate');
       if (saved?.status !== 'updated') throw new Error('Expected one created memory');
+      expect(duplicate).toEqual({ status: 'duplicate', memory: saved.memory });
+      expect(await repository.create({ ...input, subjectContactId: 'missing-contact' })).toEqual({
+        status: 'not-found',
+      });
       const snapshot = await store.doc('memories', saved.memory.id).get();
       expect(decodeRecord<Records['memories']>(snapshot.data())).toMatchObject({
         id: saved.memory.id,

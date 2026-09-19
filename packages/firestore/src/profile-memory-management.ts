@@ -267,7 +267,6 @@ export class FirestoreProfileMemoryManagementRepository
 
   async approveQuarantined(memoryId: string): Promise<MemoryMutation> {
     return this.mutateExisting(memoryId, ({ tx, row, snapshot, agentId, now }) => {
-      if (!row.quarantined) return { status: 'not-found' };
       tx.update(snapshot.ref, { quarantined: false });
       this.invalidateOwnerCard(tx, agentId, now);
       return { status: 'updated', memory: managed(row) };
@@ -294,10 +293,19 @@ export class FirestoreProfileMemoryManagementRepository
         contactRef,
       );
       if (tombstone?.exists) return { status: 'tombstoned' };
-      if (hash?.exists) return { status: 'duplicate' };
-      if (memorySnapshot?.exists) return { status: 'duplicate' };
       if (!contact?.exists || contact.get('id') !== input.subjectContactId)
         return { status: 'not-found' };
+      if (hash?.exists) {
+        const duplicateId = hash.get('memoryId');
+        if (typeof duplicateId === 'string' && duplicateId) {
+          const duplicateSnapshot = await tx.get(this.store.doc('memories', duplicateId));
+          const duplicate = this.owned(duplicateSnapshot, agentId);
+          if (duplicate?.contentHash === input.contentHash)
+            return { status: 'duplicate', memory: managed(duplicate) };
+        }
+        return { status: 'duplicate' };
+      }
+      if (memorySnapshot?.exists) return { status: 'duplicate' };
 
       const now = this.store.now();
       const row: Memory = {

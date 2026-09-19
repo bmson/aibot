@@ -9,15 +9,18 @@ export interface ManagedMemory {
 
 export type MemoryMutation =
   | { status: 'updated'; memory: ManagedMemory }
-  | { status: 'not-found' | 'stale' | 'duplicate' | 'tombstoned' };
+  | { status: 'duplicate'; memory?: ManagedMemory }
+  | { status: 'not-found' | 'stale' | 'tombstoned' };
 
 /**
  * Installation-scoped owner mutations for durable profile facts.
  *
  * `correct` uses `expectedContentHash` as its compare-and-swap token. A new
  * hash that is already live returns `duplicate`; one that has been forgotten
- * returns `tombstoned`. Implementations invalidate the compiled owner card in
- * the same transaction as every successful mutation.
+ * returns `tombstoned`. A duplicate create includes `memory` when that existing
+ * fact belongs to the configured agent, allowing a failed card rebuild to be
+ * retried safely. Implementations invalidate the compiled owner card in the
+ * same transaction as every successful mutation.
  */
 export interface ProfileMemoryManagementRepository {
   readonly kind: 'profile-memory-management-repository';

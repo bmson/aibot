@@ -216,13 +216,7 @@ export function createPostgresProfileMemoryManagementRepository(
             await tx
               .update(memories)
               .set({ quarantined: false })
-              .where(
-                and(
-                  eq(memories.id, ownedId),
-                  eq(memories.agentId, agentId),
-                  eq(memories.quarantined, true),
-                ),
-              )
+              .where(and(eq(memories.id, ownedId), eq(memories.agentId, agentId)))
               .returning({
                 id: memories.id,
                 agentId: memories.agentId,
@@ -271,7 +265,19 @@ export function createPostgresProfileMemoryManagementRepository(
               contentHash: memories.contentHash,
             })
         )[0];
-        return row ? { status: 'updated', memory: row } : { status: 'duplicate' };
+        if (row) return { status: 'updated', memory: row };
+        const duplicate = (
+          await tx
+            .select({
+              id: memories.id,
+              agentId: memories.agentId,
+              contentHash: memories.contentHash,
+            })
+            .from(memories)
+            .where(and(eq(memories.contentHash, input.contentHash), eq(memories.agentId, agentId)))
+            .limit(1)
+        )[0];
+        return duplicate ? { status: 'duplicate', memory: duplicate } : { status: 'duplicate' };
       }),
   };
 }
