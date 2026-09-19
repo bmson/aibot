@@ -295,10 +295,32 @@ async function assertDynamicIslandLayering(page: Page) {
   }
 }
 
+/**
+ * Navigate, tolerating one aborted start.
+ *
+ * Chromium reports ERR_ABORTED when a navigation is discarded while it is
+ * still starting, rather than as a page error, and this suite issues about a
+ * hundred and eighty of them back to back. The `networkidle` wait this file
+ * used to do paced that crawl as a side effect; replacing it with `load` (it
+ * had to go — the chat holds a long poll open, so that page never goes idle)
+ * removed the pacing and left the aborts visible. One retry is the remedy: a
+ * route that is genuinely broken still fails on the second attempt, and an
+ * explicit deadline keeps a wedged navigation from holding the job open for
+ * hours the way an earlier one did.
+ */
+async function navigate(page: Page, url: string) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    } catch (error) {
+      const aborted = error instanceof Error && error.message.includes('ERR_ABORTED');
+      if (!aborted || attempt > 0) throw error;
+    }
+  }
+}
+
 async function openRoute(page: Page, path: string, mobile = true) {
-  const response = await page.goto(`${baseUrl}${path}`, {
-    waitUntil: 'domcontentloaded',
-  });
+  const response = await navigate(page, `${baseUrl}${path}`);
   assert(response?.ok(), `${path} returned HTTP ${response?.status() ?? 'unknown'}`);
   assert(
     new URL(page.url()).origin === new URL(baseUrl).origin,
