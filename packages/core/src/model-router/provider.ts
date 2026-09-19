@@ -11,7 +11,7 @@ export type ModelProviderKind = 'openrouter' | 'vertex';
  * What this particular call wants from a model's hidden reasoning.
  *
  * Three states, not two, because "do not reason" and "cannot reason" must send
- * different requests. A reasoning-capable model has to be told explicitly to
+ * different requests. A model with optional reasoning can be told explicitly to
  * stay quiet — omitting the parameter leaves the provider's own default in
  * charge, which for these models is to reason freely and bill for it. A model
  * with no reasoning capability must be sent nothing at all: `chat()` sets
@@ -38,6 +38,8 @@ export interface ModelProvider {
    */
   chat(modelId: string, options?: { interactive?: boolean }): LanguageModel;
   textEmbeddingModel(modelId: string): EmbeddingModel;
+  /** Only true when this model is verified to allow reasoning to be disabled. */
+  canDisableReasoning?(modelId: string): boolean;
   optionsFor(input: { reasoning: ReasoningMode }): ProviderOptions | undefined;
   /** Provider options applied to the embedding request. */
   embeddingOptions(): ProviderOptions | undefined;
@@ -136,11 +138,23 @@ function assertOpenRouterModelId(modelId: string): void {
   }
 }
 
+// OpenRouter /api/v1/models reasoning.mandatory=false, checked 2026-09-19.
+// Capability `thinking` alone does not imply an off switch. Keep unknown IDs
+// (including new versions/variants) enabled until their behavior is verified.
+const OPENROUTER_OPTIONAL_REASONING = new Set([
+  'deepseek/deepseek-v4-pro-0813',
+  'deepseek/deepseek-v4-flash-0731',
+  'moonshotai/kimi-k2.5',
+  'moonshotai/kimi-k2.6',
+  'moonshotai/kimi-k3',
+]);
+
 export function createOpenRouterModelProvider(apiKey: string): ModelProvider {
   const provider = createOpenRouter({ apiKey });
   return {
     kind: 'openrouter',
     assertModelId: assertOpenRouterModelId,
+    canDisableReasoning: (modelId) => OPENROUTER_OPTIONAL_REASONING.has(modelId),
     chat(modelId, options) {
       assertOpenRouterModelId(modelId);
       return provider.chat(modelId, {
@@ -239,6 +253,8 @@ export function createVertexModelProvider(options: VertexModelProviderOptions): 
   return {
     kind: 'vertex',
     assertModelId: assertVertexModelId,
+    // Preserve the Vertex adapter's existing thinkingBudget=0 behavior.
+    canDisableReasoning: () => true,
     chat(modelId) {
       return provider.languageModel(vertexModelId(modelId));
     },

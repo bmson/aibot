@@ -65,7 +65,7 @@ export type Route =
       degraded: boolean;
       /**
        * The model *can* reason (capability flag on its row). Whether a given
-       * call actually asks it to is decided per call by `reasoningMode`.
+       * call can disable it also depends on the provider's model contract.
        */
       thinking: boolean;
       decision: BudgetDecision;
@@ -410,9 +410,10 @@ export function isInteractiveRole(role: ModelRole): boolean {
  *
  * Reasoning tokens are generated *before* the visible answer, so on any call a
  * person is waiting for they are pure added latency (and billed output). Only
- * the two roles whose whole job is deliberation keep it by default; a
+ * the two roles whose whole job is deliberation request it by default; a
  * tool-calling step keeps it regardless of role, because a step that cannot
- * think may fail to emit the tool call at all.
+ * think may fail to emit the tool call at all. Models that require reasoning
+ * keep it for every role.
  */
 const REASONING_ROLES: ReadonlySet<ModelRole> = new Set<ModelRole>(['plan', 'reason']);
 
@@ -438,8 +439,8 @@ const REASONING_ROLES: ReadonlySet<ModelRole> = new Set<ModelRole>(['plan', 'rea
  * bounded headroom on top of the visible budget, and cap it via OpenRouter so
  * the answer always keeps its full allocation. Only a call that will actually
  * reason gets this — see `reasoningMode`, which is narrower than the model's
- * capability flag: a classifier on a thinking model is told not to reason and
- * so needs no headroom to protect.
+ * capability flag: a classifier on a model with verified optional reasoning
+ * can skip it and needs no headroom to protect.
  */
 const REASONING_HEADROOM_TOKENS = 4_096;
 
@@ -659,8 +660,8 @@ export class ModelRouter {
    * Whether this call should spend tokens on hidden reasoning.
    *
    * A model that cannot reason reports 'unsupported' so the provider sends no
-   * reasoning parameter at all. A model that can reason is told explicitly
-   * either way, because silence means "reason by default" upstream.
+   * reasoning parameter at all. Only a model verified to support disabling
+   * reasoning may receive that request; required and unknown models keep it.
    */
   private reasoningMode(
     role: Exclude<ModelRole, 'embed'>,
@@ -668,6 +669,7 @@ export class ModelRouter {
     toolCall: boolean,
   ): ReasoningMode {
     if (!route.thinking) return 'unsupported';
+    if (!this.provider.canDisableReasoning?.(route.modelId)) return 'enabled';
     return toolCall || REASONING_ROLES.has(role) ? 'enabled' : 'disabled';
   }
 
