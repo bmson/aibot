@@ -65,6 +65,14 @@ function materializeValue(value: unknown): unknown {
   return value;
 }
 
+function markerFormatVersionMatches(
+  markerFormatVersion: unknown,
+  bundleFormatVersion: MigrationBundle['manifest']['formatVersion'],
+): boolean {
+  if (markerFormatVersion === bundleFormatVersion) return true;
+  return markerFormatVersion === undefined && bundleFormatVersion <= 2;
+}
+
 async function verifyDestination(
   store: InstallationStore,
   writes: Array<{ collection: string; id: string; data: FirebaseFirestore.DocumentData }>,
@@ -77,7 +85,7 @@ async function verifyDestination(
     !marker.exists ||
     marker.get('status') !== 'pending_activation' ||
     marker.get('bundleChecksum') !== bundle.manifest.bundleChecksum ||
-    marker.get('formatVersion') !== bundle.manifest.formatVersion ||
+    !markerFormatVersionMatches(marker.get('formatVersion'), bundle.manifest.formatVersion) ||
     marker.get('sourceAgentId') !== bundle.manifest.source.agentId ||
     JSON.stringify(marker.get('target')) !== JSON.stringify(bundle.manifest.target) ||
     marker.get('completedWrites') !== writes.length ||
@@ -533,7 +541,7 @@ export async function importWorkspaceBundle(
   if (markerData) {
     if (
       markerData.bundleChecksum !== markerIdentity.bundleChecksum ||
-      markerData.formatVersion !== markerIdentity.formatVersion ||
+      !markerFormatVersionMatches(markerData.formatVersion, markerIdentity.formatVersion) ||
       markerData.sourceAgentId !== markerIdentity.sourceAgentId ||
       JSON.stringify(markerData.target) !== JSON.stringify(markerIdentity.target)
     )
@@ -616,6 +624,7 @@ export async function importWorkspaceBundle(
       for (const write of chunk) tx.create(store.doc(write.collection, write.id), write.data);
       tx.update(marker, {
         completedWrites: index + chunk.length,
+        formatVersion: bundle.manifest.formatVersion,
         status: index + chunk.length === writes.length ? 'pending_activation' : 'importing',
       });
     });

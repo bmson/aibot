@@ -9,7 +9,7 @@ import {
   serializeMigrationValue,
   serializeMigrationVector,
 } from '@assistant/persistence';
-import { Timestamp } from '@google-cloud/firestore';
+import { FieldValue, Timestamp } from '@google-cloud/firestore';
 import { describe, expect, it, vi } from 'vitest';
 import { embeddingSpaceKey } from './memory.js';
 import { FirestoreScheduleRepository } from './schedules.js';
@@ -502,6 +502,9 @@ describe.skipIf(!enabled)('Firestore workspace migration import', () => {
         }),
       ).rejects.toThrow('checksum');
       await store.doc('tasks', task.id).update({ status: 'pending' });
+      await store.doc('coordination', 'migration').update({
+        formatVersion: FieldValue.delete(),
+      });
       const resumed = await importWorkspaceBundle(store, source, {
         sourceAgentId: source.manifest.source.agentId,
         target,
@@ -513,6 +516,85 @@ describe.skipIf(!enabled)('Firestore workspace migration import', () => {
       expect((await store.doc('coordination', 'migration').get()).get('status')).toBe(
         'pending_activation',
       );
+      expect((await store.doc('coordination', 'migration').get()).get('formatVersion')).toBe(1);
+      await store.doc('coordination', 'migration').update({
+        formatVersion: FieldValue.delete(),
+      });
+      await expect(
+        importWorkspaceBundle(store, source, {
+          sourceAgentId: source.manifest.source.agentId,
+          target,
+          mode: 'verify',
+        }),
+      ).resolves.toMatchObject({ verified: true });
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('requires an explicit matching marker version for v3 resumes', async () => {
+    const store = emulatorStore();
+    const target = {
+      projectId: 'demo-assistant-test',
+      databaseId: '(default)',
+      installationId: store.installationId,
+    };
+    try {
+      const source = bundle(target);
+      upgradeFixtureToV3(source);
+      const marker = store.doc('coordination', 'migration');
+      await marker.set({
+        sourceAgentId: source.manifest.source.agentId,
+        target,
+        bundleChecksum: source.manifest.bundleChecksum,
+        status: 'importing',
+        completedWrites: 0,
+        totalWrites: 0,
+      });
+      const resume = () =>
+        importWorkspaceBundle(store, source, {
+          sourceAgentId: source.manifest.source.agentId,
+          target,
+          mode: 'write',
+        });
+      await expect(resume()).rejects.toThrow(
+        'Existing migration marker belongs to a different bundle or identity',
+      );
+      await marker.update({ formatVersion: 2 });
+      await expect(resume()).rejects.toThrow(
+        'Existing migration marker belongs to a different bundle or identity',
+      );
+      expect((await marker.get()).get('completedWrites')).toBe(0);
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('verifies a completed v2 import whose legacy marker has no format version', async () => {
+    const store = emulatorStore();
+    const target = {
+      projectId: 'demo-assistant-test',
+      databaseId: '(default)',
+      installationId: store.installationId,
+    };
+    try {
+      const source = bundle(target);
+      source.manifest.formatVersion = 2;
+      await importWorkspaceBundle(store, source, {
+        sourceAgentId: source.manifest.source.agentId,
+        target,
+        mode: 'write',
+      });
+      await store.doc('coordination', 'migration').update({
+        formatVersion: FieldValue.delete(),
+      });
+      await expect(
+        importWorkspaceBundle(store, source, {
+          sourceAgentId: source.manifest.source.agentId,
+          target,
+          mode: 'verify',
+        }),
+      ).resolves.toMatchObject({ verified: true });
     } finally {
       await disposeStore(store);
     }
