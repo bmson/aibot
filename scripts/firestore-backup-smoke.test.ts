@@ -288,4 +288,27 @@ describe('synthetic managed backup smoke', () => {
       'projects/customer-project/databases/assistant-validation-fixedrun123456',
     );
   });
+
+  it('retries a transient concurrent delete and removes both owned databases', async () => {
+    const state = fixture();
+    const originalDelete = state.dependencies.admin.deleteDatabase;
+    let transient = true;
+    let attempts = 0;
+    state.dependencies.admin.deleteDatabase = async (request, options) => {
+      attempts++;
+      if (request.name.includes('assistant-restore-') && transient) {
+        transient = false;
+        throw Object.assign(new Error('concurrent database changes'), { code: 10 });
+      }
+      return originalDelete(request, options);
+    };
+
+    await firestoreBackupSmoke(input, state.dependencies);
+
+    expect(attempts).toBe(3);
+    expect(state.deleted.sort()).toEqual([
+      'projects/customer-project/databases/assistant-restore-fixedrun123456',
+      'projects/customer-project/databases/assistant-validation-fixedrun123456',
+    ]);
+  });
 });

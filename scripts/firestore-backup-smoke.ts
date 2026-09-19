@@ -39,14 +39,20 @@ export type BackupSmokeInput = {
 async function deleteOwnedDatabase(
   admin: BackupSmokeDependencies['admin'],
   name: string,
+  sleep: (milliseconds: number) => Promise<void>,
 ): Promise<void> {
-  try {
-    await admin.deleteDatabase({ name }, { timeout: 30_000 });
-  } catch (error) {
-    if ((error as { code?: number }).code === 5) return;
-    throw error;
-  }
   const deadline = Date.now() + 120_000;
+  while (true) {
+    try {
+      await admin.deleteDatabase({ name }, { timeout: 30_000 });
+      break;
+    } catch (error) {
+      const code = (error as { code?: number }).code;
+      if (code === 5) return;
+      if (code !== 10 || Date.now() >= deadline) throw error;
+      await sleep(2_000);
+    }
+  }
   while (Date.now() < deadline) {
     try {
       await admin.getDatabase({ name }, { timeout: 5_000 });
@@ -54,7 +60,7 @@ async function deleteOwnedDatabase(
       if ((error as { code?: number }).code === 5) return;
       throw error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await sleep(1_000);
   }
   throw new Error('Timed out deleting synthetic Firestore database');
 }
@@ -208,12 +214,21 @@ export async function firestoreBackupSmoke(
     sourceDb?.terminate(),
     sourceData?.db.close?.(),
     restoreData?.db.close?.(),
-    ...(restoreCreated ? [deleteOwnedDatabase(dependencies.admin, restoreName)] : []),
-    ...(sourceCreated ? [deleteOwnedDatabase(dependencies.admin, sourceName)] : []),
   ]);
-  const cleanupFailures = cleanup.flatMap((settled) =>
+  const cleanupFailures: unknown[] = cleanup.flatMap((settled) =>
     settled.status === 'rejected' ? [settled.reason] : [],
   );
+  for (const name of [
+    restoreCreated ? restoreName : undefined,
+    sourceCreated ? sourceName : undefined,
+  ]) {
+    if (!name) continue;
+    try {
+      await deleteOwnedDatabase(dependencies.admin, name, sleep);
+    } catch (error) {
+      cleanupFailures.push(error);
+    }
+  }
   if (cleanupFailures.length) {
     input.progress?.('cleanup_failed', {
       failures: cleanupFailures.map((failure) =>
