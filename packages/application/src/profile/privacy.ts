@@ -15,6 +15,7 @@ import {
   voiceProfile,
   writingSamples,
 } from '@assistant/db';
+import type { PrivacyExportRepository } from '@assistant/persistence';
 import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { createLongTermMemoryExporter } from './privacy-export.js';
 
@@ -28,8 +29,12 @@ export interface PrivacyWorkspace {
  * are either implementation details, secrets, or belong to a different export
  * surface. The content an owner needs to inspect or retain is included.
  */
-export function exportLongTermMemoryData(db: Db) {
-  return createLongTermMemoryExporter(createPostgresPrivacyExportRepository(db))();
+export function exportLongTermMemoryData(store: Db | PrivacyExportRepository) {
+  const repository =
+    'kind' in store && store.kind === 'privacy-export-repository'
+      ? (store as PrivacyExportRepository)
+      : createPostgresPrivacyExportRepository(store as Db);
+  return createLongTermMemoryExporter(repository)();
 }
 
 /**
