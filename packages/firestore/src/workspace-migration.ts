@@ -5,12 +5,14 @@ import {
   type MigrationBundle,
   type MigrationRecord,
   type MigrationTarget,
+  PreciseMigrationTimestamp,
   tableDefinition,
   validateMigrationBundle,
 } from '@assistant/persistence';
+import { FieldValue, Timestamp } from '@google-cloud/firestore';
 import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
 
-export type WorkspaceImportMode = 'preview' | 'write';
+export type WorkspaceImportMode = 'preview' | 'write' | 'verify';
 export type WorkspaceImportResult = {
   mode: WorkspaceImportMode;
   records: number;
@@ -18,7 +20,99 @@ export type WorkspaceImportResult = {
   writes: number;
   collections: Record<string, number>;
   resumed?: boolean;
+  verified?: boolean;
 };
+
+function preciseTimestamp(timestamp: Timestamp): PreciseMigrationTimestamp {
+  if (timestamp.nanoseconds % 1_000 !== 0)
+    throw new Error('Unexpected sub-microsecond migration timestamp');
+  const second = new Date(timestamp.seconds * 1000).toISOString().slice(0, 19);
+  const microseconds = Math.trunc(timestamp.nanoseconds / 1_000)
+    .toString()
+    .padStart(6, '0');
+  return new PreciseMigrationTimestamp(
+    BigInt(timestamp.seconds),
+    timestamp.nanoseconds,
+    `${second}.${microseconds}Z`,
+  );
+}
+
+function preserveTimestampPrecision(value: unknown): unknown {
+  if (value instanceof Timestamp) return preciseTimestamp(value);
+  if (value instanceof Date && !(value instanceof PreciseMigrationTimestamp))
+    return preciseTimestamp(Timestamp.fromDate(value));
+  if (Array.isArray(value)) return value.map(preserveTimestampPrecision);
+  if (value && value.constructor === Object)
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, preserveTimestampPrecision(item)]),
+    );
+  return value;
+}
+
+function decodeMigrationDocument(value: unknown): unknown {
+  return decodeRecord(preserveTimestampPrecision(value));
+}
+
+function materializeValue(value: unknown): unknown {
+  if (value instanceof PreciseMigrationTimestamp)
+    return new Timestamp(Number(value.seconds), value.nanoseconds);
+  if (Array.isArray(value)) return value.map(materializeValue);
+  if (value && value.constructor === Object)
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, materializeValue(item)]),
+    );
+  return value;
+}
+
+async function verifyDestination(
+  store: InstallationStore,
+  writes: Array<{ collection: string; id: string; data: FirebaseFirestore.DocumentData }>,
+  expectedChecksums: Map<string, string>,
+  collections: Record<string, number>,
+  bundle: MigrationBundle,
+): Promise<void> {
+  const marker = await store.doc('coordination', 'migration').get();
+  if (
+    !marker.exists ||
+    marker.get('status') !== 'pending_activation' ||
+    marker.get('bundleChecksum') !== bundle.manifest.bundleChecksum ||
+    marker.get('sourceAgentId') !== bundle.manifest.source.agentId ||
+    JSON.stringify(marker.get('target')) !== JSON.stringify(bundle.manifest.target) ||
+    marker.get('completedWrites') !== writes.length ||
+    marker.get('totalWrites') !== writes.length
+  )
+    throw new Error('Migration marker does not prove a complete pending import');
+  const actualCollectionNames = (await store.root.listCollections())
+    .map((collection) => collection.id)
+    .sort();
+  const expectedCollectionNames = Object.keys(collections).sort();
+  if (JSON.stringify(actualCollectionNames) !== JSON.stringify(expectedCollectionNames))
+    throw new Error('Imported installation contains unexpected or missing collections');
+  for (let index = 0; index < writes.length; index += 100) {
+    const chunk = writes.slice(index, index + 100);
+    const snapshots = await Promise.all(
+      chunk.map((write) => store.doc(write.collection, write.id).get()),
+    );
+    for (let offset = 0; offset < chunk.length; offset++) {
+      const write = chunk[offset];
+      const snapshot = snapshots[offset];
+      if (!write || !snapshot?.exists) throw new Error('Imported destination record is missing');
+      if (
+        checksum(decodeMigrationDocument(snapshot.data())) !==
+        expectedChecksums.get(`${write.collection}:${write.id}`)
+      )
+        throw new Error(`Imported destination checksum mismatch: ${write.collection}/${write.id}`);
+    }
+  }
+  for (const [collection, count] of Object.entries(collections)) {
+    const snapshot = await store.collection(collection).count().get();
+    const expected = count + (collection === 'coordination' ? 1 : 0);
+    if (snapshot.data().count !== expected)
+      throw new Error(
+        `Imported collection count mismatch: ${collection} expected ${expected}, found ${snapshot.data().count}`,
+      );
+  }
+}
 
 function scheduleNameKey(agentId: string, name: string): string {
   return createHash('sha256')
@@ -26,26 +120,125 @@ function scheduleNameKey(agentId: string, name: string): string {
     .digest('hex');
 }
 
-function materialize(record: MigrationRecord): Record<string, unknown> {
-  return Object.fromEntries(
+function embeddingSpaceKey(
+  space: NonNullable<MigrationBundle['manifest']['source']['embeddingSpace']>,
+) {
+  return createHash('sha256')
+    .update(JSON.stringify([space.provider, space.model, space.dimensions, space.revision]))
+    .digest('hex');
+}
+
+function materialize(
+  record: MigrationRecord,
+  space?: MigrationBundle['manifest']['source']['embeddingSpace'],
+): Record<string, unknown> {
+  const data = Object.fromEntries(
     Object.entries(record.data).map(([key, value]) => [key, deserializeMigrationValue(value)]),
   );
+  const vector = record.data.embedding as { $assistantMigration?: unknown } | undefined;
+  if (
+    vector &&
+    Array.isArray(vector.$assistantMigration) &&
+    vector.$assistantMigration[0] === 'vector'
+  ) {
+    if (!space) throw new Error(`Vector provenance is missing for ${record.table}/${record.id}`);
+    const values = vector.$assistantMigration[1];
+    if (!Array.isArray(values) || values.length !== space.dimensions)
+      throw new Error(`Vector dimensions do not match provenance for ${record.table}/${record.id}`);
+    data.embedding = FieldValue.vector(values as number[]);
+    data.embeddingSpace = embeddingSpaceKey(space);
+    if (record.table === 'memories' || record.table === 'skills')
+      data.retrievalRevision = record.checksum;
+  }
+  if (record.table === 'cost_reservations') {
+    data.fingerprint = createHash('sha256')
+      .update(
+        JSON.stringify([
+          data.source,
+          usdMicros(data.estimatedUsd),
+          data.taskId ?? null,
+          data.description ?? '',
+        ]),
+      )
+      .digest('hex');
+  }
+  if (record.table === 'conversations') data.archived = Boolean(data.archivedAt);
+  if (record.table === 'messages' && data.hiddenAt === undefined) data.hiddenAt = null;
+  return data;
+}
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object' && !(value instanceof Date))
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => [key, canonical(item)]),
+    );
+  return value;
+}
+
+function approvalPolicyKey(policy: Record<string, unknown>): string {
+  const requested = {
+    agentId: policy.agentId,
+    toolName: policy.toolName,
+    templateKey: policy.templateKey,
+    effect: policy.effect,
+    match: policy.match,
+  };
+  return createHash('sha256')
+    .update(JSON.stringify(canonical(requested)))
+    .digest('hex');
+}
+
+function usdMicros(value: unknown): number {
+  if (typeof value !== 'string' || !/^\d+(?:\.\d+)?$/.test(value))
+    throw new Error(`Invalid migrated USD amount: ${String(value)}`);
+  const micros = Math.round(Number(value) * 1_000_000);
+  if (!Number.isSafeInteger(micros)) throw new Error('Migrated USD exceeds safe precision');
+  return micros;
+}
+
+function assertFirestoreShape(
+  value: unknown,
+  destination: string,
+  depth = 0,
+  insideArray = false,
+): void {
+  if (depth > 20) throw new Error(`Migration document exceeds Firestore depth: ${destination}`);
+  if (Array.isArray(value)) {
+    if (insideArray) throw new Error(`Migration document contains a nested array: ${destination}`);
+    for (const item of value) assertFirestoreShape(item, destination, depth + 1, true);
+    return;
+  }
+  if (
+    value &&
+    typeof value === 'object' &&
+    !(value instanceof Date) &&
+    !(value instanceof Timestamp) &&
+    !Buffer.isBuffer(value) &&
+    !(value instanceof FieldValue)
+  )
+    for (const item of Object.values(value))
+      assertFirestoreShape(item, destination, depth + 1, false);
 }
 
 function derivedRecords(bundle: MigrationBundle, target: MigrationTarget) {
   const rows: Array<{ collection: string; id: string; data: Record<string, unknown> }> = [];
   const approvals = bundle.records
     .filter((record) => record.table === 'approvals')
-    .map(materialize);
+    .map((record) => materialize(record, bundle.manifest.source.embeddingSpace));
   let maxApprovalNumber = 0;
-  const approvalNumbers = new Set<number>();
   for (const approval of approvals) {
-    const match = /^A([1-9]\d*)([A-Z]{2})$/.exec(String(approval.shortCode ?? ''));
+    // Match PostgreSQL's allocator: the sequence is the numeric prefix after A.
+    // Historical rows include suffixless codes and multiple suffix variants for
+    // the same number; the preserved full shortCode remains the collision key.
+    const match = /^A([0-9]+)/.exec(String(approval.shortCode ?? ''));
     if (!match) throw new Error('Malformed historical approval code');
     const number = Number(match[1]);
-    if (!Number.isSafeInteger(number + 1) || approvalNumbers.has(number))
-      throw new Error('Duplicate or unsafe historical approval code');
-    approvalNumbers.add(number);
+    if (!Number.isSafeInteger(number + 1) || number < 1)
+      throw new Error('Unsafe historical approval code sequence');
     maxApprovalNumber = Math.max(maxApprovalNumber, number);
   }
   if (approvals.length)
@@ -55,7 +248,7 @@ function derivedRecords(bundle: MigrationBundle, target: MigrationTarget) {
       data: { next: maxApprovalNumber + 1 },
     });
   for (const record of bundle.records.filter((candidate) => candidate.table === 'memories')) {
-    const data = materialize(record);
+    const data = materialize(record, bundle.manifest.source.embeddingSpace);
     if (typeof data.contentHash === 'string')
       rows.push({
         collection: 'memoryContentHashes',
@@ -64,7 +257,7 @@ function derivedRecords(bundle: MigrationBundle, target: MigrationTarget) {
       });
   }
   for (const record of bundle.records.filter((candidate) => candidate.table === 'schedules')) {
-    const data = materialize(record);
+    const data = materialize(record, bundle.manifest.source.embeddingSpace);
     if (typeof data.agentId === 'string' && typeof data.name === 'string')
       rows.push({
         collection: 'scheduleNames',
@@ -72,6 +265,133 @@ function derivedRecords(bundle: MigrationBundle, target: MigrationTarget) {
         data: { agentId: data.agentId, name: data.name, scheduleId: record.id },
       });
   }
+  for (const record of bundle.records.filter((candidate) => candidate.table === 'messages')) {
+    const data = materialize(record, bundle.manifest.source.embeddingSpace);
+    if (typeof data.channelMessageId === 'string')
+      rows.push({
+        collection: 'messageChannelIds',
+        id: data.channelMessageId,
+        data: { messageId: record.id, conversationId: data.conversationId },
+      });
+  }
+  for (const record of bundle.records.filter((candidate) => candidate.table === 'tasks')) {
+    const data = materialize(record, bundle.manifest.source.embeddingSpace);
+    if (typeof data.externalEventId === 'string')
+      rows.push({
+        collection: 'taskEventKeys',
+        id: createHash('sha256').update(data.externalEventId).digest('hex'),
+        data: { taskId: record.id, createdAt: data.createdAt },
+      });
+  }
+  for (const record of bundle.records.filter((candidate) => candidate.table === 'tool_calls')) {
+    const data = materialize(record, bundle.manifest.source.embeddingSpace);
+    if (typeof data.idempotencyKey === 'string')
+      rows.push({
+        collection: 'toolCallIdempotency',
+        id: data.idempotencyKey,
+        data: { toolCallId: record.id },
+      });
+  }
+  for (const record of bundle.records.filter(
+    (candidate) => candidate.table === 'approval_policies',
+  )) {
+    const data = materialize(record, bundle.manifest.source.embeddingSpace);
+    rows.push({
+      collection: 'approvalPolicyKeys',
+      id: approvalPolicyKey(data),
+      data: { policyId: record.id },
+    });
+  }
+  for (const record of bundle.records.filter(
+    (candidate) => candidate.table === 'generated_cards',
+  )) {
+    const data = materialize(record, bundle.manifest.source.embeddingSpace);
+    if (typeof data.agentId === 'string' && typeof data.sourceFingerprint === 'string')
+      rows.push({
+        collection: 'generatedCardKeys',
+        id: createHash('sha256')
+          .update(JSON.stringify([data.agentId, data.sourceFingerprint]))
+          .digest('hex'),
+        data: {
+          agentId: data.agentId,
+          sourceFingerprint: data.sourceFingerprint,
+          cardId: record.id,
+          createdAt: data.createdAt,
+        },
+      });
+  }
+  const budgets = new Map(
+    bundle.records
+      .filter((record) => record.table === 'budgets')
+      .map((record) => {
+        const data = materialize(record, bundle.manifest.source.embeddingSpace);
+        return [String(data.scope), data] as const;
+      }),
+  );
+  const daily = budgets.get('daily');
+  const monthly = budgets.get('monthly');
+  if (daily || monthly) {
+    if (!daily || !monthly || daily.softPct !== monthly.softPct)
+      throw new Error('Daily/monthly PostgreSQL budgets cannot form one Firestore policy');
+    rows.push({
+      collection: 'coordination',
+      id: 'budget-policy',
+      data: {
+        dailyLimitMicros: usdMicros(daily.limitUsd),
+        monthlyLimitMicros: usdMicros(monthly.limitUsd),
+        softPct: daily.softPct,
+      },
+    });
+  }
+  const heldReservations = bundle.records
+    .filter((record) => record.table === 'cost_reservations')
+    .map((record) => materialize(record, bundle.manifest.source.embeddingSpace))
+    .filter((record) => record.status === 'held');
+  rows.push({
+    collection: 'coordination',
+    id: 'budget-holds',
+    data: {
+      heldMicros: heldReservations.reduce(
+        (total, reservation) => total + usdMicros(reservation.estimatedUsd),
+        0,
+      ),
+    },
+  });
+  const taskHolds = new Map<string, number>();
+  for (const reservation of heldReservations) {
+    if (typeof reservation.taskId !== 'string') continue;
+    taskHolds.set(
+      reservation.taskId,
+      (taskHolds.get(reservation.taskId) ?? 0) + usdMicros(reservation.estimatedUsd),
+    );
+  }
+  for (const [taskId, heldMicros] of taskHolds)
+    rows.push({ collection: 'taskBudgetHolds', id: taskId, data: { heldMicros } });
+  const periodTotals = new Map<string, number>();
+  for (const record of bundle.records.filter((candidate) => candidate.table === 'cost_events')) {
+    const data = materialize(record, bundle.manifest.source.embeddingSpace);
+    if (!(data.createdAt instanceof Date)) throw new Error('Cost event has no timestamp');
+    for (const id of [
+      `day:${data.createdAt.toISOString().slice(0, 10)}`,
+      `month:${data.createdAt.toISOString().slice(0, 7)}`,
+    ])
+      periodTotals.set(id, (periodTotals.get(id) ?? 0) + usdMicros(data.usd));
+  }
+  const exportedAt = bundle.manifest.source.exportedAt
+    ? new Date(bundle.manifest.source.exportedAt)
+    : null;
+  if (exportedAt && Number.isFinite(exportedAt.getTime())) {
+    periodTotals.set(
+      `day:${exportedAt.toISOString().slice(0, 10)}`,
+      periodTotals.get(`day:${exportedAt.toISOString().slice(0, 10)}`) ?? 0,
+    );
+    periodTotals.set(
+      `month:${exportedAt.toISOString().slice(0, 7)}`,
+      periodTotals.get(`month:${exportedAt.toISOString().slice(0, 7)}`) ?? 0,
+    );
+  }
+  for (const [id, spentMicros] of periodTotals)
+    rows.push({ collection: 'budgetPeriods', id, data: { spentMicros } });
   rows.push({
     collection: 'coordination',
     id: 'migration',
@@ -102,10 +422,6 @@ export async function importWorkspaceBundle(
   },
 ): Promise<WorkspaceImportResult> {
   validateMigrationBundle(bundle, options);
-  if (bundle.records.some((record) => record.table === 'memories'))
-    throw new Error(
-      'Memory import requires an explicit embedding-space migration plan; refusing incompatible records',
-    );
   const records = [...bundle.records].sort((a, b) =>
     `${a.collection}:${a.id}`.localeCompare(`${b.collection}:${b.id}`),
   );
@@ -117,16 +433,41 @@ export async function importWorkspaceBundle(
     ...records.map((record) => ({
       collection: record.collection,
       id: record.id,
-      data: encodeRecord(materialize(record)),
+      data: encodeRecord(
+        materializeValue(materialize(record, bundle.manifest.source.embeddingSpace)) as Record<
+          string,
+          unknown
+        >,
+      ),
     })),
     ...dataDerived.map((record) => ({
       collection: record.collection,
       id: record.id,
-      data: encodeRecord(record.data),
+      data: encodeRecord(materializeValue(record.data) as Record<string, unknown>),
     })),
   ];
+  const writeKeys = new Set<string>();
+  for (const write of writes) {
+    const key = `${write.collection}:${write.id}`;
+    if (writeKeys.has(key)) throw new Error(`Migration produces duplicate destination: ${key}`);
+    writeKeys.add(key);
+    assertFirestoreShape(write.data, `${write.collection}/${write.id}`);
+    const estimatedBytes = Buffer.byteLength(
+      JSON.stringify(write.data, (_key, value) =>
+        typeof value === 'bigint' ? { $bigint: value.toString() } : value,
+      ),
+      'utf8',
+    );
+    if (estimatedBytes > 900_000)
+      throw new Error(
+        `Migration document exceeds safe Firestore inline size: ${write.collection}/${write.id} (${estimatedBytes} bytes)`,
+      );
+  }
   const expectedChecksums = new Map(
-    writes.map((write) => [`${write.collection}:${write.id}`, checksum(decodeRecord(write.data))]),
+    writes.map((write) => [
+      `${write.collection}:${write.id}`,
+      checksum(decodeMigrationDocument(write.data)),
+    ]),
   );
   const collections = Object.fromEntries(
     writes.reduce(
@@ -152,6 +493,17 @@ export async function importWorkspaceBundle(
   const marker = store.doc('coordination', 'migration');
   const markerSnapshot = await marker.get();
   const markerData = markerSnapshot.exists ? markerSnapshot.data() : undefined;
+  if (mode === 'verify') {
+    await verifyDestination(store, writes, expectedChecksums, collections, bundle);
+    return {
+      mode,
+      records: records.length,
+      derivedMetadata: derived.length,
+      writes: writes.length + 1,
+      collections,
+      verified: true,
+    };
+  }
   const markerIdentity = {
     sourceAgentId: bundle.manifest.source.agentId,
     target: options.target,
@@ -214,7 +566,7 @@ export async function importWorkspaceBundle(
         if (
           expectedChecksum &&
           snapshot &&
-          checksum(decodeRecord(snapshot.data())) !== expectedChecksum
+          checksum(decodeMigrationDocument(snapshot.data())) !== expectedChecksum
         )
           throw new Error('Completed migration record checksum mismatch');
       }
@@ -248,6 +600,7 @@ export async function importWorkspaceBundle(
     if (options.failAfterBatches && batchCount >= options.failAfterBatches)
       throw new Error('Injected migration batch failure');
   }
+  await verifyDestination(store, writes, expectedChecksums, collections, bundle);
   return {
     mode,
     records: records.length,
@@ -255,6 +608,7 @@ export async function importWorkspaceBundle(
     writes: writes.length + 1,
     collections,
     resumed,
+    verified: true,
   };
 }
 

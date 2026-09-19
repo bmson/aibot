@@ -3,14 +3,14 @@
 import { dismissSavedCard, requestSavedCardRefresh } from '@assistant/application/cards';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getAgentIdentity, getDb } from '@/lib/server';
+import { getAgentIdentity, getCardRefresh, getGeneratedCards } from '@/lib/server';
 
 export async function dismissCard(formData: FormData): Promise<void> {
   await requireOwner();
   const cardId = String(formData.get('cardId') ?? '');
   const agent = await getAgentIdentity();
   if (!agent.id || !cardId) return;
-  await dismissSavedCard(getDb(), agent.id, cardId);
+  await dismissSavedCard(getGeneratedCards(), agent.id, cardId);
   revalidatePath('/cards');
 }
 
@@ -26,7 +26,7 @@ export async function refreshSavedCardInline(
   ) {
     return { ok: false, error: 'This saved card is unavailable.' };
   }
-  const result = await requestSavedCardRefresh(getDb(), agent.id, cardId);
+  const result = await requestSavedCardRefresh(getCardRefresh(), agent.id, cardId);
   revalidatePath('/cards');
   revalidatePath('/chat', 'layout');
   return result.ok ? { ok: true, taskId: result.taskId } : { ok: false, error: result.error };

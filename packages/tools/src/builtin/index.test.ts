@@ -1,6 +1,7 @@
 import { agents, createDb, type Db, goals } from '@assistant/db';
+import type { MemoryToolRepository } from '@assistant/persistence';
 import { inArray } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ToolRegistry } from '../registry.js';
 import type { ToolContext } from '../types.js';
 import { registerBuiltinTools } from './index.js';
@@ -9,6 +10,68 @@ const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
 
 describe('builtin trust capabilities', () => {
+  it.each([
+    { saved: true, quarantined: false, category: 'knowledge', expected: 1 },
+    { saved: false, quarantined: false, category: 'knowledge', expected: 0 },
+    { saved: true, quarantined: true, category: 'knowledge', expected: 0 },
+    { saved: true, quarantined: false, category: 'experience', expected: 0 },
+  ])('preserves immediate corrections for eligible portable saves: %j', async (scenario) => {
+    const supersede = vi.fn(async () => ({ superseded: ['old-fact'] }));
+    const memory: MemoryToolRepository = {
+      kind: 'memory-tool-repository',
+      save: async () => ({
+        id: 'new-fact',
+        saved: scenario.saved,
+        duplicate: !scenario.saved,
+        tombstoned: false,
+        quarantined: scenario.quarantined,
+      }),
+      recall: async () => ({ memories: [], candidateLimitReached: false }),
+    };
+    const registry = registerBuiltinTools(new ToolRegistry(), {
+      embed: async () => [[1, 0, 0]],
+      memory,
+      supersede,
+      workspace: {} as Parameters<typeof registerBuiltinTools>[1]['workspace'],
+    });
+    const tool = registry.get('memory.save')?.tool;
+    if (!tool) throw new Error('Missing memory.save');
+    const ctx = {
+      agentId: 'agent',
+      taskId: 'task',
+      trust: 'owner',
+      now: () => new Date(),
+      db: new Proxy(
+        {},
+        {
+          get() {
+            throw new Error('Unexpected SQL access');
+          },
+        },
+      ),
+    } as ToolContext;
+    const result = await tool.execute(
+      {
+        content: 'A corrected fact',
+        category: scenario.category,
+        kind: 'fact',
+        importance: 3,
+        confidence: 0.9,
+        subject: '',
+      },
+      ctx,
+    );
+    expect(supersede).toHaveBeenCalledTimes(scenario.expected);
+    if (scenario.expected) {
+      expect(supersede).toHaveBeenCalledWith({
+        agentId: 'agent',
+        taskId: 'task',
+        newFactId: 'new-fact',
+      });
+      expect(result).toMatchObject({ replacedEarlierFacts: 1 });
+    }
+  });
+
   it('does not expose owner-private reads or workspace writes to unknown tasks', () => {
     const registry = registerBuiltinTools(new ToolRegistry(), {
       embed: async () => [],
@@ -47,6 +110,97 @@ describe('builtin trust capabilities', () => {
     expect(owner).toContain('goals.update_progress');
     expect(registry.get('mission.update')?.tool.acceptsUntrustedInput).toBe(true);
     expect(registry.get('goals.update_progress')?.tool.acceptsUntrustedInput).toBe(true);
+  });
+
+  it('routes memory save and recall through the injected portable repository', async () => {
+    const calls: { save?: Record<string, unknown>; recall?: Record<string, unknown> } = {};
+    const memory: MemoryToolRepository = {
+      kind: 'memory-tool-repository',
+      save: async (input) => {
+        calls.save = input as unknown as Record<string, unknown>;
+        return { saved: true, duplicate: false, tombstoned: false, quarantined: input.quarantined };
+      },
+      recall: async (input) => {
+        calls.recall = input as unknown as Record<string, unknown>;
+        return {
+          candidateLimitReached: false,
+          memories: [
+            {
+              id: 'memory-1',
+              createdAt: new Date(),
+              agentId: input.agentId,
+              expiresAt: null,
+              embedding: null,
+              sourceTaskId: null,
+              kind: 'fact',
+              confidence: '0.6',
+              contentHash: 'hash',
+              goalId: null,
+              originTrust: 'unknown',
+              category: 'knowledge',
+              content: 'A recalled fact',
+              importance: 3,
+              quarantined: false,
+              subjectContactId: null,
+              domain: null,
+              validFrom: null,
+              validUntil: null,
+              supersededById: null,
+              ownerConfirmed: false,
+              pinned: false,
+              source: null,
+              lastAccessedAt: input.now ?? null,
+              lastConsolidatedAt: null,
+              similarity: 0.9,
+            },
+          ],
+        };
+      },
+    };
+    const registry = registerBuiltinTools(new ToolRegistry(), {
+      embed: async () => [[1, 2, 3]],
+      memory,
+      workspace: {} as Parameters<typeof registerBuiltinTools>[1]['workspace'],
+    });
+    const now = new Date('2026-09-12T12:00:00Z');
+    const ctx = {
+      taskId: 'task-1',
+      agentId: 'agent-1',
+      trust: 'known',
+      tainted: true,
+      db: {} as ToolContext['db'],
+      now: () => now,
+      signal: new AbortController().signal,
+      log: async () => {},
+    } as ToolContext;
+    const saveTool = registry.get('memory.save')?.tool;
+    const recallTool = registry.get('memory.recall')?.tool;
+    if (!saveTool || !recallTool) throw new Error('memory tools not registered');
+    await saveTool.execute(
+      {
+        content: 'Portable memory',
+        category: 'experience',
+        kind: 'episode',
+        subject: '',
+        importance: 3,
+        confidence: 0.8,
+      },
+      ctx,
+    );
+    expect(calls.save).toMatchObject({
+      agentId: 'agent-1',
+      sourceTaskId: 'task-1',
+      originTrust: 'known',
+      quarantined: true,
+    });
+    const expiresAt = calls.save?.expiresAt;
+    if (!(expiresAt instanceof Date)) throw new Error('Missing memory expiry');
+    expect(expiresAt.getTime()).toBe(now.getTime() + 90 * 24 * 3600 * 1000);
+    const recalled = await recallTool.execute({ query: 'fact', limit: 1 }, ctx);
+    expect(calls.recall).toMatchObject({ agentId: 'agent-1', query: 'fact', limit: 1, now });
+    expect(recalled).toMatchObject({
+      memories: [{ content: 'A recalled fact', unconfirmed: true }],
+    });
   });
 });
 

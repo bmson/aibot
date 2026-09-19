@@ -9,17 +9,20 @@ import {
   agents,
   conversations,
   createDb,
+  createPostgresGeneratedCardRepository,
   type Db,
   generatedCardRevisions,
   generatedCards,
   tasks,
 } from '@assistant/db';
-import { eq, inArray } from 'drizzle-orm';
+import type { GeneratedCardRepository } from '@assistant/persistence';
+import { and, eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { listSavedCards, requestSavedCardRefresh, savedCardRefreshId } from './cards.js';
 import { hydrateChatApprovals } from './chat.js';
 
 let db: Db;
+let cardRepository: GeneratedCardRepository;
 let agentId: string;
 let conversationId: string;
 const cardIds: string[] = [];
@@ -58,7 +61,7 @@ function payload(status = 'In transit'): GeneratedCardPayload {
 }
 
 async function save() {
-  const card = await persistGeneratedCard(db, {
+  const card = await persistGeneratedCard(cardRepository, {
     agentId,
     conversationId,
     payload: payload(),
@@ -73,6 +76,7 @@ beforeAll(async () => {
   db = createDb(
     process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant_test',
   );
+  cardRepository = createPostgresGeneratedCardRepository(db);
   agentId = (await getAgent(db)).id;
   const [conversation] = await db
     .insert(conversations)
@@ -117,7 +121,7 @@ describe('saved card source refresh', () => {
     expect(instruction).toContain('"value":"In transit"');
     expect(instruction).toContain('concise summary of the changed facts');
     expect(instruction).toContain('displayed facts are unchanged');
-    const [view] = await listSavedCards(db, agentId, [card.id]);
+    const [view] = await listSavedCards(cardRepository, agentId, [card.id]);
     expect(view).toMatchObject({
       refreshState: 'refreshing',
       refreshTaskId: first.taskId,
@@ -127,7 +131,9 @@ describe('saved card source refresh', () => {
     for (const status of ['waiting_budget', 'sleeping']) {
       await db.update(tasks).set({ status }).where(eq(tasks.id, first.taskId));
       expect(await requestSavedCardRefresh(db, agentId, card.id)).toEqual(first);
-      expect((await listSavedCards(db, agentId, [card.id]))[0]?.refreshState).toBe('refreshing');
+      expect((await listSavedCards(cardRepository, agentId, [card.id]))[0]?.refreshState).toBe(
+        'refreshing',
+      );
     }
   });
 
@@ -138,7 +144,7 @@ describe('saved card source refresh', () => {
       .update(generatedCards)
       .set({ updatedAt: oldTime })
       .where(eq(generatedCards.id, card.id));
-    const refreshed = await persistGeneratedCard(db, {
+    const refreshed = await persistGeneratedCard(cardRepository, {
       agentId,
       payload: payload('Delivered'),
       evidence: evidence('Delivered'),
@@ -147,7 +153,7 @@ describe('saved card source refresh', () => {
     expect(refreshed.id).toBe(card.id);
     expect(refreshed.sourceFingerprint).toBe(card.sourceFingerprint);
     expect(refreshed.revisionId).not.toBe(card.revisionId);
-    const views = await listSavedCards(db, agentId, [card.id]);
+    const views = await listSavedCards(cardRepository, agentId, [card.id]);
     expect(views).toHaveLength(1);
     expect(views[0]?.updatedAt.getTime()).toBeGreaterThan(oldTime.getTime());
     const hydrated = await hydrateChatApprovals(db, [
@@ -172,7 +178,7 @@ describe('saved card source refresh', () => {
       .update(generatedCards)
       .set({ updatedAt: oldTime })
       .where(eq(generatedCards.id, card.id));
-    const refreshed = await persistGeneratedCard(db, {
+    const refreshed = await persistGeneratedCard(cardRepository, {
       agentId,
       payload: { ...card, revisionId: randomUUID() },
       evidence: evidence(),
@@ -190,7 +196,7 @@ describe('saved card source refresh', () => {
 
   it('keeps old facts and validation time after unrelated, failed, or stale evidence', async () => {
     const card = await save();
-    const [before] = await listSavedCards(db, agentId, [card.id]);
+    const [before] = await listSavedCards(cardRepository, agentId, [card.id]);
     for (const attempted of [
       evidence('Delivered', 'other-thread'),
       evidence('Delivered').map((row) => ({ ...row, fromCurrentTask: false })),
@@ -198,7 +204,7 @@ describe('saved card source refresh', () => {
       evidence('In transit'),
     ]) {
       await expect(
-        persistGeneratedCard(db, {
+        persistGeneratedCard(cardRepository, {
           agentId,
           payload: payload('Delivered'),
           evidence: attempted,
@@ -206,17 +212,54 @@ describe('saved card source refresh', () => {
         }),
       ).rejects.toThrow('original sources');
     }
-    const [after] = await listSavedCards(db, agentId, [card.id]);
+    const [after] = await listSavedCards(cardRepository, agentId, [card.id]);
     expect(after?.revisionId).toBe(before?.revisionId);
     expect(after?.updatedAt).toEqual(before?.updatedAt);
     const result = await requestSavedCardRefresh(db, agentId, card.id);
     if (!result.ok) throw new Error(result.error);
     taskIds.push(result.taskId);
     await db.update(tasks).set({ status: 'needs_attention' }).where(eq(tasks.id, result.taskId));
-    expect((await listSavedCards(db, agentId, [card.id]))[0]).toMatchObject({
+    expect((await listSavedCards(cardRepository, agentId, [card.id]))[0]).toMatchObject({
       refreshState: 'failed',
       stale: true,
       refreshTaskId: result.taskId,
+    });
+  });
+
+  it('restores an archived primary conversation used as the fallback destination', async () => {
+    let [primary] = await db
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.agentId, agentId), eq(conversations.isPrimary, true)))
+      .limit(1);
+    if (!primary) {
+      [primary] = await db
+        .update(conversations)
+        .set({ isPrimary: true })
+        .where(eq(conversations.id, conversationId))
+        .returning();
+    }
+    if (!primary) throw new Error('primary conversation missing');
+    await db
+      .update(conversations)
+      .set({ archivedAt: new Date('2026-09-01T00:00:00Z') })
+      .where(eq(conversations.id, primary.id));
+    const card = await persistGeneratedCard(cardRepository, {
+      agentId,
+      payload: payload(),
+      evidence: evidence(),
+      sourceText: 'Where is my shipment A123?',
+    });
+    cardIds.push(card.id);
+
+    const result = await requestSavedCardRefresh(db, agentId, card.id);
+    if (!result.ok) throw new Error(result.error);
+    taskIds.push(result.taskId);
+    expect(
+      (await db.select().from(conversations).where(eq(conversations.id, primary.id)))[0],
+    ).toMatchObject({ archivedAt: null });
+    expect((await db.select().from(tasks).where(eq(tasks.id, result.taskId)))[0]).toMatchObject({
+      conversationId: primary.id,
     });
   });
 
@@ -236,13 +279,19 @@ describe('saved card source refresh', () => {
       ok: false,
       status: 404,
     });
-    const legacy = await persistGeneratedCard(db, { agentId, conversationId, payload: payload() });
+    const legacy = await persistGeneratedCard(cardRepository, {
+      agentId,
+      conversationId,
+      payload: payload(),
+    });
     cardIds.push(legacy.id);
     expect(await requestSavedCardRefresh(db, agentId, legacy.id)).toMatchObject({
       ok: false,
       status: 409,
     });
-    expect((await listSavedCards(db, agentId, [legacy.id]))[0]?.spec.refreshable).toBe(false);
+    expect((await listSavedCards(cardRepository, agentId, [legacy.id]))[0]?.spec.refreshable).toBe(
+      false,
+    );
   });
 
   it('recognizes only the established explicit client refresh prompt', () => {

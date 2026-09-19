@@ -1,6 +1,16 @@
 # Firestore migration implementation status
 
-Updated 2026-09-12. This tracks the implementation batches of the [migration and consumer-install plan](firestore-consumer-install-plan.md). **The complete migration and single-click installer are not finished.** The current application and deployments continue to require PostgreSQL and the existing owner authentication. Model-provider selection is now configurable; the deployed provider has not changed. Production release of the adapter foundation applies the additive PostgreSQL lease-token migration; it does not move production data into Firestore.
+Updated 2026-09-19. This tracks the implementation batches of the [migration and consumer-install plan](firestore-consumer-install-plan.md). **The complete migration and single-click installer are not finished.** The current application and deployments continue to require PostgreSQL and the existing owner authentication. Model-provider selection is configurable; the deployed provider has not changed. Adapter releases do not activate Firestore or make PostgreSQL safe to delete.
+
+## Current recovery checkpoint
+
+Application chat, historical and graph recall, recall metrics, memory save/recall and supersession, generated cards and refresh requests, task dispatch, and scheduled follow-ups have portable persistence adapters. Synthetic application and executor checks include historical/graph recall and assert zero SQL access for the exercised paths. These checks do not cover full startup, all enabled integrations, management routes, or context writers.
+
+The migration registry/exporter now covers all 66 source tables, including skills. A September 12 snapshot containing 61,382 source records passed full emulator import and verification with 14,565 derived documents. Version 2 exports preserve timestamp microseconds and bigint values; older snapshots remain useful for rehearsals but require replacement with a fresh version 2 snapshot for final cutover. Lossless Firestore encoding handles nested JSON arrays and reserved-key collisions. Shared index definitions now drive both customer Terraform and live validation, including vector indexes and large-payload exemptions.
+
+The production asset audit found 17 snapshot references without current or noncurrent objects and 266 live objects outside the snapshot's direct references. These need recovery/classification against a fresh source inventory. No missing reference has been deleted or declared obsolete. Managed Firestore backup/restore and asset recovery remain separate acceptance gates.
+
+The [cutover checklist](firestore-cutover-checklist.md) records the remaining acceptance gates. Production stays on PostgreSQL until complete runtime composition, enabled modules, management/context writers, customer deployment/onboarding, asset parity, real-cloud backup/restore, a PostgreSQL-offline rehearsal, and final write fencing pass. The sections below describe earlier implementation checkpoints; their validation counts and limitations are historical.
 
 ## Implemented
 

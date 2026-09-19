@@ -4,6 +4,7 @@ This directory provisions the first customer-owned resources for a Firestore ins
 
 - required Google APIs;
 - an explicitly selected Firestore Native Standard database;
+- application composite/vector indexes and large-payload single-field exemptions from the shared `infra/gcp/firestore/firestore.indexes.json` specification;
 - private, versioned assets and source archive buckets with uniform access, public access prevention, and seven-day soft-delete retention;
 - an immutable-tag Docker Artifact Registry repository; and
 - a dedicated runtime service account with access to the selected Firestore database and asset object administration. The source archive bucket has no runtime grant.
@@ -63,4 +64,4 @@ terraform validate
 terraform test
 ```
 
-The tests use a mocked provider. They cover the explicit default-database creation guard, exact database-scoped IAM, retained delete protection, named database selection, and invalid IDs. They do not establish that a customer project is empty, billing is enabled, a location is available, or IAM works in Google Cloud.
+The tests use a mocked provider. They cover the explicit default-database creation guard, exact database-scoped IAM, retained delete protection, named database selection, invalid IDs, and index deployment. They do not establish that a customer project is empty, billing is enabled, a location is available, or IAM works in Google Cloud. The live Firestore validation harness deploys the same indexes and exemptions into an isolated temporary database and waits for index operations before exercising queries.

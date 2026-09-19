@@ -1,9 +1,8 @@
 import { loadConfig } from '@assistant/config';
 import {
   createPostgresExecutionEvidenceRepository,
+  createPostgresGeneratedCardRepository,
   type Db,
-  generatedCardRevisions,
-  generatedCards,
   type TaskRow,
 } from '@assistant/db';
 import type {
@@ -13,7 +12,6 @@ import type {
   SkillContextRepository,
 } from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
-import { and, eq } from 'drizzle-orm';
 import {
   assistantMessageParts,
   getOrCreateNotificationsConversation,
@@ -526,21 +524,12 @@ export async function stageModelFinalResponse(
     task.trust === 'owner' && typeof trigger?.payload?.refreshCardId === 'string'
       ? trigger.payload.refreshCardId
       : undefined;
+  const generatedCardsRepository =
+    deps.persistence?.generatedCards ?? createPostgresGeneratedCardRepository(deps.db);
   const refreshTarget = refreshCardId
-    ? await deps.db.query.generatedCards.findFirst({
-        where: and(
-          eq(generatedCards.id, refreshCardId),
-          eq(generatedCards.agentId, task.agentId),
-          eq(generatedCards.status, 'active'),
-        ),
-      })
+    ? await generatedCardsRepository.get(task.agentId, refreshCardId)
     : undefined;
-  const refreshRevision = refreshTarget
-    ? await deps.db.query.generatedCardRevisions.findFirst({
-        where: eq(generatedCardRevisions.id, refreshTarget.currentRevisionId),
-      })
-    : undefined;
-  const provenance = cardRuntimeProvenance(refreshRevision?.spec);
+  const provenance = cardRuntimeProvenance(refreshTarget?.revision.spec);
   const refreshEvidence = provenance ? revalidatedCardEvidence(provenance.sources, evidence) : null;
   let generatedCard: GeneratedCardPayload | undefined;
   if (
@@ -588,7 +577,7 @@ export async function stageModelFinalResponse(
       const answerGrounded = generated.grounding === 'answer' && !cardRequested;
       generatedCard = answerGrounded
         ? generated
-        : await persistGeneratedCard(deps.db, {
+        : await persistGeneratedCard(generatedCardsRepository, {
             agentId: task.agentId,
             conversationId: task.conversationId,
             payload: generated,

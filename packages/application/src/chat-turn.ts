@@ -1,19 +1,18 @@
 import { type Config, modelProviderConfigProblems } from '@assistant/config';
 import {
+  assistantMessageParts,
   BACKGROUND_NOTICE_MARKER,
-  backgroundNoticeIds,
   buildSystemPrompt,
   createChatTask,
   encodeMessageCursor,
-  ensureChatConversation,
-  finishTask,
-  getAgent,
-  listConversationToolEvidence,
-  listMessages,
-  persistMessage,
   type TurnFailureReason,
 } from '@assistant/core/chat';
-import { createCueScanner, spokenReplyLines, stripCueTags } from '@assistant/core/chat-cues';
+import {
+  type Cue,
+  createCueScanner,
+  spokenReplyLines,
+  stripCueTags,
+} from '@assistant/core/chat-cues';
 import { conversationMessageTexts } from '@assistant/core/conversation-context';
 import { TRIAGED_ACTIONABLE } from '@assistant/core/events';
 import { getAmbientBlock } from '@assistant/core/memory/ambient';
@@ -31,27 +30,134 @@ import {
   clearGoalBlockedOnOwnerReply,
   goalIdForConversation,
 } from '@assistant/core/workflow/schedules';
-import { conversations, type Db } from '@assistant/db';
+import { createPostgresApplicationChatPersistence, type Db } from '@assistant/db';
+import type {
+  ApplicationChatMessage,
+  ApplicationChatPersistence,
+  ExecutionPersistence,
+  TaskLease,
+} from '@assistant/persistence';
 import {
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
   type UIMessage,
 } from 'ai';
-import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requestSavedCardRefresh, savedCardRefreshId } from './cards.js';
 import { budgetReplyTarget, isApprovalReply } from './chat-budget-reply.js';
 import { pumpWithCues, type StreamChunk } from './chat-cue-stream.js';
 import { guardDraft } from './chat-guard.js';
 import { looksLikeActionRequest } from './chat-triage.js';
-import { raiseTaskBudget } from './tasks/commands.js';
 
 const MAX_REQUEST_BYTES = 32 * 1024;
 const MAX_USER_MESSAGE_BYTES = 16 * 1024;
 const MAX_MODEL_HISTORY_BYTES = 64 * 1024;
 const MODEL_HISTORY_LIMIT = 40;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface ChatTurnDependencies {
+  config: Config;
+  /** PostgreSQL compatibility during cutover; Firestore composition omits it. */
+  db?: Db;
+  router: ModelRouter;
+  chat?: ApplicationChatPersistence;
+  persistence?: ExecutionPersistence;
+}
+
+function hasBackgroundPart(parts: unknown): boolean {
+  if (!Array.isArray(parts)) return false;
+  return parts.some((part) => {
+    if (!part || typeof part !== 'object') return false;
+    const { type, data } = part as { type?: unknown; data?: unknown };
+    if (type === 'notice' || type === 'suggestion' || type === 'approval-summary') return true;
+    return (
+      type === 'data-card' &&
+      Boolean(data) &&
+      typeof data === 'object' &&
+      (data as { kind?: unknown }).kind === 'proactive-alert'
+    );
+  });
+}
+
+async function applicationBackgroundNoticeIds(
+  chat: ApplicationChatPersistence,
+  agentId: string,
+  rows: ApplicationChatMessage[],
+): Promise<Set<string>> {
+  const notices = new Set<string>();
+  const pending = new Map<string, string[]>();
+  for (const row of rows) {
+    if (row.role !== 'assistant') continue;
+    if (hasBackgroundPart(row.parts)) {
+      notices.add(row.id);
+      continue;
+    }
+    if (!row.taskId) continue;
+    pending.set(row.taskId, [...(pending.get(row.taskId) ?? []), row.id]);
+  }
+  const kinds = await chat.getTaskKinds(agentId, [...pending.keys()]);
+  for (const [taskId, ids] of pending) {
+    if (kinds.get(taskId) === 'chat_turn') continue;
+    for (const id of ids) notices.add(id);
+  }
+  return notices;
+}
+
+function goalIdFromConversation(metadata: unknown): string | undefined {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
+  const goalId = (metadata as Record<string, unknown>).goalId;
+  return typeof goalId === 'string' && UUID_RE.test(goalId) ? goalId : undefined;
+}
+
+async function finishApplicationChatTask(
+  chat: ApplicationChatPersistence,
+  agentId: string,
+  task: TaskLease,
+  outcome: {
+    status: 'done' | 'failed';
+    progress?: string;
+    responseText?: string;
+    recall?: RecallSource[];
+    cues?: Cue[];
+    offCourse?: boolean;
+    failureNotice?: { text: string; reason: TurnFailureReason };
+  },
+): Promise<boolean> {
+  const messages = [];
+  if (outcome.responseText !== undefined && task.conversationId) {
+    messages.push({
+      conversationId: task.conversationId,
+      taskId: task.id,
+      role: 'assistant' as const,
+      origin: 'assistant' as const,
+      parts: assistantMessageParts(outcome.responseText, outcome.recall, {
+        cues: outcome.cues,
+        offCourse: outcome.offCourse,
+      }),
+      text: outcome.responseText,
+    });
+  }
+  if (outcome.status === 'failed' && outcome.failureNotice && task.conversationId) {
+    messages.push({
+      conversationId: task.conversationId,
+      taskId: task.id,
+      role: 'assistant' as const,
+      origin: 'assistant' as const,
+      parts: assistantMessageParts(outcome.failureNotice.text, undefined, {
+        turnFailed: outcome.failureNotice.reason,
+      }),
+      text: outcome.failureNotice.text,
+    });
+  }
+  return chat.completeDirectChatTask({
+    agentId,
+    task,
+    status: outcome.status,
+    progress: outcome.progress,
+    messages,
+  });
+}
 
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
@@ -154,7 +260,7 @@ function acceptedStreamResponse(taskId: string, headers: Record<string, string>)
 }
 
 function boundedModelHistory(
-  rows: Awaited<ReturnType<typeof listMessages>>,
+  rows: ApplicationChatMessage[],
   notices: ReadonlySet<string>,
 ): UIMessage[] {
   const contextTexts = conversationMessageTexts(rows, notices);
@@ -193,7 +299,7 @@ function boundedModelHistory(
  * named function — an inline closure inside that gather could not be tested.
  */
 export async function openLoopContext(
-  db: Db,
+  db: Parameters<typeof listOpenCommitments>[0],
   agentId: string,
   query: string,
 ): Promise<string | undefined> {
@@ -218,9 +324,19 @@ export async function openLoopContext(
  * call — so failures propagate.
  */
 export async function chatTurnTask(
-  db: Db,
-  input: { agentId: string; conversationId: string; title: string },
+  db: Db | ApplicationChatPersistence,
+  input: { agentId: string; conversationId: string; title: string; metadata?: unknown },
 ) {
+  if ('kind' in db) {
+    const goalId = goalIdFromConversation(input.metadata);
+    if (goalId) await db.clearGoalBlockedOnOwnerReply(input.agentId, goalId);
+    return db.createDirectChatTask({
+      agentId: input.agentId,
+      conversationId: input.conversationId,
+      goalId,
+      title: input.title,
+    });
+  }
   const goalId = await goalIdForConversation(db, input.conversationId);
   if (goalId) await clearGoalBlockedOnOwnerReply(db, goalId);
   return createChatTask(db, {
@@ -233,9 +349,13 @@ export async function chatTurnTask(
 
 export async function handleChatTurn(
   req: Request,
-  dependencies: { config: Config; db: Db; router: ModelRouter },
+  dependencies: ChatTurnDependencies,
 ): Promise<Response> {
-  const { config, db, router } = dependencies;
+  const { config, router } = dependencies;
+  const requireDb = (): Db => {
+    if (!dependencies.db) throw new Error('Chat persistence is not configured');
+    return dependencies.db;
+  };
   const providerProblems = modelProviderConfigProblems(config);
   if (providerProblems.length > 0) {
     return Response.json(
@@ -341,26 +461,26 @@ export async function handleChatTurn(
     );
   }
 
-  const agent = await getAgent(db);
-  const conversation = await ensureChatConversation(db, agent.id, body.conversationId);
+  const chat = dependencies.chat ?? createPostgresApplicationChatPersistence(requireDb());
+  const agent = await chat.resolveAgent();
+  const existingConversation = body.conversationId
+    ? await chat.getConversation(agent.id, body.conversationId)
+    : null;
+  const conversation = existingConversation ?? (await chat.createConversation(agent.id));
 
   // Replying is an explicit choice to resume an archived chat. Preserve the
   // history, but make it visible again instead of creating a duplicate thread.
   if (conversation.archivedAt) {
-    await db
-      .update(conversations)
-      .set({ archivedAt: null, updatedAt: new Date() })
-      .where(eq(conversations.id, conversation.id));
+    await chat.restoreConversation(agent.id, conversation.id);
+    conversation.archivedAt = null;
   }
 
   if (!conversation.title) {
-    await db
-      .update(conversations)
-      .set({ title: userText.slice(0, 60) })
-      .where(eq(conversations.id, conversation.id));
+    await chat.setConversationTitleIfEmpty(agent.id, conversation.id, userText.slice(0, 60));
+    conversation.title = userText.slice(0, 60);
   }
 
-  const persistedUser = await persistMessage(db, {
+  const persistedUser = await chat.appendOwned(agent.id, {
     conversationId: conversation.id,
     role: 'user',
     origin: 'owner',
@@ -370,8 +490,14 @@ export async function handleChatTurn(
   if (!persistedUser) throw new Error('failed to persist chat message');
   const messageCursor = encodeMessageCursor(persistedUser);
   const refreshCardId = savedCardRefreshId(userText);
-  if (refreshCardId) {
-    const result = await requestSavedCardRefresh(db, agent.id, refreshCardId, conversation.id);
+  const cardRefresh = dependencies.db ?? dependencies.persistence?.cardRefresh;
+  if (refreshCardId && cardRefresh) {
+    const result = await requestSavedCardRefresh(
+      cardRefresh,
+      agent.id,
+      refreshCardId,
+      conversation.id,
+    );
     if (!result.ok) return Response.json({ error: result.error }, { status: result.status });
     return acceptedStreamResponse(result.taskId, {
       'x-conversation-id': conversation.id,
@@ -379,13 +505,15 @@ export async function handleChatTurn(
       'x-message-cursor': messageCursor,
     });
   }
-  const historyRows = await listMessages(db, conversation.id, {
+  const historyPage = await chat.listMessages(agent.id, conversation.id, {
     limit: MODEL_HISTORY_LIMIT,
   });
-  const noticeRows = await backgroundNoticeIds(db, historyRows);
+  if (!historyPage) throw new Error('chat not found');
+  const historyRows = historyPage.messages;
+  const noticeRows = await applicationBackgroundNoticeIds(chat, agent.id, historyRows);
   const modelHistory = boundedModelHistory(historyRows, noticeRows);
   if (isApprovalReply(userText)) {
-    const replyTask = await createChatTask(db, {
+    const replyTask = await chat.createDirectChatTask({
       agentId: agent.id,
       conversationId: conversation.id,
       title: userText,
@@ -398,14 +526,14 @@ export async function handleChatTurn(
       'I could not match this approval to one pending budget request. Open the specific approval card to apply the decision; no change has been made by this reply.';
     if (target) {
       try {
-        await raiseTaskBudget(db, target.taskId, target.amount);
+        await chat.raiseTaskBudget(agent.id, target.taskId, target.amount);
         responseText = `Approved the spending limit of $${target.amount.toFixed(2)} and queued that task to resume.`;
       } catch {
         responseText =
           'That budget request could not be applied. It may already be resolved or the task may no longer be waiting. Check its current state in Activity.';
       }
     }
-    await finishTask(db, replyTask, { status: 'done', responseText });
+    await finishApplicationChatTask(chat, agent.id, replyTask, { status: 'done', responseText });
     return acceptedStreamResponse(replyTask.id, {
       'x-conversation-id': conversation.id,
       'x-async-task': replyTask.id,
@@ -496,9 +624,9 @@ export async function handleChatTurn(
       // An answer typed into a goal's work chat belongs to that goal, so the
       // goal's own sessions can see it was answered — and it answers whatever
       // question had the goal blocked, so the waiting marker comes down now.
-      const goalId = await goalIdForConversation(db, conversation.id);
-      if (goalId) await clearGoalBlockedOnOwnerReply(db, goalId);
-      const { task } = await enqueueTask(db, {
+      const goalId = goalIdFromConversation(conversation.metadata);
+      if (goalId) await chat.clearGoalBlockedOnOwnerReply(agent.id, goalId);
+      const { task } = await enqueueTask(dependencies.persistence?.tasks ?? requireDb(), {
         event: {
           source: 'chat',
           agentId: agent.id,
@@ -546,7 +674,7 @@ export async function handleChatTurn(
           ? async () => {
               const [queryEmbedding] = await router.embed([userText]);
               return {
-                graph: await recallKnowledgeGraph(db, {
+                graph: await recallKnowledgeGraph(dependencies.persistence?.graph ?? requireDb(), {
                   agentId: agent.id,
                   queryText: userText,
                   queryEmbedding,
@@ -557,7 +685,7 @@ export async function handleChatTurn(
           : undefined,
         history: (queryEmbedding, graph) =>
           recallRelevantContext(
-            db,
+            dependencies.persistence?.history ?? requireDb(),
             {
               agentId: agent.id,
               queryText: userText,
@@ -584,7 +712,7 @@ export async function handleChatTurn(
           );
         },
       });
-      void recordRecallMetric(db, {
+      void recordRecallMetric(dependencies.persistence?.recallMetrics ?? requireDb(), {
         agentId: agent.id,
         conversationId: conversation.id,
         path: 'chat',
@@ -604,34 +732,28 @@ export async function handleChatTurn(
     }
   })();
 
-  const openLoopsPromise = openLoopContext(db, agent.id, userText);
-  const taskPromise = chatTurnTask(db, {
+  const taskPromise = chatTurnTask(chat, {
     agentId: agent.id,
     conversationId: conversation.id,
     title: userText,
+    metadata: conversation.metadata,
   });
-
-  // Everything this turn needs before it can call the model, gathered at once.
-  // None of these consumes another's result — the goal lookup and the task it
-  // creates are the one real chain, and it stays a chain inside its own
-  // promise — so serialising them only ever cost the owner a round trip each.
-  //
-  // `toolEvidence` is the honesty-check scope for guardDraft: everything
-  // earlier turns actually did, all marked prior-turn, since this turn runs no
-  // tools itself. `ambientBlock` is the fused "right now" block (location +
-  // weather), available because owner chat is always owner-trust and
-  // untainted, so "where am I?" and "should I go for a run?" answer without a
-  // mid-task tool call.
-  const [recall, openLoops, task, toolEvidence, ambientBlock, ownerCard] = await Promise.all([
+  // Context reads are independent. Only evidence needs the newly created task ID.
+  const [recall, openLoops, task, evidence, ambientBlock, ownerCard] = await Promise.all([
     recallPromise,
-    openLoopsPromise,
+    openLoopContext(dependencies.persistence?.ownerContext ?? requireDb(), agent.id, userText),
     taskPromise,
-    listConversationToolEvidence(db, conversation.id),
-    getAmbientBlock(db, agent.id),
-    getOwnerCard(db),
+    taskPromise.then((created) =>
+      chat.listConversationEvidence(agent.id, conversation.id, created.id),
+    ),
+    getAmbientBlock(dependencies.persistence?.ownerContext ?? requireDb(), agent.id),
+    getOwnerCard(dependencies.persistence?.ownerContext ?? requireDb(), agent.id),
   ]);
   const recallBlock = recall.block;
   const recallSources = recall.sources;
+  // Honesty-check scope for guardDraft: everything earlier turns actually did,
+  // all marked prior-turn. This turn itself runs no tools.
+  const toolEvidence = evidence.map((row) => ({ ...row, fromCurrentTask: false }));
   const readRequest = detectPersonalReadRequest(modelHistory);
   // Corpus for the URL-provenance rule, mirroring finalize.ts: every tool
   // result, plus everything else the turn legitimately saw — the owner's own
@@ -695,7 +817,7 @@ export async function handleChatTurn(
         // An empty completion is a failed turn, not a blank bubble.
         if (stripped.text.trim() === '') {
           console.warn('model returned an empty chat reply', { taskId: task.id });
-          await finishTask(db, task, {
+          await finishApplicationChatTask(chat, agent.id, task, {
             status: 'failed',
             progress: 'model returned an empty reply',
             failureNotice: { text: TURN_FAILURE_COPY.empty, reason: 'empty' },
@@ -708,7 +830,7 @@ export async function handleChatTurn(
             taskId: task.id,
           });
         }
-        await finishTask(db, task, {
+        await finishApplicationChatTask(chat, agent.id, task, {
           status: 'done',
           // Persist the contract-owned replacement, never the unsupported
           // draft. The stream pump below sends the client this same text, so
@@ -721,7 +843,7 @@ export async function handleChatTurn(
         });
       },
       onError: async (error) => {
-        await finishTask(db, task, {
+        await finishApplicationChatTask(chat, agent.id, task, {
           status: 'failed',
           progress: String(error).slice(0, 500),
           failureNotice: { text: TURN_FAILURE_COPY.model, reason: 'model' },
@@ -729,7 +851,7 @@ export async function handleChatTurn(
       },
     });
   } catch (error) {
-    await finishTask(db, task, {
+    await finishApplicationChatTask(chat, agent.id, task, {
       status: 'failed',
       progress: String(error).slice(0, 500),
       failureNotice: { text: TURN_FAILURE_COPY.model, reason: 'model' },
@@ -745,7 +867,7 @@ export async function handleChatTurn(
   }
 
   if (!outcome.ok) {
-    await finishTask(db, task, {
+    await finishApplicationChatTask(chat, agent.id, task, {
       status: 'failed',
       progress: outcome.decision.reason,
       failureNotice: { text: TURN_FAILURE_COPY.budget, reason: 'budget' },

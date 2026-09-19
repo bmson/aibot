@@ -66,6 +66,7 @@ export default defineConfig({
       },
       parallel('packages/config'),
       parallel('packages/setup'),
+      parallel('scripts'),
       {
         ...parallel('apps/web'),
         // Next resolves "@/..." from the app's tsconfig paths; vitest does not

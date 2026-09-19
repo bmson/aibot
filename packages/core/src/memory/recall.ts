@@ -1,6 +1,6 @@
-import type { Db } from '@assistant/db';
-import { conversationSegments, conversations, messages } from '@assistant/db';
-import { and, asc, desc, eq, gt, inArray, isNotNull, lt, ne, or, sql } from 'drizzle-orm';
+import { createPostgresHistoryRecallRepository, type Db, messages } from '@assistant/db';
+import type { HistoryRecallRepository } from '@assistant/persistence';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 
 /**
  * Automatic chat recall for the long-running-chat design
@@ -117,11 +117,10 @@ function formatBlock(blocks: string[]): string {
   return [HEADER, '', ...blocks].join('\n');
 }
 
-interface NeighborhoodMessage {
-  id: string;
-  role: string;
-  text: string;
-  createdAt: Date;
+function historyRepository(storage: Db | HistoryRecallRepository): HistoryRecallRepository {
+  return 'kind' in storage && storage.kind === 'history-recall-repository'
+    ? (storage as HistoryRecallRepository)
+    : createPostgresHistoryRecallRepository(storage as Db);
 }
 
 /**
@@ -132,7 +131,7 @@ interface NeighborhoodMessage {
  * !untrustedContext`).
  */
 export async function recallRelevantContext(
-  db: Db,
+  storage: Db | HistoryRecallRepository,
   args: {
     agentId: string;
     queryText: string;
@@ -148,47 +147,29 @@ export async function recallRelevantContext(
   const queryEmbedding =
     opts.queryEmbedding ?? (await args.embed([query], { taskId: opts.taskId }))[0];
   if (!queryEmbedding) return EMPTY;
-  const vector = JSON.stringify(queryEmbedding);
+  const repository = historyRepository(storage);
 
   // Prefer segment summaries; fall back to raw-message neighborhoods for
   // conversations the segmentation job hasn't reached yet.
-  const segment = await recallFromSegments(db, args.agentId, vector, args.exclude, opts);
+  const segment = await recallFromSegments(
+    repository,
+    args.agentId,
+    queryEmbedding,
+    args.exclude,
+    opts,
+  );
   if (segment.used > 0) return segment;
-  return recallFromMessages(db, args.agentId, vector, args.exclude, opts);
+  return recallFromMessages(repository, args.agentId, queryEmbedding, args.exclude, opts);
 }
 
 async function recallFromSegments(
-  db: Db,
+  repository: HistoryRecallRepository,
   agentId: string,
-  vector: string,
+  embedding: number[],
   exclude: RecallExclusion,
   opts: ResolvedOptions,
 ): Promise<RecallResult> {
-  const rows = await db
-    .select({
-      conversationId: conversationSegments.conversationId,
-      summary: conversationSegments.summary,
-      startMessageId: conversationSegments.startMessageId,
-      startedAt: conversationSegments.startedAt,
-      endedAt: conversationSegments.endedAt,
-      similarity: sql<number>`1 - (${conversationSegments.embedding} <=> ${vector}::vector)`,
-    })
-    .from(conversationSegments)
-    .where(
-      and(
-        eq(conversationSegments.agentId, agentId),
-        isNotNull(conversationSegments.embedding),
-        sql`length(${conversationSegments.summary}) > 0`,
-        // A segment overlapping the live window in the current conversation is
-        // already in context — exclude it.
-        or(
-          ne(conversationSegments.conversationId, exclude.conversationId),
-          lt(conversationSegments.endedAt, exclude.sinceCreatedAt),
-        ),
-      ),
-    )
-    .orderBy(sql`${conversationSegments.embedding} <=> ${vector}::vector`)
-    .limit(opts.limit * 2);
+  const rows = await repository.segments({ agentId, embedding, exclude, limit: opts.limit * 2 });
 
   const qualifying = rows.filter((r) => Number(r.similarity) >= opts.minSimilarity);
   if (qualifying.length === 0) return EMPTY;
@@ -197,22 +178,10 @@ async function recallFromSegments(
   const sources: RecallSource[] = [];
   let used = 0;
   let chars = 0;
-  // One query fetches every candidate's key message; the loop below then only
-  // formats. Sequential per-segment selects were the recall path's tax.
-  const keyMessageRows = await db
-    .select({ id: messages.id, role: messages.role, text: messages.text })
-    .from(messages)
-    .where(
-      inArray(
-        messages.id,
-        qualifying.map((seg) => seg.startMessageId),
-      ),
-    );
-  const keyMessages = new Map(keyMessageRows.map((row) => [row.id, row]));
   for (const seg of qualifying) {
     if (used >= opts.limit) break;
     // One verbatim key line grounds the summary.
-    const keyMessage = keyMessages.get(seg.startMessageId);
+    const keyMessage = seg.keyMessage;
     const keyLine = keyMessage
       ? `\n  ${roleLabel(keyMessage.role)}: ${clip(keyMessage.text, opts.maxMessageChars)}`
       : '';
@@ -235,38 +204,18 @@ async function recallFromSegments(
 }
 
 async function recallFromMessages(
-  db: Db,
+  repository: HistoryRecallRepository,
   agentId: string,
-  vector: string,
+  embedding: number[],
   exclude: RecallExclusion,
   opts: ResolvedOptions,
 ): Promise<RecallResult> {
-  const candidates = await db
-    .select({
-      id: messages.id,
-      conversationId: messages.conversationId,
-      role: messages.role,
-      text: messages.text,
-      createdAt: messages.createdAt,
-      similarity: sql<number>`1 - (${messages.embedding} <=> ${vector}::vector)`,
-    })
-    .from(messages)
-    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
-    .where(
-      and(
-        eq(conversations.agentId, agentId),
-        inArray(conversations.trust, ['owner', 'assistant']),
-        isNotNull(messages.embedding),
-        inArray(messages.role, ['user', 'assistant']),
-        sql`length(${messages.text}) > 0`,
-        or(
-          ne(messages.conversationId, exclude.conversationId),
-          lt(messages.createdAt, exclude.sinceCreatedAt),
-        ),
-      ),
-    )
-    .orderBy(sql`${messages.embedding} <=> ${vector}::vector`)
-    .limit(opts.limit * opts.candidateMultiple);
+  const candidates = await repository.messages({
+    agentId,
+    embedding,
+    exclude,
+    limit: opts.limit * opts.candidateMultiple,
+  });
 
   const qualifying = candidates.filter((c) => Number(c.similarity) >= opts.minSimilarity);
   if (qualifying.length === 0) return EMPTY;
@@ -281,7 +230,12 @@ async function recallFromMessages(
     if (used >= opts.limit) break;
     if (includedIds.has(anchor.id)) continue;
 
-    const neighborhood = await neighborhoodOf(db, anchor, opts.neighborRadius, exclude);
+    const neighborhood = await repository.neighborhood({
+      agentId,
+      anchor,
+      radius: opts.neighborRadius,
+      exclude,
+    });
     if (neighborhood.every((m) => includedIds.has(m.id))) continue;
 
     const lines = neighborhood.map(
@@ -308,75 +262,22 @@ async function recallFromMessages(
 }
 
 /**
- * Expand a matched message to its immediate neighbors so the injected snippet
- * reads in context ("yes, do that" alone is meaningless). Neighbors in the
- * current conversation are still held behind the live-window boundary.
- */
-async function neighborhoodOf(
-  db: Db,
-  anchor: NeighborhoodMessage & { conversationId: string },
-  radius: number,
-  exclude: RecallExclusion,
-): Promise<NeighborhoodMessage[]> {
-  if (radius <= 0) {
-    return [{ id: anchor.id, role: anchor.role, text: anchor.text, createdAt: anchor.createdAt }];
-  }
-  const sameConversation = anchor.conversationId === exclude.conversationId;
-  const beforeQuery = db
-    .select({
-      id: messages.id,
-      role: messages.role,
-      text: messages.text,
-      createdAt: messages.createdAt,
-    })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.conversationId, anchor.conversationId),
-        inArray(messages.role, ['user', 'assistant']),
-        lt(messages.createdAt, anchor.createdAt),
-      ),
-    )
-    .orderBy(desc(messages.createdAt))
-    .limit(radius);
-  const afterQuery = db
-    .select({
-      id: messages.id,
-      role: messages.role,
-      text: messages.text,
-      createdAt: messages.createdAt,
-    })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.conversationId, anchor.conversationId),
-        inArray(messages.role, ['user', 'assistant']),
-        gt(messages.createdAt, anchor.createdAt),
-        ...(sameConversation ? [lt(messages.createdAt, exclude.sinceCreatedAt)] : []),
-      ),
-    )
-    .orderBy(asc(messages.createdAt))
-    .limit(radius);
-  const [before, after] = await Promise.all([beforeQuery, afterQuery]);
-  return [
-    ...before.reverse(),
-    { id: anchor.id, role: anchor.role, text: anchor.text, createdAt: anchor.createdAt },
-    ...after,
-  ];
-}
-
-/**
  * The start of the live window: the created-at of the oldest of the last
  * `size` owner/assistant messages in a conversation. Callers pass this as the
  * recall exclusion boundary so recall and the model window never overlap.
  * Null when the conversation has no such messages.
  */
 export async function recentWindowStart(
-  db: Db,
+  db: Db | HistoryRecallRepository,
   conversationId: string,
   size: number,
+  agentId?: string,
 ): Promise<Date | null> {
-  const rows = await db
+  if ('kind' in db && db.kind === 'history-recall-repository') {
+    if (!agentId) throw new Error('History recall requires an agent ID');
+    return (db as HistoryRecallRepository).recentWindowStart({ agentId, conversationId, size });
+  }
+  const rows = await (db as Db)
     .select({ createdAt: messages.createdAt })
     .from(messages)
     .where(

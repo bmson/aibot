@@ -6,6 +6,7 @@ import {
   type MigrationBundle,
   type MigrationRecord,
   type SerializedValue,
+  serializeMigrationTimestamp,
   serializeMigrationValue,
   validateMigrationBundle,
   validateMigrationReferences,
@@ -35,10 +36,36 @@ describe('workspace migration format', () => {
     expect(checksum({ b: 1, a: 2 })).toBe(checksum({ a: 2, b: 1 }));
   });
 
+  it('preserves PostgreSQL microseconds while accepting legacy millisecond dates', () => {
+    const first = serializeMigrationTimestamp('2026-09-19 12:34:56.123456+00');
+    const second = serializeMigrationTimestamp('2026-09-19 12:34:56.123789+00');
+    expect(first).toEqual({
+      $assistantMigration: ['timestamp', '2026-09-19T12:34:56.123456Z'],
+    });
+    expect(checksum(first)).not.toBe(checksum(second));
+    const precise = deserializeMigrationValue(first) as {
+      seconds: bigint;
+      nanoseconds: number;
+    };
+    expect(precise.seconds).toBe(1_789_821_296n);
+    expect(precise.nanoseconds).toBe(123_456_000);
+    expect(
+      deserializeMigrationValue({
+        $assistantMigration: ['date', '2026-09-19T12:34:56.123Z'],
+      }),
+    ).toEqual(new Date('2026-09-19T12:34:56.123Z'));
+  });
+
   it('rejects unsupported tables before any database work', () => {
-    expect(() => assertSupportedMigrationTables(['agents', 'ambient_snapshots'])).toThrow(
-      'Unsupported migration tables: ambient_snapshots',
+    expect(() => assertSupportedMigrationTables(['agents', 'not_a_real_table'])).toThrow(
+      'Unsupported migration tables: not_a_real_table',
     );
+  });
+
+  it('enumerates the complete PostgreSQL schema without duplicate tables', async () => {
+    const { MIGRATION_TABLES } = await import('./migration.js');
+    expect(MIGRATION_TABLES).toHaveLength(66);
+    expect(new Set(MIGRATION_TABLES.map(({ table }) => table))).toHaveProperty('size', 66);
   });
 
   it('rejects records outside the selected workspace and missing references', () => {
@@ -68,6 +95,7 @@ describe('migration format integrity', () => {
       numbers: [1, 2, 3],
       date: new Date('2026-01-01T00:00:00.000Z'),
       bytes: Buffer.from('example'),
+      bigint: 9_007_199_254_740_993n,
     };
     expect(deserializeMigrationValue(serializeMigrationValue(input))).toEqual(input);
   });

@@ -1,43 +1,18 @@
 import { suggestionExpiresAt } from '@assistant/core';
-import {
-  decodeMessageCursor,
-  encodeMessageCursor,
-  ensureChatConversation,
-  getAgent,
-  listConversations,
-  listMessages,
-  listMessagesByIds,
-  setConversationModel,
-  setMessageHidden,
-} from '@assistant/core/chat';
+import { decodeMessageCursor, encodeMessageCursor } from '@assistant/core/chat';
 import { compactChatMessageParts, stripBackgroundNoticeEcho } from '@assistant/core/chat-card';
 import { truncateAtBoundary } from '@assistant/core/owner-text';
 import {
-  approvals,
-  conversations,
+  createPostgresApplicationChatPersistence,
+  createPostgresGeneratedCardRepository,
   type Db,
-  goals,
-  messages,
-  models,
-  suggestions,
-  tasks,
-  toolCalls,
 } from '@assistant/db';
+import type {
+  ApplicationChatMessage,
+  ApplicationChatPersistence,
+  GeneratedCardRepository,
+} from '@assistant/persistence';
 import type { UIMessage } from 'ai';
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  inArray,
-  isNotNull,
-  isNull,
-  lt,
-  notInArray,
-  or,
-  sql,
-} from 'drizzle-orm';
 import { listSavedCards } from './cards.js';
 
 const TERMINAL_TASK_STATUSES = ['done', 'failed', 'cancelled'];
@@ -179,7 +154,25 @@ function detailValue(value: unknown): string {
  * Accepts the base row shape: listMessages rows carry an extra microsecond
  * cursor column that UI mapping has no use for.
  */
-type PersistedMessage = typeof messages.$inferSelect;
+type PersistedMessage = ApplicationChatMessage;
+
+export type ChatStore =
+  | Db
+  | ApplicationChatPersistence
+  | { chat: ApplicationChatPersistence; generatedCards: GeneratedCardRepository };
+
+function chatPersistence(store: ChatStore): ApplicationChatPersistence {
+  if ('chat' in store) return store.chat;
+  return 'kind' in store && store.kind === 'application-chat-persistence'
+    ? store
+    : createPostgresApplicationChatPersistence(store as Db);
+}
+
+function cardPersistence(store: ChatStore): GeneratedCardRepository | undefined {
+  if ('chat' in store) return store.generatedCards;
+  if ('kind' in store && store.kind === 'application-chat-persistence') return undefined;
+  return createPostgresGeneratedCardRepository(store as Db);
+}
 
 function persistedParts(row: PersistedMessage): unknown[] {
   return Array.isArray(row.parts) ? row.parts : [];
@@ -323,7 +316,8 @@ const MAX_RUNTIME_SIBLINGS = 200;
  * can also appear in this response's `refreshed` — the retraction wins.
  */
 async function collapsePageWithTaskHistory(
-  db: Db,
+  persistence: ApplicationChatPersistence,
+  agentId: string,
   conversationId: string,
   page: PersistedMessage[],
 ): Promise<{ visible: PersistedMessage[]; superseded: string[] }> {
@@ -336,18 +330,13 @@ async function collapsePageWithTaskHistory(
   }
   if (taskIds.size === 0) return { visible: page, superseded: [] };
 
-  const siblings = await db
-    .select()
-    .from(messages)
-    .where(
-      and(
-        eq(messages.conversationId, conversationId),
-        inArray(messages.taskId, [...taskIds]),
-        eq(messages.role, 'assistant'),
-      ),
-    )
-    .orderBy(asc(messages.createdAt), asc(messages.id))
-    .limit(MAX_RUNTIME_SIBLINGS);
+  const siblings =
+    (await persistence.listRuntimeMessages(
+      agentId,
+      conversationId,
+      [...taskIds],
+      MAX_RUNTIME_SIBLINGS,
+    )) ?? [];
 
   const siblingIds = new Set(siblings.map((row) => row.id));
   const union = [...siblings, ...page.filter((row) => !siblingIds.has(row.id))];
@@ -385,7 +374,7 @@ function toUiMessages(rows: PersistedMessage[]): UIMessage[] {
 
 /** Attach live approval and budget state to persisted custom message parts. */
 export async function hydrateChatApprovals(
-  db: Db,
+  store: ChatStore,
   messages: UIMessage[],
   now: Date = new Date(),
 ): Promise<UIMessage[]> {
@@ -404,10 +393,15 @@ export async function hydrateChatApprovals(
       ),
     ),
   ];
-  if (generatedIds.length) {
-    const agent = await getAgent(db);
+  const generatedCardRepository = cardPersistence(store);
+  if (generatedIds.length && generatedCardRepository) {
+    const persistence = chatPersistence(store);
+    const agent = await persistence.resolveAgent();
     const current = new Map(
-      (await listSavedCards(db, agent.id, generatedIds)).map((card) => [card.id, card]),
+      (await listSavedCards(generatedCardRepository, agent.id, generatedIds)).map((card) => [
+        card.id,
+        card,
+      ]),
     );
     messages = messages.map((message) => ({
       ...message,
@@ -434,6 +428,7 @@ export async function hydrateChatApprovals(
       }),
     }));
   }
+  const persistence = chatPersistence(store);
   const approvalIds = [
     ...new Set(
       messages.flatMap((message) =>
@@ -480,57 +475,17 @@ export async function hydrateChatApprovals(
     return messages;
   }
 
-  const [approvalRows, summaryTaskRows, budgetTasks, suggestionRows] = await Promise.all([
-    lookupApprovalIds.length
-      ? db
-          .select({
-            id: approvals.id,
-            taskId: approvals.taskId,
-            summary: approvals.summary,
-            status: approvals.status,
-            payload: approvals.payload,
-            expiresAt: approvals.expiresAt,
-          })
-          .from(approvals)
-          .where(inArray(approvals.id, lookupApprovalIds))
-      : [],
-    summaryTaskIds.size
-      ? db
-          .select({
-            id: approvals.id,
-            taskId: approvals.taskId,
-            summary: approvals.summary,
-            status: approvals.status,
-            expiresAt: approvals.expiresAt,
-          })
-          .from(approvals)
-          .where(inArray(approvals.taskId, [...summaryTaskIds]))
-      : [],
-    budgetTaskIds.length
-      ? db
-          .select({ id: tasks.id, status: tasks.status, budgetUsdLimit: tasks.budgetUsdLimit })
-          .from(tasks)
-          .where(inArray(tasks.id, budgetTaskIds))
-      : [],
-    suggestionIds.length
-      ? db
-          .select({
-            id: suggestions.id,
-            status: suggestions.status,
-            expiresAt: suggestions.expiresAt,
-            origin: suggestions.origin,
-            proposedAction: suggestions.proposedAction,
-            snoozedUntil: suggestions.snoozedUntil,
-            acceptedTaskId: suggestions.acceptedTaskId,
-            acceptedTaskStatus: tasks.status,
-            acceptedTaskProgress: tasks.progress,
-            acceptedTaskConversationId: tasks.conversationId,
-          })
-          .from(suggestions)
-          .leftJoin(tasks, eq(tasks.id, suggestions.acceptedTaskId))
-          .where(inArray(suggestions.id, suggestionIds))
-      : [],
-  ]);
+  const agent = await persistence.resolveAgent();
+  const hydration = await persistence.getHydrationState(agent.id, {
+    approvalIds: lookupApprovalIds,
+    approvalTaskIds: [...summaryTaskIds],
+    budgetTaskIds,
+    suggestionIds,
+  });
+  const approvalRows = hydration.approvals;
+  const summaryTaskRows = hydration.taskApprovals;
+  const budgetTasks = hydration.budgetTasks;
+  const suggestionRows = hydration.suggestions;
   const suggestionById = new Map(suggestionRows.map((row) => [row.id, row]));
   const approvalById = new Map(approvalRows.map((row) => [row.id, row]));
   const taskById = new Map(budgetTasks.map((task) => [task.id, task]));
@@ -640,171 +595,91 @@ export async function hydrateChatApprovals(
   }));
 }
 
-export async function createChatConversation(db: Db): Promise<string> {
-  const agent = await getAgent(db);
-  return (await ensureChatConversation(db, agent.id)).id;
+export async function createChatConversation(store: ChatStore): Promise<string> {
+  const persistence = chatPersistence(store);
+  const agent = await persistence.resolveAgent();
+  return (await persistence.createConversation(agent.id)).id;
 }
 
-export function changeChatModel(
-  db: Db,
+export async function changeChatModel(
+  store: ChatStore,
   conversationId: string,
   modelId: string | null,
 ): Promise<void> {
-  return setConversationModel(db, conversationId, modelId);
-}
-
-async function ownedChat(db: Db, conversationId: string) {
-  const agent = await getAgent(db);
-  const [conversation] = await db
-    .select({ id: conversations.id, isPrimary: conversations.isPrimary })
-    .from(conversations)
-    .where(
-      and(
-        eq(conversations.id, conversationId),
-        eq(conversations.agentId, agent.id),
-        eq(conversations.channel, 'chat'),
-      ),
-    );
-  if (!conversation) throw new Error('chat not found');
-  return { agent, conversation };
+  const persistence = chatPersistence(store);
+  const agent = await persistence.resolveAgent();
+  if (!(await persistence.setConversationModel(agent.id, conversationId, modelId))) {
+    throw new Error('chat not found');
+  }
 }
 
 export async function archiveChatConversation(
-  db: Db,
+  store: ChatStore,
   conversationId: string,
 ): Promise<'archived' | 'active' | 'primary'> {
-  const { agent, conversation } = await ownedChat(db, conversationId);
-  if (conversation.isPrimary) return 'primary';
-  const [activeTask] = await db
-    .select({ id: tasks.id })
-    .from(tasks)
-    .where(
-      and(
-        eq(tasks.agentId, agent.id),
-        eq(tasks.conversationId, conversation.id),
-        notInArray(tasks.status, TERMINAL_TASK_STATUSES),
-      ),
-    )
-    .limit(1);
-  if (activeTask) return 'active';
-  await db
-    .update(conversations)
-    .set({ archivedAt: new Date(), updatedAt: new Date() })
-    .where(and(eq(conversations.id, conversation.id), isNull(conversations.archivedAt)));
-  return 'archived';
+  const persistence = chatPersistence(store);
+  const agent = await persistence.resolveAgent();
+  return persistence.archiveConversation(agent.id, conversationId);
 }
 
-export async function restoreChatConversation(db: Db, conversationId: string): Promise<void> {
-  const { conversation } = await ownedChat(db, conversationId);
-  await db
-    .update(conversations)
-    .set({ archivedAt: null, updatedAt: new Date() })
-    .where(and(eq(conversations.id, conversation.id), isNotNull(conversations.archivedAt)));
+export async function restoreChatConversation(
+  store: ChatStore,
+  conversationId: string,
+): Promise<void> {
+  const persistence = chatPersistence(store);
+  const agent = await persistence.resolveAgent();
+  const conversation = await persistence.getConversation(agent.id, conversationId);
+  if (!conversation) throw new Error('chat not found');
+  await persistence.restoreConversation(agent.id, conversationId);
 }
 
 export async function hideChatMessage(
-  db: Db,
+  store: ChatStore,
   conversationId: string,
   messageId: string,
 ): Promise<boolean> {
-  await ownedChat(db, conversationId);
-  return setMessageHidden(db, conversationId, messageId, true);
+  const persistence = chatPersistence(store);
+  const agent = await persistence.resolveAgent();
+  if (!(await persistence.getConversation(agent.id, conversationId))) {
+    throw new Error('chat not found');
+  }
+  return persistence.setMessageHidden(agent.id, conversationId, messageId, true);
 }
 
 export async function unhideChatMessage(
-  db: Db,
+  store: ChatStore,
   conversationId: string,
   messageId: string,
 ): Promise<boolean> {
-  await ownedChat(db, conversationId);
-  return setMessageHidden(db, conversationId, messageId, false);
+  const persistence = chatPersistence(store);
+  const agent = await persistence.resolveAgent();
+  if (!(await persistence.getConversation(agent.id, conversationId))) {
+    throw new Error('chat not found');
+  }
+  return persistence.setMessageHidden(agent.id, conversationId, messageId, false);
 }
 
-export async function archiveInactiveChats(db: Db, olderThanDays = 30): Promise<number> {
-  const agent = await getAgent(db);
+export async function archiveInactiveChats(store: ChatStore, olderThanDays = 30): Promise<number> {
+  const persistence = chatPersistence(store);
+  const agent = await persistence.resolveAgent();
   const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
-  const candidates = await db
-    .select({ id: conversations.id })
-    .from(conversations)
-    .where(
-      and(
-        eq(conversations.agentId, agent.id),
-        eq(conversations.channel, 'chat'),
-        eq(conversations.isPrimary, false),
-        isNull(conversations.archivedAt),
-        lt(conversations.updatedAt, cutoff),
-      ),
-    )
-    .orderBy(desc(conversations.updatedAt))
-    .limit(100);
-  if (candidates.length === 0) return 0;
-  // One statement, not two per candidate. This walked up to a hundred chats
-  // asking the same question a hundred times; the condition it was asking is
-  // something Postgres can answer inside the UPDATE.
-  const archived = await db
-    .update(conversations)
-    .set({ archivedAt: new Date(), updatedAt: new Date() })
-    .where(
-      and(
-        inArray(
-          conversations.id,
-          candidates.map((candidate) => candidate.id),
-        ),
-        isNull(conversations.archivedAt),
-        sql`NOT EXISTS (
-          SELECT 1 FROM ${tasks}
-          WHERE ${tasks.conversationId} = ${conversations.id}
-            AND ${tasks.agentId} = ${agent.id}
-            AND ${tasks.status} NOT IN ${TERMINAL_TASK_STATUSES}
-        )`,
-      ),
-    )
-    .returning({ id: conversations.id });
-  return archived.length;
+  return persistence.archiveInactiveConversations(agent.id, cutoff, 100);
 }
 
-export async function listChatHistory(db: Db, archived: boolean) {
-  const agent = await getAgent(db);
-  const [chatRows, archivedCountRows, scopeCountRows, activeTaskRows] = await Promise.all([
-    listConversations(db, agent.id, { archived }),
-    db
-      .select({ value: count() })
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.agentId, agent.id),
-          eq(conversations.channel, 'chat'),
-          isNotNull(conversations.archivedAt),
-        ),
-      ),
-    db
-      .select({ value: count() })
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.agentId, agent.id),
-          eq(conversations.channel, 'chat'),
-          archived ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt),
-        ),
-      ),
-    db
-      .selectDistinct({ conversationId: tasks.conversationId })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          isNotNull(tasks.conversationId),
-          notInArray(tasks.status, TERMINAL_TASK_STATUSES),
-        ),
-      ),
+export async function listChatHistory(store: ChatStore, archived: boolean) {
+  const persistence = chatPersistence(store);
+  const agent = await persistence.resolveAgent();
+  const [page, archivedCount, totalInScope, activeConversationIds] = await Promise.all([
+    persistence.listConversations(agent.id, { archived }),
+    persistence.countConversations(agent.id, true),
+    persistence.countConversations(agent.id, archived),
+    persistence.listActiveConversationIds(agent.id),
   ]);
   return {
-    conversations: chatRows,
-    archivedCount: Number(archivedCountRows[0]?.value ?? 0),
-    totalInScope: Number(scopeCountRows[0]?.value ?? chatRows.length),
-    activeConversationIds: activeTaskRows
-      .map((task) => task.conversationId)
-      .filter((id): id is string => id !== null),
+    conversations: page.conversations,
+    archivedCount,
+    totalInScope,
+    activeConversationIds,
   };
 }
 
@@ -820,21 +695,13 @@ export function isValidChatCursor(value: string): boolean {
 }
 
 export async function getChatConversationView(
-  db: Db,
+  store: ChatStore,
   conversationId: string,
   input: { taskId?: string; cursor?: string; now?: Date },
 ) {
-  const agent = await getAgent(db);
-  const [conversation] = await db
-    .select()
-    .from(conversations)
-    .where(
-      and(
-        eq(conversations.id, conversationId),
-        eq(conversations.agentId, agent.id),
-        eq(conversations.channel, 'chat'),
-      ),
-    );
+  const persistence = chatPersistence(store);
+  const agent = await persistence.resolveAgent();
+  const conversation = await persistence.getConversation(agent.id, conversationId);
   if (!conversation) return null;
   // Every load of this view is the owner opening the thread — the dashboard
   // page and both mobile reads funnel here — so it doubles as the read
@@ -847,66 +714,29 @@ export async function getChatConversationView(
   // the same row the executor is writing `updated_at` to. The unread dot is
   // about whether you have looked recently, not about the exact second.
   try {
-    await db
-      .update(conversations)
-      .set({ lastReadAt: input.now ?? new Date() })
-      .where(
-        and(
-          eq(conversations.id, conversation.id),
-          or(
-            isNull(conversations.lastReadAt),
-            lt(
-              conversations.lastReadAt,
-              sql`now() - interval '${sql.raw(String(READ_STAMP_SETTLE_SECONDS))} seconds'`,
-            ),
-          ),
-        ),
-      );
+    await persistence.markConversationRead(
+      agent.id,
+      conversation.id,
+      input.now ?? new Date(),
+      READ_STAMP_SETTLE_SECONDS,
+    );
   } catch (err) {
     console.error('conversation read stamp failed', err);
   }
   const goalId = goalIdFromMetadata(conversation.metadata);
   const requestedTaskId = input.taskId && UUID_RE.test(input.taskId) ? input.taskId : undefined;
   const requestedCursor = decodeMessageCursor(input.cursor);
-  const [messageRows, linkedGoal, requestedTask, activeTasks, enabledModels] = await Promise.all([
-    listMessages(db, conversationId),
-    goalId
-      ? db
-          .select({ title: goals.title })
-          .from(goals)
-          .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)))
-          .then(([goal]) => goal)
-      : undefined,
-    requestedTaskId
-      ? db
-          .select({ id: tasks.id })
-          .from(tasks)
-          .where(and(eq(tasks.id, requestedTaskId), eq(tasks.conversationId, conversationId)))
-          .then(([task]) => task)
-      : undefined,
-    db
-      .select({ value: count() })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          eq(tasks.conversationId, conversationId),
-          notInArray(tasks.status, TERMINAL_TASK_STATUSES),
-        ),
-      ),
-    db
-      .select({ id: models.id, label: models.label })
-      .from(models)
-      .where(
-        and(
-          eq(models.enabled, true),
-          sql`${models.capabilities}->>'embedding' IS DISTINCT FROM 'true'`,
-        ),
-      )
-      .orderBy(models.label),
-  ]);
+  const [messagePage, goalTitle, requestedTaskStatus, activeTaskCount, enabledModels] =
+    await Promise.all([
+      persistence.listMessages(agent.id, conversationId),
+      goalId ? persistence.getGoalTitle(agent.id, goalId) : null,
+      requestedTaskId ? persistence.getTaskStatus(agent.id, conversationId, requestedTaskId) : null,
+      persistence.countActiveTasks(agent.id, conversationId),
+      persistence.listEnabledModels(),
+    ]);
+  const messageRows = messagePage?.messages ?? [];
   const messages = await hydrateChatApprovals(
-    db,
+    store,
     toUiMessages(collapseRuntimeMessageDuplicates(messageRows)),
   );
   return {
@@ -918,8 +748,8 @@ export async function getChatConversationView(
     agentTimezone: agent.timezone,
     messages,
     models: enabledModels,
-    goalTitle: linkedGoal?.title,
-    canArchive: !conversation.isPrimary && Number(activeTasks[0]?.value ?? 0) === 0,
+    goalTitle: goalTitle ?? undefined,
+    canArchive: !conversation.isPrimary && activeTaskCount === 0,
     // Where the open page resumes polling from. Without it the client has no
     // cursor until it sends a turn, so anything the assistant posted on its own
     // — a schedule, a watch, an approval resuming — stayed invisible until the
@@ -932,8 +762,8 @@ export async function getChatConversationView(
     // starts with no cursor and picks one up on its first tick.
     cursor: advanceCursor(messageRows, undefined, false, input.now ?? new Date()),
     asyncTurn:
-      requestedTask && requestedCursor && input.cursor
-        ? { taskId: requestedTask.id, cursor: input.cursor }
+      requestedTaskStatus && requestedTaskId && requestedCursor && input.cursor
+        ? { taskId: requestedTaskId, cursor: input.cursor }
         : undefined,
   };
 }
@@ -962,7 +792,7 @@ export async function getChatConversationView(
  * open client may be showing come back here for removal.
  */
 export async function getChatUpdates(
-  db: Db,
+  store: ChatStore,
   input: {
     conversationId: string;
     taskId?: string;
@@ -972,66 +802,50 @@ export async function getChatUpdates(
     now?: Date;
   },
 ) {
+  const persistence = chatPersistence(store);
+  const agent = await persistence.resolveAgent();
   let taskStatus: string | null = null;
   if (input.taskId) {
-    const [task] = await db
-      .select({ status: tasks.status, conversationId: tasks.conversationId })
-      .from(tasks)
-      .where(eq(tasks.id, input.taskId));
-    if (!task || task.conversationId !== input.conversationId) return null;
-    taskStatus = task.status;
+    taskStatus = await persistence.getTaskStatus(agent.id, input.conversationId, input.taskId);
+    if (taskStatus === null) return null;
   } else {
     // The task lookup above is what proved the caller may read this thread.
     // Without one, check the conversation itself rather than trusting an id
     // from the query string.
-    const agent = await getAgent(db);
-    const [conversation] = await db
-      .select({ id: conversations.id })
-      .from(conversations)
-      .where(
-        and(
-          eq(conversations.id, input.conversationId),
-          eq(conversations.agentId, agent.id),
-          eq(conversations.channel, 'chat'),
-        ),
-      );
-    if (!conversation) return null;
+    if (!(await persistence.getConversation(agent.id, input.conversationId))) return null;
   }
   const cursor = decodeMessageCursor(input.cursor);
   const pageSize = input.pageSize ?? 50;
-  const rows = await listMessages(db, input.conversationId, {
+  const messagePage = await persistence.listMessages(agent.id, input.conversationId, {
     ...(cursor ? { after: cursor } : {}),
-    limit: cursor ? pageSize + 1 : pageSize,
+    limit: pageSize,
   });
-  const hasMore = Boolean(cursor && rows.length > pageSize);
-  const page = rows.slice(0, pageSize);
-  const { visible, superseded } = await collapsePageWithTaskHistory(db, input.conversationId, page);
-  const messages = await hydrateChatApprovals(db, toUiMessages(visible));
+  if (!messagePage) return null;
+  const hasMore = Boolean(cursor && messagePage.hasMore);
+  const page = messagePage.messages;
+  const { visible, superseded } = await collapsePageWithTaskHistory(
+    persistence,
+    agent.id,
+    input.conversationId,
+    page,
+  );
+  const messages = await hydrateChatApprovals(store, toUiMessages(visible));
   const refreshIds = (input.refreshIds ?? [])
     .filter((id) => UUID_RE.test(id))
     .slice(0, MAX_REFRESH_IDS);
   const refreshed = refreshIds.length
     ? await hydrateChatApprovals(
-        db,
-        toUiMessages(await listMessagesByIds(db, input.conversationId, refreshIds)),
+        store,
+        toUiMessages(
+          (await persistence.listMessagesByIds(agent.id, input.conversationId, refreshIds)) ?? [],
+        ),
       )
     : [];
   const nextCursor = advanceCursor(page, cursor, hasMore, input.now ?? new Date());
   const taskId = input.taskId;
   const activity =
     taskId && taskStatus && !SETTLED_TASK_STATUSES.has(taskStatus)
-      ? (
-          await db
-            .select({
-              toolName: toolCalls.toolName,
-              status: toolCalls.status,
-              step: toolCalls.step,
-            })
-            .from(toolCalls)
-            .where(eq(toolCalls.taskId, taskId))
-            .orderBy(desc(toolCalls.createdAt))
-            .limit(3)
-        ).reverse()
+      ? await persistence.listTaskActivity(agent.id, input.conversationId, taskId, 3)
       : [];
   return { taskStatus, messages, refreshed, superseded, nextCursor, hasMore, activity };
 }
@@ -1045,7 +859,7 @@ export async function getChatUpdates(
  * that case advances to the tail as before.
  */
 function advanceCursor(
-  page: Awaited<ReturnType<typeof listMessages>>,
+  page: ApplicationChatMessage[],
   cursor: { createdAt: Date; id: string } | undefined,
   hasMore: boolean,
   now: Date,

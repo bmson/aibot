@@ -1,7 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Db } from '@assistant/db';
-import { generatedCardRevisions, generatedCards } from '@assistant/db';
-import { and, eq, sql } from 'drizzle-orm';
+import type { GeneratedCardRepository } from '@assistant/persistence';
 import { z } from 'zod';
 import type { ModelRouter } from './model-router/index.js';
 import type { ActionEvidence } from './workflow/response-contract.js';
@@ -572,7 +570,7 @@ export async function generateEvidenceCard(input: {
 
 /** Save or revise one active object; source identity is the idempotency fence. */
 export async function persistGeneratedCard(
-  db: Db,
+  repository: GeneratedCardRepository,
   input: {
     agentId: string;
     conversationId?: string | null;
@@ -582,112 +580,67 @@ export async function persistGeneratedCard(
     refreshCardId?: string;
   },
 ): Promise<GeneratedCardPayload> {
-  return db.transaction(async (tx) => {
-    // Serialize same-source first saves as well as refreshes. The entire
-    // revision/head change commits together, so readers never see a missing spec.
-    await tx.execute(
-      sql`select pg_advisory_xact_lock(hashtext(${`card:${input.agentId}:${input.refreshCardId ?? input.payload.sourceFingerprint}`}))`,
-    );
-    const [existing] = await tx
-      .select()
-      .from(generatedCards)
-      .where(
-        and(
-          eq(generatedCards.agentId, input.agentId),
-          input.refreshCardId
-            ? eq(generatedCards.id, input.refreshCardId)
-            : eq(generatedCards.sourceFingerprint, input.payload.sourceFingerprint),
-        ),
-      )
-      .for('update');
-    const current = existing
-      ? await tx.query.generatedCardRevisions.findFirst({
-          where: eq(generatedCardRevisions.id, existing.currentRevisionId),
-        })
-      : undefined;
-    const priorProvenance = cardRuntimeProvenance(current?.spec);
-    const fresh = priorProvenance
-      ? revalidatedCardEvidence(priorProvenance.sources, input.evidence ?? [])
-      : null;
-    if (
-      input.refreshCardId &&
-      (existing?.status !== 'active' ||
-        existing.dismissedAt ||
-        !fresh ||
-        !validateGroundedCard(
-          input.payload.spec,
-          fresh.map((row) => JSON.stringify(row.result)).join('\n'),
-        ))
-    ) {
-      throw new Error('This card could not be refreshed from its original sources.');
-    }
-    const sources = cardRefreshSources(input.evidence ?? []);
-    const provenance: CardRuntimeProvenance = {
-      requestText: (input.refreshCardId
-        ? (priorProvenance?.requestText ?? '')
-        : (input.sourceText ?? '')
-      ).slice(0, 2000),
-      sources: input.refreshCardId ? (priorProvenance?.sources ?? []) : sources,
-    };
-    const refreshable = provenance.sources.length > 0 && input.payload.grounding === 'evidence';
-    const spec = {
-      ...input.payload.spec,
-      refreshable,
-      actions: input.payload.spec.actions.filter((action) => action.type !== 'refresh'),
-    };
-    if (refreshable)
-      spec.actions = [
-        ...spec.actions.slice(0, 5),
-        { id: 'refresh', type: 'refresh', label: 'Refresh' },
-      ];
-    const stored = { ...spec, ...(refreshable ? { _runtime: provenance } : {}) };
-    const cardId = existing?.id ?? input.payload.id;
-    // Retry of a checkpointed save is idempotent. A genuine refresh still
-    // advances validation time even if every source fact stayed the same.
-    const same = canonical(current?.spec) === canonical(stored);
-    const revisionId = same && existing ? existing.currentRevisionId : input.payload.revisionId;
-    const now = new Date();
-    if (!existing) {
-      await tx.insert(generatedCards).values({
-        id: cardId,
-        agentId: input.agentId,
-        conversationId: input.conversationId,
-        sourceLabel: spec.sourceLabel,
-        sourceFingerprint: input.payload.sourceFingerprint,
-        currentRevisionId: revisionId,
-        expiresAt: spec.expiresAt
-          ? new Date(spec.expiresAt)
-          : new Date(now.getTime() + 30 * 86400_000),
-      });
-    }
-    if (!same)
-      await tx.insert(generatedCardRevisions).values({ id: revisionId, cardId, spec: stored });
-    if (existing && (!same || input.refreshCardId))
-      await tx
-        .update(generatedCards)
-        .set({
-          currentRevisionId: revisionId,
-          status: 'active',
-          dismissedAt: null,
-          sourceLabel: spec.sourceLabel,
-          expiresAt: spec.expiresAt
-            ? new Date(spec.expiresAt)
-            : new Date(now.getTime() + 30 * 86400_000),
-          updatedAt: now,
-        })
-        .where(eq(generatedCards.id, cardId));
-    return {
-      ...input.payload,
-      id: cardId,
-      revisionId,
-      spec,
-      sourceFingerprint: existing?.sourceFingerprint ?? input.payload.sourceFingerprint,
-      updatedAt: (same && !input.refreshCardId && existing
-        ? existing.updatedAt
-        : now
-      ).toISOString(),
-      stale: false,
-      refreshState: 'idle',
-    };
+  const existing = input.refreshCardId
+    ? await repository.get(input.agentId, input.refreshCardId)
+    : null;
+  const priorProvenance = cardRuntimeProvenance(existing?.revision.spec);
+  const fresh = priorProvenance
+    ? revalidatedCardEvidence(priorProvenance.sources, input.evidence ?? [])
+    : null;
+  if (
+    input.refreshCardId &&
+    (existing?.card.status !== 'active' ||
+      existing.card.dismissedAt ||
+      !fresh ||
+      !validateGroundedCard(
+        input.payload.spec,
+        fresh.map((row) => JSON.stringify(row.result)).join('\n'),
+      ))
+  ) {
+    throw new Error('This card could not be refreshed from its original sources.');
+  }
+  const sources = cardRefreshSources(input.evidence ?? []);
+  const provenance: CardRuntimeProvenance = {
+    requestText: (input.refreshCardId
+      ? (priorProvenance?.requestText ?? '')
+      : (input.sourceText ?? '')
+    ).slice(0, 2000),
+    sources: input.refreshCardId ? (priorProvenance?.sources ?? []) : sources,
+  };
+  const refreshable = provenance.sources.length > 0 && input.payload.grounding === 'evidence';
+  const spec = {
+    ...input.payload.spec,
+    refreshable,
+    actions: input.payload.spec.actions.filter((action) => action.type !== 'refresh'),
+  };
+  if (refreshable)
+    spec.actions = [
+      ...spec.actions.slice(0, 5),
+      { id: 'refresh', type: 'refresh', label: 'Refresh' },
+    ];
+  const stored = { ...spec, ...(refreshable ? { _runtime: provenance } : {}) };
+  const result = await repository.createOrRevise({
+    agentId: input.agentId,
+    conversationId: input.conversationId,
+    id: input.payload.id,
+    revisionId: input.payload.revisionId,
+    sourceFingerprint: existing?.card.sourceFingerprint ?? input.payload.sourceFingerprint,
+    sourceLabel: spec.sourceLabel,
+    spec: stored,
+    expiresAt: spec.expiresAt
+      ? new Date(spec.expiresAt)
+      : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    targetCardId: input.refreshCardId,
+    touch: Boolean(input.refreshCardId),
   });
+  return {
+    ...input.payload,
+    id: result.card.id,
+    revisionId: result.revision.id,
+    spec,
+    sourceFingerprint: result.card.sourceFingerprint,
+    updatedAt: result.card.updatedAt.toISOString(),
+    stale: false,
+    refreshState: 'idle',
+  };
 }

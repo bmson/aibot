@@ -73,7 +73,12 @@ import {
 } from '@assistant/application';
 import { loadConfig, repoRoot } from '@assistant/config';
 import { createConfiguredModelProvider, ModelRouter } from '@assistant/core/model-router';
-import { createDb, type Db } from '@assistant/db';
+import {
+  createDb,
+  createPostgresCardRefreshRepository,
+  createPostgresGeneratedCardRepository,
+  type Db,
+} from '@assistant/db';
 import { inspectMcpConnection } from '@assistant/tools/mcp';
 import {
   GcsWorkspaceStore,
@@ -101,6 +106,14 @@ export function getDb(): Db {
     });
   }
   return globalCache.__assistantDb;
+}
+
+export function getGeneratedCards() {
+  return createPostgresGeneratedCardRepository(getDb());
+}
+
+export function getCardRefresh() {
+  return createPostgresCardRefreshRepository(getDb());
 }
 
 export function getRouter(): ModelRouter {

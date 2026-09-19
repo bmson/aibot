@@ -1,4 +1,8 @@
-import type { Db, messages as messageTable } from '@assistant/db';
+import type { messages as messageTable } from '@assistant/db';
+import type {
+  ApplicationChatHydrationState,
+  ApplicationChatPersistence,
+} from '@assistant/persistence';
 import type { UIMessage } from 'ai';
 import { describe, expect, it, vi } from 'vitest';
 import { collapseRuntimeMessageDuplicates, hydrateChatApprovals } from './chat.js';
@@ -21,18 +25,55 @@ function row(id: string, text: string, parts: unknown[], createdAt: string): Mes
   };
 }
 
+function hydrationStore(state: Partial<ApplicationChatHydrationState> = {}) {
+  const getHydrationState = vi.fn().mockResolvedValue({
+    approvals: [],
+    taskApprovals: [],
+    budgetTasks: [],
+    suggestions: [],
+    ...state,
+  });
+  const resolveAgent = vi.fn().mockResolvedValue({
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    name: 'Assistant',
+    email: 'assistant@example.invalid',
+    calendarId: null,
+    phoneE164: null,
+    avatarUrl: null,
+    signature: '',
+    timezone: 'UTC',
+    locale: 'en',
+    workspacePrefix: 'assistant',
+    browserProfilePath: null,
+    credentialRefs: {},
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  });
+  return {
+    getHydrationState,
+    resolveAgent,
+    store: {
+      kind: 'application-chat-persistence',
+      getHydrationState,
+      resolveAgent,
+    } as unknown as ApplicationChatPersistence,
+  };
+}
+
 describe('hydrateChatApprovals', () => {
   it('hydrates custom approval parts with one batched query', async () => {
-    const where = vi.fn().mockResolvedValue([
-      {
-        id: '11111111-1111-4111-8111-111111111111',
-        status: 'approved',
-        expiresAt: new Date('2027-01-01T00:00:00.000Z'),
-        payload: { to: ['owner@example.com'], subject: 'Trip details' },
-      },
-    ]);
-    const from = vi.fn(() => ({ where }));
-    const db = { select: vi.fn(() => ({ from })) } as unknown as Db;
+    const fixture = hydrationStore({
+      approvals: [
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          taskId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          summary: 'Send the email',
+          status: 'approved',
+          expiresAt: new Date('2027-01-01T00:00:00.000Z'),
+          payload: { to: ['owner@example.com'], subject: 'Trip details' },
+        },
+      ],
+    });
     const messages = [
       {
         id: 'message-1',
@@ -49,7 +90,7 @@ describe('hydrateChatApprovals', () => {
       },
     ] satisfies UIMessage[];
 
-    const hydrated = await hydrateChatApprovals(db, messages);
+    const hydrated = await hydrateChatApprovals(fixture.store, messages);
 
     expect(hydrated[0]?.parts).toMatchObject([
       { type: 'text' },
@@ -62,30 +103,31 @@ describe('hydrateChatApprovals', () => {
         ],
       },
     ]);
+    expect(fixture.getHydrationState).toHaveBeenCalledOnce();
   });
 
   it('does not query when no message has actionable parts', async () => {
-    const select = vi.fn();
-    const db = { select } as unknown as Db;
+    const fixture = hydrationStore();
     const messages = [
       { id: 'message-1', role: 'assistant', parts: [{ type: 'text', text: 'Done.' }] },
     ] satisfies UIMessage[];
-    await expect(hydrateChatApprovals(db, messages)).resolves.toBe(messages);
-    expect(select).not.toHaveBeenCalled();
+    await expect(hydrateChatApprovals(fixture.store, messages)).resolves.toBe(messages);
+    expect(fixture.getHydrationState).not.toHaveBeenCalled();
   });
 
   it('renders a stale pending approval as expired', async () => {
-    const where = vi.fn().mockResolvedValue([
-      {
-        id: '11111111-1111-4111-8111-111111111111',
-        status: 'pending',
-        expiresAt: new Date('2026-07-22T17:59:59.000Z'),
-        payload: {},
-      },
-    ]);
-    const db = {
-      select: vi.fn(() => ({ from: vi.fn(() => ({ where })) })),
-    } as unknown as Db;
+    const fixture = hydrationStore({
+      approvals: [
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          taskId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          summary: 'Send the email',
+          status: 'pending',
+          expiresAt: new Date('2026-07-22T17:59:59.000Z'),
+          payload: {},
+        },
+      ],
+    });
     const messages = [
       {
         id: 'message-1',
@@ -100,21 +142,24 @@ describe('hydrateChatApprovals', () => {
         ] as unknown as UIMessage['parts'],
       },
     ] satisfies UIMessage[];
-    const hydrated = await hydrateChatApprovals(db, messages, new Date('2026-07-22T18:00:00.000Z'));
+    const hydrated = await hydrateChatApprovals(
+      fixture.store,
+      messages,
+      new Date('2026-07-22T18:00:00.000Z'),
+    );
     expect(hydrated[0]?.parts).toMatchObject([{ type: 'approval', status: 'expired' }]);
   });
 
   it('hydrates a budget request from the current task cap', async () => {
-    const where = vi.fn().mockResolvedValue([
-      {
-        id: '33333333-3333-4333-8333-333333333333',
-        status: 'pending',
-        budgetUsdLimit: '0.5000',
-      },
-    ]);
-    const db = {
-      select: vi.fn(() => ({ from: vi.fn(() => ({ where })) })),
-    } as unknown as Db;
+    const fixture = hydrationStore({
+      budgetTasks: [
+        {
+          id: '33333333-3333-4333-8333-333333333333',
+          status: 'pending',
+          budgetUsdLimit: '0.5000',
+        },
+      ],
+    });
     const messages = [
       {
         id: 'message-1',
@@ -128,7 +173,7 @@ describe('hydrateChatApprovals', () => {
         ] as unknown as UIMessage['parts'],
       },
     ] satisfies UIMessage[];
-    const hydrated = await hydrateChatApprovals(db, messages);
+    const hydrated = await hydrateChatApprovals(fixture.store, messages);
     expect(hydrated[0]?.parts).toMatchObject([{ type: 'budget-request', status: 'approved' }]);
   });
 
@@ -136,20 +181,20 @@ describe('hydrateChatApprovals', () => {
     // The summary card has no status of its own, so before this it kept
     // reporting the count frozen in at write time — "1 action is waiting for
     // review" long after the owner had declined it.
-    const where = vi.fn().mockResolvedValue([
-      {
-        id: '11111111-1111-4111-8111-111111111111',
-        taskId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-        summary: 'Email the cafe',
-        status: 'denied',
-        payload: {},
-        expiresAt: new Date('2027-01-01T00:00:00.000Z'),
-      },
-    ]);
-    const from = vi.fn(() => ({ where }));
-    const db = { select: vi.fn(() => ({ from })) } as unknown as Db;
+    const fixture = hydrationStore({
+      approvals: [
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          taskId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          summary: 'Email the cafe',
+          status: 'denied',
+          payload: {},
+          expiresAt: new Date('2027-01-01T00:00:00.000Z'),
+        },
+      ],
+    });
 
-    const hydrated = await hydrateChatApprovals(db, [
+    const hydrated = await hydrateChatApprovals(fixture.store, [
       {
         id: 'message-1',
         role: 'assistant',
@@ -180,19 +225,20 @@ describe('hydrateChatApprovals', () => {
   });
 
   it('resolves a summary written before it carried ids through its own task', async () => {
-    const where = vi.fn().mockResolvedValue([
-      {
-        id: '11111111-1111-4111-8111-111111111111',
-        taskId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-        summary: 'Email the cafe',
-        status: 'pending',
-        expiresAt: new Date('2027-01-01T00:00:00.000Z'),
-      },
-    ]);
-    const from = vi.fn(() => ({ where }));
-    const db = { select: vi.fn(() => ({ from })) } as unknown as Db;
+    const fixture = hydrationStore({
+      taskApprovals: [
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          taskId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          summary: 'Email the cafe',
+          status: 'pending',
+          expiresAt: new Date('2027-01-01T00:00:00.000Z'),
+          payload: {},
+        },
+      ],
+    });
 
-    const hydrated = await hydrateChatApprovals(db, [
+    const hydrated = await hydrateChatApprovals(fixture.store, [
       {
         id: 'message-1',
         role: 'assistant',
@@ -210,17 +256,17 @@ describe('hydrateChatApprovals', () => {
   });
 
   it('leaves a summary alone when there is nothing to resolve it against', async () => {
-    const db = { select: vi.fn() } as unknown as Db;
+    const fixture = hydrationStore();
     const parts = [
       { type: 'approval-summary', purpose: 'Find an open cafe nearby', approvalCount: 2 },
     ] as unknown as UIMessage['parts'];
 
-    const hydrated = await hydrateChatApprovals(db, [
+    const hydrated = await hydrateChatApprovals(fixture.store, [
       { id: 'message-1', role: 'assistant', parts } satisfies UIMessage,
     ]);
 
     expect(hydrated[0]?.parts).toEqual(parts);
-    expect(db.select).not.toHaveBeenCalled();
+    expect(fixture.getHydrationState).not.toHaveBeenCalled();
   });
 
   /**
@@ -232,37 +278,50 @@ describe('hydrateChatApprovals', () => {
     const now = new Date('2026-09-18T12:00:00.000Z');
     const later = new Date('2026-09-25T12:00:00.000Z');
     const id = (n: number) => `5555555${n}-5555-4555-8555-555555555555`;
-    const where = vi.fn().mockResolvedValue([
-      {
-        id: id(1),
-        status: 'accepted',
-        expiresAt: later,
-        snoozedUntil: null,
-        acceptedTaskId: '66666666-6666-4666-8666-666666666666',
-        acceptedTaskStatus: 'done',
-        acceptedTaskProgress: 'The alert needs no reply.',
-        acceptedTaskConversationId: null,
-      },
-      {
-        id: id(2),
-        status: 'snoozed',
-        expiresAt: later,
-        snoozedUntil: new Date('2026-09-19T12:00:00.000Z'),
-        acceptedTaskId: null,
-      },
-      // A snooze whose time has come re-opens the card.
-      {
-        id: id(3),
-        status: 'snoozed',
-        expiresAt: later,
-        snoozedUntil: new Date('2026-09-18T11:00:00.000Z'),
-        acceptedTaskId: null,
-      },
-      { id: id(4), status: 'pending', expiresAt: now, snoozedUntil: null, acceptedTaskId: null },
-    ]);
-    const db = {
-      select: vi.fn(() => ({ from: vi.fn(() => ({ leftJoin: vi.fn(() => ({ where })) })) })),
-    } as unknown as Db;
+    const fixture = hydrationStore({
+      suggestions: [
+        {
+          id: id(1),
+          status: 'accepted',
+          expiresAt: later,
+          origin: 'heartbeat',
+          proposedAction: 'Do 1',
+          snoozedUntil: null,
+          acceptedTaskId: '66666666-6666-4666-8666-666666666666',
+          acceptedTaskStatus: 'done',
+          acceptedTaskProgress: 'The alert needs no reply.',
+          acceptedTaskConversationId: null,
+        },
+        {
+          id: id(2),
+          status: 'snoozed',
+          expiresAt: later,
+          origin: 'heartbeat',
+          proposedAction: 'Do 2',
+          snoozedUntil: new Date('2026-09-19T12:00:00.000Z'),
+          acceptedTaskId: null,
+        },
+        // A snooze whose time has come re-opens the card.
+        {
+          id: id(3),
+          status: 'snoozed',
+          expiresAt: later,
+          origin: 'heartbeat',
+          proposedAction: 'Do 3',
+          snoozedUntil: new Date('2026-09-18T11:00:00.000Z'),
+          acceptedTaskId: null,
+        },
+        {
+          id: id(4),
+          status: 'pending',
+          expiresAt: now,
+          origin: 'heartbeat',
+          proposedAction: 'Do 4',
+          snoozedUntil: null,
+          acceptedTaskId: null,
+        },
+      ],
+    });
     const suggestion = (n: number) => ({
       type: 'suggestion',
       suggestionId: id(n),
@@ -271,7 +330,7 @@ describe('hydrateChatApprovals', () => {
     });
 
     const hydrated = await hydrateChatApprovals(
-      db,
+      fixture.store,
       [
         {
           id: 'message-1',
@@ -285,7 +344,7 @@ describe('hydrateChatApprovals', () => {
       now,
     );
 
-    expect(db.select).toHaveBeenCalledTimes(1);
+    expect(fixture.getHydrationState).toHaveBeenCalledTimes(1);
     expect(JSON.parse(JSON.stringify(hydrated[0]?.parts))).toEqual([
       { type: 'text', text: 'Morning.' },
       {

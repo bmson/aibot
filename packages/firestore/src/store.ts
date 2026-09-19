@@ -9,6 +9,40 @@ import {
   VectorValue,
 } from '@google-cloud/firestore';
 
+const CODEC_TAG = 'assistantFirestoreCodecV1';
+const CODEC_MARKER = Buffer.from('assistant-firestore-codec-v1', 'utf8');
+
+type CodecPayload =
+  | {
+      kind: 'array' | 'object';
+      length?: number;
+      marker: Buffer;
+      items: Record<string, unknown>;
+    }
+  | { kind: 'bigint'; marker: Buffer; value: string };
+
+function codecPayload(input: unknown): CodecPayload | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const entries = Object.entries(input);
+  if (entries.length !== 1 || entries[0]?.[0] !== CODEC_TAG) return null;
+  const payload = entries[0][1];
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const value = payload as Record<string, unknown>;
+  if (!Buffer.isBuffer(value.marker) || !value.marker.equals(CODEC_MARKER)) return null;
+  if (value.kind === 'bigint')
+    return typeof value.value === 'string' && /^-?(0|[1-9]\d*)$/.test(value.value)
+      ? (value as CodecPayload)
+      : null;
+  if ((value.kind !== 'array' && value.kind !== 'object') || !value.items) return null;
+  if (typeof value.items !== 'object' || Array.isArray(value.items)) return null;
+  if (
+    value.kind === 'array' &&
+    (!Number.isSafeInteger(value.length) || (value.length as number) < 0)
+  )
+    return null;
+  return value as CodecPayload;
+}
+
 /** Encode IDs reversibly so slashes, provider IDs, and reserved names cannot change scope. */
 export function documentKey(id: string): string {
   if (!id || Buffer.byteLength(id, 'utf8') > 1000) throw new Error('Invalid document identifier');
@@ -21,6 +55,16 @@ export function decodeRecord<T>(value: unknown): T {
     if (input instanceof VectorValue) return input.toArray();
     if (Array.isArray(input)) return input.map(visit);
     if (input && typeof input === 'object' && !(input instanceof Date) && !Buffer.isBuffer(input)) {
+      const tagged = codecPayload(input);
+      if (tagged?.kind === 'bigint') return BigInt(tagged.value);
+      if (tagged?.kind === 'array')
+        return Array.from({ length: tagged.length as number }, (_, index) =>
+          visit(tagged.items[index]),
+        );
+      if (tagged?.kind === 'object')
+        return Object.fromEntries(
+          Object.entries(tagged.items).map(([key, field]) => [key, visit(field)]),
+        );
       return Object.fromEntries(Object.entries(input).map(([key, field]) => [key, visit(field)]));
     }
     return input;
@@ -30,8 +74,12 @@ export function decodeRecord<T>(value: unknown): T {
 
 /** Skip absent optional object fields; an undefined array element is always a programming error. */
 export function encodeRecord(value: DocumentData): DocumentData {
-  function visit(input: unknown): unknown {
+  function visit(input: unknown, insideArray = false): unknown {
     if (input === undefined) throw new Error('Undefined array value cannot be persisted');
+    // The SDK decodes native int64 values as Number by default. Preserve bigint
+    // fields without changing every ordinary integer in application records.
+    if (typeof input === 'bigint')
+      return { [CODEC_TAG]: { kind: 'bigint', marker: CODEC_MARKER, value: input.toString() } };
     if (input instanceof Date) {
       if (!Number.isFinite(input.getTime())) throw new Error('Invalid persisted timestamp');
       return input;
@@ -44,13 +92,27 @@ export function encodeRecord(value: DocumentData): DocumentData {
     ) {
       return input;
     }
-    if (Array.isArray(input)) return input.map(visit);
+    if (Array.isArray(input)) {
+      if (insideArray)
+        return {
+          [CODEC_TAG]: {
+            kind: 'array',
+            marker: CODEC_MARKER,
+            length: input.length,
+            items: Object.fromEntries(input.map((item, index) => [index, visit(item)])),
+          },
+        };
+      return input.map((item) => visit(item, true));
+    }
     if (input && typeof input === 'object') {
-      return Object.fromEntries(
+      const encoded = Object.fromEntries(
         Object.entries(input)
           .filter(([, v]) => v !== undefined)
           .map(([key, v]) => [key, visit(v)]),
       );
+      if (CODEC_TAG in input)
+        return { [CODEC_TAG]: { kind: 'object', marker: CODEC_MARKER, items: encoded } };
+      return encoded;
     }
     if (typeof input === 'number' && !Number.isFinite(input))
       throw new Error('Nonfinite persisted number');

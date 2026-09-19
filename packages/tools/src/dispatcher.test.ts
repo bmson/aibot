@@ -6,6 +6,7 @@ import {
   costEvents,
   costReservations,
   createDb,
+  createPostgresTaskRepository,
   type Db,
   goals,
   rateLimits,
@@ -1352,6 +1353,7 @@ describe('ToolDispatcher (integration)', () => {
     const registry = registerBuiltinTools(new ToolRegistry(), {
       embed: async (texts: string[]) => texts.map(() => [0]),
       workspace: { read: async () => '', write: async () => {}, list: async () => [] } as never,
+      tasks: createPostgresTaskRepository(db),
     });
     const dispatcher = new ToolDispatcher(db, registry);
     const task = await makeTask('owner');

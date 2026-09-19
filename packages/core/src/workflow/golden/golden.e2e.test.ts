@@ -3,6 +3,7 @@ import {
   approvals,
   conversations,
   createDb,
+  createPostgresGeneratedCardRepository,
   type Db,
   generatedCardRevisions,
   generatedCards,
@@ -140,27 +141,30 @@ describe('golden tasks', () => {
         facts: [{ id: 'status', value, source: 'gmail.read_thread' }],
         blocks: [{ type: 'facts', factIds: ['status'] }],
       });
-    const saved = await generatedCardModule.persistGeneratedCard(db, {
-      agentId,
-      conversationId: conversation.id,
-      sourceText: 'What is the status of my shipment A456?',
-      payload: {
-        kind: 'generated-card',
-        id: randomUUID(),
-        revisionId: randomUUID(),
-        sourceFingerprint: randomUUID(),
-        grounding: 'evidence',
-        spec: card('In transit'),
-      },
-      evidence: [
-        {
-          toolName: 'gmail.read_thread',
-          status: 'succeeded',
-          args: { threadId: 'shipment-a456' },
-          result: { messages: [{ subject: 'Shipment A456', text: 'In transit' }] },
+    const saved = await generatedCardModule.persistGeneratedCard(
+      createPostgresGeneratedCardRepository(db),
+      {
+        agentId,
+        conversationId: conversation.id,
+        sourceText: 'What is the status of my shipment A456?',
+        payload: {
+          kind: 'generated-card',
+          id: randomUUID(),
+          revisionId: randomUUID(),
+          sourceFingerprint: randomUUID(),
+          grounding: 'evidence',
+          spec: card('In transit'),
         },
-      ],
-    });
+        evidence: [
+          {
+            toolName: 'gmail.read_thread',
+            status: 'succeeded',
+            args: { threadId: 'shipment-a456' },
+            result: { messages: [{ subject: 'Shipment A456', text: 'In transit' }] },
+          },
+        ],
+      },
+    );
     createdCardIds.push(saved.id);
     await db.insert(messages).values({
       conversationId: conversation.id,

@@ -8,6 +8,7 @@ const { values } = parseArgs({
   options: {
     help: { type: 'boolean' },
     write: { type: 'boolean' },
+    verify: { type: 'boolean' },
     'allow-cloud': { type: 'boolean' },
     in: { type: 'string' },
     'agent-id': { type: 'string' },
@@ -19,7 +20,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    'Preview or import a bundle. Write requires --write --in --agent-id --project-id --database-id --installation-id.',
+    'Preview, import, or verify a bundle. --write and --verify require --in plus explicit source/target identities.',
   );
   process.exit(0);
 }
@@ -34,15 +35,21 @@ const target = {
 };
 const sourceAgentId = values['agent-id'] ?? bundle.manifest.source.agentId;
 validateMigrationBundle(bundle, { sourceAgentId, target });
-if (!values.write) {
+if (!values.write && !values.verify) {
+  const result = await importWorkspaceBundle(
+    {} as Parameters<typeof importWorkspaceBundle>[0],
+    bundle,
+    { sourceAgentId, target },
+  );
   console.log(
     JSON.stringify(
       {
-        mode: 'preview',
+        ...result,
         sourceAgentId,
         target,
-        records: bundle.records.length,
         checksum: bundle.manifest.bundleChecksum,
+        coverage: bundle.manifest.coverage,
+        embeddingSpace: bundle.manifest.source.embeddingSpace ?? null,
       },
       null,
       2,
@@ -50,6 +57,7 @@ if (!values.write) {
   );
   process.exit(0);
 }
+if (values.write && values.verify) throw new Error('Choose either --write or --verify');
 if (
   !values['agent-id'] ||
   !values['project-id'] ||
@@ -68,7 +76,7 @@ try {
   const result = await importWorkspaceBundle(store, bundle, {
     sourceAgentId,
     target,
-    mode: 'write',
+    mode: values.verify ? 'verify' : 'write',
   });
   console.log(JSON.stringify(result, null, 2));
 } finally {
