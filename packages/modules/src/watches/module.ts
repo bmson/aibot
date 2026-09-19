@@ -6,8 +6,9 @@ import { pollDueWebWatches } from './web-watches.js';
 
 export const watchesModule = defineModule({
   meta: watchesMeta,
-  create: ({ registry }) => {
-    registerWatchTools(registry);
+  create: ({ registry, persistence }) => {
+    const watches = persistence.watches;
+    registerWatchTools(registry, watches);
     return {
       hooks: {
         // Watches observe every authenticated inbound email (the google module
@@ -16,7 +17,12 @@ export const watchesModule = defineModule({
         emailObservers: [
           async (services, event) => {
             await matchEmailWatches(
-              { db: services.db, notifyOwner: services.ownerNotifier.notifyOwner },
+              {
+                watches: services.persistence.watches,
+                messages: services.persistence.messages,
+                tasks: services.persistence.tasks,
+                notifyOwner: services.ownerNotifier.notifyOwner,
+              },
               event,
             );
           },
@@ -26,7 +32,7 @@ export const watchesModule = defineModule({
             name: 'reapExpiredWatches',
             // Preserves the /internal/sweep response key from the hardcoded era.
             reportKey: 'expiredInboxWatches',
-            run: (services) => reapExpiredWatches({ db: services.db }),
+            run: (services) => reapExpiredWatches({ watches: services.persistence.watches }),
           },
           {
             // Poll due web watches ("watch.poll_web"): fetch each watched page
@@ -35,7 +41,8 @@ export const watchesModule = defineModule({
             reportKey: 'webWatchFires',
             run: (services) =>
               pollDueWebWatches({
-                db: services.db,
+                watches: services.persistence.watches,
+                messages: services.persistence.messages,
                 notifyOwner: services.ownerNotifier.notifyOwner,
               }),
           },

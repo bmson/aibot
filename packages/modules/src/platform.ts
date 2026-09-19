@@ -1,6 +1,7 @@
 import type { Config } from '@assistant/config';
 import type { ModelRouter } from '@assistant/core';
 import type { Db, TaskRow } from '@assistant/db';
+import type { ExecutionPersistence } from '@assistant/persistence';
 import type { ToolDispatcher } from '@assistant/tools/dispatcher';
 import type { ToolRegistry } from '@assistant/tools/registry';
 import type { WorkspaceStore } from '@assistant/tools/workspace';
@@ -26,6 +27,7 @@ export interface ModulePlatformContext {
   workspacePrefix: string;
   workspaceRoot: string;
   repoRoot: string;
+  persistence: ExecutionPersistence;
 }
 
 /**
@@ -108,6 +110,7 @@ export interface ModuleServices {
   workspace: WorkspaceStore;
   ownerNotifier: OwnerNotifier;
   emailObservers: readonly InboundEmailObserver[];
+  persistence: ExecutionPersistence;
 }
 
 /** The narrow, framework-free request a webhook handler receives. */

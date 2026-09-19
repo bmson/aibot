@@ -220,6 +220,7 @@ export function agentServices(deps: AgentDeps): ModuleServices {
     workspace: deps.workspace,
     ownerNotifier: composeOwnerNotifiers([dashboardOwnerNotifier(deps), deps.outOfBandNotifier]),
     emailObservers: deps.modules.emailObservers,
+    persistence: deps.persistence ?? createPostgresExecutionPersistence(deps.db),
   };
 }
 
@@ -285,6 +286,7 @@ export function buildDeps(): AgentDeps {
     workspace,
     workspacePrefix,
     workspaceRoot,
+    persistence,
   });
   outOfBandNotifier = policyGatedOutOfBand(db, modules.ownerNotifier);
 

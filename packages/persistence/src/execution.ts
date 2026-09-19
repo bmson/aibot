@@ -17,6 +17,7 @@ import type { OwnerContextRepository } from './owner-context.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { SkillContextRepository } from './skill-context.js';
 import type { TaskRepository } from './task-lifecycle.js';
+import type { WatchRepository } from './watches.js';
 
 /** One store supplies every migrated executor operation. Remaining domain ports are separate. */
 export interface ExecutionPersistence {
@@ -41,4 +42,5 @@ export interface ExecutionPersistence {
   readonly generatedCards: GeneratedCardRepository;
   readonly cardRefresh: CardRefreshRepository;
   readonly recallMetrics: RecallMetricsRepository;
+  readonly watches: WatchRepository;
 }

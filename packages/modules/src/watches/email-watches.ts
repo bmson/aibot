@@ -1,12 +1,12 @@
 import { enqueueTask, InboundEventSchema } from '@assistant/core';
-import { type WatchRow, watches } from '@assistant/db';
+import type { WatchRow } from '@assistant/db';
+import type { TaskRepository } from '@assistant/persistence';
 import { emailWatchMatches } from '@assistant/tools';
-import { and, eq, gt, lte } from 'drizzle-orm';
 import type { InboundEmailEvent } from '../platform.js';
 import { recordWatchFire, type WatchFireDeps } from './fire.js';
 
 /** What watch matching consumes: the database and the owner-notifier port. */
-export type WatchesDeps = WatchFireDeps;
+export type WatchesDeps = WatchFireDeps & { tasks: TaskRepository };
 
 /**
  * The authenticated-inbound-email shape watches match against — structurally
@@ -50,28 +50,8 @@ export async function matchEmailWatches(
 
   // Lazily expire lapsed watches so a match is never evaluated against a stale
   // window (the sweep reaper is the durable path; this covers the hot path).
-  await deps.db
-    .update(watches)
-    .set({ status: 'expired', updatedAt: now })
-    .where(
-      and(
-        eq(watches.agentId, input.agentId),
-        eq(watches.status, 'active'),
-        lte(watches.expiresAt, now),
-      ),
-    );
-
-  const candidates = await deps.db
-    .select()
-    .from(watches)
-    .where(
-      and(
-        eq(watches.agentId, input.agentId),
-        eq(watches.status, 'active'),
-        eq(watches.kind, 'email'),
-        gt(watches.expiresAt, now),
-      ),
-    );
+  await deps.watches.expire(input.agentId, now);
+  const candidates = await deps.watches.emailCandidates(input.agentId, now);
 
   const triggerRef = `gmail:${input.messageId}`;
   for (const watch of candidates) {
@@ -105,7 +85,7 @@ export async function matchEmailWatches(
         trust: 'assistant',
         payload: { job: 'watch.suggest', watchId: watch.id, triggerRef },
       });
-      await enqueueTask(deps.db, {
+      await enqueueTask(deps.tasks, {
         event,
         type: 'adhoc',
         budgetUsdLimit: '0.06',
@@ -122,13 +102,8 @@ export async function matchEmailWatches(
  * status-guarded UPDATE transitions each row once.
  */
 export async function reapExpiredWatches(
-  deps: Pick<WatchesDeps, 'db'>,
+  deps: Pick<WatchesDeps, 'watches'>,
   now = new Date(),
 ): Promise<number> {
-  const expired = await deps.db
-    .update(watches)
-    .set({ status: 'expired', updatedAt: now })
-    .where(and(eq(watches.status, 'active'), lte(watches.expiresAt, now)))
-    .returning({ id: watches.id });
-  return expired.length;
+  return deps.watches.expire(null, now);
 }

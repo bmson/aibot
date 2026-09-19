@@ -1,11 +1,12 @@
 import { persistMessage } from '@assistant/core';
-import { type Db, type WatchRow, watches, watchFires } from '@assistant/db';
-import { and, eq, sql } from 'drizzle-orm';
+import type { WatchRow } from '@assistant/db';
+import type { MessageRepository, WatchRepository } from '@assistant/persistence';
 import type { OwnerNotifier } from '../platform.js';
 
 /** What recording a watch firing needs: the database and the owner-notifier port. */
 export interface WatchFireDeps {
-  db: Db;
+  watches: WatchRepository;
+  messages: MessageRepository;
   notifyOwner: OwnerNotifier['notifyOwner'];
 }
 
@@ -24,36 +25,18 @@ export async function recordWatchFire(
   fire: { triggerRef: string; text: string; channelMessageId: string; excerpt?: string },
   now: Date,
 ): Promise<boolean> {
-  const [recorded] = await deps.db
-    .insert(watchFires)
-    .values({
-      watchId: watch.id,
-      agentId: watch.agentId,
-      triggerRef: fire.triggerRef,
-      summary: fire.text,
-      // Bounded trigger text for the suggest tier's compose step — tainted
-      // reference data, never owner-facing raw.
-      excerpt: (fire.excerpt ?? '').slice(0, 2048),
-    })
-    .onConflictDoNothing({ target: [watchFires.watchId, watchFires.triggerRef] })
-    .returning({ id: watchFires.id });
-  if (!recorded) return false;
-
-  const [updated] = await deps.db
-    .update(watches)
-    .set({ fireCount: sql`${watches.fireCount} + 1`, lastFiredAt: now, updatedAt: now })
-    .where(eq(watches.id, watch.id))
-    .returning();
-  // Exhaust a bounded watch once it has fired its allotted number of times.
-  if (updated?.maxFires != null && updated.fireCount >= updated.maxFires) {
-    await deps.db
-      .update(watches)
-      .set({ status: 'fired', updatedAt: now })
-      .where(and(eq(watches.id, watch.id), eq(watches.status, 'active')));
-  }
+  const result = await deps.watches.recordFire({
+    watchId: watch.id,
+    agentId: watch.agentId,
+    triggerRef: fire.triggerRef,
+    summary: fire.text,
+    excerpt: fire.excerpt ?? '',
+    now,
+  });
+  if (!result.recorded) return false;
 
   if (watch.conversationId) {
-    await persistMessage(deps.db, {
+    await persistMessage(deps.messages, {
       conversationId: watch.conversationId,
       role: 'assistant',
       origin: 'assistant',
