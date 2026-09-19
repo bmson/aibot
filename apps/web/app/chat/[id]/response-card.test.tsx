@@ -118,6 +118,29 @@ describe('ResponseCards', () => {
     expect(html).not.toContain('Thursday, Sep 17');
   });
 
+  it('preserves the date and label of an explicit all-day timestamp card', () => {
+    const html = renderToStaticMarkup(
+      <ResponseCards
+        timeZone="America/Los_Angeles"
+        cards={[
+          {
+            kind: 'calendar-event',
+            id: 'day',
+            title: 'Day off',
+            allDay: true,
+            start: '2026-09-18T00:00:00Z',
+            end: '2026-09-19T00:00:00Z',
+            time: '5:00 PM',
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain('Friday, Sep 18');
+    expect(html).toContain('All day');
+    expect(html).not.toContain('Thursday, Sep 17');
+    expect(html).not.toContain('5:00 PM');
+  });
+
   it('groups a weather card by day and keeps the current metrics above them', () => {
     const html = render({
       kind: 'weather',

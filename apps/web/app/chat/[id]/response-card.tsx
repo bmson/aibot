@@ -1258,7 +1258,8 @@ export function ResponseCards({
 }) {
   const eventGroups = new Map<string, Raw[]>();
   for (const event of cards.filter((card) => str(card.kind) === 'calendar-event')) {
-    const label = calendarDayLabel(str(event.start), timeZone);
+    const start = str(event.start);
+    const label = calendarDayLabel(event.allDay === true ? start.slice(0, 10) : start, timeZone);
     eventGroups.set(label, [...(eventGroups.get(label) ?? []), event]);
   }
   const displayCards: Raw[] = [
