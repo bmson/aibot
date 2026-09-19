@@ -171,20 +171,15 @@ describe('ModelRouter streaming finalization', () => {
     );
   });
 
-  it('tells a thinking model not to reason on the reply the owner is waiting for', async () => {
+  it('keeps reasoning and answer headroom when a model is not known to allow disabling it', async () => {
     const { router } = makeRouter({ thinking: true });
     await router.stream('draft', { prompt: 'hello' });
     const args = stubs.streamText.mock.calls[0]?.[0] as {
       maxOutputTokens: number;
       providerOptions?: { openrouter?: { reasoning?: { max_tokens?: number; enabled?: boolean } } };
     };
-    // Reasoning tokens are generated before the visible answer, so on a
-    // streamed reply they are pure time-to-first-token. Silence would leave
-    // the provider's own default in charge, so it is disabled explicitly —
-    // and the headroom that only existed to protect reasoning goes with it.
-    // Tool-carrying steps keep both; see router.reasoning.test.ts.
-    expect(args.maxOutputTokens).toBe(2048);
-    expect(args.providerOptions?.openrouter?.reasoning).toEqual({ enabled: false });
+    expect(args.maxOutputTokens).toBe(2048 + 4096);
+    expect(args.providerOptions?.openrouter?.reasoning).toEqual({ max_tokens: 4096 });
   });
 
   it('leaves a plain model at its visible budget with no reasoning options', async () => {
