@@ -72,6 +72,7 @@ async function seedSyntheticData(db: DataFirestore, installationId: string): Pro
       stringValue: 'synthetic backup smoke',
       bytesValue: Buffer.from('synthetic-bytes'),
       referenceValue: reference,
+      nestedReferences: { local: { direct: reference, array: [reference] } },
       geoPointValue: new firestore.GeoPoint(37.7749, -122.4194),
       arrayValue: [null, true, 7, 'nested'],
       mapValue: { nested: { active: true, count: 2 } },
@@ -118,10 +119,18 @@ export async function firestoreBackupSmoke(
   const restore = dependencies.restore ?? restoreManagedFirestoreBackup;
   let sourceCreated = false;
   let restoreCreated = false;
-  let smokeFailed = false;
   let sourceDb: DataFirestore | undefined;
   let sourceData: ManagedFirestoreDataClient | undefined;
   let restoreData: ManagedFirestoreDataClient | undefined;
+  let result:
+    | {
+        sourceDatabaseId: string;
+        restoreDatabaseId: string;
+        manifest: ManagedBackupManifest;
+        verificationReadTime: string;
+      }
+    | undefined;
+  let smokeError: unknown;
   try {
     input.progress?.('creating', { databaseId: sourceDatabaseId, role: 'source' });
     const [sourceCreation] = await dependencies.admin.createDatabase({
@@ -131,6 +140,7 @@ export async function firestoreBackupSmoke(
         locationId: input.location,
         type: 'FIRESTORE_NATIVE',
         databaseEdition: 'STANDARD',
+        pointInTimeRecoveryEnablement: 'POINT_IN_TIME_RECOVERY_ENABLED',
       },
     });
     sourceCreated = true;
@@ -161,6 +171,7 @@ export async function firestoreBackupSmoke(
     const restoreAdmin: ManagedFirestoreAdmin = {
       exportDocuments: (request) => dependencies.admin.exportDocuments(request),
       importDocuments: (request) => dependencies.admin.importDocuments(request),
+      getDatabase: (request) => dependencies.admin.getDatabase(request),
       createDatabase: async (request) => {
         const [operation, ...rest] = await dependencies.admin.createDatabase(request);
         restoreCreated = true;
@@ -179,34 +190,46 @@ export async function firestoreBackupSmoke(
       location: input.location,
       listObjects: dependencies.listObjects,
     });
-    return {
+    result = {
       sourceDatabaseId,
       restoreDatabaseId,
       manifest,
       verificationReadTime: restored.verificationReadTime,
     };
   } catch (error) {
-    smokeFailed = true;
-    throw error;
-  } finally {
-    input.progress?.('cleanup', {
-      sourceDatabaseId: sourceCreated ? sourceDatabaseId : null,
-      restoreDatabaseId: restoreCreated ? restoreDatabaseId : null,
-      retainedExportPrefix: input.gcsPrefix,
-    });
-    await Promise.allSettled([
-      sourceDb?.terminate(),
-      sourceData?.db.close?.(),
-      restoreData?.db.close?.(),
-    ]);
-    const cleanup = await Promise.allSettled([
-      ...(restoreCreated ? [deleteOwnedDatabase(dependencies.admin, restoreName)] : []),
-      ...(sourceCreated ? [deleteOwnedDatabase(dependencies.admin, sourceName)] : []),
-    ]);
-    const failure = cleanup.find((result) => result.status === 'rejected');
-    // biome-ignore lint/correctness/noUnsafeFinally: cleanup must reject an otherwise successful smoke
-    if (!smokeFailed && failure?.status === 'rejected') throw failure.reason;
+    smokeError = error;
   }
+  input.progress?.('cleanup', {
+    sourceDatabaseId: sourceCreated ? sourceDatabaseId : null,
+    restoreDatabaseId: restoreCreated ? restoreDatabaseId : null,
+    retainedExportPrefix: input.gcsPrefix,
+  });
+  const cleanup = await Promise.allSettled([
+    sourceDb?.terminate(),
+    sourceData?.db.close?.(),
+    restoreData?.db.close?.(),
+    ...(restoreCreated ? [deleteOwnedDatabase(dependencies.admin, restoreName)] : []),
+    ...(sourceCreated ? [deleteOwnedDatabase(dependencies.admin, sourceName)] : []),
+  ]);
+  const cleanupFailures = cleanup.flatMap((settled) =>
+    settled.status === 'rejected' ? [settled.reason] : [],
+  );
+  if (cleanupFailures.length) {
+    input.progress?.('cleanup_failed', {
+      failures: cleanupFailures.map((failure) =>
+        failure instanceof Error ? failure.message : String(failure),
+      ),
+    });
+    throw new AggregateError(
+      [...(smokeError === undefined ? [] : [smokeError]), ...cleanupFailures],
+      smokeError === undefined
+        ? 'Synthetic backup smoke cleanup failed'
+        : 'Synthetic backup smoke and cleanup both failed',
+    );
+  }
+  if (smokeError !== undefined) throw smokeError;
+  if (!result) throw new Error('Synthetic backup smoke produced no result');
+  return result;
 }
 
 function parseGcsUri(uri: string): { bucket: string; object: string } {

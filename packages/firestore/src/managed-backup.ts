@@ -72,6 +72,7 @@ export type DatabaseInventory = {
   collections: Record<string, number>;
   installationRoots: string[];
   outOfScopeDocuments: number;
+  externalReferences: number;
   canonicalHash: string;
 };
 export type VerifiedGcsObject = {
@@ -101,10 +102,24 @@ type LongRunningOperation<T> = {
   promise(): Promise<[T, { endTime?: ProtoTimestamp | null }?, ...unknown[]]>;
 };
 export type ManagedFirestoreAdmin = {
+  getDatabase(input: { name: string }): Promise<
+    [
+      {
+        pointInTimeRecoveryEnablement?: string | number | null;
+        earliestVersionTime?: ProtoTimestamp | null;
+      },
+      ...unknown[],
+    ]
+  >;
   createDatabase(input: {
     parent: string;
     databaseId: string;
-    database: { locationId: string; type: 'FIRESTORE_NATIVE'; databaseEdition: 'STANDARD' };
+    database: {
+      locationId: string;
+      type: 'FIRESTORE_NATIVE';
+      databaseEdition: 'STANDARD';
+      pointInTimeRecoveryEnablement?: 'POINT_IN_TIME_RECOVERY_ENABLED';
+    };
   }): Promise<[LongRunningOperation<{ createTime?: ProtoTimestamp | null }>, ...unknown[]]>;
   exportDocuments(input: {
     name: string;
@@ -158,6 +173,15 @@ function exactTimestamp(value: Date | ProtoTimestamp): ProtoTimestamp {
   timestampIso(value);
   return value;
 }
+function compareTimestamps(left: ProtoTimestamp, right: ProtoTimestamp): number {
+  timestampIso(left);
+  timestampIso(right);
+  const seconds = Number(left.seconds) - Number(right.seconds);
+  return seconds === 0 ? (left.nanos ?? 0) - (right.nanos ?? 0) : seconds;
+}
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 function numberText(value: number): string {
   if (Number.isNaN(value)) return 'NaN';
   if (value === Infinity) return 'Infinity';
@@ -165,15 +189,16 @@ function numberText(value: number): string {
   if (Object.is(value, -0)) return '-0';
   return value.toString();
 }
-function canonicalFields(fields: Record<string, ProtoValue>): unknown {
+type CanonicalContext = { documentsRoot: string; externalReferences: number };
+function canonicalFields(fields: Record<string, ProtoValue>, context: CanonicalContext): unknown {
   return [
     'map',
     Object.entries(fields)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, value]) => [key, canonicalValue(value)]),
+      .sort(([a], [b]) => compareText(a, b))
+      .map(([key, value]) => [key, canonicalValue(value, context)]),
   ];
 }
-function canonicalValue(value: ProtoValue): unknown {
+function canonicalValue(value: ProtoValue, context: CanonicalContext): unknown {
   if (value.nullValue !== undefined && value.nullValue !== null) return ['null'];
   if (value.booleanValue !== undefined && value.booleanValue !== null)
     return ['boolean', value.booleanValue];
@@ -190,8 +215,13 @@ function canonicalValue(value: ProtoValue): unknown {
     return ['string', value.stringValue];
   if (value.bytesValue !== undefined && value.bytesValue !== null)
     return ['bytes', Buffer.from(value.bytesValue ?? new Uint8Array()).toString('base64')];
-  if (value.referenceValue !== undefined && value.referenceValue !== null)
-    return ['reference', value.referenceValue];
+  if (value.referenceValue !== undefined && value.referenceValue !== null) {
+    const localPrefix = `${context.documentsRoot}/`;
+    if (value.referenceValue.startsWith(localPrefix))
+      return ['reference', 'local', value.referenceValue.slice(localPrefix.length)];
+    context.externalReferences++;
+    return ['reference', 'external', value.referenceValue];
+  }
   if (value.geoPointValue !== undefined && value.geoPointValue !== null)
     return [
       'geo',
@@ -199,9 +229,9 @@ function canonicalValue(value: ProtoValue): unknown {
       numberText(value.geoPointValue?.longitude ?? 0),
     ];
   if (value.arrayValue !== undefined && value.arrayValue !== null)
-    return ['array', (value.arrayValue?.values ?? []).map(canonicalValue)];
+    return ['array', (value.arrayValue?.values ?? []).map((item) => canonicalValue(item, context))];
   if (value.mapValue !== undefined && value.mapValue !== null)
-    return canonicalFields(value.mapValue.fields ?? {});
+    return canonicalFields(value.mapValue.fields ?? {}, context);
   throw new Error('Unsupported raw Firestore value in backup inventory');
 }
 
@@ -213,6 +243,7 @@ export async function inventoryFirestoreDatabase(
   const root = `projects/${identity.projectId}/databases/${identity.databaseId}/documents`;
   const exactReadTime = exactTimestamp(readTime);
   const records: Array<{ path: string; hash: string }> = [];
+  const canonicalContext: CanonicalContext = { documentsRoot: root, externalReferences: 0 };
   const collections = new Map<string, number>();
   const visited = new Set<string>();
   const visit = async (parent: string): Promise<string[]> => {
@@ -254,7 +285,7 @@ export async function inventoryFirestoreDatabase(
           presentNames.has(document.name)
         ) {
           const hash = createHash('sha256')
-            .update(JSON.stringify(canonicalFields(document.fields ?? {})))
+            .update(JSON.stringify(canonicalFields(document.fields ?? {}, canonicalContext)))
             .digest('hex');
           records.push({ path, hash });
           const collectionPath = path.split('/').slice(0, -1).join('/');
@@ -279,7 +310,7 @@ export async function inventoryFirestoreDatabase(
     const discovered = await Promise.all(batch.map(visit));
     for (const parent of discovered.flat()) if (!visited.has(parent)) queue.push(parent);
   }
-  records.sort((a, b) => a.path.localeCompare(b.path));
+  records.sort((a, b) => compareText(a.path, b.path));
   const installationRoots = new Set<string>();
   let outOfScopeDocuments = 0;
   for (const record of records) {
@@ -290,9 +321,10 @@ export async function inventoryFirestoreDatabase(
   }
   return {
     documents: records.length,
-    collections: Object.fromEntries([...collections].sort(([a], [b]) => a.localeCompare(b))),
+    collections: Object.fromEntries([...collections].sort(([a], [b]) => compareText(a, b))),
     installationRoots: [...installationRoots].sort(),
     outOfScopeDocuments,
+    externalReferences: canonicalContext.externalReferences,
     canonicalHash: createHash('sha256')
       .update(records.map((record) => `${record.path}\0${record.hash}`).join('\n'))
       .digest('hex'),
@@ -301,7 +333,7 @@ export async function inventoryFirestoreDatabase(
 
 function verifiedObjects(objects: VerifiedGcsObject[], prefix: string): VerifiedGcsObject[] {
   if (!objects.length) throw new Error('Managed export did not produce any verified objects');
-  const sorted = [...objects].sort((a, b) => a.uri.localeCompare(b.uri));
+  const sorted = [...objects].sort((a, b) => compareText(a.uri, b.uri));
   const seen = new Set<string>();
   for (const object of sorted) {
     if (
@@ -315,6 +347,46 @@ function verifiedObjects(objects: VerifiedGcsObject[], prefix: string): Verified
     seen.add(object.uri);
   }
   return sorted;
+}
+
+function validIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+function assertRestoreManifestShape(manifest: ManagedBackupManifest): void {
+  const snapshot = new Date(manifest.export?.snapshotTime);
+  const collections = manifest.inventory?.collections;
+  const collectionEntries =
+    collections && typeof collections === 'object' && !Array.isArray(collections)
+      ? Object.entries(collections)
+      : [];
+  if (
+    !validIsoTimestamp(manifest.createdAt) ||
+    !validIsoTimestamp(manifest.export?.snapshotTime) ||
+    snapshot.getUTCSeconds() !== 0 ||
+    snapshot.getUTCMilliseconds() !== 0 ||
+    !Array.isArray(manifest.export?.objects) ||
+    !Number.isSafeInteger(manifest.inventory?.documents) ||
+    manifest.inventory.documents < 1 ||
+    !Number.isSafeInteger(manifest.inventory?.outOfScopeDocuments) ||
+    manifest.inventory.outOfScopeDocuments !== 0 ||
+    !Number.isSafeInteger(manifest.inventory?.externalReferences) ||
+    manifest.inventory.externalReferences !== 0 ||
+    !/^[0-9a-f]{64}$/.test(manifest.inventory?.canonicalHash ?? '') ||
+    !collections ||
+    typeof collections !== 'object' ||
+    Array.isArray(collections) ||
+    collectionEntries.length === 0 ||
+    collectionEntries.some(
+      ([path, count]) => path.length === 0 || !Number.isSafeInteger(count) || count < 1,
+    ) ||
+    collectionEntries.reduce((sum, [, count]) => sum + count, 0) !== manifest.inventory.documents ||
+    !Array.isArray(manifest.inventory?.installationRoots) ||
+    manifest.inventory.installationRoots.some((root) => typeof root !== 'string')
+  )
+    throw new Error('Managed backup manifest has invalid inventory or timestamp data');
 }
 
 export async function createManagedFirestoreBackup(input: {
@@ -344,6 +416,18 @@ export async function createManagedFirestoreBackup(input: {
     now.getTime() - input.snapshotTime.getTime() > 15 * 60_000
   )
     throw new Error('Snapshot time must be a recent past UTC minute');
+  const requestedSnapshotTime = timestamp(input.snapshotTime);
+  const [database] = await input.admin.getDatabase({ name });
+  if (
+    database.pointInTimeRecoveryEnablement !== 'POINT_IN_TIME_RECOVERY_ENABLED' &&
+    database.pointInTimeRecoveryEnablement !== 1
+  )
+    throw new Error('Point-in-Time Recovery must be enabled before a snapshot export');
+  if (
+    !database.earliestVersionTime ||
+    compareTimestamps(requestedSnapshotTime, database.earliestVersionTime) < 0
+  )
+    throw new Error('Snapshot time predates the database earliest PITR version');
   const inventory = await inventoryFirestoreDatabase(
     input.dataClient.db,
     input.source,
@@ -358,10 +442,14 @@ export async function createManagedFirestoreBackup(input: {
     inventory.installationRoots[0] !== installationRoot
   )
     throw new Error('Source Firestore database is not isolated to the requested installation');
+  if (inventory.externalReferences !== 0)
+    throw new Error(
+      'Source Firestore database contains external native document references that managed import cannot preserve',
+    );
   const [operation] = await input.admin.exportDocuments({
     name,
     outputUriPrefix: requestedOutputUriPrefix,
-    snapshotTime: timestamp(input.snapshotTime),
+    snapshotTime: requestedSnapshotTime,
   });
   const [response] = await operation.promise();
   const outputUriPrefix = response.outputUriPrefix;
@@ -416,6 +504,7 @@ export async function restoreManagedFirestoreBackup(input: {
     !manifest.export.completed
   )
     throw new Error('Invalid or incomplete managed backup manifest');
+  assertRestoreManifestShape(manifest);
   const expectedName = databaseName(manifest.source);
   const expectedRoot = `installations/${documentKey(manifest.source.installationId)}`;
   const expectedMetadata = `${manifest.export.outputUriPrefix}/${manifest.export.outputUriPrefix.slice(

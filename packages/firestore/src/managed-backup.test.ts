@@ -70,7 +70,27 @@ function rawClient(databaseId: string, populatedAtOrAfter = 0): ManagedFirestore
             fields: {
               integer: { integerValue: '1' },
               double: { doubleValue: 1 },
-              reference: { referenceValue: 'projects/source/databases/(default)/documents/x/y' },
+              reference: {
+                referenceValue: `${root}/installations/${installation}/fixtures/reference`,
+              },
+              localReference: {
+                referenceValue: `${root}/installations/${installation}/fixtures/target`,
+              },
+              nestedReferences: {
+                mapValue: {
+                  fields: {
+                    values: {
+                      arrayValue: {
+                        values: [
+                          {
+                            referenceValue: `${root}/installations/${installation}/fixtures/nested`,
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
               timestamp: { timestampValue: { seconds: '123', nanos: 456 } },
               protobufDefaults: {
                 nullValue: null,
@@ -128,6 +148,12 @@ function adminMock() {
     exportOperation,
     importOperation,
     admin: {
+      getDatabase: vi.fn(async () => [
+        {
+          pointInTimeRecoveryEnablement: 'POINT_IN_TIME_RECOVERY_ENABLED',
+          earliestVersionTime: endTime('2026-09-18T23:50:00.000Z'),
+        },
+      ]),
       createDatabase: vi.fn(async () => [createOperation]),
       exportDocuments: vi.fn(async () => [exportOperation]),
       importDocuments: vi.fn(async () => [importOperation]),
@@ -136,6 +162,32 @@ function adminMock() {
 }
 
 describe('raw managed Firestore inventory', () => {
+  it('does not depend on the host locale for canonical ordering', async () => {
+    const localeCompare = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(() => {
+      throw new Error('locale-dependent ordering used');
+    });
+    const raw = rawClient(identity.databaseId);
+    const listDocuments = raw.listDocuments;
+    raw.listDocuments = vi.fn(async (input) => {
+      const result = await listDocuments(input);
+      const document = result[0][0];
+      if (document?.fields)
+        document.fields = {
+          ...document.fields,
+          zulu: { stringValue: 'z' },
+          äther: { stringValue: 'unicode' },
+        };
+      return result;
+    });
+    const inventory = await inventoryFirestoreDatabase(
+      raw,
+      identity,
+      new Date('2026-09-18T23:59:00.000Z'),
+    );
+    localeCompare.mockRestore();
+    expect(inventory.documents).toBe(2);
+  });
+
   it('uses one readTime, showMissing recursion, and preserves protobuf value types', async () => {
     const raw = rawClient(identity.databaseId);
     const at = new Date('2026-09-18T23:59:00.123Z');
@@ -148,6 +200,7 @@ describe('raw managed Firestore inventory', () => {
       },
       installationRoots: [`installations/${installation}`],
       outOfScopeDocuments: 0,
+      externalReferences: 0,
     });
     expect(raw.listDocuments).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -170,6 +223,39 @@ describe('raw managed Firestore inventory', () => {
     expect((await inventoryFirestoreDatabase(normalized, identity, at)).canonicalHash).toBe(
       inventory.canonicalHash,
     );
+    const restoredIdentity = { ...identity, databaseId: 'assistant-restore-reference-test' };
+    expect(
+      (
+        await inventoryFirestoreDatabase(
+          rawClient(restoredIdentity.databaseId),
+          restoredIdentity,
+          at,
+        )
+      ).canonicalHash,
+    ).toBe(inventory.canonicalHash);
+    const changedExternal = rawClient(identity.databaseId);
+    const externalList = changedExternal.listDocuments;
+    changedExternal.listDocuments = vi.fn(async (input) => {
+      const result = await externalList(input);
+      const docs = result[0];
+      if (docs[0]?.fields?.reference)
+        docs[0] = {
+          ...docs[0],
+          fields: {
+            ...docs[0].fields,
+            reference: {
+              referenceValue: 'projects/other/databases/external/documents/x/y',
+            },
+          },
+        };
+      return result;
+    });
+    expect(
+      (await inventoryFirestoreDatabase(changedExternal, identity, at)).canonicalHash,
+    ).not.toBe(inventory.canonicalHash);
+    expect(
+      (await inventoryFirestoreDatabase(changedExternal, identity, at)).externalReferences,
+    ).toBe(1);
     const changed = rawClient(identity.databaseId);
     const original = changed.listDocuments;
     changed.listDocuments = vi.fn(async (input) => {
@@ -252,6 +338,85 @@ describe('managed Firestore backup and restore', () => {
         listObjects: vi.fn(),
       }),
     ).rejects.toThrow('refuses emulator routing');
+    expect(admin.exportDocuments).not.toHaveBeenCalled();
+  });
+
+  it('checks PITR retention before reading inventory or starting export', async () => {
+    vi.stubEnv('FIRESTORE_EMULATOR_HOST', '');
+    const { admin } = adminMock();
+    const raw = rawClient(identity.databaseId);
+    vi.mocked(admin.getDatabase).mockResolvedValueOnce([
+      {
+        pointInTimeRecoveryEnablement: 'POINT_IN_TIME_RECOVERY_DISABLED',
+        earliestVersionTime: endTime('2026-09-18T23:50:00.000Z'),
+      },
+    ]);
+    const request = () =>
+      createManagedFirestoreBackup({
+        admin,
+        dataClient: dataClient(identity.databaseId, raw),
+        source: identity,
+        outputUriPrefix: 'gs://customer-backups/firestore/run',
+        snapshotTime: new Date('2026-09-18T23:59:00.000Z'),
+        listObjects: vi.fn(),
+        now: () => new Date('2026-09-19T00:00:00.000Z'),
+      });
+    await expect(request()).rejects.toThrow('Point-in-Time Recovery must be enabled');
+    expect(raw.listCollectionIds).not.toHaveBeenCalled();
+    expect(admin.exportDocuments).not.toHaveBeenCalled();
+
+    vi.mocked(admin.getDatabase).mockResolvedValueOnce([
+      {
+        pointInTimeRecoveryEnablement: 'POINT_IN_TIME_RECOVERY_ENABLED',
+        earliestVersionTime: endTime('2026-09-19T00:00:00.000Z'),
+      },
+    ]);
+    await expect(request()).rejects.toThrow('predates the database earliest PITR version');
+    expect(raw.listCollectionIds).not.toHaveBeenCalled();
+    expect(admin.exportDocuments).not.toHaveBeenCalled();
+  });
+
+  it('rejects nested external native references before export', async () => {
+    vi.stubEnv('FIRESTORE_EMULATOR_HOST', '');
+    const { admin } = adminMock();
+    const raw = rawClient(identity.databaseId);
+    const listDocuments = raw.listDocuments;
+    raw.listDocuments = vi.fn(async (input) => {
+      const result = await listDocuments(input);
+      const document = result[0][0];
+      if (document?.fields)
+        document.fields = {
+          ...document.fields,
+          external: {
+            mapValue: {
+              fields: {
+                values: {
+                  arrayValue: {
+                    values: [
+                      {
+                        referenceValue:
+                          'projects/external-project/databases/external-db/documents/x/y',
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        };
+      return result;
+    });
+    await expect(
+      createManagedFirestoreBackup({
+        admin,
+        dataClient: dataClient(identity.databaseId, raw),
+        source: identity,
+        outputUriPrefix: 'gs://customer-backups/firestore/run',
+        snapshotTime: new Date('2026-09-18T23:59:00.000Z'),
+        listObjects: vi.fn(),
+        now: () => new Date('2026-09-19T00:00:00.000Z'),
+      }),
+    ).rejects.toThrow('external native document references');
     expect(admin.exportDocuments).not.toHaveBeenCalled();
   });
 
@@ -353,5 +518,66 @@ describe('managed Firestore backup and restore', () => {
       }),
     ).rejects.toThrow('no longer match');
     expect(admin.createDatabase).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed inventory data before any restore mutation', async () => {
+    vi.stubEnv('FIRESTORE_EMULATOR_HOST', '');
+    const { admin } = adminMock();
+    const inventory = await inventoryFirestoreDatabase(
+      rawClient(identity.databaseId),
+      identity,
+      new Date('2026-09-18T23:59:00.000Z'),
+    );
+    const valid: ManagedBackupManifest = {
+      format: 'assistant-firestore-managed-backup',
+      formatVersion: 2,
+      createdAt: '2026-09-19T00:00:00.000Z',
+      source: {
+        ...identity,
+        databaseName: 'projects/customer-project/databases/assistant-primary',
+        installationRoot: `installations/${installation}`,
+      },
+      export: {
+        requestedOutputUriPrefix: 'gs://customer-backups/firestore/run',
+        outputUriPrefix: 'gs://customer-backups/firestore/run/export-1',
+        snapshotTime: '2020-01-01T00:00:00.000Z',
+        metadataObjectUri: metadataObject.uri,
+        objects,
+        operationName: 'operations/export-1',
+        completed: true,
+      },
+      inventory,
+    };
+    const malformed = [
+      { ...valid, inventory: { ...inventory, canonicalHash: 'truncated' } },
+      {
+        ...valid,
+        inventory: {
+          ...inventory,
+          collections: undefined as unknown as Record<string, number>,
+        },
+      },
+      { ...valid, inventory: { ...inventory, externalReferences: 1 } },
+      {
+        ...valid,
+        inventory: {
+          ...inventory,
+          externalReferences: undefined as unknown as number,
+        },
+      },
+    ];
+    for (const manifest of malformed)
+      await expect(
+        restoreManagedFirestoreBackup({
+          admin,
+          dataClient: dataClient('assistant-restore-isolated1'),
+          target: { ...identity, databaseId: 'assistant-restore-isolated1' },
+          manifest,
+          location: 'us-central1',
+          listObjects: vi.fn(async () => [...objects]),
+        }),
+      ).rejects.toThrow('invalid inventory or timestamp data');
+    expect(admin.createDatabase).not.toHaveBeenCalled();
+    expect(admin.importDocuments).not.toHaveBeenCalled();
   });
 });

@@ -37,6 +37,10 @@ run "default_creation_is_database_scoped" {
     condition     = google_firestore_database.consumer.delete_protection_state == "DELETE_PROTECTION_ENABLED"
     error_message = "Default database must retain server-side deletion protection."
   }
+  assert {
+    condition     = google_firestore_database.consumer.point_in_time_recovery_enablement == "POINT_IN_TIME_RECOVERY_ENABLED"
+    error_message = "Consistent managed snapshot exports require point-in-time recovery."
+  }
 }
 
 run "named_creation_remains_explicit" {

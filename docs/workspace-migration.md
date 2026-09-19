@@ -72,6 +72,8 @@ pnpm exec tsx scripts/firestore-managed-backup.ts --backup \
 
 Execution requires explicit `--execute` and a recent past UTC minute. Both the recursive inventory and managed export use that exact snapshot time, so their contents remain comparable while later writes continue. Google requires the export timestamp to be rounded to the minute and within retained database history ([export API](https://docs.cloud.google.com/firestore/docs/reference/rest/v1/projects.databases/exportDocuments)). Credentials need Firestore export/import permission and write/read access to the customer-owned bucket. The local manifest is created mode 0600 and never overwrites an existing file. Final migration cutover still requires its separate application write fence.
 
+The source database must have point-in-time recovery enabled for snapshot exports, even within the past hour. The consumer Terraform configuration enables it; the backup preflight verifies it and the earliest retained timestamp before scanning records. PITR storage is billed to the customer project and has no free tier ([Google PITR documentation](https://docs.cloud.google.com/firestore/native/docs/pitr)).
+
 ```sh
 pnpm exec tsx scripts/firestore-managed-backup.ts --backup --execute \
   --project-id CUSTOMER_PROJECT --database-id DATABASE_ID \
@@ -82,6 +84,8 @@ pnpm exec tsx scripts/firestore-managed-backup.ts --backup --execute \
 ```
 
 Restore creates a distinct Firestore database whose ID begins with `assistant-restore-`, using the requested location, and requires the same installation identity. A successful create operation is the exclusivity fence: an existing database cannot be adopted or overwritten, and the restore database must not be configured in the application while rehearsal runs. Tooling re-verifies the complete export object manifest around import. After import completes, it reads the target at one server-reported timestamp and requires exact document counts, collection paths, installation roots, and canonical hash parity. It refuses emulator routing, same-database restore, cross-installation restore, an existing/non-empty target, changed export objects, and parity failures.
+
+Google's managed import rebases native references onto the restore database, including references originally pointing at other projects or databases. The inventory hashes source-local references by their unchanged document-relative path, including within arrays and maps. Native external references retain their full identity in the inventory hash and are counted separately; backup and restore preflight reject a nonzero external-reference count before export or database creation. This prevents a managed restore from silently changing their targets. Ordinary string IDs are unaffected. A database containing native external references needs a separate lossless reference-preservation mechanism before this managed workflow can be used. All other value types and document paths remain part of the exact checksum comparison.
 
 ```sh
 pnpm exec tsx scripts/firestore-managed-backup.ts --restore --execute \

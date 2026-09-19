@@ -62,6 +62,7 @@ function fixture() {
     },
     inventory: {
       documents: 2,
+      externalReferences: 0,
       collections: {},
       installationRoots: ['installations/synthetic'],
       outOfScopeDocuments: 0,
@@ -97,17 +98,16 @@ function fixture() {
   );
   const dependencies: BackupSmokeDependencies = {
     admin,
-    createFirestore: (databaseId) =>
-      ({
+    createFirestore: (databaseId) => {
+      return {
         doc: (path: string) => ({
-          set: async (value: unknown) => {
-            writes.push({ path, value });
-          },
+          set: async (value: unknown) => writes.push({ path, value }),
         }),
         terminate: async () => {
           terminated.push(databaseId);
         },
-      }) as never,
+      } as never;
+    },
     createDataClient: (databaseId) =>
       ({
         db: {
@@ -147,6 +147,15 @@ describe('synthetic managed backup smoke', () => {
       state.dependencies,
     );
 
+    expect(state.admin.createDatabase).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        databaseId: 'assistant-validation-fixedrun123456',
+        database: expect.objectContaining({
+          pointInTimeRecoveryEnablement: 'POINT_IN_TIME_RECOVERY_ENABLED',
+        }),
+      }),
+    );
     expect(state.writes).toHaveLength(2);
     expect(state.writes.map((write) => write.path)).toEqual(
       expect.arrayContaining([
@@ -154,6 +163,17 @@ describe('synthetic managed backup smoke', () => {
         expect.stringContaining('/missingParents/absent/children/leaf'),
       ]),
     );
+    const mixed = state.writes.find((write) => write.path.endsWith('/fixtures/mixed-types'))
+      ?.value as {
+      referenceValue: unknown;
+      nestedReferences: {
+        local: { direct: unknown; array: unknown[] };
+      };
+    };
+    expect(mixed.nestedReferences.local).toEqual({
+      direct: mixed.referenceValue,
+      array: [mixed.referenceValue],
+    });
     expect(state.backup).toHaveBeenCalledOnce();
     expect(state.restore).toHaveBeenCalledOnce();
     expect(result.manifest.export.objects).toEqual(state.manifest.export.objects);
@@ -229,5 +249,43 @@ describe('synthetic managed backup smoke', () => {
     };
     await expect(firestoreBackupSmoke(input, state.dependencies)).rejects.toThrow('already exists');
     expect(state.deleted).toEqual([]);
+  });
+
+  it('reports cleanup failures together with the primary smoke failure', async () => {
+    const state = fixture();
+    const originalDelete = state.dependencies.admin.deleteDatabase;
+    state.dependencies.admin.deleteDatabase = async (request, options) => {
+      if (request.name.includes('assistant-restore-')) throw new Error('restore cleanup failed');
+      return originalDelete(request, options);
+    };
+    state.dependencies.restore = async (request) => {
+      const [operation] = await request.admin.createDatabase({
+        parent: 'projects/customer-project',
+        databaseId: 'assistant-restore-fixedrun123456',
+        database: {
+          locationId: 'us-west1',
+          type: 'FIRESTORE_NATIVE',
+          databaseEdition: 'STANDARD',
+        },
+      });
+      await operation.promise();
+      throw new Error('parity failed');
+    };
+
+    const error = await firestoreBackupSmoke(
+      { ...input, progress: state.progress },
+      state.dependencies,
+    ).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: 'parity failed' }),
+      expect.objectContaining({ message: 'restore cleanup failed' }),
+    ]);
+    expect(state.progress).toHaveBeenCalledWith('cleanup_failed', {
+      failures: ['restore cleanup failed'],
+    });
+    expect(state.deleted).toContain(
+      'projects/customer-project/databases/assistant-validation-fixedrun123456',
+    );
   });
 });
