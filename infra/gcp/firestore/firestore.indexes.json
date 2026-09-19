@@ -1011,6 +1011,21 @@
   ],
   "fieldOverrides": [
     {
+      "collectionGroup": "watches",
+      "fieldPath": "match",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "watches",
+      "fieldPath": "state",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "watchFires",
+      "fieldPath": "excerpt",
+      "indexes": []
+    },
+    {
       "collectionGroup": "toolCalls",
       "fieldPath": "args",
       "indexes": []
