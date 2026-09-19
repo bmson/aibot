@@ -304,7 +304,12 @@ async function openRoute(page: Page, path: string, mobile = true) {
     new URL(page.url()).origin === new URL(baseUrl).origin,
     `${path} unexpectedly left the smoke-test origin: ${page.url()}`,
   );
-  await page.waitForLoadState('networkidle');
+  // NOT networkidle: the chat holds a long poll open against /api/chat/status
+  // for as long as twenty seconds at a time, and opens the next one as soon as
+  // it returns, so that page has no idle network and never will. `load` is the
+  // real precondition here anyway — the contract below measures layout, which
+  // needs the document and its stylesheets, not a quiet socket.
+  await page.waitForLoadState('load');
   await assertResponsiveContract(page, path, mobile);
 }
 
