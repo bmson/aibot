@@ -113,3 +113,71 @@ it('folds historical provider diagnostics without claiming that no tools ran', (
     }),
   );
 });
+
+it('repairs only the legacy pulse mail envelope without rewriting its action or storage', () => {
+  const text = 'Still unanswered from no-reply@example.com: "New login"';
+  const parts = [
+    { type: 'text', text },
+    {
+      type: 'data-card',
+      data: {
+        kind: 'proactive-alert',
+        id: 'mail-action:gmail:1',
+        category: 'email',
+        urgencyLabel: 'Needs a reply',
+        title: 'New login',
+        summary: 'The owner should verify whether it was them.',
+        details: [{ label: 'From', value: 'no-reply@example.com' }],
+      },
+    },
+    {
+      type: 'suggestion',
+      suggestionId: 'suggestion-1',
+      summary: 'Deal with "New login" from no-reply@example.com?',
+      proposedAction: 'Original persisted action',
+      status: 'dismissed',
+    },
+  ];
+  const result = compactChatMessageParts(text, parts);
+  expect(result[1]).toMatchObject({
+    data: { urgencyLabel: 'Needs attention', title: 'New login' },
+  });
+  expect((result[1] as { data: { summary?: string } }).data.summary).toBeUndefined();
+  expect(result[2]).toMatchObject({
+    summary: 'Help with “New login”?',
+    proposedAction: 'Original persisted action',
+    status: 'dismissed',
+  });
+  expect(parts[1]).toMatchObject({
+    data: { summary: 'The owner should verify whether it was them.' },
+  });
+  expect(compactChatMessageParts(text, result)).toBe(result);
+});
+
+it('preserves legitimate email summaries and unmatched suggestion copy', () => {
+  for (const data of [
+    {
+      kind: 'email-results',
+      id: 'mail-action:gmail:1',
+      category: 'email',
+      urgencyLabel: 'Needs a reply',
+    },
+    { kind: 'proactive-alert', id: 'email:1', category: 'email', urgencyLabel: 'Needs a reply' },
+    {
+      kind: 'proactive-alert',
+      id: 'mail-action:gmail:1',
+      category: 'email',
+      urgencyLabel: 'Needs attention',
+    },
+  ]) {
+    const parts = [
+      {
+        type: 'data-card',
+        data: { ...data, title: 'Question', summary: 'Please confirm by Friday.' },
+      },
+    ];
+    expect(compactChatMessageParts('', parts)).toBe(parts);
+  }
+  const parts = [{ type: 'suggestion', summary: 'Deal with "something" from someone?' }];
+  expect(compactChatMessageParts('', parts)).toBe(parts);
+});

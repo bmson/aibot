@@ -469,7 +469,7 @@ struct ChatView: View {
                     // recognizer spanning that strip.
                     .simultaneousGesture(
                         pullMenuCloseGesture,
-                        including: menuOpen && usesExtraLargeAccessibilityMenu ? .all : .none
+                        including: menuOpen && usesExtraLargeAccessibilityMenu ? .all : .subviews
                     )
 
                 if !menuOpen {
@@ -489,10 +489,11 @@ struct ChatView: View {
             // Once open, observe its vertical dismissal drag across both surfaces
             // without stealing the horizontal swipe used by the extra-large
             // accessibility menu. The 10pt threshold leaves tile taps untouched;
-            // disabling it while closed avoids the transcript's opening pull.
+            // Disable only this recognizer while closed. `.none` also disables
+            // descendant gestures, including the suggestion and approval buttons.
             .simultaneousGesture(
                 pullMenuCloseGesture,
-                including: menuOpen && !usesExtraLargeAccessibilityMenu ? .all : .none
+                including: menuOpen && !usesExtraLargeAccessibilityMenu ? .all : .subviews
             )
             .toolbar(.hidden, for: .navigationBar)
             .sensoryFeedback(.selection, trigger: menuDetentFeedback)

@@ -7,7 +7,7 @@ import {
   watches,
   watchFires,
 } from '@assistant/db';
-import { and, desc, eq, gte } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { getAgent, postOwnerNotice } from '../chat.js';
 import { loadConfig } from '../config.js';
@@ -217,6 +217,19 @@ function proposalFor(
     };
   }
   return null;
+}
+
+/** Preserve actionable questions, but keep provider diagnostics in task details. */
+export function briefingTaskSummary(progress: string | null): string {
+  const value = collapseWhitespace(progress ?? '');
+  if (
+    /AI_[A-Za-z]+Error|(?:APICallError|stack trace|ECONNRESET|ETIMEDOUT)|(?:attempt|retry)\s*#?\d+.*(?:error|failed)/i.test(
+      value,
+    )
+  ) {
+    return 'Paused because a service request failed. Open the task for details.';
+  }
+  return value ? truncateAtBoundary(value, 160) : 'Open the task to review what is needed.';
 }
 
 export interface BriefingResult {
@@ -549,12 +562,28 @@ export async function runBriefing(
         db
           .select({ title: taskTable.title, progress: taskTable.progress })
           .from(taskTable)
-          .where(and(eq(taskTable.agentId, agent.id), eq(taskTable.status, 'needs_attention')))
+          .where(
+            and(
+              eq(taskTable.agentId, agent.id),
+              eq(taskTable.status, 'needs_attention'),
+              isNull(taskTable.archivedAt),
+              gte(taskTable.updatedAt, since),
+            ),
+          )
+          .orderBy(desc(taskTable.updatedAt))
           .limit(10),
         db
           .select({ shortCode: approvals.shortCode, summary: approvals.summary })
           .from(approvals)
-          .where(eq(approvals.status, 'pending'))
+          .innerJoin(taskTable, eq(approvals.taskId, taskTable.id))
+          .where(
+            and(
+              eq(taskTable.agentId, agent.id),
+              eq(approvals.status, 'pending'),
+              gt(approvals.expiresAt, now),
+              isNull(taskTable.archivedAt),
+            ),
+          )
           .limit(10),
         calendarPromise,
         // Goals that moved in the window — progress, a new next step, a
@@ -578,7 +607,7 @@ export async function runBriefing(
           .where(and(eq(watchFires.agentId, agent.id), gte(watchFires.createdAt, since)))
           .orderBy(desc(watchFires.createdAt))
           .limit(MAX_WATCH_HITS),
-        listOpenSuggestions(db, agent.id, { limit: MAX_OPEN_SUGGESTIONS }),
+        listOpenSuggestions(db, agent.id, { limit: MAX_OPEN_SUGGESTIONS, now }),
       ]);
 
     const highlights = mail.filter((row) => row.importance >= 3).slice(0, MAX_HIGHLIGHTS);
@@ -694,14 +723,12 @@ export async function runBriefing(
     if (attention.length > 0) {
       lines.push(
         '',
-        'Work that stopped and needs you:',
+        'Work that needs attention:',
         ...attention.map((row) => {
           // Mission-facing and dashboard-rendered, so it is fair to show, but
           // it is the model's own words and can run long — cap it rather than
           // let one stalled task's essay crowd out everything else.
-          const progress = row.progress
-            ? truncateAtBoundary(collapseWhitespace(row.progress), 160)
-            : 'no detail recorded';
+          const progress = briefingTaskSummary(row.progress);
           // tasks.title is nullable (planner-authored, falls back to the
           // instruction elsewhere) — this select carries only the title, so
           // an absent one prints as an em dash rather than the string "null".
@@ -812,12 +839,16 @@ export async function runBriefing(
     for (const entry of upcoming) {
       const proposal = proposalFor(entry, agent.timezone);
       if (!proposal) continue;
+      const deadline = Date.parse(entry.iso) - (PAYABLE.has(entry.category) ? 2 * 86_400_000 : 0);
+      if (deadline <= now.getTime()) continue;
       const created = await createSuggestion(db, {
         agentId: agent.id,
         summary: proposal.summary,
         proposedAction: proposal.action,
         sourceRef: entry.sourceRef,
         origin: 'briefing',
+        // A proposal about an event must stop asking once that event has passed.
+        ttlDays: Math.min(7, (deadline - now.getTime()) / 86_400_000),
         now,
       });
       if (!created) continue;

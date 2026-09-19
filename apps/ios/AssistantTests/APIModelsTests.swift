@@ -719,7 +719,7 @@ final class APIModelsTests: XCTestCase {
 
     func testSettledSuggestionStatusesCloseTheCard() throws {
         let cases: [(String, SuggestionStatus, Bool)] = [
-            ("accepted", .accepted, false),
+            ("accepted", .accepted, true),
             ("dismissed", .dismissed, false),
             // A snooze still sleeping settles, but is read back until it lapses.
             ("snoozed", .snoozed, true),
@@ -749,6 +749,51 @@ final class APIModelsTests: XCTestCase {
         ])
         XCTAssertTrue(message.suggestionParts.isEmpty)
         XCTAssertFalse(message.hasUnsettledSuggestion)
+    }
+
+    func testSuggestionReceiptReflectsActualTaskProgress() throws {
+        let data = Data(#"{"id":"m","role":"assistant","parts":[{"type":"suggestion","suggestionId":"s1","status":"accepted","acceptedTaskId":"t1","acceptedTaskStatus":"completed","acceptedTaskSummary":"Reviewed the report; no reply was needed."}]}"#.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        XCTAssertEqual(message.suggestionParts.first?.acceptedTaskStatus, "completed")
+        XCTAssertEqual(message.suggestionParts.first?.acceptedTaskSummary, "Reviewed the report; no reply was needed.")
+        XCTAssertEqual(SuggestionTaskReceipt.title(for: "completed"), "Completed")
+        XCTAssertEqual(SuggestionTaskReceipt.title(for: "done"), "Completed")
+        XCTAssertEqual(SuggestionTaskReceipt.title(for: "running"), "Working on it")
+        XCTAssertEqual(SuggestionTaskReceipt.title(for: "queued"), "Queued")
+        XCTAssertEqual(SuggestionTaskReceipt.title(for: "pending"), "Queued")
+        XCTAssertEqual(SuggestionTaskReceipt.title(for: "sleeping"), "Waiting")
+        XCTAssertEqual(SuggestionTaskReceipt.title(for: "waiting_event"), "Waiting")
+        XCTAssertEqual(SuggestionTaskReceipt.title(for: "cancelled"), "Cancelled")
+        for status in ["failed", "dead"] {
+            XCTAssertEqual(SuggestionTaskReceipt.title(for: status), "Couldn’t complete")
+        }
+        for status in ["waiting_approval", "waiting_budget", "needs_attention"] {
+            XCTAssertEqual(SuggestionTaskReceipt.title(for: status), "Needs attention")
+        }
+        XCTAssertEqual(SuggestionTaskReceipt.title(for: nil), "Accepted")
+        XCTAssertEqual(SuggestionTaskReceipt.title(for: "future-status"), "Accepted")
+        let overlaid = message.applyingSuggestionAnswers(["s1": .init(decision: .accepted, taskId: "t1")])
+        XCTAssertEqual(overlaid.suggestionParts.first?.acceptedTaskStatus, "completed")
+        XCTAssertEqual(overlaid.suggestionParts.first?.acceptedTaskSummary, "Reviewed the report; no reply was needed.")
+        XCTAssertFalse(overlaid.hasUnsettledSuggestion)
+        for status in ["pending", "running", "waiting_approval", "waiting_event", "sleeping", "waiting_budget", "needs_attention", "done", "failed", "cancelled"] {
+            var updated = message
+            updated.parts[0].acceptedTaskStatus = status
+            XCTAssertEqual(updated.hasUnsettledSuggestion, !["done", "failed", "cancelled"].contains(status), status)
+        }
+    }
+
+    func testLocalSnoozeEndsOnTimeAndCannotOverwriteTerminalServerAnswers() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let answer = SuggestionAnswer(decision: .snoozed, snoozedUntil: now.addingTimeInterval(60))
+        for status in ["pending", "snoozed", "accepted", "dismissed", "expired", "missing"] {
+            let message = ChatMessage(id: "m", role: .assistant, parts: [
+                .init(type: "suggestion", suggestionId: "s1", status: status)
+            ])
+            let beforeWake = message.applyingSuggestionAnswers(["s1": answer], now: now)
+            XCTAssertEqual(beforeWake.parts[0].status, status == "pending" ? "snoozed" : status)
+            XCTAssertEqual(message.applyingSuggestionAnswers(["s1": answer], now: now.addingTimeInterval(60)), message)
+        }
     }
 
     func testLocalSuggestionAnswerOutlivesAStaleReadAndTouchesNothingElse() {
@@ -979,13 +1024,41 @@ final class APIModelsTests: XCTestCase {
         }
         XCTAssertEqual(id, "event-1")
         XCTAssertEqual(start, "2026-08-24T14:00:00-07:00")
-        XCTAssertEqual(time, "2:00 PM–3:00 PM")
+        XCTAssertEqual(time, CalendarEventPresentation.timeLabel(
+            start: "2026-08-24T14:00:00-07:00", end: nil, fallback: ""))
         XCTAssertEqual(title, "Design review")
         XCTAssertEqual(location, "Studio")
         XCTAssertEqual(attendees, ["Ana"])
         XCTAssertEqual(calendars, ["Work"])
         XCTAssertEqual(calendarLink, "https://calendar.google.com/event?eid=event-1")
         XCTAssertEqual(meetingLink, "https://zoom.us/j/12345")
+    }
+
+    func testCalendarCardsDeriveLocalTimesAndKeepAllDayDates() throws {
+        let zone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let locale = Locale(identifier: "en_US")
+        let label = CalendarEventPresentation.timeLabel(start: "2026-09-19T22:45:00.000Z",
+            end: "2026-09-19T23:45:00Z", fallback: "10:45 PM–11:45 PM", timeZone: zone, locale: locale)
+        XCTAssertTrue(label.contains("3:45"))
+        XCTAssertTrue(label.contains("4:45"))
+        XCTAssertFalse(label.contains("10:45"))
+        XCTAssertEqual(CalendarEventPresentation.timeLabel(start: "2026-09-19", end: "2026-09-20",
+            fallback: "midnight", timeZone: zone, locale: locale), "All day")
+        let allDay = CalendarEventPresentation.dateCaption("2026-09-19", timeZone: zone, locale: locale)
+        XCTAssertTrue(try XCTUnwrap(allDay).contains("19"))
+        let overnight = CalendarEventPresentation.dateCaption("2026-09-19T01:00:00.000Z", timeZone: zone, locale: locale)
+        XCTAssertTrue(try XCTUnwrap(overnight).contains("18"))
+        XCTAssertEqual(CalendarEventPresentation.timeLabel(start: "invalid", end: nil, fallback: "TBD"), "TBD")
+        let declaredAllDay = MessagePart(type: "data-card", data: .object([
+            "kind": .string("calendar-event"), "title": .string("School holiday"),
+            "start": .string("2026-09-19T00:00:00.000Z"), "allDay": .bool(true),
+            "time": .string("All day")
+        ]))
+        guard case let .event(_, start, time, _, _, _, _, _, _)? = MessageResponseCard(part: declaredAllDay) else {
+            return XCTFail("Expected all-day calendar card")
+        }
+        XCTAssertEqual(start, "2026-09-19")
+        XCTAssertEqual(time, "All day")
     }
 
     func testProactiveAlertCardDecodesGroundedDetails() {

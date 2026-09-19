@@ -67,6 +67,80 @@ describe('ResponseCards', () => {
   const render = (card: Record<string, unknown>) =>
     renderToStaticMarkup(<ResponseCards cards={[card]} timeZone="UTC" />);
 
+  it('renders historical UTC and offset calendar timestamps in one owner timezone', () => {
+    const html = renderToStaticMarkup(
+      <ResponseCards
+        timeZone="America/Los_Angeles"
+        cards={[
+          {
+            kind: 'calendar-event',
+            id: 'utc',
+            title: 'Family game',
+            start: '2026-09-19T22:00:00Z',
+            end: '2026-09-20T00:20:00Z',
+            time: '10:00 PM–12:20 AM',
+          },
+          {
+            kind: 'calendar-event',
+            id: 'offset',
+            title: 'Team game',
+            start: '2026-09-19T15:45:00-07:00',
+            end: '2026-09-19T17:00:00-07:00',
+            time: '3:45 PM–5:00 PM',
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain('Saturday, Sep 19');
+    expect(html).toContain('3:00 PM–5:20 PM');
+    expect(html).toContain('3:45 PM–5:00 PM');
+    expect(html).not.toContain('10:00 PM');
+  });
+
+  it('keeps all-day calendar dates on their actual day west of UTC', () => {
+    const html = renderToStaticMarkup(
+      <ResponseCards
+        timeZone="America/Los_Angeles"
+        cards={[
+          {
+            kind: 'calendar-event',
+            id: 'birthday',
+            title: 'Birthday',
+            start: '2026-09-18',
+            end: '2026-09-19',
+            allDay: true,
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain('Friday, Sep 18');
+    expect(html).toContain('All day');
+    expect(html).not.toContain('Thursday, Sep 17');
+  });
+
+  it('preserves the date and label of an explicit all-day timestamp card', () => {
+    const html = renderToStaticMarkup(
+      <ResponseCards
+        timeZone="America/Los_Angeles"
+        cards={[
+          {
+            kind: 'calendar-event',
+            id: 'day',
+            title: 'Day off',
+            allDay: true,
+            start: '2026-09-18T00:00:00Z',
+            end: '2026-09-19T00:00:00Z',
+            time: '5:00 PM',
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain('Friday, Sep 18');
+    expect(html).toContain('All day');
+    expect(html).not.toContain('Thursday, Sep 17');
+    expect(html).not.toContain('5:00 PM');
+  });
+
   it('groups a weather card by day and keeps the current metrics above them', () => {
     const html = render({
       kind: 'weather',

@@ -1,3 +1,4 @@
+import { suggestionExpiresAt } from '@assistant/core';
 import {
   decodeMessageCursor,
   encodeMessageCursor,
@@ -10,6 +11,7 @@ import {
   setMessageHidden,
 } from '@assistant/core/chat';
 import { compactChatMessageParts, stripBackgroundNoticeEcho } from '@assistant/core/chat-card';
+import { truncateAtBoundary } from '@assistant/core/owner-text';
 import {
   approvals,
   conversations,
@@ -470,10 +472,16 @@ export async function hydrateChatApprovals(
             id: suggestions.id,
             status: suggestions.status,
             expiresAt: suggestions.expiresAt,
+            origin: suggestions.origin,
+            proposedAction: suggestions.proposedAction,
             snoozedUntil: suggestions.snoozedUntil,
             acceptedTaskId: suggestions.acceptedTaskId,
+            acceptedTaskStatus: tasks.status,
+            acceptedTaskProgress: tasks.progress,
+            acceptedTaskConversationId: tasks.conversationId,
           })
           .from(suggestions)
+          .leftJoin(tasks, eq(tasks.id, suggestions.acceptedTaskId))
           .where(inArray(suggestions.id, suggestionIds))
       : [],
   ]);
@@ -541,14 +549,26 @@ export async function hydrateChatApprovals(
         // has come reads as pending again so the card re-opens.
         const status =
           (suggestion.status === 'pending' || suggestion.status === 'snoozed') &&
-          suggestion.expiresAt <= now
+          suggestionExpiresAt(suggestion) <= now
             ? 'expired'
             : suggestion.status === 'snoozed'
               ? suggestion.snoozedUntil && suggestion.snoozedUntil > now
                 ? 'snoozed'
                 : 'pending'
               : suggestion.status;
-        return { ...part, status, acceptedTaskId: suggestion.acceptedTaskId ?? undefined };
+        return {
+          ...part,
+          status,
+          acceptedTaskId: suggestion.acceptedTaskId ?? undefined,
+          acceptedTaskStatus: suggestion.acceptedTaskStatus ?? undefined,
+          // Legacy accepted tasks had no chat destination. Make their saved
+          // completion update visible without rerunning the action.
+          acceptedTaskSummary:
+            suggestion.acceptedTaskStatus === 'done' && !suggestion.acceptedTaskConversationId
+              ? truncateAtBoundary(suggestion.acceptedTaskProgress ?? '', 180) || undefined
+              : undefined,
+          snoozedUntil: suggestion.snoozedUntil?.toISOString(),
+        };
       }
       if (!isApprovalPart(part)) return part;
       const approval = approvalById.get(part.approvalId);

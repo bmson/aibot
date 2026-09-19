@@ -156,6 +156,8 @@ struct MessagePart: Codable, Hashable, Sendable {
     var proposedAction: String? = nil
     /// The task an accepted suggestion became, hydrated by the server.
     var acceptedTaskId: String? = nil
+    var acceptedTaskStatus: String? = nil
+    var acceptedTaskSummary: String? = nil
 
     /// Where a suggestion part stands. The server hydrates `status` on every
     /// read, so a part it has not hydrated yet is a live question; a status
@@ -216,6 +218,7 @@ enum SuggestionDecision: String, Codable, Sendable {
 struct SuggestionAnswer: Hashable, Sendable {
     let decision: SuggestionDecision
     var taskId: String? = nil
+    var snoozedUntil: Date? = nil
 }
 
 struct ApprovalSummaryOutcome: Codable, Hashable, Sendable, Identifiable {
@@ -265,11 +268,17 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
 
     /// Lay answers given here over a read that may predate them. Only the
     /// suggestions they name change; the rest of the row is the server's.
-    func applyingSuggestionAnswers(_ answers: [String: SuggestionAnswer]) -> Self {
+    func applyingSuggestionAnswers(_ answers: [String: SuggestionAnswer], now: Date = Date()) -> Self {
         guard !answers.isEmpty else { return self }
         var message = self
         for index in message.parts.indices where message.parts[index].type == "suggestion" {
             guard let id = message.parts[index].suggestionId, let answer = answers[id] else { continue }
+            if answer.decision == .snoozed {
+                // A stale poll cannot wake a snooze, but its deadline can. A
+                // terminal decision from another device always takes precedence.
+                guard answer.snoozedUntil.map({ $0 > now }) ?? true,
+                      [.pending, .snoozed].contains(message.parts[index].suggestionStatus) else { continue }
+            }
             message.parts[index].status = answer.decision.rawValue
             if let taskId = answer.taskId { message.parts[index].acceptedTaskId = taskId }
         }
@@ -350,10 +359,14 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
         parts.filter { $0.type == "suggestion" && !($0.suggestionId ?? "").isEmpty }
     }
 
-    /// A suggestion worth reading back: one still open, or a snooze the server
-    /// will turn back into a question once it lapses.
+    /// Re-read open questions, sleeping snoozes, and accepted work until its
+    /// result lands, so a completed task never stays labelled as running.
     var hasUnsettledSuggestion: Bool {
-        suggestionParts.contains { $0.suggestionStatus == .pending || $0.suggestionStatus == .snoozed }
+        suggestionParts.contains { part in
+            if part.suggestionStatus == .pending || part.suggestionStatus == .snoozed { return true }
+            return part.suggestionStatus == .accepted && part.acceptedTaskId != nil
+                && !["done", "completed", "failed", "cancelled", "dead", "dead_letter"].contains(part.acceptedTaskStatus ?? "")
+        }
     }
 
     /// Dashboard mirrors carry a compact reason and count rather than the raw
@@ -1965,6 +1978,7 @@ struct ApprovalResult: Codable, Sendable {
 struct SuggestionResult: Codable, Sendable {
     let ok: Bool
     let taskId: String?
+    var snoozedUntil: String? = nil
 }
 
 struct SendReceipt: Sendable {

@@ -90,9 +90,11 @@ describe('native suggestion answers', () => {
 
   /** "Later" on the web: the core default of this time tomorrow, not a phone-chosen time. */
   it('snoozes through the same use case as the web "Later"', async () => {
+    const snoozedUntil = '2026-09-20T12:00:00.000Z';
+    mocks.snooze.mockResolvedValue({ ok: true, snoozedUntil });
     const response = await post(SUGGESTION_ID, { decision: 'snoozed' });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true });
+    expect(await response.json()).toEqual({ ok: true, snoozedUntil });
     expect(mocks.snooze).toHaveBeenCalledWith(mocks.db, SUGGESTION_ID);
     expect(mocks.decide).not.toHaveBeenCalled();
   });
