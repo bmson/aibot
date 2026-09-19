@@ -1,5 +1,11 @@
 import { loadConfig } from '@assistant/config';
-import { createPostgresExecutionEvidenceRepository, type Db, type TaskRow } from '@assistant/db';
+import {
+  createPostgresExecutionEvidenceRepository,
+  type Db,
+  generatedCardRevisions,
+  generatedCards,
+  type TaskRow,
+} from '@assistant/db';
 import type {
   ExecutionEvidenceRecord,
   ExecutionEvidenceRepository,
@@ -7,6 +13,7 @@ import type {
   SkillContextRepository,
 } from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
+import { and, eq } from 'drizzle-orm';
 import {
   assistantMessageParts,
   getOrCreateNotificationsConversation,
@@ -17,12 +24,16 @@ import { type Cue, stripCueTags } from '../../chat-cues.js';
 import { isForwardedIngest } from '../../email-provenance.js';
 import type { PendingFinal, TaskState } from '../../events.js';
 import {
+  cardRuntimeProvenance,
   type GeneratedCardPayload,
   generateEvidenceCard,
   persistGeneratedCard,
+  prefersAnswerCard,
+  revalidatedCardEvidence,
 } from '../../generative-card.js';
 import type { RecallSource } from '../../memory/recall.js';
 import { recordSkillOutcome } from '../../memory/skills.js';
+import { truncateAtBoundary } from '../../owner-text.js';
 import { type ArtifactIntent, artifactExecutionFailure } from '../artifact-intent.js';
 import { remainingBirthdaySaves, requestedBirthdaySaves } from '../birthday-import.js';
 import { CARD_NOT_BUILT, requestedCardIntent } from '../card-intent.js';
@@ -505,31 +516,60 @@ export async function stageModelFinalResponse(
   // when a handwritten card already matched this turn. Without this, the
   // resource card for a docs.create — or the email-results card for the very
   // lookup the owner is pointing at — silently swallowed the request, which is
-  // how an asked-for card came back as a Google Doc. Unrequested turns keep the
-  // original precedence: one handwritten card, or the generative fallback.
-  const cardRequested = requestedCardIntent(latestUserText(window) ?? '');
+  // how an asked-for card came back as a Google Doc. Coherent object questions
+  // also prefer a composed answer; their raw lookup trail stays secondary.
+  const ownerRequest = latestUserText(window) ?? '';
+  const cardRequested = requestedCardIntent(ownerRequest);
+  const answerCardPreferred = prefersAnswerCard(ownerRequest);
+  const trigger = task.trigger as { payload?: { refreshCardId?: unknown } } | null;
+  const refreshCardId =
+    task.trust === 'owner' && typeof trigger?.payload?.refreshCardId === 'string'
+      ? trigger.payload.refreshCardId
+      : undefined;
+  const refreshTarget = refreshCardId
+    ? await deps.db.query.generatedCards.findFirst({
+        where: and(
+          eq(generatedCards.id, refreshCardId),
+          eq(generatedCards.agentId, task.agentId),
+          eq(generatedCards.status, 'active'),
+        ),
+      })
+    : undefined;
+  const refreshRevision = refreshTarget
+    ? await deps.db.query.generatedCardRevisions.findFirst({
+        where: eq(generatedCardRevisions.id, refreshTarget.currentRevisionId),
+      })
+    : undefined;
+  const provenance = cardRuntimeProvenance(refreshRevision?.spec);
+  const refreshEvidence = provenance ? revalidatedCardEvidence(provenance.sources, evidence) : null;
   let generatedCard: GeneratedCardPayload | undefined;
   if (
-    (cardRequested || specializedCards.length === 0) &&
+    (refreshCardId || cardRequested || answerCardPreferred || specializedCards.length === 0) &&
+    (!refreshCardId || refreshEvidence) &&
     !checked.blocked &&
     loadConfig().GENERATIVE_CARDS_ENABLED
   ) {
-    const sourceText = [
-      latestUserText(window) ?? task.title ?? '',
-      window
-        .filter((message) => message.role === 'user')
-        .map((message) =>
-          typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
-        )
-        .join('\n'),
-    ].join('\n');
+    const sourceText = refreshCardId
+      ? (provenance?.requestText ?? '')
+      : [
+          latestUserText(window) ?? task.title ?? '',
+          window
+            .filter((message) => message.role === 'user')
+            .map((message) =>
+              typeof message.content === 'string'
+                ? message.content
+                : JSON.stringify(message.content),
+            )
+            .join('\n'),
+        ].join('\n');
     const generated = await generateEvidenceCard({
       router: deps.router,
       taskId: task.id,
       sourceText,
-      evidence,
+      evidence: refreshCardId ? (refreshEvidence ?? []) : evidence,
       sourceKey: task.externalEventId ?? task.id,
-      explicitRequest: cardRequested,
+      explicitRequest: Boolean(refreshCardId) || cardRequested,
+      evidenceOnly: Boolean(refreshCardId),
       // A turn that called no tool has only its own reply to stand on. The
       // composer admits it as evidence in that case alone, under the same
       // verbatim rule, which is what the phone's hand-written kinds used to do
@@ -552,6 +592,9 @@ export async function stageModelFinalResponse(
             agentId: task.agentId,
             conversationId: task.conversationId,
             payload: generated,
+            evidence: refreshCardId ? (refreshEvidence ?? []) : evidence,
+            sourceText,
+            refreshCardId,
           }).catch((error) => {
             console.error('generated card persistence failed', error);
             return undefined;
@@ -582,19 +625,37 @@ export async function stageModelFinalResponse(
    * email"), and they keep the rendering they have always had.
    */
   const steps = generatedCard ? responseCardSteps(evidence) : [];
-  const cards = generatedCard
-    ? [{ ...generatedCard, ...(steps.length > 0 ? { steps } : {}) }]
-    : specializedCards;
+  // Refresh replaces the original card through hydration. Its new chat message
+  // is a compact receipt, never a second copy of the same saved object.
+  const cards = refreshCardId
+    ? []
+    : generatedCard
+      ? [{ ...generatedCard, ...(steps.length > 0 ? { steps } : {}) }]
+      : answerCardPreferred || refreshCardId
+        ? specializedCards.filter(
+            (card) =>
+              ![
+                'email-results',
+                'email-thread',
+                'drive-results',
+                'document-results',
+                'web-search-results',
+              ].includes(card.kind),
+          )
+        : specializedCards;
   if (cards.length > 0) pending.responseCards = cards;
   // A requested card that could not be grounded must say so. Staying quiet let
   // the prose claim a card the Cards page never received.
-  const text =
-    cardRequested && !checked.blocked
+  const text = refreshCardId
+    ? generatedCard
+      ? `Refreshed “${generatedCard.spec.title}” from its sources.\n\n${truncateAtBoundary(checked.text.trim(), 500)}`
+      : 'I could not verify the latest source data, so I left your saved card unchanged. Please try again.'
+    : cardRequested && !checked.blocked
       ? generatedCard
         ? `Saved “${generatedCard.spec.title}” to your Cards page.`
         : CARD_NOT_BUILT
       : checked.text;
-  if (cardRequested && !generatedCard) {
+  if ((cardRequested || refreshCardId) && !generatedCard) {
     pending.terminalStatus = 'needs_attention';
     pending.outcome = 'needs_attention';
   }

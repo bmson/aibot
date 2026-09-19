@@ -158,6 +158,9 @@ struct MessagePart: Codable, Hashable, Sendable {
     var acceptedTaskId: String? = nil
     var acceptedTaskStatus: String? = nil
     var acceptedTaskSummary: String? = nil
+    /// Explicit server pairing only; older clients keep rendering the sibling card.
+    var contextCard: JSONValue? = nil
+    var actionLabel: String? = nil
 
     /// Where a suggestion part stands. The server hydrates `status` on every
     /// read, so a part it has not hydrated yet is a live question; a status
@@ -367,6 +370,30 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
             return part.suggestionStatus == .accepted && part.acceptedTaskId != nil
                 && !["done", "completed", "failed", "cancelled", "dead", "dead_letter"].contains(part.acceptedTaskStatus ?? "")
         }
+    }
+
+    var hasRefreshingCard: Bool {
+        parts.contains { part in
+            guard part.type == "data-card", case let .object(data)? = part.data else { return false }
+            return data["kind"] == .string("generated-card") && data["refreshState"] == .string("refreshing")
+        }
+    }
+
+    func applyingCardRefreshes(_ markers: [String: CardRefreshMarker]) -> Self {
+        guard !markers.isEmpty else { return self }
+        var message = self
+        for index in message.parts.indices where message.parts[index].type == "data-card" {
+            guard case var .object(data)? = message.parts[index].data,
+                  data["kind"] == .string("generated-card"),
+                  let id = data["id"]?.string, let marker = markers[id],
+                  marker.holds(revisionId: data["revisionId"]?.string, updatedAt: data["updatedAt"]?.string,
+                               state: data["refreshState"]?.string,
+                               refreshTaskId: data["refreshTaskId"]?.string) else { continue }
+            data["refreshState"] = .string("refreshing")
+            data["refreshError"] = nil
+            message.parts[index].data = .object(data)
+        }
+        return message
     }
 
     /// Dashboard mirrors carry a compact reason and count rather than the raw
@@ -982,6 +1009,25 @@ struct SavedCardsResponse: Codable, Sendable {
     let cards: [SavedCardRecord]
 }
 
+struct CardRefreshResult: Codable, Sendable {
+    let ok: Bool
+    let taskId: String?
+    let refreshState: String?
+}
+
+struct CardRefreshMarker: Sendable {
+    let revisionId: String?
+    let updatedAt: String?
+    var taskId: String? = nil
+
+    func holds(revisionId: String?, updatedAt: String?, state: String?, refreshTaskId: String? = nil) -> Bool {
+        guard self.revisionId == revisionId && self.updatedAt == updatedAt else { return false }
+        if state == "idle", let taskId, taskId == refreshTaskId { return false }
+        if state == "failed" { return taskId != nil && refreshTaskId != nil && taskId != refreshTaskId }
+        return true
+    }
+}
+
 struct SavedCardRecord: Codable, Identifiable, Sendable {
     let id: String
     let revisionId: String
@@ -989,14 +1035,24 @@ struct SavedCardRecord: Codable, Identifiable, Sendable {
     let spec: JSONValue
     let conversationId: String?
     let updatedAt: String
+    var stale: Bool? = nil
+    var refreshState: String? = nil
+    var refreshError: String? = nil
+    var refreshTaskId: String? = nil
 
     var messagePart: MessagePart {
-        .init(type: "data-card", data: .object([
+        var data: [String: JSONValue] = [
             "kind": .string("generated-card"),
             "id": .string(id),
             "revisionId": .string(revisionId),
             "spec": spec,
-        ]))
+            "updatedAt": .string(updatedAt),
+        ]
+        if let stale { data["stale"] = .bool(stale) }
+        if let refreshState { data["refreshState"] = .string(refreshState) }
+        if let refreshError { data["refreshError"] = .string(refreshError) }
+        if let refreshTaskId { data["refreshTaskId"] = .string(refreshTaskId) }
+        return .init(type: "data-card", data: .object(data))
     }
 }
 

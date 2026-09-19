@@ -867,6 +867,7 @@ struct ChatView: View {
             decideApproval: { id, decision in await model.decideApproval(id: id, decision: decision) },
             decideSuggestion: { id, decision in await model.decideSuggestion(id: id, decision: decision) },
             openActivity: { openRoute(.activity) },
+            refreshCard: { id in await model.refreshSavedCard(id: id) },
             // Only a row the server has stored can be taken out of the log; an
             // echo of a turn still in flight has no id it would recognise.
             hide: message.isDurableLogRow

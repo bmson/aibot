@@ -22,3 +22,13 @@ Stored message text is preserved. The historical cleanup only recognizes the kno
 - Native layouts were checked in light, dark, narrow, and accessibility snapshots. Simulator unit/render tests do not prove physical-device touch behavior.
 
 A server deployment can update message hydration and task behavior. The gesture repair requires an updated signed iOS app; server deployment alone cannot replace the installed native code. The separate message-API-error task owns the model provider's mandatory-reasoning failure.
+
+## Rich-card follow-up
+
+- An explicitly paired alert and suggestion now render as one card on web and iOS. Actions describe the proposed work, long context expands on demand, and completed decisions become compact receipts. Older clients retain the original standalone card payload.
+- Web now renders email-thread, sheet-row, and resource cards directly. Timelines have a sequential layout, factual values wrap, and secondary source information stays behind accessible disclosures. Native cards support sensitive-value reveal and copy feedback; image blocks offer an explicit safe link.
+- Shipment and booking questions prefer a grounded answer card over the raw search trail. Explicit email-result requests keep their result cards; unavailable card generation retains the text answer.
+- Refresh re-reads a saved card's recorded sources, validates fresh evidence, and atomically updates that same card. Concurrent requests share a task. Failed reads preserve the previous revision and timestamp. Refresh receipts summarize changes without posting another full card.
+- Chat and the Cards page reconcile revision and task state in place. Cards show their actual update time, stale state, progress, and actionable failure feedback. Older cards without reliable source provenance ask for a new lookup rather than offering an unreliable refresh.
+
+The same production snapshot now renders all 1,273 assistant messages and 538 card payloads with no unsupported card types. The full JavaScript suite passed 2,591 tests (131 optional tests skipped); focused regression checks covered subsequent review adjustments. Lint, typechecks, and the production build passed. The native full suite passed 258 tests with one optional corpus skip, followed by focused checks after accessibility review. Desktop and narrow browser checks verified the three decision actions and in-place refresh using isolated synthetic data. No real suggestion was executed during verification. A signed native development build is available, but the phone was unavailable for installation or physical tap verification.

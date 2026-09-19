@@ -2,6 +2,36 @@ import XCTest
 import CoreLocation
 @testable import Assistant
 
+enum RichMessageFixture {
+    static let alert: JSONValue = .object([
+        "kind": .string("proactive-alert"), "id": .string("email-report"),
+        "category": .string("email"), "urgencyLabel": .string("For your attention"),
+        "title": .string("Weekly progress report"),
+        "summary": .string("The report includes a test on Friday and a deadline for missing work. Review the dates and any follow-up needed."),
+        "details": .array([.object(["label": .string("From"), "value": .string("Teacher <teacher@example.edu>")])])
+    ])
+    static var suggestion: MessagePart {
+        .init(type: "suggestion", suggestionId: "s1", summary: "Review the report and highlight what needs attention.",
+            status: "pending", contextCard: alert, actionLabel: "Review email")
+    }
+    static func generated(state: String = "idle", stale: Bool = false, updatedAt: String = "2026-09-19T18:00:00.000Z") -> MessagePart {
+        .init(type: "data-card", data: .object([
+            "kind": .string("generated-card"), "id": .string("saved-1"), "revisionId": .string("r1"),
+            "updatedAt": .string(updatedAt), "stale": .bool(stale), "refreshState": .string(state),
+            "refreshTaskId": .string("refresh-1"),
+            "spec": .object([
+                "version": .number(1), "title": .string("Your travel plan"), "sourceLabel": .string("Travel"),
+                "facts": .array([
+                    .object(["id": .string("flight"), "label": .string("Friday · 9:30 AM"), "value": .string("Flight to Lisbon, with enough time to check in and drop off your bags.")]),
+                    .object(["id": .string("hotel"), "label": .string("Friday · 3:00 PM"), "value": .string("Hotel check-in near the old town. Keep your confirmation and arrival details handy.")])
+                ]),
+                "blocks": .array([.object(["type": .string("timeline"), "factIds": .array([.string("flight"), .string("hotel")])])]),
+                "actions": .array([.object(["id": .string("refresh"), "type": .string("refresh"), "label": .string("Refresh")])])
+            ])
+        ]))
+    }
+}
+
 enum KnowledgeGraphFixture {
     static let focus = KnowledgeEntity(id: "alex", label: "Alex Morgan", kind: "person", canonicalKey: "alex")
     static func relation(id: String, other: KnowledgeEntity, predicate: String = "knows",
@@ -52,6 +82,75 @@ enum PeopleMapFixture {
 }
 
 final class APIModelsTests: XCTestCase {
+    func testSuggestionContextOnlySuppressesItsExplicitMatchingAlert() throws {
+        let message = ChatMessage(id: "m", role: .assistant, parts: [
+            RichMessageFixture.suggestion, .init(type: "data-card", data: RichMessageFixture.alert),
+            RichMessageFixture.generated()
+        ])
+        XCTAssertEqual(message.suggestionParts.first?.suggestionContext?.id, "email-report")
+        XCTAssertEqual(message.standaloneResponseCards.map(\.id), ["saved-1"])
+        XCTAssertEqual(message.suggestionParts.first?.suggestionActionLabel, "Review email")
+        let decoded = try JSONDecoder().decode(ChatMessage.self, from: JSONEncoder().encode(message))
+        XCTAssertEqual(decoded, message)
+        var unpaired = message
+        unpaired.parts[0].contextCard = nil
+        XCTAssertEqual(unpaired.standaloneResponseCards.count, 2, "Never guess a pairing from adjacent cards")
+        unpaired.parts[0].actionLabel = "  "
+        XCTAssertEqual(unpaired.parts[0].suggestionActionLabel, "Start task")
+        var invalid = message
+        invalid.parts[0].contextCard = .object(["kind": .string("proactive-alert"), "id": .string("email-report")])
+        XCTAssertEqual(invalid.standaloneResponseCards.count, 2, "Malformed context must not hide a readable source card")
+        var unrelated = message
+        unrelated.parts[0].contextCard = .object([
+            "kind": .string("proactive-alert"), "id": .string("other"), "title": .string("Another alert")
+        ])
+        XCTAssertEqual(unrelated.standaloneResponseCards.count, 2)
+    }
+
+    func testCardFreshnessAndRefreshGuardPreserveOldDataUntilRevalidated() throws {
+        let original = ChatMessage(id: "m", role: .assistant, parts: [RichMessageFixture.generated()])
+        let marker = CardRefreshMarker(revisionId: "r1", updatedAt: "2026-09-19T18:00:00.000Z", taskId: "refresh-2")
+        XCTAssertTrue(original.applyingCardRefreshes(["saved-1": marker]).hasRefreshingCard)
+        var priorFailure = original
+        priorFailure.parts = [RichMessageFixture.generated(state: "failed")]
+        XCTAssertTrue(priorFailure.applyingCardRefreshes(["saved-1": marker]).hasRefreshingCard,
+            "The previous refresh's failure must not end the newly accepted attempt")
+        let fresh = ChatMessage(id: "m", role: .assistant, parts: [
+            RichMessageFixture.generated(updatedAt: "2026-09-19T18:01:00.000Z")
+        ])
+        XCTAssertEqual(fresh.applyingCardRefreshes(["saved-1": marker]), fresh)
+        let failedMarker = CardRefreshMarker(revisionId: "r1", updatedAt: "2026-09-19T18:00:00.000Z", taskId: "refresh-1")
+        XCTAssertEqual(priorFailure.applyingCardRefreshes(["saved-1": failedMarker]), priorFailure)
+        XCTAssertEqual(original.applyingCardRefreshes(["saved-1": failedMarker]), original,
+            "An idle response for the accepted refresh task settles even if its revision is unchanged")
+        guard case let .generated(card)? = MessageResponseCard(part: original.parts[0]) else { return XCTFail("Expected generated card") }
+        XCTAssertEqual(card.updatedAt, "2026-09-19T18:00:00.000Z")
+        XCTAssertEqual(card.stale, false)
+        XCTAssertEqual(CardFreshnessPresentation.label(stale: false, state: "idle", hasTimestamp: true), "Current")
+        XCTAssertEqual(CardFreshnessPresentation.label(stale: nil, state: nil, hasTimestamp: false), "Saved snapshot")
+        XCTAssertEqual(CardFreshnessPresentation.label(stale: true, state: "idle", hasTimestamp: true), "May be out of date")
+        XCTAssertEqual(CardFreshnessPresentation.label(stale: false, state: "refreshing", hasTimestamp: true), "Refreshing…")
+        XCTAssertEqual(CardFreshnessPresentation.label(stale: true, state: "failed", hasTimestamp: true), "Refresh failed")
+    }
+
+    func testGeneratedCardProgressiveDetailsKeepEveryTimelineFactInOrder() throws {
+        guard case let .generated(card)? = MessageResponseCard(part: RichMessageFixture.generated()) else { return XCTFail("Missing fixture") }
+        let ids = ["one", "two", "three", "four", "five", "six"]
+        let timeline = MessageResponseCard.GeneratedBlock(id: "timeline", type: "timeline",
+            values: ["factIds": .array(ids.map(JSONValue.string))])
+        let long = MessageResponseCard.GeneratedCard(id: card.id, groundedOnAnswer: false,
+            title: card.title, subtitle: "", sourceLabel: card.sourceLabel, icon: card.icon,
+            accessibilityLabel: card.accessibilityLabel, facts: card.facts,
+            blocks: [timeline, .init(id: "note1", type: "note", values: [:]), .init(id: "note2", type: "note", values: [:])],
+            actions: [], steps: [])
+        let split = long.blockSections
+        XCTAssertEqual(split.preview.map(\.id), ["timeline", "note1"])
+        XCTAssertEqual(split.details.map(\.id), ["timeline-continued", "note2"])
+        XCTAssertEqual(split.preview[0].values["factIds"], .array(ids.prefix(4).map(JSONValue.string)))
+        XCTAssertEqual(split.details[0].values["factIds"], .array(ids.suffix(2).map(JSONValue.string)))
+        XCTAssertEqual(split.details[0].values["startIndex"], .number(5))
+    }
+
     func testPeopleMapKeepsContradictionsUnknownRolesAndExactEvidence() throws {
         let branches = PeopleConnectionBranch.branches(for: PeopleMapFixture.card())
         XCTAssertEqual(branches.count, 5)

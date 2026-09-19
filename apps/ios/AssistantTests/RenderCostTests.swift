@@ -258,4 +258,18 @@ final class RenderCostTests: XCTestCase {
             ApprovedReceiptGroup(messages: [receipt("r1"), receipt("r2")])
         )
     }
+
+    func testRowNoticesCardRefreshAvailabilityAndFreshnessChanges() {
+        let message = ChatMessage(id: "m", role: .assistant, parts: [RichMessageFixture.generated(stale: true)])
+        let row = MessageBubble(message: message, userPrompt: nil, isCurrentAnswer: false,
+            isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil)
+        var available = row
+        available.refreshCard = { _ in nil }
+        XCTAssertNotEqual(row, available)
+        let fresh = MessageBubble(message: ChatMessage(id: "m", role: .assistant, parts: [
+            RichMessageFixture.generated(updatedAt: "2026-09-19T18:01:00.000Z")
+        ]), userPrompt: nil, isCurrentAnswer: false, isStreaming: false,
+            openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil)
+        XCTAssertNotEqual(row, fresh)
+    }
 }

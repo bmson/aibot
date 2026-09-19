@@ -1,0 +1,66 @@
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/app/suggestions/actions', () => ({
+  decideSuggestionInline: vi.fn(),
+  snoozeSuggestionInline: vi.fn(),
+}));
+
+import { type InlineSuggestionPart, SuggestionCard } from './inline-suggestion';
+
+const part: InlineSuggestionPart = {
+  type: 'suggestion',
+  suggestionId: 's1',
+  summary: 'Review the progress report?',
+  proposedAction: 'Read the email',
+  actionLabel: 'Review email',
+  status: 'pending',
+  contextCard: {
+    kind: 'proactive-alert',
+    id: 'mail:1',
+    category: 'email',
+    title: 'Progress report',
+    urgencyLabel: 'Needs attention',
+    details: [{ label: 'From', value: 'School' }],
+  },
+};
+
+describe('SuggestionCard', () => {
+  it('presents the subject and specific action together, without restating the suggestion', () => {
+    const html = renderToStaticMarkup(<SuggestionCard parts={[part]} />);
+    expect(html.match(/data-decision-card="true"/g)).toHaveLength(1);
+    expect(html).toContain('Review email');
+    expect(html).toContain('Progress report');
+    expect(html).not.toContain('Review the progress report?');
+    expect(html).not.toContain('Yes, do it');
+  });
+
+  it('settles into a named collapsed receipt and preserves its result inside disclosure', () => {
+    const html = renderToStaticMarkup(
+      <SuggestionCard
+        parts={[
+          {
+            ...part,
+            status: 'accepted',
+            acceptedTaskStatus: 'done',
+            acceptedTaskId: 't1',
+            acceptedTaskSummary: 'No reply is needed.',
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain('aria-label="Progress report — Completed"');
+    expect(html).not.toContain('<details open');
+    expect(html).not.toContain('data-decision-card="true"');
+    expect(html).toContain('No reply is needed.');
+    expect(html).toContain('href="/tasks/t1"');
+  });
+
+  it('does not crash on malformed persisted snooze timestamps', () => {
+    const html = renderToStaticMarkup(
+      <SuggestionCard parts={[{ ...part, status: 'snoozed', snoozedUntil: 'not a date' }]} />,
+    );
+    expect(html).toContain('Snoozed');
+    expect(html).not.toContain('Invalid Date');
+  });
+});

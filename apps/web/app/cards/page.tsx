@@ -1,11 +1,10 @@
 import { listSavedCards } from '@assistant/application/cards';
-import { Archive, Layers3 } from 'lucide-react';
+import { Layers3 } from 'lucide-react';
 import Link from 'next/link';
-import { ResponseCards } from '@/app/chat/[id]/response-card';
 import { requireOwner } from '@/auth';
 import { getAgentIdentity, getAgentTimezone, getDb } from '@/lib/server';
 import { btnSm, EmptyState, PageHeader, PageShell } from '@/lib/ui';
-import { dismissCard } from './actions';
+import { SavedCardGrid } from './saved-card-grid';
 
 export const metadata = { title: 'Cards' };
 export const dynamic = 'force-dynamic';
@@ -38,40 +37,20 @@ export default async function CardsPage() {
           notice one from connected mail.
         </EmptyState>
       ) : (
-        <div className="mt-8 grid gap-5">
-          {cards.map((card) => (
-            <article key={card.id} className="min-w-0">
-              <ResponseCards
-                timeZone={timeZone}
-                cards={[
-                  {
-                    kind: 'generated-card',
-                    id: card.id,
-                    revisionId: card.revisionId,
-                    spec: card.spec,
-                  },
-                ]}
-              />
-              <div className="mt-2 flex items-center justify-between gap-3 px-1">
-                <p className="font-mono text-[10px] tracking-[0.08em] text-muted uppercase">
-                  Saved{' '}
-                  {card.updatedAt.toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                    timeZone,
-                  })}
-                </p>
-                <form action={dismissCard}>
-                  <input type="hidden" name="cardId" value={card.id} />
-                  <button type="submit" className={btnSm.outline}>
-                    <Archive className="size-3" aria-hidden="true" />
-                    Dismiss
-                  </button>
-                </form>
-              </div>
-            </article>
-          ))}
-        </div>
+        <SavedCardGrid
+          timeZone={timeZone}
+          cards={cards.map((card) => ({
+            kind: 'generated-card',
+            id: card.id,
+            revisionId: card.revisionId,
+            spec: card.spec,
+            updatedAt: card.updatedAt.toISOString(),
+            stale: card.stale,
+            refreshState: card.refreshState,
+            refreshTaskId: card.refreshTaskId,
+            refreshError: card.refreshError,
+          }))}
+        />
       )}
     </PageShell>
   );

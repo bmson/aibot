@@ -210,6 +210,59 @@ function readablePulseMailParts(parts: unknown[]): unknown[] {
   });
 }
 
+/** Labels describe the proposed work; source text never authors a button. */
+function suggestionActionLabel(action: string, context?: Record<string, unknown>): string {
+  if (/^Create a calendar event on the owner's own calendar with no attendees for: /.test(action))
+    return 'Add to calendar';
+  if (/^Set a reminder two days before /.test(action)) return 'Set reminder';
+  if (/^Read the email identified by this source data: /.test(action)) return 'Review email';
+  if (context?.category === 'email') return 'Handle email';
+  return 'Start task';
+}
+
+/**
+ * A pulse posts its context and decision in one message. Keep the original
+ * card for older clients, and give newer clients an explicit pairing rather
+ * than asking each renderer to guess which nearby alert a decision belongs to.
+ */
+function contextualSuggestions(parts: unknown[]): unknown[] {
+  const decisions = parts
+    .map(record)
+    .filter(
+      (part) =>
+        part?.type === 'suggestion' &&
+        typeof part.suggestionId === 'string' &&
+        !!part.suggestionId.trim(),
+    );
+  const contexts = parts.flatMap((part) => {
+    const value = record(part);
+    const card = record(value?.data);
+    return value?.type === 'data-card' &&
+      card?.kind === 'proactive-alert' &&
+      typeof card.id === 'string' &&
+      typeof card.title === 'string'
+      ? [card]
+      : [];
+  });
+  const context = decisions.length === 1 && contexts.length === 1 ? contexts[0] : undefined;
+  let changed = false;
+  const result = parts.map((part) => {
+    const value = record(part);
+    if (
+      value?.type !== 'suggestion' ||
+      typeof value.suggestionId !== 'string' ||
+      !value.suggestionId.trim()
+    )
+      return part;
+    const actionLabel = suggestionActionLabel(String(value.proposedAction ?? ''), context);
+    if (value.actionLabel === actionLabel && (!context || value.contextCard === context))
+      return part;
+    changed = true;
+    return { ...value, actionLabel, ...(context ? { contextCard: context } : {}) };
+  });
+  return changed ? result : parts;
+}
+
 /**
  * Enrich a persisted message without rewriting it. It upgrades known legacy
  * runtime prose into a compact notice and fills the presentation envelope on
@@ -220,7 +273,7 @@ export function compactChatMessageParts(
   input: unknown[],
   taskId?: string,
 ): unknown[] {
-  const parts = readablePulseMailParts(Array.isArray(input) ? input : []);
+  const parts = contextualSuggestions(readablePulseMailParts(Array.isArray(input) ? input : []));
   if (
     parts.some((part) => {
       const type = record(part)?.type;

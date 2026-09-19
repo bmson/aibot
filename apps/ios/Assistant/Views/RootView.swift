@@ -343,10 +343,24 @@ struct CardsView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var pollingPaused = false
+    @State private var pollingGeneration = 0
+
+    private var refreshPollingKey: String {
+        guard scenePhase == .active else { return "inactive" }
+        return model.savedCards.filter { $0.refreshState == "refreshing" }.map(\.id).sorted().joined(separator: ",")
+            + ":\(pollingGeneration)"
+    }
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
+                if pollingPaused {
+                    Label("The refresh is taking longer. Pull down to check again.", systemImage: "clock")
+                        .font(.caption)
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                }
                 NavigationLink {
                     SituationPacksView()
                 } label: {
@@ -366,7 +380,7 @@ struct CardsView: View {
                 } else {
                     ForEach(model.savedCards) { card in
                         if let parsed = MessageResponseCard(part: card.messagePart) {
-                            SavedResponseCard(card: parsed) {
+                            SavedResponseCard(card: parsed, refresh: { id in await model.refreshSavedCard(id: id) }) {
                                 _ = await model.dismissCard(card)
                             }
                         }
@@ -378,8 +392,25 @@ struct CardsView: View {
         }
         .navigationTitle("Cards")
         .assistantSubmenuChrome()
-        .refreshable { await model.refreshCards() }
-        .task { await model.refreshCards() }
+        .refreshable {
+            pollingPaused = false
+            _ = await model.refreshCards()
+            pollingGeneration += 1
+        }
+        .task { _ = await model.refreshCards() }
+        .task(id: refreshPollingKey) {
+            guard scenePhase == .active else { return }
+            pollingPaused = false
+            var failures = 0
+            for attempt in 0..<12 {
+                guard model.savedCards.contains(where: { $0.refreshState == "refreshing" }) else { return }
+                let delay = attempt < 3 ? 2 : min(30, PollingPolicy.idleIntervalSeconds(unchangedPolls: attempt - 3))
+                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                if await model.refreshCards(reportFailure: false) { failures = 0 } else { failures += 1 }
+                if failures >= 3 { break }
+            }
+            pollingPaused = model.savedCards.contains { $0.refreshState == "refreshing" }
+        }
     }
 
     private var isLandscape: Bool { verticalSizeClass == .compact }
@@ -389,6 +420,7 @@ struct CardsView: View {
 /// card supplies content only here, avoiding a second rounded card and seam.
 struct SavedResponseCard: View {
     let card: MessageResponseCard
+    var refresh: ((String) async -> String?)? = nil
     let dismiss: () async -> Void
     @State private var dismissing = false
     @Environment(\.colorScheme) private var colorScheme
@@ -396,7 +428,7 @@ struct SavedResponseCard: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
         VStack(alignment: .leading, spacing: 0) {
-            RichResponseCards(cards: [card])
+            RichResponseCards(cards: [card], onRefresh: refresh)
                 .environment(\.responseCardIsEmbedded, true)
             Divider().padding(.horizontal, 20)
             HStack {

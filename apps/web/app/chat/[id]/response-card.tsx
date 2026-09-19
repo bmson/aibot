@@ -38,6 +38,7 @@ import {
   Sparkles,
   Star,
   Sun,
+  Table2,
   Ticket,
   Trophy,
   Users,
@@ -45,9 +46,11 @@ import {
 } from 'lucide-react';
 import Image from 'next/image';
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { focusRing } from '@/lib/ui';
+import { requestCardPolling } from './card-refresh-events';
 import { CardSteps, cardStepsOf } from './card-steps';
+import { type CardRefreshAttempt, cardIsRefreshing } from './generated-card-state';
 import { SensitiveValue } from './sensitive-value';
 
 // Cards fill the transcript column, matching the native chat surface. The
@@ -57,6 +60,14 @@ const CARD_WIDTH = 'min-w-0 w-full max-w-none';
 const PREVIEW_LIMIT = 3;
 
 type Raw = Record<string, unknown>;
+
+export interface CardRefreshResult {
+  ok: boolean;
+  taskId?: string;
+  error?: string;
+}
+
+type RefreshCard = (cardId: string) => Promise<CardRefreshResult>;
 
 function str(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -187,7 +198,9 @@ function CardOverflow({ count, children }: { count: number; children: ReactNode 
   if (count <= 0) return null;
   return (
     <details className="mt-3 border-t border-edge/60 pt-2.5">
-      <summary className="disclosure flex cursor-pointer select-none items-center gap-2 text-xs font-medium text-muted">
+      <summary
+        className={`disclosure flex cursor-pointer select-none items-center gap-2 rounded-sm text-xs font-medium text-muted ${focusRing}`}
+      >
         {count} more
       </summary>
       <div className="mt-3">{children}</div>
@@ -213,9 +226,14 @@ function DetailRows({ items }: { items: Array<{ label: string; value: string }> 
   return (
     <dl className="flex flex-wrap gap-x-5 gap-y-1">
       {items.map((item) => (
-        <div key={item.label} className="flex items-baseline gap-1.5 text-xs">
+        <div
+          key={`${item.label}-${item.value}`}
+          className="flex min-w-0 items-baseline gap-1.5 text-xs"
+        >
           <dt className="text-muted">{item.label}</dt>
-          <dd className="font-medium text-strong">{item.value}</dd>
+          <dd className="min-w-0 break-words font-medium text-strong [overflow-wrap:anywhere]">
+            {item.value}
+          </dd>
         </div>
       ))}
     </dl>
@@ -544,6 +562,208 @@ function EmailResultsCard({ data, timeZone }: { data: Raw; timeZone: string }) {
   );
 }
 
+/** Readable source excerpts stay plain text; quoted email is never executable markup. */
+function TextPreview({ text, limit = 180 }: { text: string; limit?: number }) {
+  if (!text) return null;
+  if (text.length <= limit)
+    return (
+      <p className="whitespace-pre-wrap break-words text-sm leading-6 text-muted [overflow-wrap:anywhere]">
+        {text}
+      </p>
+    );
+  const head = text.slice(0, limit);
+  const preview = head.slice(0, Math.max(head.lastIndexOf(' '), Math.floor(limit * 0.75)));
+  return (
+    <details className="group">
+      <summary
+        className={`disclosure cursor-pointer list-none rounded-sm text-sm leading-6 text-muted ${focusRing}`}
+      >
+        <span className="break-words group-open:hidden [overflow-wrap:anywhere]">
+          {preview.trimEnd()}…{' '}
+        </span>
+        <span className="text-xs font-medium text-accent group-open:hidden">Read more</span>
+        <span className="hidden text-xs font-medium text-accent group-open:inline">Show less</span>
+      </summary>
+      <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-muted [overflow-wrap:anywhere]">
+        {text}
+      </p>
+    </details>
+  );
+}
+
+function EmailThreadCard({ data, timeZone }: { data: Raw; timeZone: string }) {
+  const messages = recs(data.messages);
+  const count = Math.max(messages.length, num(data.messageCount) ?? messages.length);
+  const renderMessage = (message: Raw, index: number) => (
+    <li key={str(message.id) || index} className="relative min-w-0 border-l border-accent/25 pl-4">
+      <span
+        aria-hidden="true"
+        className="absolute top-1.5 -left-1 size-2 rounded-full bg-accent/60"
+      />
+      <div className="mb-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        <p className="min-w-0 break-words text-xs font-semibold text-strong [overflow-wrap:anywhere]">
+          {str(message.sender) || 'Unknown sender'}
+        </p>
+        {str(message.date) ? (
+          <span className="text-[11px] text-muted">{shortDate(str(message.date), timeZone)}</span>
+        ) : null}
+      </div>
+      <TextPreview text={str(message.excerpt)} />
+    </li>
+  );
+  return (
+    <CardShell
+      icon={Mail}
+      label={`Email thread · ${count} ${count === 1 ? 'message' : 'messages'}`}
+    >
+      <h3 className="mb-3 break-words text-base font-semibold leading-6 text-strong">
+        {str(data.subject) || 'Email thread'}
+      </h3>
+      {messages.length ? (
+        <ol className="grid gap-4">{messages.slice(0, PREVIEW_LIMIT).map(renderMessage)}</ol>
+      ) : (
+        <p className="text-sm text-muted">No message preview is available.</p>
+      )}
+      <CardOverflow count={Math.max(0, messages.length - PREVIEW_LIMIT)}>
+        <ol start={PREVIEW_LIMIT + 1} className="grid gap-4">
+          {messages.slice(PREVIEW_LIMIT).map(renderMessage)}
+        </ol>
+      </CardOverflow>
+      {count > messages.length ? (
+        <p className="mt-3 text-xs text-muted">
+          {messages.length} of {count} messages included in this preview.
+        </p>
+      ) : null}
+    </CardShell>
+  );
+}
+
+function sheetRows(value: unknown): string[][] {
+  return Array.isArray(value)
+    ? value
+        .filter(Array.isArray)
+        .map((row) =>
+          row.map((cell: unknown) =>
+            typeof cell === 'string' || typeof cell === 'number' || typeof cell === 'boolean'
+              ? String(cell)
+              : '',
+          ),
+        )
+    : [];
+}
+
+function SheetRowsCard({ data }: { data: Raw }) {
+  const rows = sheetRows(data.rows);
+  const count = Math.max(rows.length, num(data.totalRows) ?? rows.length);
+  const columns = rows.reduce((max, row) => Math.max(max, row.length), 0);
+  const open = link(data.link);
+  const title = str(data.sheetName) || 'Spreadsheet';
+  const table = (entries: string[][], offset: number) => (
+    <section
+      className={`max-w-full overflow-x-auto rounded-lg border border-edge/60 ${focusRing}`}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: This scroll region needs keyboard access.
+      tabIndex={0}
+      aria-label={`${title} preview rows ${offset + 1} to ${offset + entries.length}`}
+    >
+      <table className="w-full border-collapse text-left text-xs">
+        <caption className="sr-only">
+          {title} · {count} rows · preview
+        </caption>
+        <thead className="bg-sunken/60 text-muted">
+          <tr>
+            <th scope="col" className="px-3 py-2 font-medium">
+              #
+            </th>
+            {Array.from({ length: columns }, (_, index) => (
+              <th
+                key={String.fromCharCode(65 + index)}
+                scope="col"
+                className="px-3 py-2 font-medium"
+              >
+                Column {index + 1}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((row, rowIndex) => (
+            <tr
+              // biome-ignore lint/suspicious/noArrayIndexKey: Spreadsheet position is the stable row identity.
+              key={`row-${offset + rowIndex}`}
+              className="border-t border-edge/50"
+            >
+              <th scope="row" className="px-3 py-2 align-top font-normal text-muted">
+                {offset + rowIndex + 1}
+              </th>
+              {Array.from({ length: columns }, (_, column) => (
+                <td
+                  key={String.fromCharCode(65 + column)}
+                  className="min-w-24 max-w-64 break-words px-3 py-2 align-top text-strong [overflow-wrap:anywhere]"
+                >
+                  {row[column] || '—'}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+  return (
+    <CardShell icon={Table2} label={`Spreadsheet · ${count} ${count === 1 ? 'row' : 'rows'}`}>
+      <h3 className="mb-3 break-words text-base font-semibold text-strong">{title}</h3>
+      {rows.length ? (
+        table(rows.slice(0, PREVIEW_LIMIT), 0)
+      ) : (
+        <p className="text-sm text-muted">This range has no rows.</p>
+      )}
+      <CardOverflow count={Math.max(0, rows.length - PREVIEW_LIMIT)}>
+        {table(rows.slice(PREVIEW_LIMIT), PREVIEW_LIMIT)}
+      </CardOverflow>
+      {count > rows.length ? (
+        <p className="mt-3 text-xs text-muted">
+          Showing {rows.length} of {count} rows. Open the spreadsheet for the full range.
+        </p>
+      ) : null}
+      {open ? (
+        <div className="mt-3">
+          <CardLink href={open.url} label={open.label} />
+        </div>
+      ) : null}
+    </CardShell>
+  );
+}
+
+function ResourceCard({ data }: { data: Raw }) {
+  const details = pairs(data.details);
+  const open = link(data.link);
+  return (
+    <CardShell
+      icon={data.resourceType === 'spreadsheet' ? Table2 : FileText}
+      label={data.resourceType === 'spreadsheet' ? 'Spreadsheet' : 'Document'}
+    >
+      <h3 className="break-words text-base font-semibold leading-6 text-strong">
+        {str(data.title) || 'Saved resource'}
+      </h3>
+      {str(data.subtitle) ? <p className="mt-1 text-sm text-muted">{str(data.subtitle)}</p> : null}
+      {details.length ? (
+        <div className="mt-3">
+          <DetailRows items={details.slice(0, 4)} />
+        </div>
+      ) : null}
+      <CardOverflow count={Math.max(0, details.length - 4)}>
+        <DetailRows items={details.slice(4)} />
+      </CardOverflow>
+      {open ? (
+        <div className="mt-3">
+          <CardLink href={open.url} label={open.label} />
+        </div>
+      ) : null}
+      <CardSteps steps={cardStepsOf(data.steps)} />
+    </CardShell>
+  );
+}
+
 function WebSearchCard({ data }: { data: Raw }) {
   const results = recs(data.results);
   const renderResult = (result: Raw, index: number) => (
@@ -851,14 +1071,76 @@ const accentClass: Record<string, string> = {
   slate: 'from-slate-500/16 via-slate-400/6 to-transparent',
 };
 
-function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) => void }) {
+function GeneratedCard({
+  data,
+  onSend,
+  onRefresh,
+  timeZone,
+}: {
+  data: Raw;
+  onSend?: (text: string) => void;
+  onRefresh?: RefreshCard;
+  timeZone: string;
+}) {
   const [revealed, setRevealed] = useState<Set<string>>(new Set());
+  const [refreshAttempt, setRefreshAttempt] = useState<CardRefreshAttempt | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const refreshInFlight = useRef(false);
   const spec = rec(data.spec);
   const version = num(spec?.version);
   if (!spec || version !== 1 || !str(spec.title)) return null;
   const facts = new Map(recs(spec.facts).map((fact) => [str(fact.id), fact]));
   const blocks = recs(spec.blocks);
-  const actions = recs(spec.actions);
+  const actions = recs(spec.actions).filter((action) => str(action.type) !== 'refresh');
+  const refreshable = spec.refreshable === true;
+  const revision = str(data.revisionId) || str(data.updatedAt);
+  const refreshing = cardIsRefreshing(data, refreshAttempt);
+  const refresh = async () => {
+    if (refreshing || refreshInFlight.current || !onRefresh) return;
+    refreshInFlight.current = true;
+    setActionFeedback(null);
+    setRefreshAttempt({ revision, state: 'saving' });
+    try {
+      const result = await onRefresh(str(data.id));
+      if (!result.ok) {
+        setRefreshAttempt(null);
+        setActionFeedback(result.error || 'Could not refresh this card. Try again.');
+        return;
+      }
+      setRefreshAttempt({ revision, taskId: result.taskId, state: 'refreshing' });
+      requestCardPolling(str(data.id), result.taskId);
+    } catch {
+      setRefreshAttempt(null);
+      setActionFeedback('Could not start the refresh. Try again.');
+    } finally {
+      refreshInFlight.current = false;
+    }
+  };
+  const copyValue = async (text: string) => {
+    try {
+      if (!navigator.clipboard) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(text);
+      setActionFeedback('Copied.');
+    } catch {
+      setActionFeedback('Could not copy. Select and copy the value instead.');
+    }
+  };
+  const previewBlocks: Raw[] = [];
+  const detailBlocks: Raw[] = [];
+  for (const block of blocks) {
+    if (previewBlocks.length >= 2) {
+      detailBlocks.push(block);
+      continue;
+    }
+    if (
+      (block.type === 'facts' || block.type === 'timeline') &&
+      Array.isArray(block.factIds) &&
+      block.factIds.length > 4
+    ) {
+      previewBlocks.push({ ...block, factIds: block.factIds.slice(0, 4) });
+      detailBlocks.push({ ...block, factIds: block.factIds.slice(4), startIndex: 5 });
+    } else previewBlocks.push(block);
+  }
   const Icon = generatedIcons[str(spec.icon) as keyof typeof generatedIcons] ?? Sparkles;
   const fact = (id: unknown) => facts.get(str(id));
   const value = (id: unknown) => str(fact(id)?.value);
@@ -891,6 +1173,158 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
     );
   };
 
+  const renderBlock = (block: Raw) => {
+    const type = str(block.type);
+    const blockKey = JSON.stringify(block);
+    if (type === 'hero') {
+      return (
+        <div key={blockKey} className="border-y border-edge/60 py-3">
+          <p className="text-xl font-semibold tracking-[-0.025em] text-strong">
+            {shownValue(block.titleFact, 'text-xl font-semibold tracking-[-0.025em]')}
+          </p>
+          {value(block.subtitleFact) ? (
+            <p className="mt-1 text-sm text-muted">{shownValue(block.subtitleFact)}</p>
+          ) : null}
+        </div>
+      );
+    }
+    if (type === 'timeline') {
+      const items = Array.isArray(block.factIds) ? block.factIds : [];
+      return (
+        <ol
+          key={blockKey}
+          aria-label="Timeline"
+          start={num(block.startIndex) ?? 1}
+          className="ml-3 grid gap-4 border-l border-accent/30 pl-4"
+        >
+          {items.map((id, index) => {
+            const item = fact(id);
+            if (!item) return null;
+            return (
+              <li key={str(item.id)} className="relative min-w-0">
+                <span
+                  aria-hidden="true"
+                  className="absolute top-0 -left-7 flex size-5 items-center justify-center rounded-full border border-accent/25 bg-raised text-[10px] font-semibold text-accent"
+                >
+                  {(num(block.startIndex) ?? 1) + index}
+                </span>
+                <p className="text-xs font-medium text-muted">{str(item.label) || 'Step'}</p>
+                <p className="mt-0.5 break-words text-sm font-medium text-strong [overflow-wrap:anywhere]">
+                  {shownValue(item.id, 'text-sm font-medium')}
+                </p>
+              </li>
+            );
+          })}
+        </ol>
+      );
+    }
+    if (type === 'facts') {
+      const items = Array.isArray(block.factIds) ? block.factIds : [];
+      return (
+        <dl key={blockKey} className="grid grid-cols-2 gap-x-5 gap-y-3">
+          {items.map((id) => {
+            const item = fact(id);
+            if (!item) return null;
+            return (
+              <div key={str(item.id)} className="min-w-0">
+                <dt className="font-mono text-[10px] tracking-[0.08em] text-muted uppercase">
+                  {str(item.label) || 'Detail'}
+                </dt>
+                <dd className="mt-0.5 break-words text-sm font-medium text-strong [overflow-wrap:anywhere]">
+                  {shownValue(item.id, 'text-sm font-medium')}
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+      );
+    }
+    if (type === 'score') {
+      return (
+        <div
+          key={blockKey}
+          className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-xl border border-edge/60 bg-raised/65 p-3 text-center"
+        >
+          <div>
+            <p className="text-xs text-muted">{shownValue(block.leftLabelFact)}</p>
+            <p className="mt-1 font-mono text-2xl font-semibold text-strong">
+              {shownValue(block.leftValueFact, 'text-2xl font-semibold')}
+            </p>
+          </div>
+          <span className="text-xs text-muted">—</span>
+          <div>
+            <p className="text-xs text-muted">{shownValue(block.rightLabelFact)}</p>
+            <p className="mt-1 font-mono text-2xl font-semibold text-strong">
+              {shownValue(block.rightValueFact, 'text-2xl font-semibold')}
+            </p>
+          </div>
+        </div>
+      );
+    }
+    if (type === 'code') {
+      const item = fact(block.valueFact);
+      if (!item) return null;
+      const sensitive = item.sensitive === true;
+      const shown = revealed.has(str(item.id)) || !sensitive;
+      const name = str(item.label).toLowerCase() || 'code';
+      if (!sensitive)
+        return (
+          <div
+            key={blockKey}
+            className="rounded-xl border border-dashed border-edge bg-sunken/45 px-4 py-3"
+          >
+            <p className="font-mono text-[10px] tracking-[0.12em] text-muted uppercase">
+              {str(item.label) || 'Code'}
+            </p>
+            <p className="mt-1 break-all font-mono text-sm font-semibold tracking-[0.08em] text-strong">
+              {str(item.value)}
+            </p>
+          </div>
+        );
+      return (
+        <button
+          key={blockKey}
+          type="button"
+          onClick={() => toggleReveal(str(item.id))}
+          aria-pressed={sensitive ? shown : undefined}
+          aria-label={sensitive ? `${shown ? 'Hide' : 'Show'} ${name}` : undefined}
+          className={`rounded-xl border border-dashed border-edge bg-sunken/45 px-4 py-3 text-left ${focusRing}`}
+        >
+          <span className="block font-mono text-[10px] tracking-[0.12em] text-muted uppercase">
+            {shown ? str(block.format) : 'Tap to reveal'}
+          </span>
+          {/* One asterisk per character, in the face the value itself
+                      uses, so revealing rewrites the line instead of resizing
+                      it. */}
+          <span className="mt-1 block break-all font-mono text-sm font-semibold tracking-[0.08em] text-strong">
+            {shown ? str(item.value) : '*'.repeat(str(item.value).length)}
+          </span>
+        </button>
+      );
+    }
+    if (type === 'note')
+      return (
+        <p key={blockKey} className="text-sm leading-6 text-muted">
+          {shownValue(block.factId)}
+        </p>
+      );
+    if (type === 'image') {
+      const src = cardHref(value(block.urlFact));
+      return src ? (
+        <Image
+          key={blockKey}
+          src={`/api/card-image?url=${encodeURIComponent(src)}`}
+          alt={value(block.altFact) || ''}
+          className="max-h-64 w-full rounded-xl border border-edge/60 object-cover"
+          width={1200}
+          height={640}
+          unoptimized
+        />
+      ) : null;
+    }
+    return null;
+  };
+
   return (
     <section
       aria-label={str(spec.accessibilityLabel) || str(spec.title)}
@@ -918,125 +1352,68 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
           </div>
         </header>
 
+        {str(data.updatedAt) ||
+        data.stale === true ||
+        refreshing ||
+        data.refreshState === 'failed' ? (
+          <div
+            className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted"
+            role="status"
+            aria-live="polite"
+          >
+            {str(data.updatedAt) ? (
+              <span>Updated {shortDate(str(data.updatedAt), timeZone)}</span>
+            ) : null}
+            {refreshing ? (
+              <span className="inline-flex items-center gap-1 text-accent">
+                <RotateCw className="size-3 motion-safe:animate-spin" aria-hidden="true" />
+                Refreshing…
+              </span>
+            ) : data.refreshState === 'failed' ? (
+              <span>Refresh failed. Showing the saved version.</span>
+            ) : data.stale === true ? (
+              <span className="inline-flex items-center gap-1">
+                <Clock className="size-3" aria-hidden="true" />
+                May be out of date
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="mt-4 grid gap-3">
-          {blocks.map((block) => {
-            const type = str(block.type);
-            const blockKey = JSON.stringify(block);
-            if (type === 'hero') {
-              return (
-                <div key={blockKey} className="border-y border-edge/60 py-3">
-                  <p className="text-xl font-semibold tracking-[-0.025em] text-strong">
-                    {shownValue(block.titleFact, 'text-xl font-semibold tracking-[-0.025em]')}
-                  </p>
-                  {value(block.subtitleFact) ? (
-                    <p className="mt-1 text-sm text-muted">{shownValue(block.subtitleFact)}</p>
-                  ) : null}
-                </div>
-              );
-            }
-            if (type === 'facts' || type === 'timeline') {
-              const items = Array.isArray(block.factIds) ? block.factIds : [];
-              return (
-                <dl
-                  key={blockKey}
-                  className={
-                    type === 'timeline'
-                      ? 'grid gap-2 border-l border-accent/30 pl-3'
-                      : 'grid grid-cols-2 gap-x-5 gap-y-3'
-                  }
-                >
-                  {items.map((id) => {
-                    const item = fact(id);
-                    if (!item) return null;
-                    return (
-                      <div key={str(item.id)} className="min-w-0">
-                        <dt className="font-mono text-[10px] tracking-[0.08em] text-muted uppercase">
-                          {str(item.label) || 'Detail'}
-                        </dt>
-                        <dd className="mt-0.5 break-words text-sm font-medium text-strong">
-                          {shownValue(item.id, 'text-sm font-medium')}
-                        </dd>
-                      </div>
-                    );
-                  })}
-                </dl>
-              );
-            }
-            if (type === 'score') {
-              return (
-                <div
-                  key={blockKey}
-                  className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-xl border border-edge/60 bg-raised/65 p-3 text-center"
-                >
-                  <div>
-                    <p className="text-xs text-muted">{shownValue(block.leftLabelFact)}</p>
-                    <p className="mt-1 font-mono text-2xl font-semibold text-strong">
-                      {shownValue(block.leftValueFact, 'text-2xl font-semibold')}
-                    </p>
-                  </div>
-                  <span className="text-xs text-muted">—</span>
-                  <div>
-                    <p className="text-xs text-muted">{shownValue(block.rightLabelFact)}</p>
-                    <p className="mt-1 font-mono text-2xl font-semibold text-strong">
-                      {shownValue(block.rightValueFact, 'text-2xl font-semibold')}
-                    </p>
-                  </div>
-                </div>
-              );
-            }
-            if (type === 'code') {
-              const item = fact(block.valueFact);
-              if (!item) return null;
-              const sensitive = item.sensitive === true;
-              const shown = revealed.has(str(item.id)) || !sensitive;
-              const name = str(item.label).toLowerCase() || 'code';
-              return (
-                <button
-                  key={blockKey}
-                  type="button"
-                  onClick={() => toggleReveal(str(item.id))}
-                  aria-pressed={sensitive ? shown : undefined}
-                  aria-label={sensitive ? `${shown ? 'Hide' : 'Show'} ${name}` : undefined}
-                  className={`rounded-xl border border-dashed border-edge bg-sunken/45 px-4 py-3 text-left ${focusRing}`}
-                >
-                  <span className="block font-mono text-[10px] tracking-[0.12em] text-muted uppercase">
-                    {shown ? str(block.format) : 'Tap to reveal'}
-                  </span>
-                  {/* One asterisk per character, in the face the value itself
-                      uses, so revealing rewrites the line instead of resizing
-                      it. */}
-                  <span className="mt-1 block break-all font-mono text-sm font-semibold tracking-[0.08em] text-strong">
-                    {shown ? str(item.value) : '*'.repeat(str(item.value).length)}
-                  </span>
-                </button>
-              );
-            }
-            if (type === 'note')
-              return (
-                <p key={blockKey} className="text-sm leading-6 text-muted">
-                  {shownValue(block.factId)}
-                </p>
-              );
-            if (type === 'image') {
-              const src = cardHref(value(block.urlFact));
-              return src ? (
-                <Image
-                  key={blockKey}
-                  src={`/api/card-image?url=${encodeURIComponent(src)}`}
-                  alt={value(block.altFact) || ''}
-                  className="max-h-64 w-full rounded-xl border border-edge/60 object-cover"
-                  width={1200}
-                  height={640}
-                  unoptimized
-                />
-              ) : null;
-            }
-            return null;
-          })}
+          {previewBlocks.map(renderBlock)}
+          {detailBlocks.length > 0 ? (
+            <details className="border-t border-edge/60 pt-2.5">
+              <summary
+                className={`disclosure flex cursor-pointer items-center gap-2 rounded-sm text-xs font-medium text-muted ${focusRing}`}
+              >
+                More details
+              </summary>
+              <div className="mt-3 grid gap-3">{detailBlocks.map(renderBlock)}</div>
+            </details>
+          ) : null}
         </div>
 
-        {actions.length > 0 ? (
+        {actions.length > 0 || (refreshable && onRefresh) ? (
           <div className="mt-4 flex flex-wrap gap-2 border-t border-edge/60 pt-3">
+            {refreshable && onRefresh ? (
+              <button
+                type="button"
+                disabled={refreshing}
+                onClick={() => void refresh()}
+                className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border border-accent/30 px-3 text-xs font-medium text-accent hover:bg-accent/10 disabled:cursor-wait disabled:opacity-60 ${focusRing}`}
+              >
+                <RotateCw
+                  className={`size-3 ${refreshing ? 'motion-safe:animate-spin' : ''}`}
+                  aria-hidden="true"
+                />
+                {refreshAttempt?.state === 'saving' && refreshing
+                  ? 'Starting refresh…'
+                  : refreshing
+                    ? 'Refreshing…'
+                    : 'Refresh'}
+              </button>
+            ) : null}
             {actions.map((action) => {
               const type = str(action.type);
               const id = str(action.id);
@@ -1045,26 +1422,26 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
                 return (
                   <CardLink key={id} href={cardHref(target.value)} label={str(action.label)} />
                 );
+              if (
+                type === 'open_url' ||
+                ((type === 'copy_value' || type === 'reveal_sensitive') && !target) ||
+                (type === 'ask_assistant' && (!str(action.prompt) || !onSend)) ||
+                !['copy_value', 'reveal_sensitive', 'ask_assistant'].includes(type)
+              )
+                return null;
               return (
                 <button
                   key={id}
                   type="button"
                   className={`inline-flex h-7 items-center gap-1.5 rounded-full border border-edge px-3 text-xs font-medium text-strong hover:bg-sunken ${focusRing}`}
                   onClick={() => {
-                    if (type === 'copy_value' && target)
-                      void navigator.clipboard.writeText(str(target.value));
+                    if (type === 'copy_value' && target) void copyValue(str(target.value));
                     if (type === 'reveal_sensitive' && target) toggleReveal(str(target.id));
                     if (type === 'ask_assistant' && str(action.prompt) && onSend)
                       onSend(str(action.prompt));
-                    if (type === 'refresh' && onSend)
-                      onSend(
-                        `Refresh saved card ${str(data.id)} (“${str(spec.title)}”) using current source data.`,
-                      );
                   }}
                 >
-                  {type === 'refresh' ? (
-                    <RotateCw className="size-3" aria-hidden="true" />
-                  ) : type === 'ask_assistant' ? (
+                  {type === 'ask_assistant' ? (
                     <MessageCircle className="size-3" aria-hidden="true" />
                   ) : null}
                   {str(action.label)}
@@ -1072,6 +1449,11 @@ function GeneratedCard({ data, onSend }: { data: Raw; onSend?: (text: string) =>
               );
             })}
           </div>
+        ) : null}
+        {actionFeedback ? (
+          <p role="status" className="mt-2 text-xs text-muted">
+            {actionFeedback}
+          </p>
         ) : null}
         {/* Last element in the card, after the actions: the answer first, then
             the affordances that act on it, then — for whoever wants it — where
@@ -1086,10 +1468,12 @@ function ResponseCardView({
   data,
   timeZone,
   onSend,
+  onRefresh,
 }: {
   data: Raw;
   timeZone: string;
   onSend?: (text: string) => void;
+  onRefresh?: RefreshCard;
 }) {
   switch (data.kind) {
     case 'calendar-day':
@@ -1103,6 +1487,12 @@ function ResponseCardView({
       return <CalendarEventCard data={data} />;
     case 'email-results':
       return <EmailResultsCard data={data} timeZone={timeZone} />;
+    case 'email-thread':
+      return <EmailThreadCard data={data} timeZone={timeZone} />;
+    case 'sheet-rows':
+      return <SheetRowsCard data={data} />;
+    case 'resource':
+      return <ResourceCard data={data} />;
     case 'web-search-results':
       return <WebSearchCard data={data} />;
     case 'availability':
@@ -1122,10 +1512,11 @@ function ResponseCardView({
     case 'proactive-alert':
       return <ProactiveAlertCard data={data} timeZone={timeZone} />;
     case 'generated-card':
-      return <GeneratedCard data={data} onSend={onSend} />;
+      return (
+        <GeneratedCard data={data} onSend={onSend} onRefresh={onRefresh} timeZone={timeZone} />
+      );
     default:
-      // email-thread, sheet-rows, resource and anything newer keep the prose
-      // fallback — an unportable card kind never renders as a broken box.
+      // Newer card kinds keep their prose fallback until this client supports them.
       return null;
   }
 }
@@ -1234,6 +1625,9 @@ export function rendersAllCards(cards: Raw[]): boolean {
       'agenda',
       'calendar-event',
       'email-results',
+      'email-thread',
+      'sheet-rows',
+      'resource',
       'web-search-results',
       'availability',
       'status',
@@ -1251,10 +1645,12 @@ export function ResponseCards({
   cards,
   timeZone,
   onSend,
+  onRefresh,
 }: {
   cards: Raw[];
   timeZone: string;
   onSend?: (text: string) => void;
+  onRefresh?: RefreshCard;
 }) {
   const eventGroups = new Map<string, Raw[]>();
   for (const event of cards.filter((card) => str(card.kind) === 'calendar-event')) {
@@ -1281,6 +1677,7 @@ export function ResponseCards({
           data={card}
           timeZone={timeZone}
           onSend={onSend}
+          onRefresh={onRefresh}
         />
       ))}
       {overflow.length > 0 ? (
@@ -1295,6 +1692,7 @@ export function ResponseCards({
                 data={card}
                 timeZone={timeZone}
                 onSend={onSend}
+                onRefresh={onRefresh}
               />
             ))}
           </div>

@@ -101,6 +101,79 @@ final class StubURLProtocol: URLProtocol {
 }
 
 final class APIClientRetryTests: XCTestCase {
+    @MainActor
+    func testSavedCardRefreshPostsSourceRefreshWithoutPretendingContentIsNew() async throws {
+        let original = ChatMessage(id: "card-message", role: .assistant, parts: [RichMessageFixture.generated(stale: true)])
+        StubURLProtocol.prime([.success(status: 202, body: Data(#"{"ok":true,"taskId":"refresh-2","refreshState":"refreshing"}"#.utf8))])
+        let model = AppModel(apiClient: makeClient(), initialMessages: [original])
+        let failure = await model.refreshSavedCard(id: "saved-1")
+        XCTAssertNil(failure)
+        XCTAssertTrue(try XCTUnwrap(model.messages.first).hasRefreshingCard)
+        guard case let .object(data)? = model.messages.first?.parts.first?.data else { return XCTFail("Missing card") }
+        XCTAssertEqual(data["updatedAt"], .string("2026-09-19T18:00:00.000Z"))
+        XCTAssertEqual(data["stale"], .bool(true))
+        XCTAssertEqual(StubURLProtocol.urls.first?.path, "/api/mobile/v1/cards/saved-1")
+        let body = try JSONSerialization.jsonObject(with: XCTUnwrap(StubURLProtocol.bodies.first))
+        XCTAssertEqual(body as? [String: String], ["action": "refresh"])
+        XCTAssertEqual(StubURLProtocol.attempts, ["POST"])
+    }
+
+    @MainActor
+    func testFailedCardRefreshRetainsSnapshotAndReturnsInlineError() async {
+        let original = ChatMessage(id: "card-message", role: .assistant, parts: [RichMessageFixture.generated(stale: true)])
+        StubURLProtocol.prime([.success(status: 409, body: Data(#"{"error":"The source is unavailable."}"#.utf8))])
+        let model = AppModel(apiClient: makeClient(), initialMessages: [original])
+        let failure = await model.refreshSavedCard(id: "saved-1")
+        XCTAssertEqual(failure, "The source is unavailable.")
+        XCTAssertEqual(model.messages, [original])
+        XCTAssertNil(model.errorMessage)
+    }
+
+    @MainActor
+    func testCardRefreshPrioritizesItsRowOverOldDecisionReceipts() async throws {
+        let card = ChatMessage(id: "card-message", role: .assistant, parts: [RichMessageFixture.generated(stale: true)])
+        let receipts = (0..<12).map { index in
+            ChatMessage(id: "receipt-\(index)", role: .assistant, parts: [.init(type: "approval", status: "approved")])
+        }
+        let conversation = ConversationView(conversation: .init(id: "chat", title: "Cards", modelOverride: nil,
+            archivedAt: nil, isPrimary: true), agentName: "Assistant", agentTimezone: "UTC",
+            messages: [card] + receipts, models: [], goalTitle: nil, canArchive: false, cursor: nil, asyncTurn: nil)
+        let stale = ChatUpdates(taskStatus: nil, messages: [], refreshed: [card], superseded: nil,
+            nextCursor: nil, hasMore: false, activity: [])
+        StubURLProtocol.prime([
+            .success(status: 200, body: try JSONEncoder().encode(conversation)),
+            .success(status: 202, body: Data(#"{"ok":true,"taskId":"refresh-2","refreshState":"refreshing"}"#.utf8)),
+            .success(status: 200, body: try JSONEncoder().encode(stale))
+        ])
+        let model = AppModel(apiClient: makeClient())
+        _ = await model.openConversation(id: "chat")
+        let failure = await model.refreshSavedCard(id: "saved-1")
+        XCTAssertNil(failure)
+        let reread = try XCTUnwrap(StubURLProtocol.urls.last)
+        let refreshedIDs = URLComponents(url: reread, resolvingAgainstBaseURL: false)?.queryItems?
+            .first { $0.name == "refresh" }?.value?.split(separator: ",")
+        XCTAssertEqual(refreshedIDs?.first, "card-message")
+        XCTAssertEqual(refreshedIDs?.count, 10)
+        XCTAssertEqual(model.messages.filter(\.hasRefreshingCard).map(\.id), ["card-message"])
+    }
+
+    @MainActor
+    func testCardRefreshCannotBeStartedTwiceWhileSaving() async {
+        StubURLProtocol.prime([.stream(body: Data())])
+        let model = AppModel(apiClient: makeClient(), initialMessages: [
+            ChatMessage(id: "m", role: .assistant, parts: [RichMessageFixture.generated()])
+        ])
+        let first = Task { await model.refreshSavedCard(id: "saved-1") }
+        while StubURLProtocol.attempts.isEmpty { await Task.yield() }
+        let duplicate = await model.refreshSavedCard(id: "saved-1")
+        XCTAssertEqual(duplicate, "This card is already refreshing.")
+        XCTAssertEqual(StubURLProtocol.attempts, ["POST"])
+        first.cancel()
+        let failure = await first.value
+        XCTAssertNotNil(failure)
+        XCTAssertFalse(model.messages[0].hasRefreshingCard)
+    }
+
     func testRelationshipGraphOmitsAbsentQueryIdentifiers() async throws {
         let body = try JSONEncoder().encode(RelationshipGraphSnapshot.empty)
         for (person, entity, expected) in [(nil, nil, Set<String>()), ("person-id", nil, ["person"]), (nil, "entity-id", ["entity"])] as [(String?, String?, Set<String>)] {

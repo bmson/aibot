@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+
 import {
   cardsReplaceProse,
   ResponseCards,
@@ -58,7 +59,9 @@ describe('rendersAllCards', () => {
         },
       ]),
     ).toBe(true);
-    expect(rendersAllCards([{ kind: 'weather' }, { kind: 'email-thread' }])).toBe(false);
+    expect(
+      rendersAllCards([{ kind: 'email-thread' }, { kind: 'sheet-rows' }, { kind: 'resource' }]),
+    ).toBe(true);
     expect(rendersAllCards([{ kind: 'something-newer' }])).toBe(false);
   });
 });
@@ -531,5 +534,124 @@ describe('a card read out of the reply', () => {
     // An older build sends no grounding: a lookup card, the previous contract.
     expect(cardsReplaceProse([{ ...fromAnswer, grounding: undefined }])).toBe(true);
     expect(cardsReplaceProse([])).toBe(false);
+  });
+});
+
+describe('rich result previews', () => {
+  const render = (card: Record<string, unknown>) =>
+    renderToStaticMarkup(<ResponseCards cards={[card]} timeZone="UTC" />);
+  it('renders email threads as readable excerpts with remaining messages disclosed', () => {
+    const html = render({
+      kind: 'email-thread',
+      subject: 'Travel plans',
+      messageCount: 7,
+      messages: Array.from({ length: 5 }, (_, index) => ({
+        id: `mail-${index}`,
+        sender: `Person ${index}`,
+        date: '2026-09-19T12:00:00Z',
+        excerpt: index
+          ? `Message ${index}`
+          : `<script>alert(1)</script> ${'Long email text. '.repeat(30)}`,
+      })),
+    });
+    expect(html).toContain('Email thread · 7 messages');
+    expect(html).toContain('Travel plans');
+    expect(html).toContain('Read more');
+    expect(html).toContain('5 of 7 messages included');
+    expect(html).not.toContain('<script>');
+    expect(html.indexOf('Person 2')).toBeLessThan(html.indexOf('2 more'));
+    expect(html.indexOf('2 more')).toBeLessThan(html.indexOf('Person 3'));
+  });
+  it('preserves typed sheet values in a semantic, scrollable preview without assuming a header row', () => {
+    const html = render({
+      kind: 'sheet-rows',
+      sheetName: 'Budget',
+      totalRows: 12,
+      rows: [
+        ['Rent', 0, false],
+        ['Utilities', 30],
+        ['Travel', 250],
+        ['Food', 180],
+      ],
+      link: { label: 'Open spreadsheet', url: 'https://docs.google.com/spreadsheets/d/test' },
+    });
+    expect(html).toContain('<table');
+    expect(html).toContain('scope="col"');
+    expect(html).toContain('Column 1');
+    expect(html).toContain('>0</td>');
+    expect(html).toContain('>false</td>');
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('Showing 4 of 12 rows');
+    expect(html.indexOf('1 more')).toBeLessThan(html.indexOf('Food'));
+    expect(html).toContain('href="https://docs.google.com/spreadsheets/d/test"');
+  });
+  it('keeps resource metadata and refuses unsafe open links', () => {
+    const html = render({
+      kind: 'resource',
+      resourceType: 'document',
+      title: 'Trip notes',
+      subtitle: 'Google Doc created',
+      details: [{ label: 'Shared with', value: 'me@example.com' }],
+      link: { label: 'Open document', url: 'javascript:alert(1)' },
+    });
+    expect(html).toContain('Trip notes');
+    expect(html).toContain('Shared with');
+    expect(html).not.toContain('javascript:');
+    expect(html).not.toContain('href=');
+  });
+});
+
+describe('generated card hierarchy and freshness', () => {
+  const card = {
+    kind: 'generated-card',
+    id: 'card-1',
+    revisionId: 'revision-1',
+    updatedAt: '2026-09-18T10:00:00Z',
+    spec: {
+      version: 1,
+      title: 'Journey',
+      sourceLabel: 'Itinerary',
+      refreshable: true,
+      facts: Array.from({ length: 6 }, (_, index) => ({
+        id: `f${index}`,
+        label: `Stop ${index + 1}`,
+        value: `Place ${index + 1}`,
+      })),
+      blocks: [{ type: 'timeline', factIds: ['f0', 'f1', 'f2', 'f3', 'f4', 'f5'] }],
+      actions: [{ id: 'refresh', type: 'refresh', label: 'Refresh' }],
+    },
+  };
+  const render = (overrides: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(
+      <ResponseCards
+        cards={[{ ...card, ...overrides }]}
+        timeZone="UTC"
+        onRefresh={async () => ({ ok: true, taskId: 'task' })}
+      />,
+    );
+  it('shows a semantic timeline with four facts before a closed details disclosure', () => {
+    const html = render();
+    expect(html).toContain('<ol aria-label="Timeline"');
+    expect(html).toContain('start="5"');
+    expect(html.indexOf('Place 4')).toBeLessThan(html.indexOf('More details'));
+    expect(html.indexOf('More details')).toBeLessThan(html.indexOf('Place 5'));
+    expect(html).not.toContain('<details open');
+  });
+  it('shows source update time and stale state without claiming a fresh read', () => {
+    const html = render({ stale: true, refreshState: 'idle' });
+    expect(html).toContain('Updated Sep 18');
+    expect(html).toContain('May be out of date');
+    expect(html.match(/>Refresh</g)).toHaveLength(1);
+  });
+  it('disables refresh while the server is working and retains facts on failure', () => {
+    const loading = render({ refreshState: 'refreshing' });
+    expect(loading).toContain('disabled=""');
+    expect(loading).toContain('Refreshing…');
+    const failed = render({ refreshState: 'failed', refreshError: 'Internal provider diagnostic' });
+    expect(failed).toContain('Refresh failed. Showing the saved version.');
+    expect(failed).toContain('Place 1');
+    expect(failed).toContain('Updated Sep 18');
+    expect(failed).not.toContain('Internal provider diagnostic');
+    expect(failed).not.toContain('disabled=""');
   });
 });
