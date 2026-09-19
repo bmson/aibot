@@ -416,16 +416,17 @@ export function isInteractiveRole(role: ModelRole): boolean {
  */
 const REASONING_ROLES: ReadonlySet<ModelRole> = new Set<ModelRole>(['plan', 'reason']);
 
-/**
- * How long a `model_roles` / `models` row stays usable without re-reading it.
- *
- * Both tables are tiny, near-static installation config, yet `route()` reads
- * two to three rows from them on *every* model call — two or three times per
- * chat turn. They change only when the owner picks a model or a seed
- * reconciles, so a few seconds of staleness costs nothing and a short TTL
- * needs no invalidation hook reaching into the router from the seed path.
+/*
+ * `model_roles` and `models` are read on every call and look like obvious
+ * cache candidates — they are tiny and change rarely. They are deliberately
+ * NOT cached. Routing config is also a safety control: `route()` refuses a
+ * disabled model so a retired provider is never billed, and the owner's model
+ * choice is expected to take effect on the next message. A TTL turns both into
+ * "eventually", and the router runs in more than one process, so no in-process
+ * invalidation can cover a change made elsewhere. Two indexed lookups on a
+ * pooled connection are not worth paying for with a window where a disabled
+ * model still routes.
  */
-const ROUTING_CACHE_TTL_MS = 30_000;
 
 /**
  * Reasoning ("thinking") models spend completion tokens on hidden reasoning
@@ -521,12 +522,6 @@ export function isProviderCapabilityError(err: unknown): boolean {
 export class ModelRouter {
   private provider: ModelProvider;
   private readonly persistence: ModelRoutingRepository;
-  /**
-   * Per-router, not module-global: a test builds its own router per fixture and
-   * must never inherit another's rows, and the web process holds exactly one
-   * router, which is where the repeated reads actually happen.
-   */
-  private readonly routingCache = new Map<string, { at: number; value: unknown }>();
 
   constructor(
     store: Db | ModelRoutingRepository,
@@ -545,28 +540,6 @@ export class ModelRouter {
       'kind' in store && store.kind === 'model-routing-repository'
         ? (store as ModelRoutingRepository)
         : createPostgresModelRoutingRepository(store as Db);
-  }
-
-  /**
-   * Read installation routing config through a short TTL.
-   *
-   * Only `model_roles` and `models` go through here. Budget totals, task
-   * budgets and conversation overrides are deliberately excluded: those change
-   * as a direct result of the very calls being routed, and serving a stale one
-   * would let spend slip past the guard or pin a conversation to a model the
-   * owner just switched away from.
-   */
-  private async cachedRouting<T>(key: string, read: () => Promise<T>): Promise<T> {
-    const hit = this.routingCache.get(key);
-    if (hit && Date.now() - hit.at < ROUTING_CACHE_TTL_MS) return hit.value as T;
-    const value = await read();
-    this.routingCache.set(key, { at: Date.now(), value });
-    return value;
-  }
-
-  /** Drop cached routing config — for a process that just rewrote those rows. */
-  clearRoutingCache(): void {
-    this.routingCache.clear();
   }
 
   /**
@@ -609,7 +582,7 @@ export class ModelRouter {
       return { ok: false, decision };
     }
 
-    const roleRow = await this.cachedRouting(`role:${role}`, () => this.persistence.role(role));
+    const roleRow = await this.persistence.role(role);
     if (!roleRow) throw new Error(`no model_roles row for role: ${role}`);
 
     let primaryId = roleRow.primaryModel;
@@ -625,10 +598,7 @@ export class ModelRouter {
       modelOverride = (await this.persistence.conversationOverride(opts.taskId)) ?? undefined;
     }
     if (modelOverride) {
-      const overrideId = modelOverride;
-      const override = await this.cachedRouting(`model:${overrideId}`, () =>
-        this.persistence.model(overrideId),
-      );
+      const override = await this.persistence.model(modelOverride);
       if (override?.enabled && !(override.capabilities as { embedding?: boolean }).embedding) {
         primaryId = override.id;
       }
@@ -637,9 +607,7 @@ export class ModelRouter {
     const degraded = opts.forceFallback || decision.mode === 'fallback';
     const modelId = degraded ? roleRow.fallbackModel : primaryId;
     const params = (roleRow.params ?? {}) as Record<string, unknown>;
-    const modelRow = await this.cachedRouting(`model:${modelId}`, () =>
-      this.persistence.model(modelId),
-    );
+    const modelRow = await this.persistence.model(modelId);
     if (!modelRow) throw new Error(`model row missing for routed model: ${modelId}`);
     if (!modelRow.enabled) throw new Error(`routed model is disabled: ${modelId}`);
     const promptCostPerMTok = Number(modelRow.promptCostPerMTok);

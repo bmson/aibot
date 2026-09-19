@@ -72,7 +72,12 @@ for (const viewport of viewports) {
   for (const target of pages) {
     const url = `${base}${target.path}`;
     try {
-      const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+      // NOT networkidle: the chat holds a long poll open against
+      // /api/chat/status and opens the next one as soon as it returns, so that
+      // page never goes quiet and every shot of it would burn the full
+      // timeout. `load` plus the per-target settle below is what these
+      // screenshots actually need.
+      const response = await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
       await page.waitForTimeout(target.wait ?? 600);
       const status = response?.status() ?? 0;
       const file = `${outDir}/${viewport.name}-${target.name}.png`;
