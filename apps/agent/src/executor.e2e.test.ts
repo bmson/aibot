@@ -1,6 +1,8 @@
 import type { DispatcherPort, InboundEvent, ModelRouter, StepCallOutcome } from '@assistant/core';
 import {
+  acceptSuggestion,
   completeTask,
+  createSuggestion,
   enqueueTask,
   executeTask,
   getAgent,
@@ -15,6 +17,7 @@ import {
   createDb,
   type Db,
   messages,
+  suggestions,
   tasks,
   toolCalls,
 } from '@assistant/db';
@@ -32,6 +35,7 @@ let dbUp = false;
 let agentId: string;
 const createdTaskIds: string[] = [];
 const createdConversationIds: string[] = [];
+const createdSuggestionIds: string[] = [];
 const executions: Record<string, number> = {};
 
 /**
@@ -155,6 +159,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (dbUp) {
+    if (createdSuggestionIds.length) {
+      await db.delete(suggestions).where(inArray(suggestions.id, createdSuggestionIds));
+    }
     await db
       .update(toolCalls)
       .set({ approvalId: null })
@@ -195,6 +202,86 @@ afterAll(async () => {
 });
 
 describe('executor end-to-end (integration, scripted model)', () => {
+  it('accepts a legacy suggestion, uses its proposal, and delivers the completed result in its chat', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const [conversation] = await db
+      .insert(conversations)
+      .values({ agentId, channel: 'chat', trust: 'owner', title: 'suggestion-result-test' })
+      .returning();
+    if (!conversation) throw new Error('conversation was not created');
+    createdConversationIds.push(conversation.id);
+
+    const instruction = 'Explain the difference between snoozing and dismissing a reminder.';
+    const suggestion = await createSuggestion(db, {
+      agentId,
+      // Historical pulse cards have no conversationId on the suggestion row.
+      summary: 'Explain the reminder options?',
+      proposedAction: instruction,
+      sourceRef: `executor-suggestion-${conversation.id}`,
+      origin: 'pulse',
+    });
+    if (!suggestion) throw new Error('suggestion was not created');
+    createdSuggestionIds.push(suggestion.id);
+    await db.insert(messages).values([
+      {
+        conversationId: conversation.id,
+        role: 'assistant',
+        origin: 'assistant',
+        text: suggestion.summary,
+        parts: [{ type: 'suggestion', suggestionId: suggestion.id, summary: suggestion.summary }],
+      },
+      {
+        conversationId: conversation.id,
+        role: 'user',
+        origin: 'owner',
+        text: 'Find my unrelated vacation photos from Reykjavik.',
+        parts: [{ type: 'text', text: 'Find my unrelated vacation photos from Reykjavik.' }],
+      },
+    ]);
+
+    const accepted = await acceptSuggestion(db, suggestion.id);
+    if (!accepted.ok) throw new Error(accepted.reason);
+    createdTaskIds.push(accepted.taskId);
+    const modelWindows: ModelMessage[][] = [];
+    const finalText = 'Snoozing brings the reminder back later. Dismissing closes it.';
+    const router = {
+      async object() {
+        return {
+          ok: true,
+          modelId: 'fake/model',
+          degraded: false,
+          object: { action: 'reply', reasoning: '', steps: [], missingInfo: [] },
+        };
+      },
+      async step(_role: string, options: { messages?: ModelMessage[] }): Promise<StepCallOutcome> {
+        modelWindows.push(options.messages ?? []);
+        return { ok: true, modelId: 'fake/model', degraded: false, text: finalText, toolCalls: [] };
+      },
+    } as unknown as ModelRouter;
+    // No external side-effect tools are registered for this regression.
+    const dispatcher = new ToolDispatcher(db, new ToolRegistry());
+    const outcome = await executeTask({ db, router, dispatcher }, accepted.taskId);
+    expect(outcome.outcome).toBe('done');
+    expect(modelWindows.length).toBeGreaterThan(0);
+    expect(modelWindows[0]?.filter((message) => message.role === 'user')).toEqual([
+      { role: 'user', content: instruction },
+    ]);
+    expect(JSON.stringify(modelWindows)).not.toContain('unrelated vacation photos');
+
+    const replies = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.taskId, accepted.taskId), eq(messages.role, 'assistant')));
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.conversationId).toBe(conversation.id);
+    expect(replies[0]?.text).toBe(finalText);
+    const [finished] = await db.select().from(tasks).where(eq(tasks.id, accepted.taskId));
+    expect(finished?.status).toBe('done');
+    expect(await db.select().from(toolCalls).where(eq(toolCalls.taskId, accepted.taskId))).toEqual(
+      [],
+    );
+  });
+
   it('runs tools, parks on approval, resumes after approval, completes', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const key = `t1-${Date.now()}`;
