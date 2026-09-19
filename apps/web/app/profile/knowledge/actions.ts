@@ -19,10 +19,9 @@ import {
   reviewKnowledgeGraphRelation,
   searchKnowledgeGraphEntities,
 } from '@assistant/application';
-import { approveQuarantinedMemory, restoreMemory } from '@assistant/application/profile';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getDb, getRouter } from '@/lib/server';
+import { getApplication, getDb, getRouter } from '@/lib/server';
 
 /**
  * Saving a connection has to embed its source note first, so an unreachable
@@ -234,13 +233,13 @@ export async function forgetKnowledgeMemory(memoryId: string): Promise<void> {
 
 export async function keepKnowledgeMemory(memoryId: string): Promise<void> {
   await requireOwner();
-  await restoreMemory(getDb(), memoryId);
+  await getApplication().restoreMemory(memoryId);
   revalidateKnowledgeGraph();
 }
 
 export async function approveKnowledgeMemory(memoryId: string): Promise<void> {
   await requireOwner();
-  await approveQuarantinedMemory(getDb(), memoryId);
+  await getApplication().approveQuarantinedMemory(memoryId);
   revalidateKnowledgeGraph();
 }
 

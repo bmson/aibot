@@ -1,12 +1,10 @@
 import {
-  approveQuarantinedMemory,
   cleanKnowledgeProjectionOrphans,
   forgetKnowledgeSource,
   getKnowledgeCleanupFindings,
   retryQuarantinedKnowledgeGraphSources,
 } from '@assistant/application';
-import { restoreMemory } from '@assistant/application/profile';
-import { getDb } from '@/lib/server';
+import { getApplication, getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -24,8 +22,9 @@ export async function POST(request: Request): Promise<Response> {
   if (action === 'remove-orphans') await cleanKnowledgeProjectionOrphans(getDb());
   else if (action === 'retry') await retryQuarantinedKnowledgeGraphSources(getDb());
   else if (action === 'forget' && memoryId) await forgetKnowledgeSource(getDb(), memoryId);
-  else if (action === 'approve' && memoryId) await approveQuarantinedMemory(getDb(), memoryId);
-  else if (action === 'keep' && memoryId) await restoreMemory(getDb(), memoryId);
+  else if (action === 'approve' && memoryId)
+    await getApplication().approveQuarantinedMemory(memoryId);
+  else if (action === 'keep' && memoryId) await getApplication().restoreMemory(memoryId);
   else return mobileJson({ error: 'invalid cleanup action' }, { status: 400 });
   return mobileJson({ ok: true });
 }

@@ -1,3 +1,5 @@
 export * from './profile/commands.js';
+export * from './profile/memory-commands.js';
+export * from './profile/memory-persistence.js';
 export * from './profile/privacy.js';
 export * from './profile/queries.js';

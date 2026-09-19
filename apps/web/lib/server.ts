@@ -28,7 +28,6 @@ import {
   getAssistantIdentity,
   getAssistantTimezone,
   getChatConversationView,
-  getChatUpdates,
   getDocumentsOverview,
   getImportOverview,
   getMcpConnection,
@@ -71,6 +70,10 @@ import {
   uploadImport,
   waitForChatUpdates,
 } from '@assistant/application';
+import {
+  type ProfileMemoryCommandPersistence,
+  profileMemoryCommands,
+} from '@assistant/application/profile';
 import { loadConfig, repoRoot } from '@assistant/config';
 import { createConfiguredModelProvider, ModelRouter } from '@assistant/core/model-router';
 import {
@@ -166,8 +169,11 @@ export function getWorkspace(): WorkspaceStore {
  * handlers, and server actions call this facade instead of reaching into
  * persistence, model routing, or workspace adapters themselves.
  */
-function createApplication() {
+function createApplication(options: { profileMemory?: ProfileMemoryCommandPersistence } = {}) {
   const db = getDb();
+  const memoryCommands = profileMemoryCommands(options.profileMemory ?? db, {
+    embed: (texts) => getRouter().embed(texts),
+  });
   const workspace = getWorkspace();
   const refreshMcpConnection = async (connectionId: string) => {
     const current = await getMcpConnection(db, connectionId);
@@ -181,6 +187,7 @@ function createApplication() {
     return { connectionId, ...discovery };
   };
   return {
+    ...memoryCommands,
     listAnomalies: () => listAnomalies(db),
     dismissAnomaly: (id: string) => dismissAnomalyRecord(db, id),
     suspendAnomaly: (id: string) => suspendAnomalyRecord(db, id),
