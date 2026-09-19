@@ -76,7 +76,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
     expect(messageRecords.find((record) => record.id === ids.message)?.checksum).not.toBe(
       messageRecords.find((record) => record.id === ids.message2)?.checksum,
     );
-    expect(bundle.manifest.formatVersion).toBe(2);
+    expect(bundle.manifest.formatVersion).toBe(3);
     expect(bundle.records.find((record) => record.id === ids.file)?.data.bytes).toBe(
       Number.MAX_SAFE_INTEGER,
     );

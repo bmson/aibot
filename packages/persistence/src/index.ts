@@ -18,6 +18,7 @@ export * from './memory-tools.js';
 export * from './migration.js';
 export * from './model-routing.js';
 export * from './money.js';
+export * from './owner-card-compilation.js';
 export * from './owner-context.js';
 export * from './recall-metrics.js';
 export * from './records.js';

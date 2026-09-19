@@ -1,11 +1,59 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { compileOwnerCard } from '@assistant/core/memory/consolidation';
 import {
   createFirestoreCardRefreshRepository,
+  createFirestoreExecutionPersistence,
+  embeddingSpaceKey,
   FirestoreApplicationChatPersistence,
   FirestoreGeneratedCardRepository,
   type InstallationStore,
 } from '@assistant/firestore';
+import type { EmbeddingSpace, Records } from '@assistant/persistence';
+import { FieldValue } from '@google-cloud/firestore';
+
+const APPLICATION_SMOKE_SPACE: EmbeddingSpace = {
+  provider: 'synthetic',
+  model: 'application-smoke',
+  dimensions: 1536,
+  revision: '1',
+};
+
+function smokeMemory(
+  id: string,
+  agentId: string,
+  subjectContactId: string,
+  content: string,
+  createdAt: Date,
+): Records['memories'] {
+  return {
+    id,
+    agentId,
+    createdAt,
+    expiresAt: null,
+    embedding: [1, ...new Array(APPLICATION_SMOKE_SPACE.dimensions - 1).fill(0)],
+    sourceTaskId: null,
+    kind: 'fact',
+    confidence: '0.90',
+    content,
+    contentHash: createHash('sha256').update(content).digest('hex'),
+    goalId: null,
+    originTrust: 'owner',
+    category: 'knowledge',
+    importance: 5,
+    quarantined: false,
+    subjectContactId,
+    domain: 'home',
+    validFrom: null,
+    validUntil: null,
+    supersededById: null,
+    ownerConfirmed: false,
+    pinned: false,
+    source: 'synthetic-smoke',
+    lastAccessedAt: null,
+    lastConsolidatedAt: null,
+  };
+}
 
 /** Synthetic application-query smoke shared by emulator CI and real-cloud validation. */
 export async function firestoreApplicationSmoke(store: InstallationStore): Promise<void> {
@@ -19,6 +67,63 @@ export async function firestoreApplicationSmoke(store: InstallationStore): Promi
     createdAt: now,
     updatedAt: now,
   });
+  const execution = createFirestoreExecutionPersistence(store, agentId, APPLICATION_SMOKE_SPACE);
+  assert.equal(execution.driver, 'firestore');
+  assert.equal(execution.memorySupersede.kind, 'memory-supersede-repository');
+  assert.equal(execution.ownerCardCompilation.kind, 'owner-card-compilation-repository');
+  assert.equal(execution.ownerContext.kind, 'owner-context-repository');
+
+  const ownerContactId = randomUUID();
+  await store.doc('contacts', ownerContactId).set({
+    id: ownerContactId,
+    name: 'Synthetic owner',
+    aliases: [],
+    emails: [],
+    phones: [],
+    relationship: '',
+    trust: 'owner',
+    notes: '',
+    createdAt: now,
+    updatedAt: now,
+  });
+  const oldFact = smokeMemory(
+    randomUUID(),
+    agentId,
+    ownerContactId,
+    'Synthetic owner lives in Oldtown',
+    new Date(now.getTime() - 1_000),
+  );
+  const replacement = smokeMemory(
+    randomUUID(),
+    agentId,
+    ownerContactId,
+    'Synthetic owner lives in Newtown',
+    now,
+  );
+  for (const memory of [oldFact, replacement]) {
+    await store.doc('memories', memory.id).set({
+      ...memory,
+      embedding: FieldValue.vector(memory.embedding as number[]),
+      embeddingSpace: embeddingSpaceKey(APPLICATION_SMOKE_SPACE),
+    });
+  }
+  const compiled = await compileOwnerCard(execution.ownerCardCompilation, agentId, now);
+  assert.match(compiled, /Oldtown/);
+  assert.match(compiled, /Newtown/);
+  assert.deepEqual(
+    await execution.memorySupersede.retire({
+      agentId,
+      replacementId: replacement.id,
+      ids: [oldFact.id],
+    }),
+    [oldFact.id],
+  );
+  assert.equal((await execution.ownerContext.getOwnerCard(agentId))?.content, '');
+  const recompiled = await compileOwnerCard(execution.ownerCardCompilation, agentId, now);
+  assert.doesNotMatch(recompiled, /Oldtown/);
+  assert.match(recompiled, /Newtown/);
+  assert.equal((await execution.ownerContext.getOwnerCard(agentId))?.content, recompiled);
+
   const chat = new FirestoreApplicationChatPersistence(store);
   const first = await chat.createConversation(agentId);
   const second = await chat.createConversation(agentId);

@@ -24,6 +24,15 @@
       "collectionGroup": "memories",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "quarantined", "order": "ASCENDING" },
+        { "fieldPath": "supersededById", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "memories",
+      "queryScope": "COLLECTION",
+      "fields": [
         {
           "fieldPath": "agentId",
           "order": "ASCENDING"

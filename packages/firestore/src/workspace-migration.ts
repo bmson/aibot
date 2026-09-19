@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import {
-  checksum,
+  checksumForMigrationVersion,
   deserializeMigrationValue,
+  deterministicMigrationCompare,
   type MigrationBundle,
   type MigrationRecord,
   type MigrationTarget,
@@ -64,6 +65,14 @@ function materializeValue(value: unknown): unknown {
   return value;
 }
 
+function markerFormatVersionMatches(
+  markerFormatVersion: unknown,
+  bundleFormatVersion: MigrationBundle['manifest']['formatVersion'],
+): boolean {
+  if (markerFormatVersion === bundleFormatVersion) return true;
+  return markerFormatVersion === undefined && bundleFormatVersion <= 2;
+}
+
 async function verifyDestination(
   store: InstallationStore,
   writes: Array<{ collection: string; id: string; data: FirebaseFirestore.DocumentData }>,
@@ -76,6 +85,7 @@ async function verifyDestination(
     !marker.exists ||
     marker.get('status') !== 'pending_activation' ||
     marker.get('bundleChecksum') !== bundle.manifest.bundleChecksum ||
+    !markerFormatVersionMatches(marker.get('formatVersion'), bundle.manifest.formatVersion) ||
     marker.get('sourceAgentId') !== bundle.manifest.source.agentId ||
     JSON.stringify(marker.get('target')) !== JSON.stringify(bundle.manifest.target) ||
     marker.get('completedWrites') !== writes.length ||
@@ -98,8 +108,10 @@ async function verifyDestination(
       const snapshot = snapshots[offset];
       if (!write || !snapshot?.exists) throw new Error('Imported destination record is missing');
       if (
-        checksum(decodeMigrationDocument(snapshot.data())) !==
-        expectedChecksums.get(`${write.collection}:${write.id}`)
+        checksumForMigrationVersion(
+          decodeMigrationDocument(snapshot.data()),
+          bundle.manifest.formatVersion,
+        ) !== expectedChecksums.get(`${write.collection}:${write.id}`)
       )
         throw new Error(`Imported destination checksum mismatch: ${write.collection}/${write.id}`);
     }
@@ -167,19 +179,22 @@ function materialize(
   return data;
 }
 
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
+function canonical(value: unknown, compare: (left: string, right: string) => number): unknown {
+  if (Array.isArray(value)) return value.map((item) => canonical(item, compare));
   if (value && typeof value === 'object' && !(value instanceof Date))
     return Object.fromEntries(
       Object.entries(value)
         .filter(([, item]) => item !== undefined)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, item]) => [key, canonical(item)]),
+        .sort(([a], [b]) => compare(a, b))
+        .map(([key, item]) => [key, canonical(item, compare)]),
     );
   return value;
 }
 
-function approvalPolicyKey(policy: Record<string, unknown>): string {
+function approvalPolicyKey(
+  policy: Record<string, unknown>,
+  version: MigrationBundle['manifest']['formatVersion'],
+): string {
   const requested = {
     agentId: policy.agentId,
     toolName: policy.toolName,
@@ -187,8 +202,12 @@ function approvalPolicyKey(policy: Record<string, unknown>): string {
     effect: policy.effect,
     match: policy.match,
   };
+  const compare =
+    version >= 3
+      ? deterministicMigrationCompare
+      : (left: string, right: string) => left.localeCompare(right);
   return createHash('sha256')
-    .update(JSON.stringify(canonical(requested)))
+    .update(JSON.stringify(canonical(requested, compare)))
     .digest('hex');
 }
 
@@ -298,7 +317,7 @@ function derivedRecords(bundle: MigrationBundle, target: MigrationTarget) {
     const data = materialize(record, bundle.manifest.source.embeddingSpace);
     rows.push({
       collection: 'approvalPolicyKeys',
-      id: approvalPolicyKey(data),
+      id: approvalPolicyKey(data, bundle.manifest.formatVersion),
       data: { policyId: record.id },
     });
   }
@@ -422,8 +441,12 @@ export async function importWorkspaceBundle(
   },
 ): Promise<WorkspaceImportResult> {
   validateMigrationBundle(bundle, options);
+  const recordCompare =
+    bundle.manifest.formatVersion >= 3
+      ? deterministicMigrationCompare
+      : (left: string, right: string) => left.localeCompare(right);
   const records = [...bundle.records].sort((a, b) =>
-    `${a.collection}:${a.id}`.localeCompare(`${b.collection}:${b.id}`),
+    recordCompare(`${a.collection}:${a.id}`, `${b.collection}:${b.id}`),
   );
   const derived = derivedRecords(bundle, options.target);
   const dataDerived = derived.filter(
@@ -466,7 +489,10 @@ export async function importWorkspaceBundle(
   const expectedChecksums = new Map(
     writes.map((write) => [
       `${write.collection}:${write.id}`,
-      checksum(decodeMigrationDocument(write.data)),
+      checksumForMigrationVersion(
+        decodeMigrationDocument(write.data),
+        bundle.manifest.formatVersion,
+      ),
     ]),
   );
   const collections = Object.fromEntries(
@@ -508,12 +534,14 @@ export async function importWorkspaceBundle(
     sourceAgentId: bundle.manifest.source.agentId,
     target: options.target,
     bundleChecksum: bundle.manifest.bundleChecksum,
+    formatVersion: bundle.manifest.formatVersion,
   };
   let resumed = false;
   let completed = 0;
   if (markerData) {
     if (
       markerData.bundleChecksum !== markerIdentity.bundleChecksum ||
+      !markerFormatVersionMatches(markerData.formatVersion, markerIdentity.formatVersion) ||
       markerData.sourceAgentId !== markerIdentity.sourceAgentId ||
       JSON.stringify(markerData.target) !== JSON.stringify(markerIdentity.target)
     )
@@ -566,7 +594,10 @@ export async function importWorkspaceBundle(
         if (
           expectedChecksum &&
           snapshot &&
-          checksum(decodeMigrationDocument(snapshot.data())) !== expectedChecksum
+          checksumForMigrationVersion(
+            decodeMigrationDocument(snapshot.data()),
+            bundle.manifest.formatVersion,
+          ) !== expectedChecksum
         )
           throw new Error('Completed migration record checksum mismatch');
       }
@@ -593,6 +624,7 @@ export async function importWorkspaceBundle(
       for (const write of chunk) tx.create(store.doc(write.collection, write.id), write.data);
       tx.update(marker, {
         completedWrites: index + chunk.length,
+        formatVersion: bundle.manifest.formatVersion,
         status: index + chunk.length === writes.length ? 'pending_activation' : 'importing',
       });
     });
@@ -618,4 +650,4 @@ export function migrationCoverage(bundle: MigrationBundle): string[] {
   );
 }
 
-export { checksum };
+export { checksum } from '@assistant/persistence';

@@ -14,6 +14,7 @@ import { createPostgresMemorySupersedeRepository } from './memory-supersede-repo
 import { createPostgresMemoryToolRepository } from './memory-tool-repository.js';
 import { createPostgresMessageRepository } from './message-repository.js';
 import { createPostgresModelRoutingRepository } from './model-routing-repository.js';
+import { createPostgresOwnerCardCompilationRepository } from './owner-card-compilation-repository.js';
 import { createPostgresOwnerContextRepository } from './owner-context-repository.js';
 import { createPostgresRecallMetricsRepository } from './recall-metrics-repository.js';
 import { createPostgresSkillContextRepository } from './skill-context-repository.js';
@@ -36,6 +37,7 @@ export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence
     executionJobs: createPostgresExecutionJobRepository(db),
     executionEvidence: createPostgresExecutionEvidenceRepository(db),
     ownerContext: createPostgresOwnerContextRepository(db),
+    ownerCardCompilation: createPostgresOwnerCardCompilationRepository(db),
     skills: createPostgresSkillContextRepository(db),
     history: createPostgresHistoryRecallRepository(db),
     graph: createPostgresGraphRecallRepository(db),

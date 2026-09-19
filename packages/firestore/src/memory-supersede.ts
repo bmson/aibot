@@ -199,6 +199,17 @@ export class FirestoreMemorySupersedeRepository implements MemorySupersedeReposi
         tx.update(snapshot.ref, encodeRecord({ expiresAt: now, supersededById: replacement.id }));
         retired.push(row.id);
       }
+      if (retired.length > 0) {
+        tx.set(
+          this.store.doc('ownerCards', input.agentId),
+          encodeRecord({
+            agentId: input.agentId,
+            content: '',
+            compiledAt: now,
+            invalidatedAt: now,
+          }),
+        );
+      }
       return retired;
     });
   }

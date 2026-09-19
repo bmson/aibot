@@ -3,7 +3,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, type Db } from './client.js';
 import { createPostgresMemorySupersedeRepository } from './memory-supersede-repository.js';
-import { agents, contacts, memories } from './schema.js';
+import { agents, contacts, memories, ownerCard } from './schema.js';
 
 /**
  * The storage half of write-time supersession: which live facts a write is
@@ -222,6 +222,10 @@ describe('PostgreSQL memory supersession', () => {
       content: 'supersede: the replacement',
       subjectContactId: subjectA,
     });
+    await db
+      .insert(ownerCard)
+      .values({ id: 1, content: 'stale private fact' })
+      .onConflictDoUpdate({ target: ownerCard.id, set: { content: 'stale private fact' } });
 
     const retired = await repository.retire({
       agentId: ownerId,
@@ -244,6 +248,9 @@ describe('PostgreSQL memory supersession', () => {
       .where(eq(memories.id, fresh))
       .limit(1);
     expect(live?.expiresAt).toBeNull();
+    expect(
+      (await db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1))[0]?.content,
+    ).toBe('');
   });
 
   it('leaves an already-retired fact to its first replacement', async () => {

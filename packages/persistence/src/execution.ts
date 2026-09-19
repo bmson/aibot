@@ -12,6 +12,7 @@ import type { HistoryRecallRepository } from './history-recall.js';
 import type { MemorySupersedeRepository } from './memory-supersede.js';
 import type { MemoryToolRepository } from './memory-tools.js';
 import type { ModelRoutingRepository } from './model-routing.js';
+import type { OwnerCardCompilationRepository } from './owner-card-compilation.js';
 import type { OwnerContextRepository } from './owner-context.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { SkillContextRepository } from './skill-context.js';
@@ -31,6 +32,7 @@ export interface ExecutionPersistence {
   readonly executionJobs: ExecutionJobRepository;
   readonly executionEvidence: ExecutionEvidenceRepository;
   readonly ownerContext: OwnerContextRepository;
+  readonly ownerCardCompilation: OwnerCardCompilationRepository;
   readonly skills: SkillContextRepository;
   readonly history: HistoryRecallRepository;
   readonly memory: MemoryToolRepository;

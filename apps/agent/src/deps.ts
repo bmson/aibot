@@ -270,7 +270,7 @@ export function buildDeps(): AgentDeps {
           {
             memory: persistence.memorySupersede,
             router,
-            onRetired: () => compileOwnerCard(db),
+            onRetired: () => compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
           },
           input,
         ),

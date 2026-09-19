@@ -3,7 +3,7 @@ import { disposeStore, emulatorStore } from '../../../packages/firestore/src/tes
 import { firestoreApplicationSmoke } from '../../../scripts/firestore-application-smoke.js';
 
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore application smoke', () => {
-  it('exercises synthetic chat and generated-card persistence', async () => {
+  it('exercises synthetic application and owner-card persistence', async () => {
     const store = emulatorStore();
     try {
       await firestoreApplicationSmoke(store);

@@ -5,7 +5,8 @@ import {
 } from '@assistant/persistence';
 import { and, asc, eq, gt, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
-import { memories } from './schema.js';
+import { OWNER_CARD_ADVISORY_LOCK } from './owner-card-compilation-repository.js';
+import { memories, ownerCard } from './schema.js';
 
 /** The precedence fields, projected the same way everywhere in this adapter. */
 const FACT_COLUMNS = {
@@ -70,21 +71,33 @@ export function createPostgresMemorySupersedeRepository(db: Db): MemorySupersede
     async retire(input) {
       const ids = [...new Set(input.ids)].filter((id) => id !== input.replacementId);
       if (ids.length === 0) return [];
-      const rows = await db
-        .update(memories)
-        .set({ expiresAt: sql`now()`, supersededById: input.replacementId })
-        .where(
-          and(
-            eq(memories.agentId, input.agentId),
-            inArray(memories.id, ids),
-            // Re-checked here, not merely in the read above: a concurrent save
-            // may have retired the same fact in between, and the first
-            // replacement's provenance is the one that should stand.
-            isNull(memories.supersededById),
-          ),
-        )
-        .returning({ id: memories.id });
-      return rows.map((row) => row.id);
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select ${OWNER_CARD_ADVISORY_LOCK}`);
+        const rows = await tx
+          .update(memories)
+          .set({ expiresAt: sql`now()`, supersededById: input.replacementId })
+          .where(
+            and(
+              eq(memories.agentId, input.agentId),
+              inArray(memories.id, ids),
+              // Re-checked here, not merely in the read above: a concurrent save
+              // may have retired the same fact in between, and the first
+              // replacement's provenance is the one that should stand.
+              isNull(memories.supersededById),
+            ),
+          )
+          .returning({ id: memories.id });
+        if (rows.length > 0) {
+          await tx
+            .insert(ownerCard)
+            .values({ id: 1, content: '', compiledAt: sql`now()` })
+            .onConflictDoUpdate({
+              target: ownerCard.id,
+              set: { content: '', compiledAt: sql`now()` },
+            });
+        }
+        return rows.map((row) => row.id);
+      });
     },
   };
 }

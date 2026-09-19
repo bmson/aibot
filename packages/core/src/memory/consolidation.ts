@@ -1,7 +1,20 @@
 import { createHash } from 'node:crypto';
-import { contacts, type Db, isTombstoned, memories, ownerCard } from '@assistant/db';
-import { isOwnerContextRepository, type OwnerContextRepository } from '@assistant/persistence';
-import { and, eq, gt, inArray, isNull, ne, notInArray, or, sql } from 'drizzle-orm';
+import {
+  agents,
+  createPostgresOwnerCardCompilationRepository,
+  type Db,
+  isTombstoned,
+  memories,
+  ownerCard,
+} from '@assistant/db';
+import {
+  isOwnerCardCompilationRepository,
+  isOwnerContextRepository,
+  type OwnerCardCompilationInput,
+  type OwnerCardCompilationRepository,
+  type OwnerContextRepository,
+} from '@assistant/persistence';
+import { and, eq, gt, inArray, isNull, notInArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
@@ -456,6 +469,60 @@ export const CARD_AUTO_MIN_IMPORTANCE = 4;
 const CARD_PEOPLE_LIMIT = 5;
 const CARD_PEOPLE_MIN_FACTS = 3;
 
+/** Deterministic rendering shared by PostgreSQL and Firestore compilation adapters. */
+export function renderOwnerCard(input: OwnerCardCompilationInput, now: Date): string {
+  const lines: string[] = [];
+  let omitted = 0;
+  for (const domain of CARD_DOMAIN_ORDER) {
+    const inDomain = input.ownerFacts.filter((fact) => (fact.domain ?? 'other') === domain);
+    const chosen = [
+      ...inDomain.filter((fact) => fact.pinned),
+      ...inDomain
+        .filter(
+          (fact) =>
+            !fact.pinned &&
+            fact.importance >= CARD_AUTO_MIN_IMPORTANCE &&
+            isCurrentAt(fact.validUntil, now),
+        )
+        .slice(0, CARD_AUTO_FACTS_PER_DOMAIN),
+    ];
+    omitted += inDomain.length - chosen.length;
+    if (chosen.length === 0) continue;
+    lines.push(`${domain[0]?.toUpperCase()}${domain.slice(1)}:`);
+    for (const fact of chosen) {
+      const hedge = Number(fact.confidence) < 0.5 ? ' (unconfirmed)' : '';
+      lines.push(`- ${fact.content}${validitySuffix(fact, now)}${hedge}`);
+    }
+  }
+  const people = input.people
+    .filter(
+      (person) =>
+        person.relationship ||
+        person.factCount >= CARD_PEOPLE_MIN_FACTS ||
+        person.pinnedFacts.length > 0,
+    )
+    .sort(
+      (a, b) =>
+        (b.pinnedFacts.length > 0 ? 1 : 0) - (a.pinnedFacts.length > 0 ? 1 : 0) ||
+        b.factCount - a.factCount,
+    )
+    .slice(0, CARD_PEOPLE_LIMIT);
+  const peopleOmitted = input.people.length - people.length;
+  if (people.length > 0) {
+    lines.push('People:');
+    for (const person of people) {
+      lines.push(`- ${person.name}${person.relationship ? ` (${person.relationship})` : ''}`);
+      for (const fact of person.pinnedFacts) lines.push(`  - ${fact}`);
+    }
+  }
+  const extras: string[] = [];
+  if (omitted > 0) extras.push(`${omitted} more owner facts`);
+  if (peopleOmitted > 0) extras.push(`${peopleOmitted} more people`);
+  if (extras.length > 0)
+    lines.push(`(+${extras.join(' and ')} in memory — use memory.recall to look them up.)`);
+  return lines.join('\n');
+}
+
 /**
  * Deterministic (model-free) owner-card compile, kept deliberately small:
  * facts the owner PINNED always make the card; beyond those, only a couple
@@ -465,154 +532,32 @@ const CARD_PEOPLE_MIN_FACTS = 3;
  * card's footer tells the model how much that covers.
  * Rebuilt nightly after consolidation and on demand from the Profile page.
  */
-export async function compileOwnerCard(db: Db, now: Date = new Date()): Promise<string> {
-  const [owner] = await db.select().from(contacts).where(eq(contacts.trust, 'owner')).limit(1);
-
-  const lines: string[] = [];
-  let omitted = 0;
-  if (owner) {
-    const facts = await db
-      .select({
-        content: memories.content,
-        domain: memories.domain,
-        importance: memories.importance,
-        confidence: memories.confidence,
-        pinned: memories.pinned,
-        validFrom: memories.validFrom,
-        validUntil: memories.validUntil,
-      })
-      .from(memories)
-      .where(
-        and(
-          eq(memories.subjectContactId, owner.id),
-          eq(memories.category, 'knowledge'),
-          eq(memories.quarantined, false),
-          or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-        ),
-      )
-      .orderBy(sql`${memories.importance} desc`, sql`${memories.confidence} desc`);
-
-    for (const domain of CARD_DOMAIN_ORDER) {
-      const inDomain = facts.filter((f) => (f.domain ?? 'other') === domain);
-      const chosen = [
-        // Pinned is the owner saying "always tell it this", so a pinned fact
-        // makes the card whether or not its validity has lapsed — it is just
-        // labelled as past below rather than passed off as current state.
-        ...inDomain.filter((f) => f.pinned),
-        // Auto-selection is a different matter. There are only
-        // CARD_AUTO_FACTS_PER_DOMAIN slots and they are filled by importance,
-        // so a former employer with importance 5 took the slot from the
-        // current one and then answered "where do I work". A fact that has
-        // stopped being true no longer competes for a slot; it stays in the
-        // store, counts toward the omitted total the footer reports, and is
-        // still reachable through memory.recall.
-        ...inDomain
-          .filter(
-            (f) =>
-              !f.pinned &&
-              f.importance >= CARD_AUTO_MIN_IMPORTANCE &&
-              isCurrentAt(f.validUntil, now),
-          )
-          .slice(0, CARD_AUTO_FACTS_PER_DOMAIN),
-      ];
-      omitted += inDomain.length - chosen.length;
-      if (chosen.length === 0) continue;
-      lines.push(`${domain[0]?.toUpperCase()}${domain.slice(1)}:`);
-      for (const f of chosen) {
-        const hedge = Number(f.confidence) < 0.5 ? ' (unconfirmed)' : '';
-        lines.push(`- ${f.content}${validitySuffix(f, now)}${hedge}`);
-      }
-    }
-  }
-
-  const peopleRows = await db
-    .select({
-      id: contacts.id,
-      name: contacts.name,
-      relationship: contacts.relationship,
-      n: sql<number>`count(${memories.id})`,
-    })
-    .from(contacts)
-    .leftJoin(
-      memories,
-      and(
-        eq(memories.subjectContactId, contacts.id),
-        eq(memories.quarantined, false),
-        or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-      ),
-    )
-    .where(ne(contacts.trust, 'owner'))
-    .groupBy(contacts.id, contacts.name, contacts.relationship)
-    .having(sql`count(${memories.id}) > 0`)
-    .orderBy(sql`count(${memories.id}) desc`);
-
-  // Facts the owner pinned about a specific person belong in the always-on card
-  // just like pinned owner facts do — otherwise "Always in profile" is a silent
-  // no-op on person pages. Collect them so each person can carry their pins as
-  // sub-bullets, and so a pinned-about person is never omitted from the list.
-  const pinnedPersonFacts = await db
-    .select({ contactId: memories.subjectContactId, content: memories.content })
-    .from(memories)
-    .innerJoin(contacts, eq(memories.subjectContactId, contacts.id))
-    .where(
-      and(
-        ne(contacts.trust, 'owner'),
-        eq(memories.pinned, true),
-        eq(memories.category, 'knowledge'),
-        eq(memories.quarantined, false),
-        or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-      ),
-    )
-    .orderBy(sql`${memories.importance} desc`, sql`${memories.confidence} desc`);
-  const pinnedByContact = new Map<string, string[]>();
-  for (const f of pinnedPersonFacts) {
-    if (!f.contactId) continue;
-    const list = pinnedByContact.get(f.contactId) ?? [];
-    list.push(f.content);
-    pinnedByContact.set(f.contactId, list);
-  }
-
-  // Include a person when they clearly matter (a named relationship or a real
-  // body of facts) OR when the owner pinned a fact about them. Pinned-about
-  // people sort first so the limit never drops an explicit owner choice.
-  const people = peopleRows
-    .filter(
-      (p) => p.relationship || Number(p.n) >= CARD_PEOPLE_MIN_FACTS || pinnedByContact.has(p.id),
-    )
-    .sort(
-      (a, b) =>
-        (pinnedByContact.has(b.id) ? 1 : 0) - (pinnedByContact.has(a.id) ? 1 : 0) ||
-        Number(b.n) - Number(a.n),
-    )
-    .slice(0, CARD_PEOPLE_LIMIT);
-  const peopleOmitted = peopleRows.length - people.length;
-
-  if (people.length > 0) {
-    lines.push('People:');
-    for (const p of people) {
-      lines.push(`- ${p.name}${p.relationship ? ` (${p.relationship})` : ''}`);
-      for (const fact of pinnedByContact.get(p.id) ?? []) {
-        lines.push(`  - ${fact}`);
-      }
-    }
-  }
-
-  const extras: string[] = [];
-  if (omitted > 0) extras.push(`${omitted} more owner facts`);
-  if (peopleOmitted > 0) extras.push(`${peopleOmitted} more people`);
-  if (extras.length > 0) {
-    lines.push(`(+${extras.join(' and ')} in memory — use memory.recall to look them up.)`);
-  }
-
-  const content = lines.join('\n');
-  await db
-    .insert(ownerCard)
-    .values({ id: 1, content, compiledAt: sql`now()` })
-    .onConflictDoUpdate({
-      target: ownerCard.id,
-      set: { content, compiledAt: sql`now()` },
+export function compileOwnerCard(db: Db, now?: Date): Promise<string>;
+export function compileOwnerCard(
+  repository: OwnerCardCompilationRepository,
+  agentId: string,
+  now?: Date,
+): Promise<string>;
+export async function compileOwnerCard(
+  store: Db | OwnerCardCompilationRepository,
+  agentIdOrNow: string | Date = new Date(),
+  repositoryNow: Date = new Date(),
+): Promise<string> {
+  if (isOwnerCardCompilationRepository(store)) {
+    if (typeof agentIdOrNow !== 'string')
+      throw new Error('Owner card compilation repository requires an agent ID');
+    return store.compile({
+      agentId: agentIdOrNow,
+      now: repositoryNow,
+      render: (input) => renderOwnerCard(input, repositoryNow),
     });
-  return content;
+  }
+  const db = store;
+  const now = agentIdOrNow instanceof Date ? agentIdOrNow : repositoryNow;
+  const configured = await db.select({ id: agents.id }).from(agents).limit(2);
+  if (configured.length !== 1 || !configured[0])
+    throw new Error('Owner card compilation requires exactly one configured agent');
+  return compileOwnerCard(createPostgresOwnerCardCompilationRepository(db), configured[0].id, now);
 }
 
 /** The compiled card for prompt injection ('' when never compiled). */

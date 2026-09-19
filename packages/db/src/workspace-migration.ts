@@ -1,6 +1,7 @@
 import {
   assertSupportedMigrationTables,
-  checksum,
+  checksumV3,
+  deterministicMigrationCompare,
   MIGRATION_TABLES,
   type MigrationBundle,
   type MigrationManifest,
@@ -8,7 +9,7 @@ import {
   type MigrationTable,
   type MigrationTarget,
   serializeMigrationTimestamp,
-  serializeMigrationValue,
+  serializeMigrationValueV3,
   serializeMigrationVector,
   snakeToCamel,
   validateMigrationReferences,
@@ -49,18 +50,18 @@ function serializeTypedColumn(
   table: MigrationTable,
   column: string,
   value: unknown,
-): ReturnType<typeof serializeMigrationValue> {
+): ReturnType<typeof serializeMigrationValueV3> {
   if (table === 'gmail_sync_state' && column === 'last_history_id' && typeof value === 'string') {
     if (!/^-?\d+$/.test(value)) throw new Error(`Invalid bigint ${table}.${column}`);
-    return serializeMigrationValue(BigInt(value));
+    return serializeMigrationValueV3(BigInt(value));
   }
   if (table === 'files' && column === 'bytes' && typeof value === 'string') {
     if (!/^\d+$/.test(value)) throw new Error(`Invalid byte count ${table}.${column}`);
     const bytes = Number(value);
     if (!Number.isSafeInteger(bytes)) throw new Error(`Unsafe integer ${table}.${column}`);
-    return serializeMigrationValue(bytes);
+    return serializeMigrationValueV3(bytes);
   }
-  return serializeMigrationValue(value);
+  return serializeMigrationValueV3(value);
 }
 
 /**
@@ -191,7 +192,7 @@ export async function exportWorkspaceSnapshot(
           const data = Object.fromEntries(
             Object.entries(row)
               .filter(([key]) => !key.startsWith(TIMESTAMP_PREFIX))
-              .sort(([a], [b]) => a.localeCompare(b))
+              .sort(([a], [b]) => deterministicMigrationCompare(a, b))
               .map(([key, value]) => {
                 const timestamp = row[`${TIMESTAMP_PREFIX}${key}`];
                 if (typeof timestamp === 'string')
@@ -218,11 +219,11 @@ export async function exportWorkspaceSnapshot(
           const migratedId = singletonByAgent ? options.agentId : String(rawId);
           if (table === 'owner_card') {
             data.agentId = options.agentId;
-            data.postgresqlId = serializeMigrationValue(rawId);
+            data.postgresqlId = serializeMigrationValueV3(rawId);
             delete data.id;
           }
           if (table === 'ambient_snapshots') {
-            data.postgresqlId = serializeMigrationValue(rawId);
+            data.postgresqlId = serializeMigrationValueV3(rawId);
             delete data.id;
           }
           records.push({
@@ -230,11 +231,13 @@ export async function exportWorkspaceSnapshot(
             collection: definition.collection,
             id: migratedId,
             data,
-            checksum: checksum(data),
+            checksum: checksumV3(data),
           });
         }
       }
-      records.sort((a, b) => `${a.table}:${a.id}`.localeCompare(`${b.table}:${b.id}`));
+      records.sort((a, b) =>
+        deterministicMigrationCompare(`${a.table}:${a.id}`, `${b.table}:${b.id}`),
+      );
       const vectorRecords = records.filter((record) => {
         const value = record.data.embedding;
         const tag =
@@ -266,14 +269,14 @@ export async function exportWorkspaceSnapshot(
             {
               collection: definition.collection,
               count: selected.length,
-              checksum: checksum(selected),
+              checksum: checksumV3(selected),
             },
           ];
         }),
       ) as MigrationManifest['tables'];
       const manifest: MigrationManifest = {
         format: 'assistant-workspace-migration',
-        formatVersion: 2,
+        formatVersion: 3,
         mode: 'export',
         source: {
           kind: 'postgresql',
@@ -296,7 +299,7 @@ export async function exportWorkspaceSnapshot(
             .filter((table) => !tables.includes(table as MigrationTable)),
         },
         recordCount: records.length,
-        bundleChecksum: checksum(records),
+        bundleChecksum: checksumV3(records),
         unsupportedTables: [],
       };
       return { manifest, records };

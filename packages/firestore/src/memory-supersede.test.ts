@@ -4,6 +4,8 @@ import { FieldValue } from '@google-cloud/firestore';
 import { describe, expect, it } from 'vitest';
 import { embeddingSpaceKey } from './memory.js';
 import { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
+import { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
+import { FirestoreOwnerContextRepository } from './owner-context.js';
 import { encodeRecord, type InstallationStore } from './store.js';
 import { disposeStore, emulatorStore } from './test-store.js';
 
@@ -190,6 +192,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore memory superses
       await Promise.all(
         [replacement, stale, foreign, otherSubject, erased].map((row) => save(store, row)),
       );
+      await store.doc('ownerCards', 'owner-a').set({
+        agentId: 'owner-a',
+        content: 'Earlier compiled card',
+        compiledAt: new Date('2026-09-19T10:00:00Z'),
+      });
       await store
         .doc('memoryTombstones', erased.contentHash)
         .set({ contentHash: erased.contentHash });
@@ -205,6 +212,19 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore memory superses
       expect(retired.get('supersededById')).toBe(replacement.id);
       expect(retired.get('expiresAt')).toBeTruthy();
       expect((await store.doc('memories', replacement.id).get()).get('expiresAt')).toBeNull();
+      expect((await store.doc('ownerCards', 'owner-a').get()).get('invalidatedAt')).toBeTruthy();
+      await expect(
+        new FirestoreOwnerCardCompilationRepository(store).compile({
+          agentId: 'owner-a',
+          now: new Date(),
+          render: () => {
+            throw new Error('compile failed');
+          },
+        }),
+      ).rejects.toThrow('compile failed');
+      expect(
+        await new FirestoreOwnerContextRepository(store).getOwnerCard('owner-a'),
+      ).toMatchObject({ content: '' });
     } finally {
       await disposeStore(store);
     }
