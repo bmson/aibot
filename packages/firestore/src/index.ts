@@ -1,11 +1,18 @@
+export { FirestoreApplicationChatPersistence } from './application-chat.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 export { FirestoreApprovalRepository } from './approvals.js';
+export { createFirestoreCardRefreshRepository } from './card-refresh.js';
 export { FirestoreCostRepository } from './costs.js';
 export { createFirestoreExecutionPersistence } from './execution.js';
 export { FirestoreExecutionContextRepository } from './execution-context.js';
 export { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 export { FirestoreExecutionJobRepository } from './execution-jobs.js';
+export { FirestoreGeneratedCardRepository } from './generated-cards.js';
+export { FirestoreGraphRecallRepository } from './graph-recall.js';
+export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { embeddingSpaceKey, FirestoreMemoryRepository } from './memory.js';
+export { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
+export { FirestoreMemoryToolRepository } from './memory-tools.js';
 export { FirestoreMessageRepository } from './messages.js';
 export { FirestoreModelRoutingRepository } from './model-routing.js';
 export {
@@ -16,6 +23,7 @@ export {
   wakeIntentId,
 } from './outbox.js';
 export { FirestoreOwnerContextRepository } from './owner-context.js';
+export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 export { FirestoreReminderRepository } from './reminders.js';
 export { FirestoreScheduleRepository } from './schedules.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';

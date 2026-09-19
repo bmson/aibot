@@ -5,10 +5,13 @@ const mocks = vi.hoisted(() => ({
   identity: vi.fn(),
   refresh: vi.fn(),
   revalidate: vi.fn(),
-  db: {},
+  cardRefresh: {},
 }));
 vi.mock('@/auth', () => ({ requireOwner: mocks.owner }));
-vi.mock('@/lib/server', () => ({ getAgentIdentity: mocks.identity, getDb: () => mocks.db }));
+vi.mock('@/lib/server', () => ({
+  getAgentIdentity: mocks.identity,
+  getCardRefresh: () => mocks.cardRefresh,
+}));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidate }));
 vi.mock('@assistant/application/cards', () => ({
   requestSavedCardRefresh: mocks.refresh,
@@ -29,7 +32,7 @@ describe('saved-card refresh action', () => {
   it('authenticates before queueing and scopes the request to the signed-in agent', async () => {
     await expect(refreshSavedCardInline(id)).resolves.toEqual({ ok: true, taskId: 'task-1' });
     expect(mocks.owner).toHaveBeenCalledOnce();
-    expect(mocks.refresh).toHaveBeenCalledWith(mocks.db, 'owner-agent', id);
+    expect(mocks.refresh).toHaveBeenCalledWith(mocks.cardRefresh, 'owner-agent', id);
     expect(mocks.revalidate).toHaveBeenCalledWith('/chat', 'layout');
   });
   it('does not refresh without owner authentication or a valid card id', async () => {

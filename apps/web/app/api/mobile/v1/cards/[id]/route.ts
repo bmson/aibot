@@ -1,5 +1,5 @@
 import { dismissSavedCard, requestSavedCardRefresh } from '@assistant/application/cards';
-import { getAgentIdentity, getDb } from '@/lib/server';
+import { getAgentIdentity, getCardRefresh, getGeneratedCards } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -17,12 +17,12 @@ export async function POST(
   const agent = await getAgentIdentity();
   if (body.action === 'refresh') {
     if (!agent.id) return mobileJson({ error: 'card not found' }, { status: 404 });
-    const result = await requestSavedCardRefresh(getDb(), agent.id, id);
+    const result = await requestSavedCardRefresh(getCardRefresh(), agent.id, id);
     return result.ok
       ? mobileJson(result, { status: 202 })
       : mobileJson({ error: result.error }, { status: result.status });
   }
-  const dismissed = agent.id ? await dismissSavedCard(getDb(), agent.id, id) : false;
+  const dismissed = agent.id ? await dismissSavedCard(getGeneratedCards(), agent.id, id) : false;
   return dismissed
     ? mobileJson({ ok: true })
     : mobileJson({ error: 'card not found' }, { status: 404 });

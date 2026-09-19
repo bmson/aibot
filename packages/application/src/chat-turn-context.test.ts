@@ -1,4 +1,5 @@
 import type { Db } from '@assistant/db';
+import type { ApplicationChatPersistence } from '@assistant/persistence';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const stubs = vi.hoisted(() => ({
@@ -65,6 +66,33 @@ describe('open-loop context is best effort', () => {
 });
 
 describe('the turn’s task row', () => {
+  it('preserves the goal link through portable persistence and clears it before task creation', async () => {
+    const goalId = '11111111-1111-4111-8111-111111111111';
+    const order: string[] = [];
+    const clear = vi.fn(async () => {
+      order.push('clear');
+    });
+    const create = vi.fn(async () => {
+      order.push('create');
+      return { id: 'portable-task' };
+    });
+    const chat = {
+      kind: 'application-chat-persistence',
+      clearGoalBlockedOnOwnerReply: clear,
+      createDirectChatTask: create,
+    } as unknown as ApplicationChatPersistence;
+    await chatTurnTask(chat, {
+      agentId: 'a',
+      conversationId: 'c',
+      title: 'hi',
+      metadata: { goalId },
+    });
+    expect(order).toEqual(['clear', 'create']);
+    expect(clear).toHaveBeenCalledWith('a', goalId);
+    expect(create).toHaveBeenCalledWith({ agentId: 'a', conversationId: 'c', goalId, title: 'hi' });
+    expect(stubs.createChatTask).not.toHaveBeenCalled();
+  });
+
   it('clears a blocked goal before the task exists, not after', async () => {
     const order: string[] = [];
     stubs.goalIdForConversation.mockResolvedValue('goal-1');

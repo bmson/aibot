@@ -2,7 +2,7 @@ import { listSavedCards } from '@assistant/application/cards';
 import { Layers3 } from 'lucide-react';
 import Link from 'next/link';
 import { requireOwner } from '@/auth';
-import { getAgentIdentity, getAgentTimezone, getDb } from '@/lib/server';
+import { getAgentIdentity, getAgentTimezone, getGeneratedCards } from '@/lib/server';
 import { btnSm, EmptyState, PageHeader, PageShell } from '@/lib/ui';
 import { SavedCardGrid } from './saved-card-grid';
 
@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 export default async function CardsPage() {
   await requireOwner();
   const [agent, timeZone] = await Promise.all([getAgentIdentity(), getAgentTimezone()]);
-  const cards = agent.id ? await listSavedCards(getDb(), agent.id) : [];
+  const cards = agent.id ? await listSavedCards(getGeneratedCards(), agent.id) : [];
 
   return (
     <PageShell size="reading">

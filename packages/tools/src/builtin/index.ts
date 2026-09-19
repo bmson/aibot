@@ -8,7 +8,6 @@ import { GRAPH_EXTRACTION_VERSION } from '@assistant/core/memory/knowledge-graph
 import {
   findContactsByName,
   goals,
-  isTombstoned,
   knowledgeGraphEntities,
   knowledgeGraphRelations,
   knowledgeGraphSources,
@@ -18,6 +17,7 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
+import type { MemoryToolRepository, TaskRepository } from '@assistant/persistence';
 import { and, desc, eq, gt, gte, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
@@ -32,13 +32,6 @@ export * from './weather.js';
 // The `web.fetch` machinery lives in web-fetch.ts; re-exported here so the
 // package surface (and the web-watch poller's imports) stay unchanged.
 export * from './web-fetch.js';
-
-/**
- * How much cosine distance a literal word match is worth in `memory.recall`.
- * Cosine distance runs 0–2, so this reorders neighbours without letting a
- * keyword hit jump the whole ranking.
- */
-const LEXICAL_MATCH_BONUS = 0.06;
 
 export interface BuiltinDeps {
   /** Embedding closure (injected by the app — avoids a core↔tools cycle). */
@@ -69,6 +62,10 @@ export interface BuiltinDeps {
   }) => Promise<{ superseded: string[] }>;
   /** Injected in tests; defaults to global fetch (used by `weather.lookup`). */
   fetchImpl?: (url: string, init?: { signal?: AbortSignal }) => Promise<Response>;
+  /** Task lifecycle port used by future-self scheduling. */
+  tasks?: TaskRepository;
+  /** Durable memory port used by memory.save and memory.recall. */
+  memory?: MemoryToolRepository;
 }
 
 export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps): ToolRegistry {
@@ -102,73 +99,61 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       approvalSummary: (args) =>
         `Remember${args.subject ? ` (about ${args.subject})` : ''}: “${args.content.slice(0, 200)}”`,
       execute: async (args, ctx) => {
+        if (!deps.memory) throw new Error('memory tool repository unavailable');
         const contentHash = createHash('sha256').update(args.content).digest('hex');
-        if (await isTombstoned(ctx.db, contentHash)) {
-          return {
-            saved: false,
-            tombstoned: true,
-            note: 'the owner explicitly forgot this fact — do not re-save it',
-          };
-        }
         const [embedding] = await deps.embed([args.content]);
+        if (!embedding) throw new Error('embedding unavailable');
         const quarantined = ctx.trust !== 'owner' && ctx.trust !== 'assistant';
-        const subject = args.subject
-          ? await resolveSubjectContact(ctx.db, { subject: args.subject })
-          : null;
         const expiresAt =
-          args.category === 'experience' ? new Date(Date.now() + 90 * 24 * 3600 * 1000) : undefined;
-        const [row] = await ctx.db
-          .insert(memories)
-          .values({
-            agentId: ctx.agentId,
-            category: args.category,
-            kind: args.kind,
-            content: args.content,
-            contentHash,
-            embedding,
-            importance: args.importance,
-            confidence: String(args.confidence),
-            originTrust: ctx.trust,
-            quarantined,
-            subjectContactId: subject?.contactId,
-            domain: args.domain,
-            sourceTaskId: ctx.taskId,
-            expiresAt,
-          })
-          .onConflictDoNothing({ target: memories.contentHash })
-          .returning();
-        if (!row) return { saved: false, duplicate: true, quarantined };
-
-        // A correction should take effect on the turn it is made, not on the
-        // next night's sweep. Only a trusted, live `knowledge` write may retire
-        // anything: an `experience` episode does not falsify an earlier one,
-        // and a quarantined save is still awaiting the owner's review.
-        const eligible = args.category === 'knowledge' && !quarantined;
+          args.category === 'experience'
+            ? new Date(ctx.now().getTime() + 90 * 24 * 3600 * 1000)
+            : null;
+        const result = await deps.memory.save({
+          agentId: ctx.agentId,
+          content: args.content,
+          contentHash,
+          embedding,
+          category: args.category,
+          kind: args.kind,
+          importance: args.importance,
+          confidence: args.confidence,
+          originTrust: ctx.trust,
+          quarantined,
+          subject: args.subject || undefined,
+          domain: args.domain,
+          sourceTaskId: ctx.taskId,
+          expiresAt,
+        });
+        // Preserve immediate correction handling across persistence drivers.
         const superseded =
-          eligible && deps.supersede
+          result.saved &&
+          result.id &&
+          args.category === 'knowledge' &&
+          !result.quarantined &&
+          deps.supersede
             ? await deps
                 .supersede({
                   agentId: ctx.agentId,
-                  newFactId: row.id,
+                  newFactId: result.id,
                   ...(ctx.taskId ? { taskId: ctx.taskId } : {}),
                 })
-                .then((result) => result.superseded)
-                // The fact is saved either way. Losing the check is a delay
-                // (consolidation still runs tonight); failing the tool call
-                // would lose the owner's correction outright.
+                .then((value) => value.superseded)
                 .catch((err: unknown) => {
                   console.error('memory.save: supersession check failed', err);
                   return [] as string[];
                 })
             : [];
-
         return {
-          saved: true,
-          duplicate: false,
-          quarantined,
-          // Named so the model can tell the owner it replaced something rather
-          // than quietly adding a second version of the same fact.
+          saved: result.saved,
+          duplicate: result.duplicate,
+          quarantined: result.quarantined,
           ...(superseded.length ? { replacedEarlierFacts: superseded.length } : {}),
+          ...(result.tombstoned
+            ? {
+                tombstoned: true,
+                note: 'the owner explicitly forgot this fact — do not re-save it',
+              }
+            : {}),
         };
       },
     },
@@ -188,65 +173,26 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
       risk: 'autonomous',
       acceptsUntrustedInput: true,
       execute: async (args, ctx) => {
+        if (!deps.memory) throw new Error('memory tool repository unavailable');
         const [embedding] = await deps.embed([args.query]);
-        const vector = JSON.stringify(embedding);
-        const distance = sql<number>`(${memories.embedding} <=> ${vector}::vector)`;
-        // A literal term the owner used is worth surfacing even when the
-        // embedding ranks it a little lower — a name or a place is exactly
-        // what vector similarity blurs. It is a nudge, not an override:
-        // sorting on the flag itself let one incidental hit displace the
-        // entire semantic ranking, and at this limit that means the right
-        // answer falls off the end. Word-anchored for the same reason —
-        // `%car%` also matches "Oscar" and "scarce".
-        const lexicalTerms = args.query
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, ' ')
-          .split(/\s+/)
-          .filter((term) => term.length > 2)
-          .slice(0, 5);
-        const lexicalMatch =
-          lexicalTerms.length > 0
-            ? sql<boolean>`${memories.content} ~* ${`\\y(${lexicalTerms.join('|')})\\y`}`
-            : undefined;
-        const rows = await ctx.db
-          .select({
-            id: memories.id,
-            content: memories.content,
-            category: memories.category,
-            kind: memories.kind,
-            importance: memories.importance,
-            confidence: memories.confidence,
-            validFrom: memories.validFrom,
-            validUntil: memories.validUntil,
-            source: memories.source,
-            ownerConfirmed: memories.ownerConfirmed,
-            createdAt: memories.createdAt,
-            similarity: sql<number>`1 - ${distance}`,
-          })
-          .from(memories)
-          .where(
-            and(
-              eq(memories.agentId, ctx.agentId),
-              eq(memories.quarantined, false),
-              or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-            ),
-          )
-          .orderBy(
-            lexicalMatch
-              ? sql`${distance} - CASE WHEN ${lexicalMatch} THEN ${sql.raw(String(LEXICAL_MATCH_BONUS))} ELSE 0 END`
-              : distance,
-          )
-          .limit(args.limit);
-        const now = Date.now();
+        if (!embedding) throw new Error('embedding unavailable');
+        const now = ctx.now();
+        const result = await deps.memory.recall({
+          agentId: ctx.agentId,
+          embedding,
+          query: args.query,
+          limit: args.limit,
+          now,
+        });
         return {
-          memories: rows.map((r) => ({
+          memories: result.memories.map((r) => ({
             ...r,
             // Flag a fact the model must not treat as settled: low confidence, or
             // a validity window that has lapsed (stale but not yet superseded).
             unconfirmed:
               r.ownerConfirmed !== true ||
               Number(r.confidence) < 0.7 ||
-              (r.validUntil ? new Date(r.validUntil).getTime() < now : false),
+              (r.validUntil ? new Date(r.validUntil).getTime() < now.getTime() : false),
           })),
         };
       },
@@ -804,39 +750,20 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     execute: async (args, ctx) => {
       const runAfter = new Date(args.when);
       if (Number.isNaN(runAfter.getTime())) throw new Error('invalid timestamp');
-      if (runAfter.getTime() < Date.now()) throw new Error('when must be in the future');
-
-      const [count] = await ctx.db
-        .select({ n: sql<number>`count(*)` })
-        .from(tasks)
-        .where(and(eq(tasks.parentTaskId, ctx.taskId), eq(tasks.status, 'sleeping')));
-      if (Number(count?.n ?? 0) >= 5) throw new Error('too many scheduled follow-ups (max 5)');
-
-      const [task] = await ctx.db
-        .insert(tasks)
-        .values({
-          agentId: ctx.agentId,
-          conversationId: ctx.conversationId,
-          type: 'scheduled',
-          status: 'sleeping',
-          trust: ctx.trust === 'owner' ? 'owner' : 'assistant',
-          // Taint laundering defense: a scheduled child of a tainted session
-          // would otherwise start clean (shouldTaintContext only taints
-          // source==='email'), and its instruction — possibly lifted from
-          // attacker content — becomes the opening user turn. Carry the taint
-          // forward so the child's outward/egress calls stay approval-gated.
-          trigger: {
-            source: 'internal',
-            payload: {
-              instruction: args.instruction,
-              ...(ctx.tainted ? { taintedOrigin: true } : {}),
-            },
-          },
-          runAfter,
-          parentTaskId: ctx.taskId,
-        })
-        .returning();
-      return { scheduled: Boolean(task), taskId: task?.id, runAfter: args.when };
+      if (runAfter.getTime() <= ctx.now().getTime()) throw new Error('when must be in the future');
+      if (!deps.tasks) throw new Error('task lifecycle repository unavailable');
+      const result = await deps.tasks.createScheduledFollowUp({
+        parentTaskId: ctx.taskId,
+        agentId: ctx.agentId,
+        conversationId: ctx.conversationId,
+        instruction: args.instruction,
+        runAfter,
+        trust: ctx.trust === 'owner' ? 'owner' : 'assistant',
+        // Taint laundering defense: carry taint into the internal child so its
+        // future outward/egress calls remain approval-gated.
+        tainted: ctx.tainted,
+      });
+      return { scheduled: result.created, taskId: result.task.id, runAfter: args.when };
     },
   });
 

@@ -1,4 +1,11 @@
-import type { TaskLease, TaskRepository, TaskWake } from '@assistant/persistence';
+import { randomUUID } from 'node:crypto';
+import type {
+  ScheduledFollowUpInput,
+  TaskLease,
+  TaskRepository,
+  TaskWake,
+} from '@assistant/persistence';
+import { newTaskRecord } from '@assistant/persistence';
 import { and, eq, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { type TaskRow, tasks } from './schema.js';
@@ -23,6 +30,67 @@ export async function persistPlan(db: Db, task: TaskLease, plan: unknown): Promi
     .where(and(activeLease(task), eq(tasks.agentId, task.agentId)))
     .returning({ id: tasks.id });
   return Boolean(updated);
+}
+
+/**
+ * Create a future-self child while holding the parent row lock. The lock is
+ * the serialization boundary for the count, so concurrent callers cannot
+ * create a sixth sleeping child.
+ */
+export async function createScheduledFollowUp(
+  db: Db,
+  input: ScheduledFollowUpInput,
+): Promise<Awaited<ReturnType<TaskRepository['createTask']>>> {
+  if (!input.parentTaskId || !input.agentId || !input.instruction.trim())
+    throw new Error('Invalid scheduled follow-up');
+  if (input.instruction.length > 2000) throw new Error('Invalid scheduled follow-up');
+  if (!Number.isFinite(input.runAfter.getTime())) throw new Error('Invalid task resume time');
+  if (!['owner', 'assistant'].includes(input.trust)) throw new Error('Invalid scheduled trust');
+
+  return db.transaction(async (tx) => {
+    const [parent] = await tx
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.id, input.parentTaskId), eq(tasks.agentId, input.agentId)))
+      .for('update');
+    if (!parent) throw new Error('Parent task not found or belongs to another agent');
+
+    const [clock] = await tx.execute<{ now: string }>(sql`select clock_timestamp() as now`);
+    if (!clock) throw new Error('Missing database clock');
+    const now = new Date(clock.now);
+    if (input.runAfter <= now) throw new Error('when must be in the future');
+
+    const [count] = await tx
+      .select({ n: sql<number>`count(*)` })
+      .from(tasks)
+      .where(and(eq(tasks.parentTaskId, parent.id), eq(tasks.status, 'sleeping')));
+    if (Number(count?.n ?? 0) >= 5) throw new Error('too many scheduled follow-ups (max 5)');
+
+    const task = {
+      ...newTaskRecord(
+        {
+          agentId: parent.agentId,
+          conversationId: input.conversationId ?? parent.conversationId,
+          type: 'scheduled',
+          trust: input.trust,
+          trigger: {
+            source: 'internal',
+            payload: {
+              instruction: input.instruction,
+              ...(input.tainted ? { taintedOrigin: true } : {}),
+            },
+          },
+          runAfter: input.runAfter,
+          parentTaskId: parent.id,
+        },
+        randomUUID(),
+        now,
+      ),
+    };
+    const [created] = await tx.insert(tasks).values(task).returning();
+    if (!created) throw new Error('Scheduled follow-up was not created');
+    return { task: created, created: true };
+  });
 }
 
 export async function parkForApproval(
@@ -316,7 +384,13 @@ export async function findDueTasks(db: Db, limit = 10): Promise<TaskRow[]> {
 export function createPostgresTaskRepository(db: Db): TaskRepository {
   return {
     ...createPostgresTaskLeaseRepository(db),
+    async getTask(taskId) {
+      if (!taskId) return null;
+      const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
+      return task ?? null;
+    },
     createTask: (input) => createTask(db, input),
+    createScheduledFollowUp: (input) => createScheduledFollowUp(db, input),
     persistPlan: (task, plan) => persistPlan(db, task, plan),
     parkForApproval: (...args) => parkForApproval(db, ...args),
     parkForBudget: (...args) => parkForBudget(db, ...args),

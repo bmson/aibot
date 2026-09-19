@@ -11,12 +11,7 @@ import {
 import { compileOwnerCard } from '@assistant/core/memory/consolidation';
 import { supersedeContradictedFacts } from '@assistant/core/memory/supersede';
 import { evaluateOutOfBandPing } from '@assistant/core/proactive/nudge-policy';
-import {
-  createDb,
-  createPostgresExecutionPersistence,
-  createPostgresMemorySupersedeRepository,
-  type Db,
-} from '@assistant/db';
+import { createDb, createPostgresExecutionPersistence, type Db } from '@assistant/db';
 import {
   browserModule,
   composedModuleMetas as collectModuleMetas,
@@ -265,13 +260,15 @@ export function buildDeps(): AgentDeps {
   // each registers its own tools — the composition root names none of them.
   const registry = registerMcpTools(
     registerBuiltinTools(new ToolRegistry(), {
+      tasks: persistence.tasks,
+      memory: persistence.memory,
       embed: (texts) => router.embed(texts),
       workspace,
       notifyOwner: (input) => outOfBandNotifier.notifyOwner(input),
       supersede: (input) =>
         supersedeContradictedFacts(
           {
-            memory: createPostgresMemorySupersedeRepository(db),
+            memory: persistence.memorySupersede,
             router,
             onRetired: () => compileOwnerCard(db),
           },

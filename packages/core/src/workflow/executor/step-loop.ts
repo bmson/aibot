@@ -309,13 +309,19 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     const queryText = `${emailMeta} ${baseText}`.trim();
     if (queryText) {
       try {
-        const since = (await recentWindowStart(db, conversationId, 20)) ?? new Date();
+        const since =
+          (await recentWindowStart(
+            deps.persistence?.history ?? db,
+            conversationId,
+            20,
+            agent.id,
+          )) ?? new Date();
         const layered = await recallWithGraphFallback({
           graph: loadConfig().GRAPH_RAG_ENABLED
             ? async () => {
                 const [queryEmbedding] = await router.embed([queryText], { taskId: task.id });
                 return {
-                  graph: await recallKnowledgeGraph(db, {
+                  graph: await recallKnowledgeGraph(deps.persistence?.graph ?? db, {
                     agentId: agent.id,
                     queryText,
                     queryEmbedding,
@@ -326,7 +332,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
             : undefined,
           history: (queryEmbedding, graph) =>
             recallRelevantContext(
-              db,
+              deps.persistence?.history ?? db,
               {
                 agentId: agent.id,
                 queryText,
@@ -357,7 +363,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         // Provenance for the chat UI affordance; checkpointed so it survives to
         // the (possibly resumed) final-response persist.
         state.recall = layered.sources.length > 0 ? layered.sources : undefined;
-        await recordRecallMetric(db, {
+        await recordRecallMetric(deps.persistence?.recallMetrics ?? db, {
           agentId: agent.id,
           taskId: task.id,
           conversationId,

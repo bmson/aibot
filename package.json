@@ -52,6 +52,7 @@
     "eval:questions:config": "tsx scripts/question-regression-config.ts",
     "test:firestore": "tsx scripts/test-firestore.ts",
     "firestore:validate": "tsx scripts/validate-firestore.ts",
+    "firestore:backup-smoke": "tsx scripts/firestore-backup-smoke.ts",
     "workspace:export": "tsx scripts/workspace-migration-export.ts",
     "workspace:import": "tsx scripts/workspace-migration-import.ts",
     "consumer:install": "tsx scripts/consumer-install.ts"
@@ -62,19 +63,20 @@
     "@assistant/db": "workspace:^",
     "@assistant/firestore": "workspace:*",
     "@assistant/modules": "workspace:*",
+    "@assistant/persistence": "workspace:*",
     "@assistant/setup": "workspace:*",
     "@assistant/tools": "workspace:*",
     "@biomejs/biome": "^2.5.12",
     "@google-cloud/firestore": "^9.0.1",
     "@types/node": "^26.4.1",
     "drizzle-orm": "^0.45.2",
+    "google-auth-library": "^10.5.0",
     "playwright": "^1.63.0",
     "sharp": "^0.35.4",
     "tsx": "^4.23.13",
     "turbo": "^2.10.12",
     "typescript": "^7.0.2",
     "vitest": "^5.0.0",
-    "zod": "^4.5.4",
-    "@assistant/persistence": "workspace:*"
+    "zod": "^4.5.4"
   }
 }

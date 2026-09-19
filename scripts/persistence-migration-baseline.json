@@ -32,7 +32,6 @@
   "packages/application/src/tasks/queries.ts",
   "packages/core/src/chat.ts",
   "packages/core/src/cost.ts",
-  "packages/core/src/generative-card.ts",
   "packages/core/src/memory/ambient.ts",
   "packages/core/src/memory/commitments.ts",
   "packages/core/src/memory/consolidation.ts",

@@ -5,13 +5,18 @@ const mocks = vi.hoisted(() => ({
   refresh: vi.fn(),
   dismiss: vi.fn(),
   identity: vi.fn(),
-  db: {},
+  refreshRepository: {},
+  cards: {},
 }));
 vi.mock('@assistant/application/cards', () => ({
   requestSavedCardRefresh: mocks.refresh,
   dismissSavedCard: mocks.dismiss,
 }));
-vi.mock('@/lib/server', () => ({ getDb: () => mocks.db, getAgentIdentity: mocks.identity }));
+vi.mock('@/lib/server', () => ({
+  getCardRefresh: () => mocks.refreshRepository,
+  getGeneratedCards: () => mocks.cards,
+  getAgentIdentity: mocks.identity,
+}));
 vi.mock('@/mobile-auth', () => ({
   isMobileAuthed: mocks.auth,
   mobileJson: (body: unknown, init?: ResponseInit) => Response.json(body, init),
@@ -51,7 +56,7 @@ describe('saved card refresh transport', () => {
     const response = await post();
     expect(response.status).toBe(202);
     expect(await response.json()).toEqual(result);
-    expect(mocks.refresh).toHaveBeenCalledWith(mocks.db, 'owner-agent', id);
+    expect(mocks.refresh).toHaveBeenCalledWith(mocks.refreshRepository, 'owner-agent', id);
     expect(mocks.dismiss).not.toHaveBeenCalled();
   });
 
@@ -76,7 +81,7 @@ describe('saved card refresh transport', () => {
     const response = await post('dismiss');
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
-    expect(mocks.dismiss).toHaveBeenCalledWith(mocks.db, 'owner-agent', id);
+    expect(mocks.dismiss).toHaveBeenCalledWith(mocks.cards, 'owner-agent', id);
     expect(mocks.refresh).not.toHaveBeenCalled();
   });
 });

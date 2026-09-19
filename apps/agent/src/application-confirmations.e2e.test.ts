@@ -553,10 +553,14 @@ describe('cross-event application confirmations', () => {
       },
     });
     const calls = await db.select().from(toolCalls).where(eq(toolCalls.taskId, task.id));
-    expect(calls.map((call) => [call.toolName, call.status])).toEqual([
-      ['applications.apply_confirmation', 'succeeded'],
-      ['applications.append_confirmation_doc', 'succeeded'],
-    ]);
+    // SQL rows have no implicit order; both distinct actions must have succeeded once.
+    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => [call.toolName, call.status])).toEqual(
+      expect.arrayContaining([
+        ['applications.apply_confirmation', 'succeeded'],
+        ['applications.append_confirmation_doc', 'succeeded'],
+      ]),
+    );
 
     await expect(processApplicationConfirmation(testHarness.deps, confirmation)).resolves.toEqual({
       kind: 'replay',

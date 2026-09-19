@@ -37,6 +37,35 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect((await store.collection('outbox').get()).size).toBe(2);
       expect((await repo.findDueTasks()).map((t) => t.id)).toEqual(['task']);
     });
+    it('creates an owned tainted scheduled child with its generation-zero wake atomically', async () => {
+      const runAfter = new Date(store.now().getTime() + 60_000);
+      const result = await repo.createScheduledFollowUp({
+        parentTaskId: 'task',
+        agentId: 'agent',
+        conversationId: 'conversation',
+        instruction: 'review this later',
+        runAfter,
+        trust: 'assistant',
+        tainted: true,
+      });
+      expect(result.created).toBe(true);
+      expect(result.task).toMatchObject({
+        parentTaskId: 'task',
+        agentId: 'agent',
+        status: 'sleeping',
+        queueGeneration: 0,
+        runAfter,
+        trust: 'assistant',
+        trigger: {
+          source: 'internal',
+          payload: { instruction: 'review this later', taintedOrigin: true },
+        },
+      });
+      const outbox = await store.collection('outbox').get();
+      expect(outbox.size).toBe(1);
+      expect(outbox.docs[0]?.get('taskId')).toBe(result.task.id);
+      expect(outbox.docs[0]?.get('generation')).toBe(0);
+    });
     it('rechecks a lease renewed after the recovery query before mutating it', async () => {
       await store.doc('tasks', 'task').update({ status: 'running', lockedUntil: new Date(0) });
       const runTransaction = store.db.runTransaction.bind(store.db);

@@ -2,12 +2,20 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import firestore from '@google-cloud/firestore';
-import { createInstallationStore, type InstallationStore } from './store.js';
+import { InstallationStore } from './store.js';
 import { dueTasksQuery } from './task-lifecycle.js';
 
 type AdminClient = InstanceType<typeof firestore.v1.FirestoreAdminClient>;
+type AdminOptions = NonNullable<ConstructorParameters<typeof firestore.v1.FirestoreAdminClient>[0]>;
+export type ValidationAuthClient = AdminOptions['authClient'];
 type IndexRequest = NonNullable<Parameters<AdminClient['createIndex']>[0]>;
 export type ValidationIndex = NonNullable<IndexRequest['index']> & { collectionGroup: string };
+type FieldRequest = NonNullable<Parameters<AdminClient['updateField']>[0]>;
+export type ValidationFieldOverride = {
+  collectionGroup: string;
+  fieldPath: string;
+  indexes: NonNullable<NonNullable<FieldRequest['field']>['indexConfig']>['indexes'];
+};
 
 export function validationDatabaseId(): string {
   return `assistant-validation-${randomUUID().replaceAll('-', '').slice(0, 16)}`;
@@ -48,6 +56,8 @@ export async function withValidationDatabase<T>(
     projectId: string;
     location: string;
     indexes: ValidationIndex[];
+    fieldOverrides?: ValidationFieldOverride[];
+    authClient?: ValidationAuthClient;
     progress: (stage: string, details: Record<string, unknown>) => void;
   },
   validate: (store: InstallationStore) => Promise<T>,
@@ -58,7 +68,10 @@ export async function withValidationDatabase<T>(
     throw new Error('Explicit Google project ID required');
   const databaseId = validationDatabaseId();
   const name = `projects/${input.projectId}/databases/${databaseId}`;
-  const admin = new firestore.v1.FirestoreAdminClient({ projectId: input.projectId });
+  const admin = new firestore.v1.FirestoreAdminClient({
+    projectId: input.projectId,
+    authClient: input.authClient,
+  });
   let created = false;
   let store: InstallationStore | undefined;
   let validationFailed = false;
@@ -116,15 +129,71 @@ export async function withValidationDatabase<T>(
         builds.push(Promise.resolve({ status: 'rejected', reason }));
       }
     }
+    for (const override of input.fieldOverrides ?? []) {
+      try {
+        let operation: { promise(): Promise<unknown> } | undefined;
+        for (let attempt = 0; !operation; attempt++) {
+          try {
+            [operation] = await admin.updateField({
+              field: {
+                name: admin.fieldPath(
+                  input.projectId,
+                  databaseId,
+                  override.collectionGroup,
+                  override.fieldPath,
+                ),
+                indexConfig: { indexes: override.indexes },
+              },
+              updateMask: { paths: ['index_config'] },
+            });
+          } catch (error) {
+            if ((error as { code?: number }).code !== 10 || attempt >= 4) throw error;
+            input.progress('field_override_retry', {
+              name,
+              collectionGroup: override.collectionGroup,
+              fieldPath: override.fieldPath,
+              attempt: attempt + 1,
+            });
+            await delay(250 * 2 ** attempt);
+          }
+        }
+        builds.push(
+          operation.promise().then(
+            () => {
+              input.progress('field_override_ready', {
+                name,
+                collectionGroup: override.collectionGroup,
+                fieldPath: override.fieldPath,
+              });
+              return { status: 'fulfilled', value: undefined } as const;
+            },
+            (reason: unknown) => ({ status: 'rejected', reason }) as const,
+          ),
+        );
+      } catch (reason) {
+        input.progress('field_override_failed', {
+          name,
+          collectionGroup: override.collectionGroup,
+          fieldPath: override.fieldPath,
+          message: reason instanceof Error ? reason.message : String(reason),
+        });
+        builds.push(Promise.resolve({ status: 'rejected', reason }));
+      }
+    }
     const completedBuilds = await Promise.all(builds);
     const failure = completedBuilds.find((build) => build.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
     input.progress('validating', { name });
-    store = createInstallationStore({
+    const data = new firestore.Firestore({
       projectId: input.projectId,
       databaseId,
-      installationId: `validation-${randomUUID()}`,
+      // Firestore forwards GoogleAuthOptions to its GAPIC client, although its
+      // narrower public Settings type omits authClient.
+      authClient: input.authClient,
+    } as ConstructorParameters<typeof firestore.Firestore>[0] & {
+      authClient?: ValidationAuthClient;
     });
+    store = new InstallationStore(data, `validation-${randomUUID()}`);
     const result = await validate(store);
     input.progress('validation_passed', { name });
     return result;

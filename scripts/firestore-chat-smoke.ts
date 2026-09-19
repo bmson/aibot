@@ -5,6 +5,7 @@ import type { Db } from '@assistant/db';
 import {
   createFirestoreExecutionPersistence,
   embeddingSpaceKey,
+  FirestoreMemoryRepository,
   type InstallationStore,
 } from '@assistant/firestore';
 import type { EmbeddingSpace } from '@assistant/persistence';
@@ -18,7 +19,10 @@ export const CHAT_SMOKE_SPACE: EmbeddingSpace = {
 };
 
 /** Full queued chat -> planner -> model -> durable final, with synthetic provider output. */
-export async function firestoreChatSmoke(store: InstallationStore) {
+export async function firestoreChatSmoke(
+  store: InstallationStore,
+  options: { recall?: boolean } = {},
+) {
   const agentId = randomUUID();
   const conversationId = randomUUID();
   const skillId = randomUUID();
@@ -108,6 +112,119 @@ export async function firestoreChatSmoke(store: InstallationStore) {
     createdAt: now,
     updatedAt: now,
   });
+  if (options.recall) {
+    const historyConversationId = randomUUID();
+    const historyMessageId = randomUUID();
+    const historyAt = new Date(now.getTime() - 86_400_000);
+    await store.doc('conversations', historyConversationId).set({
+      id: historyConversationId,
+      agentId,
+      channel: 'chat',
+      trust: 'owner',
+      createdAt: historyAt,
+      updatedAt: historyAt,
+    });
+    await store.doc('messages', historyMessageId).set({
+      id: historyMessageId,
+      conversationId: historyConversationId,
+      role: 'user',
+      text: 'Historical rainbow observation at the coast',
+      createdAt: historyAt,
+      embedding: FieldValue.vector(embedding),
+      embeddingSpace: embeddingSpaceKey(CHAT_SMOKE_SPACE),
+    });
+    const segmentId = randomUUID();
+    await store.doc('conversationSegments', segmentId).set({
+      id: segmentId,
+      agentId,
+      conversationId: historyConversationId,
+      startMessageId: historyMessageId,
+      endMessageId: historyMessageId,
+      summary: 'Earlier rainbow discussion by the sea',
+      startedAt: historyAt,
+      endedAt: historyAt,
+      createdAt: historyAt,
+      updatedAt: historyAt,
+      embedding: FieldValue.vector(embedding),
+      embeddingSpace: embeddingSpaceKey(CHAT_SMOKE_SPACE),
+    });
+    const memoryId = randomUUID(),
+      subjectId = randomUUID(),
+      objectId = randomUUID(),
+      relationId = randomUUID();
+    await new FirestoreMemoryRepository(store, CHAT_SMOKE_SPACE).save({
+      id: memoryId,
+      agentId,
+      content: 'The owner observes rainbows by the sea.',
+      contentHash: `synthetic-${memoryId}`,
+      createdAt: historyAt,
+      expiresAt: null,
+      embedding,
+      sourceTaskId: null,
+      kind: 'fact',
+      confidence: '1',
+      goalId: null,
+      originTrust: 'owner',
+      category: 'knowledge',
+      importance: 3,
+      quarantined: false,
+      subjectContactId: null,
+      domain: null,
+      validFrom: null,
+      validUntil: null,
+      supersededById: null,
+      ownerConfirmed: true,
+      pinned: false,
+      source: 'synthetic',
+      lastAccessedAt: null,
+      lastConsolidatedAt: null,
+    });
+    await store
+      .doc('knowledgeGraphEntities', subjectId)
+      .set({ id: subjectId, agentId, label: 'Owner', preferredLabel: null });
+    await store
+      .doc('knowledgeGraphEntities', objectId)
+      .set({ id: objectId, agentId, label: 'Coastal rainbows', preferredLabel: null });
+    await store.doc('knowledgeGraphSources', memoryId).set({
+      memoryId,
+      status: 'ready',
+      contentHash: `synthetic-${memoryId}`,
+      extractionVersion: 2,
+    });
+    await store.doc('knowledgeGraphRelations', relationId).set({
+      id: relationId,
+      agentId,
+      subjectEntityId: subjectId,
+      objectEntityId: objectId,
+      sourceMemoryId: memoryId,
+      predicate: 'observes',
+      evidenceQuote: 'The owner observes rainbows by the sea.',
+      confidence: '1',
+      reviewStatus: 'pending',
+      validFrom: null,
+      validUntil: null,
+    });
+    const anchors = await persistence.history.messages({
+      agentId,
+      embedding,
+      exclude: { conversationId, sinceCreatedAt: now },
+      limit: 4,
+    });
+    assert.equal(anchors[0]?.id, historyMessageId);
+    const anchor = anchors[0];
+    assert.ok(anchor);
+    assert.equal(
+      (
+        await persistence.history.neighborhood({
+          agentId,
+          anchor,
+          radius: 1,
+          exclude: { conversationId, sinceCreatedAt: now },
+        })
+      ).length,
+      1,
+    );
+  }
   const { task } = await persistence.tasks.createTask({
     agentId,
     conversationId,
@@ -186,6 +303,14 @@ export async function firestoreChatSmoke(store: InstallationStore) {
   assert.match(systemPrompt, /Synthetic Observatory/);
   assert.match(systemPrompt, /Rainbow observation notes/);
   assert.match(systemPrompt, /Explain science clearly/);
+  if (options.recall) {
+    assert.match(systemPrompt, /Earlier rainbow discussion by the sea/);
+    assert.match(systemPrompt, /Coastal rainbows/);
+    const metrics = await store.collection('recallMetrics').where('taskId', '==', task.id).get();
+    assert.equal(metrics.size, 1);
+    assert.equal(metrics.docs[0]?.get('graphUsed'), 1);
+    assert.equal(metrics.docs[0]?.get('historyUsed'), 1);
+  }
   assert.equal((await store.doc('tasks', task.id).get()).get('plan.action'), 'reply');
   assert.equal((await store.doc('skills', skillId).get()).get('useCount'), 1);
   assert.equal((await store.doc('skills', skillId).get()).get('successCount'), 1);
@@ -206,5 +331,6 @@ export async function firestoreChatSmoke(store: InstallationStore) {
     skills: true,
     finalized: true,
     sqlAccesses: sqlAccesses.length,
+    ...(options.recall ? { history: true, graph: true } : {}),
   };
 }

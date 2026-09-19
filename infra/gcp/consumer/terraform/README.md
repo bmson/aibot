@@ -3,7 +3,8 @@
 This directory provisions the first customer-owned resources for a Firestore installation:
 
 - required Google APIs;
-- an explicitly selected Firestore Native Standard database;
+- an explicitly selected Firestore Native Standard database with point-in-time recovery (PITR), required for consistent managed snapshot exports;
+- application composite/vector indexes and large-payload single-field exemptions from the shared `infra/gcp/firestore/firestore.indexes.json` specification;
 - private, versioned assets and source archive buckets with uniform access, public access prevention, and seven-day soft-delete retention;
 - an immutable-tag Docker Artifact Registry repository; and
 - a dedicated runtime service account with access to the selected Firestore database and asset object administration. The source archive bucket has no runtime grant.
@@ -48,6 +49,8 @@ The default consumer path creates `(default)` in a fresh customer-owned project.
 
 Google currently grants free quota only to the eligible default database; named databases are usage-billed. The free quota does not cover all features or the rest of the application. See [Firestore pricing](https://cloud.google.com/firestore/pricing?hl=en). The named-only isolation rule in the real-cloud validation harness is separate and remains unchanged. Choose a Firestore location that is compatible with the customer's region and selected Google model endpoints; the database location is a durable choice.
 
+PITR retains seven days of document history and is billed to the customer's project outside the free storage tier. It is enabled here so managed backups can export the same consistent snapshot used for checksum verification. Disabling PITR prevents that backup workflow; the backup CLI checks the prerequisite before reading the inventory. See [PITR behavior and billing](https://docs.cloud.google.com/firestore/native/docs/pitr).
+
 The Google provider constraint permits compatible 8.x releases. The committed `.terraform.lock.hcl` records the provider version and package checksums validated for local Apple Silicon and Linux CI/Cloud Shell. Refresh both platform checksums deliberately when upgrading: `terraform providers lock -platform=darwin_arm64 -platform=linux_amd64`. Read-only initialization must be followed by successful validation on the target platform.
 
 This is a foundation only. Cloud Run images and services are deliberately absent until the runtime profile, verified image digests, authentication, queues, secrets, and installation manifest are ready.
@@ -63,4 +66,4 @@ terraform validate
 terraform test
 ```
 
-The tests use a mocked provider. They cover the explicit default-database creation guard, exact database-scoped IAM, retained delete protection, named database selection, and invalid IDs. They do not establish that a customer project is empty, billing is enabled, a location is available, or IAM works in Google Cloud.
+The tests use a mocked provider. They cover the explicit default-database creation guard, exact database-scoped IAM, retained delete protection, named database selection, invalid IDs, and index deployment. They do not establish that a customer project is empty, billing is enabled, a location is available, or IAM works in Google Cloud. The live Firestore validation harness deploys the same indexes and exemptions into an isolated temporary database and waits for index operations before exercising queries.

@@ -1,6 +1,21 @@
 import type { TaskLease, TaskLeaseRepository } from './contracts.js';
 import type { Records } from './records.js';
 import type { TaskCreateInput, TaskCreateResult } from './task-creation.js';
+
+/** Input for the owner-scoped future-self task command. */
+export interface ScheduledFollowUpInput {
+  /** The task currently executing task.schedule. */
+  parentTaskId: string;
+  /** Used to prove that the caller owns parentTaskId. */
+  agentId: string;
+  conversationId?: string | null;
+  instruction: string;
+  runAfter: Date;
+  /** Scheduled children are either owner work or assistant-origin work. */
+  trust: 'owner' | 'assistant';
+  /** Preserve taint provenance in the child trigger. */
+  tainted: boolean;
+}
 export interface TaskOutcome {
   status: 'done' | 'failed' | 'cancelled';
   progress?: string;
@@ -14,7 +29,11 @@ export interface TaskWake {
   queueGeneration: number;
 }
 export interface TaskRepository extends TaskLeaseRepository {
+  /** Installation-scoped task lookup used before choosing an execution route. */
+  getTask(taskId: string): Promise<Records['tasks'] | null>;
   createTask(input: TaskCreateInput): Promise<TaskCreateResult>;
+  /** Atomically create an owner-scoped scheduled child and its initial wake. */
+  createScheduledFollowUp(input: ScheduledFollowUpInput): Promise<TaskCreateResult>;
   /** Persist planner output only while the supplied running lease is current. */
   persistPlan(task: TaskLease, plan: unknown): Promise<boolean>;
   parkForApproval(

@@ -31,6 +31,8 @@ resource "google_firestore_database" "consumer" {
   database_edition        = "STANDARD"
   delete_protection_state = "DELETE_PROTECTION_ENABLED"
   deletion_policy         = "PREVENT"
+  # Consistent managed exports require PITR, including snapshots from the past hour.
+  point_in_time_recovery_enablement = "POINT_IN_TIME_RECOVERY_ENABLED"
 
   lifecycle {
     prevent_destroy = true

@@ -1,11 +1,15 @@
+import { randomUUID } from 'node:crypto';
 import type {
   Records,
+  ScheduledFollowUpInput,
   TaskBudgetIncrease,
   TaskCreateInput,
+  TaskCreateResult,
   TaskLease,
   TaskOutcome,
   TaskRepository,
 } from '@assistant/persistence';
+import { newTaskRecord } from '@assistant/persistence';
 import { Filter } from '@google-cloud/firestore';
 import { createWakeIntent } from './outbox.js';
 import { decodeRecord, encodeRecord } from './store.js';
@@ -22,12 +26,88 @@ const WAKEABLE = new Set([
 ]);
 type Task = Records['tasks'];
 
+/**
+ * Create a scheduled child and its first wake intent in one Firestore
+ * transaction. The coordination document serializes the bounded child count
+ * even when the parent currently has fewer than five children.
+ */
+export async function createScheduledFollowUp(
+  store: import('./store.js').InstallationStore,
+  input: ScheduledFollowUpInput,
+): Promise<TaskCreateResult> {
+  if (!input.parentTaskId || !input.agentId || !input.instruction.trim())
+    throw new Error('Invalid scheduled follow-up');
+  if (input.instruction.length > 2000) throw new Error('Invalid scheduled follow-up');
+  if (!Number.isFinite(input.runAfter.getTime())) throw new Error('Invalid task resume time');
+  if (!['owner', 'assistant'].includes(input.trust)) throw new Error('Invalid scheduled trust');
+
+  const id = randomUUID();
+  return store.db.runTransaction(async (tx) => {
+    const guardRef = store.doc('coordination', `scheduled-follow-up:${input.parentTaskId}`);
+    const parentRef = store.doc('tasks', input.parentTaskId);
+    // All reads precede writes. Reading the guard makes concurrent callers for
+    // this parent conflict even when the child query is initially empty.
+    await tx.get(guardRef);
+    const parentSnapshot = await tx.get(parentRef);
+    if (!parentSnapshot.exists)
+      throw new Error('Parent task not found or belongs to another agent');
+    const parent = decodeRecord<Task>(parentSnapshot.data());
+    if (parent.agentId !== input.agentId)
+      throw new Error('Parent task not found or belongs to another agent');
+
+    const now = store.now();
+    if (input.runAfter <= now) throw new Error('when must be in the future');
+    const children = await tx.get(
+      store
+        .collection('tasks')
+        .where('parentTaskId', '==', parent.id)
+        .where('status', '==', 'sleeping')
+        .limit(6),
+    );
+    if (children.size >= 5) throw new Error('too many scheduled follow-ups (max 5)');
+
+    const task = newTaskRecord(
+      {
+        agentId: parent.agentId,
+        conversationId: input.conversationId ?? parent.conversationId,
+        type: 'scheduled',
+        trust: input.trust,
+        trigger: {
+          source: 'internal',
+          payload: {
+            instruction: input.instruction,
+            ...(input.tainted ? { taintedOrigin: true } : {}),
+          },
+        },
+        runAfter: input.runAfter,
+        parentTaskId: parent.id,
+      },
+      id,
+      now,
+    );
+    tx.set(guardRef, { lastTaskId: id, updatedAt: now });
+    tx.create(store.doc('tasks', id), encodeRecord(task));
+    createWakeIntent(tx, store, { taskId: id, generation: 0, availableAt: input.runAfter });
+    return { task, created: true };
+  });
+}
+
 export class FirestoreTaskRepository
   extends FirestoreTaskLeaseRepository
   implements TaskRepository
 {
+  async getTask(taskId: string): Promise<Task | null> {
+    if (!taskId) return null;
+    const snapshot = await this.store.doc('tasks', taskId).get();
+    if (!snapshot.exists) return null;
+    const task = decodeRecord<Task>(snapshot.data());
+    return task.id === taskId ? task : null;
+  }
   createTask(input: TaskCreateInput) {
     return createTask(this.store, input);
+  }
+  createScheduledFollowUp(input: ScheduledFollowUpInput) {
+    return createScheduledFollowUp(this.store, input);
   }
   async persistPlan(task: TaskLease, plan: unknown) {
     return Boolean(await this.change(task.id, () => ({ plan }), task));

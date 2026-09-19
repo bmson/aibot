@@ -4,30 +4,47 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const calls = vi.hoisted(() => ({
   create: vi.fn(),
   index: vi.fn(),
+  field: vi.fn(),
   remove: vi.fn(),
   getDatabase: vi.fn(),
   close: vi.fn(),
   terminate: vi.fn(),
+  adminOptions: vi.fn(),
+  dataOptions: vi.fn(),
 }));
 vi.mock('@google-cloud/firestore', () => ({
   default: {
     v1: {
       FirestoreAdminClient: class {
+        constructor(options: unknown) {
+          calls.adminOptions(options);
+        }
         createDatabase = calls.create;
         createIndex = calls.index;
+        updateField = calls.field;
+        fieldPath = (project: string, database: string, collection: string, field: string) =>
+          `projects/${project}/databases/${database}/collectionGroups/${collection}/fields/${field}`;
         deleteDatabase = calls.remove;
         getDatabase = calls.getDatabase;
         close = calls.close;
       },
     },
+    Firestore: class {
+      terminate = calls.terminate;
+      constructor(options: unknown) {
+        calls.dataOptions(options);
+      }
+    },
   },
 }));
 vi.mock('./store.js', () => ({
-  createInstallationStore: () => ({ db: { terminate: calls.terminate } }),
+  InstallationStore: class {
+    constructor(readonly db: unknown) {}
+  },
 }));
 vi.mock('./task-lifecycle.js', () => ({ dueTasksQuery: vi.fn() }));
 
-import { withValidationDatabase } from './validation-admin.js';
+import { type ValidationAuthClient, withValidationDatabase } from './validation-admin.js';
 
 describe('isolated live-validation resource lifecycle', () => {
   beforeEach(() => {
@@ -35,12 +52,15 @@ describe('isolated live-validation resource lifecycle', () => {
     const operation = () => [{ promise: async () => [] }];
     calls.create.mockReset().mockImplementation(operation);
     calls.index.mockReset().mockImplementation(operation);
+    calls.field.mockReset().mockImplementation(operation);
     calls.remove.mockReset().mockImplementation(operation);
     calls.getDatabase
       .mockReset()
       .mockRejectedValue(Object.assign(new Error('missing'), { code: 5 }));
     calls.close.mockReset().mockResolvedValue(undefined);
     calls.terminate.mockReset().mockResolvedValue(undefined);
+    calls.adminOptions.mockReset();
+    calls.dataOptions.mockReset();
   });
   afterEach(() => vi.unstubAllEnvs());
   const input = {
@@ -83,6 +103,18 @@ describe('isolated live-validation resource lifecycle', () => {
       'refuses emulator',
     );
     expect(calls.create).not.toHaveBeenCalled();
+  });
+  it('shares an explicit auth client between admin and data clients', async () => {
+    const authClient = { getAccessToken: vi.fn() } as unknown as ValidationAuthClient;
+    await expect(withValidationDatabase({ ...input, authClient }, async () => true)).resolves.toBe(
+      true,
+    );
+    expect(calls.adminOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ authClient, projectId: 'test-project' }),
+    );
+    expect(calls.dataOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ authClient, projectId: 'test-project' }),
+    );
   });
   it('starts independent indexes together and waits for all builds before cleanup after a failure', async () => {
     let finishSecond!: () => void;
@@ -133,6 +165,46 @@ describe('isolated live-validation resource lifecycle', () => {
     ).resolves.toBe(true);
     expect(calls.index).toHaveBeenCalledTimes(2);
     expect(validate).toHaveBeenCalledOnce();
+    expect(calls.remove).toHaveBeenCalledOnce();
+  });
+  it('applies field exemptions and waits for all operations before cleanup after failure', async () => {
+    let finishSecond!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finishSecond = resolve;
+    });
+    calls.field
+      .mockImplementationOnce(() => [
+        {
+          promise: async () => {
+            throw new Error('field override failed');
+          },
+        },
+      ])
+      .mockImplementationOnce(() => [{ promise: () => pending }]);
+    const validate = vi.fn();
+    const run = withValidationDatabase(
+      {
+        ...input,
+        fieldOverrides: [
+          { collectionGroup: 'messages', fieldPath: 'parts', indexes: [] },
+          { collectionGroup: 'tasks', fieldPath: 'state', indexes: [] },
+        ],
+      },
+      validate,
+    );
+    const rejection = expect(run).rejects.toThrow('field override failed');
+    await vi.waitFor(() => expect(calls.field).toHaveBeenCalledTimes(2));
+    expect(calls.field.mock.calls[0]?.[0]).toMatchObject({
+      field: {
+        name: expect.stringContaining('/collectionGroups/messages/fields/parts'),
+        indexConfig: { indexes: [] },
+      },
+      updateMask: { paths: ['index_config'] },
+    });
+    expect(calls.remove).not.toHaveBeenCalled();
+    finishSecond();
+    await rejection;
+    expect(validate).not.toHaveBeenCalled();
     expect(calls.remove).toHaveBeenCalledOnce();
   });
   it('reports a passed workload before waiting for database cleanup', async () => {
