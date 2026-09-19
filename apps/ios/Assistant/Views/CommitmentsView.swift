@@ -152,9 +152,7 @@ struct CommitmentsScreen: View {
 
     private func dueLabel(_ row: Commitment) -> String? {
         guard let date = row.dueAt?.assistantDate else { return nil }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        return "Due \(formatter.string(from: date))"
+        return "Due \(AssistantFormatters.mediumDate.string(from: date))"
     }
 
     private func act(_ row: Commitment, action: String) {

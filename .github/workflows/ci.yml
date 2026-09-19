@@ -12,9 +12,17 @@ on:
 # nor a build, so they run alongside the database-backed verification, and the
 # build+smoke job reuses caches instead of starting cold. Deploy keys off the
 # workflow conclusion, which requires every job to pass.
+#
+# Every job carries a timeout-minutes, generously above its observed run but far
+# under GitHub's six-hour default. A hung job is not a slow job: the browser
+# smoke step once held a main-branch run open for the better part of an hour,
+# and because a deploy keys off this workflow's conclusion, nothing shipped and
+# nothing failed either — there was no signal to act on. A job that hangs should
+# go red in minutes and upload its log, which is the only way to find out why.
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -77,6 +85,7 @@ jobs:
 
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -107,6 +116,7 @@ jobs:
 
   firestore:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       FIRESTORE_EMULATOR_HOST: 127.0.0.1:8789
       GCLOUD_PROJECT: demo-assistant-test
@@ -153,6 +163,7 @@ jobs:
 
   build-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: pgvector/pgvector:pg17

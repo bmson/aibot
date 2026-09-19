@@ -252,6 +252,53 @@ private final class TranscriptScrollTracker {
     var contentPosition: CGFloat = 0
 }
 
+/// The facts a transcript row needs about the rest of the log, resolved in one
+/// pass over it.
+///
+/// Each of these used to be a scan through `model.messages` inside the row
+/// builder — backwards for the prompt a reply is answering, forwards to find out
+/// whether a newer answer had superseded it. Building n rows therefore cost n
+/// scans of n messages, and the transcript is eager, so that quadratic ran again
+/// on every streamed token. Resolving both up front makes drawing the whole log
+/// linear in its length.
+struct TranscriptContext {
+    /// For each message, the nearest user message before it, as its text. The
+    /// text is read once per user turn here rather than once per row that asks
+    /// for it: joining a message's parts is not free either.
+    private let precedingUserPrompts: [String?]
+
+    /// The newest answer in the log. Only that row carries answer context — an
+    /// older answer has been superseded and stays quiet.
+    private let currentAnswerIndex: Int?
+
+    init(messages: [ChatMessage]) {
+        var prompts: [String?] = []
+        prompts.reserveCapacity(messages.count)
+        var promptSoFar: String?
+        var newestAnswer: Int?
+
+        for (index, message) in messages.enumerated() {
+            // Appended before this message is considered, so a user turn is
+            // never offered as the prompt for itself.
+            prompts.append(promptSoFar)
+            if message.role == .user { promptSoFar = message.text }
+            if message.isConversationAnswer { newestAnswer = index }
+        }
+
+        precedingUserPrompts = prompts
+        currentAnswerIndex = newestAnswer
+    }
+
+    func userPrompt(before index: Int) -> String? {
+        guard precedingUserPrompts.indices.contains(index) else { return nil }
+        return precedingUserPrompts[index]
+    }
+
+    func isCurrentAnswer(at index: Int) -> Bool {
+        currentAnswerIndex == index
+    }
+}
+
 struct ChatView: View {
     let safeAreaTopInset: CGFloat
     let safeAreaBottomInset: CGFloat
@@ -526,6 +573,7 @@ struct ChatView: View {
     private var conversationSurface: some View {
         let motionIsReduced = reduceMotion
         let transcriptItems = model.messages.transcriptItems()
+        let transcriptContext = TranscriptContext(messages: model.messages)
 
         return Group {
             ConversationColumn {
@@ -552,7 +600,11 @@ struct ChatView: View {
                             emptyConversation
                         } else {
                             ForEach(transcriptItems) { item in
-                                transcriptRow(item, motionIsReduced: motionIsReduced)
+                                transcriptRow(
+                                    item,
+                                    context: transcriptContext,
+                                    motionIsReduced: motionIsReduced
+                                )
                             }
                         }
                     }
@@ -769,13 +821,15 @@ struct ChatView: View {
     @ViewBuilder
     private func transcriptRow(
         _ item: ChatTranscriptItem,
+        context: TranscriptContext,
         motionIsReduced: Bool
     ) -> some View {
         switch item {
         case let .message(message, index):
-            messageRow(message, at: index, motionIsReduced: motionIsReduced)
+            messageRow(message, at: index, context: context, motionIsReduced: motionIsReduced)
         case let .approvedReceiptGroup(messages, firstIndex):
             ApprovedReceiptGroup(messages: messages)
+                .equatable()
                 .padding(.top, startsRun(at: firstIndex) ? 22 : 7)
                 .transition(
                     motionIsReduced
@@ -794,6 +848,7 @@ struct ChatView: View {
     private func messageRow(
         _ message: ChatMessage,
         at index: Int,
+        context: TranscriptContext,
         motionIsReduced: Bool
     ) -> some View {
         // No per-row edge effects: a scroll transition applies opacity and
@@ -802,11 +857,8 @@ struct ChatView: View {
         // pixels at the clipped edges instead, which works for any height.
         MessageBubble(
             message: message,
-            userPrompt: model.messages[..<index].reversed().first(where: { $0.role == .user })?.text,
-            isCurrentAnswer: message.isConversationAnswer
-                && !model.messages.dropFirst(index + 1).contains(where: {
-                    $0.isConversationAnswer
-                }),
+            userPrompt: context.userPrompt(before: index),
+            isCurrentAnswer: context.isCurrentAnswer(at: index),
             isStreaming: message.id.hasPrefix("stream-") && model.isSending,
             openApprovals: { model.present(.approvals) },
             runForReal: model.isSending ? nil : { text in model.send(text, force: true) },
@@ -820,6 +872,9 @@ struct ChatView: View {
                 ? { Task { await model.hideMessage(message) } }
                 : nil
         )
+        // A streamed token changes one row; without this every other row in the
+        // log is rebuilt alongside it.
+        .equatable()
         .padding(.top, startsRun(at: index) ? 22 : 7)
         .transition(
             motionIsReduced

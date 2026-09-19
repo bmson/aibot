@@ -58,6 +58,8 @@
 		B00000000000000000000085 /* SpeechVoiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000085 /* SpeechVoiceTests.swift */; };
 		B00000000000000000000083 /* System/SpeechListener.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000083 /* System/SpeechListener.swift */; };
 		B00000000000000000000084 /* Views/TalkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000084 /* Views/TalkView.swift */; };
+		B00000000000000000000086 /* System/RenderMemo.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000086 /* System/RenderMemo.swift */; };
+		B00000000000000000000087 /* RenderCostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000087 /* RenderCostTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -147,6 +149,8 @@
 		C00000000000000000000085 /* SpeechVoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechVoiceTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000083 /* System/SpeechListener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/SpeechListener.swift; sourceTree = "<group>"; };
 		C00000000000000000000084 /* Views/TalkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/TalkView.swift; sourceTree = "<group>"; };
+		C00000000000000000000086 /* System/RenderMemo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/RenderMemo.swift; sourceTree = "<group>"; };
+		C00000000000000000000087 /* RenderCostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderCostTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -208,6 +212,7 @@
 				C00000000000000000000015 /* System/LiveActivityManager.swift */,
 				C00000000000000000000016 /* System/NotificationManager.swift */,
 				C00000000000000000000051 /* System/LocationManager.swift */,
+				C00000000000000000000086 /* System/RenderMemo.swift */,
 				C00000000000000000000022 /* Components/ActivityCrown.swift */,
 				C00000000000000000000024 /* Components/ChatDashboard.swift */,
 				C00000000000000000000008 /* Components/StatusPill.swift */,
@@ -254,6 +259,7 @@
 				C00000000000000000000082 /* SpeakableTextTests.swift */,
 				C00000000000000000000085 /* SpeechVoiceTests.swift */,
 				C00000000000000000000060 /* APIClientRetryTests.swift */,
+				C00000000000000000000087 /* RenderCostTests.swift */,
 			);
 			path = AssistantTests;
 			sourceTree = "<group>";
@@ -410,6 +416,7 @@
 				B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */,
 				B00000000000000000000015 /* System/NotificationManager.swift in Sources */,
 				B00000000000000000000051 /* System/LocationManager.swift in Sources */,
+				B00000000000000000000086 /* System/RenderMemo.swift in Sources */,
 				B00000000000000000000019 /* Components/ActivityCrown.swift in Sources */,
 				B0000000000000000000001B /* Components/ChatDashboard.swift in Sources */,
 				B00000000000000000000008 /* Components/StatusPill.swift in Sources */,
@@ -450,6 +457,7 @@
 				B00000000000000000000060 /* APIClientRetryTests.swift in Sources */,
 				B00000000000000000000082 /* SpeakableTextTests.swift in Sources */,
 				B00000000000000000000085 /* SpeechVoiceTests.swift in Sources */,
+				B00000000000000000000087 /* RenderCostTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

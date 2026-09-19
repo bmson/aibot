@@ -13,8 +13,12 @@ The native SwiftUI client keeps the agent runtime on the existing Assistant serv
 - a Keychain-stored mobile credential, Dynamic Type, dark mode, and Reduce Motion support.
 
 Open findings on the visual and interaction layer are tracked in
-[`docs/visual-qa.md`](docs/visual-qa.md). Getting a build to TestFlight is
-[`docs/shipping.md`](docs/shipping.md) — the app does not ship from CI.
+[`docs/visual-qa.md`](docs/visual-qa.md). What the chat transcript costs per
+frame, and the rules that keep it at 60fps while a reply streams, is
+[`docs/render-cost.md`](docs/render-cost.md) — read it before adding a property
+to `MessageBubble` or parsing anything in a view body. Getting a build to
+TestFlight is [`docs/shipping.md`](docs/shipping.md) — the app does not ship
+from CI.
 
 ## Run locally
 

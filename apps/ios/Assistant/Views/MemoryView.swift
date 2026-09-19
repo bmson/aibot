@@ -789,10 +789,9 @@ struct PersonDetailsView: View {
     }
 
     private func suggestionLabel(_ suggestion: PersonOccasionSuggestion) -> String {
-        let formatter = DateFormatter()
-        formatter.setLocalizedDateFormatFromTemplate("MMMMd")
         let date = Calendar.current.date(from: DateComponents(year: 2024, month: suggestion.month, day: suggestion.day))
-        let day = date.map(formatter.string(from:)) ?? "\(suggestion.month)/\(suggestion.day)"
+        let day = date.map(AssistantFormatters.monthAndDay.string(from:))
+            ?? "\(suggestion.month)/\(suggestion.day)"
         return "\(day) · \(suggestion.kind)"
     }
 
@@ -817,7 +816,7 @@ struct PersonDetailsView: View {
     }
 
     private func occasionDate(_ occasion: PersonOccasion) -> String {
-        let month = DateFormatter().monthSymbols[max(0, min(11, occasion.month - 1))]
+        let month = AssistantFormatters.monthSymbols[max(0, min(11, occasion.month - 1))]
         return [month, String(occasion.day), occasion.year.map { String($0) }]
             .compactMap { $0 }
             .joined(separator: " ")
@@ -885,7 +884,7 @@ struct OccasionEditor: View {
                 Picker("Month", selection: $month) {
                     Text("Choose month").tag("")
                     ForEach(1...12, id: \.self) { number in
-                        Text(DateFormatter().monthSymbols[number - 1]).tag(String(number))
+                        Text(AssistantFormatters.monthSymbols[number - 1]).tag(String(number))
                     }
                 }
                 LabeledContent("Day") { TextField("Day", text: $day).keyboardType(.numberPad).multilineTextAlignment(.trailing) }
@@ -1105,7 +1104,7 @@ struct PersonDatesScreen: View {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(occasion.label.isEmpty ? occasion.kind.sentenceCaseIdentifier : occasion.label)
-                                    Text("\(DateFormatter().monthSymbols[max(0, min(11, occasion.month - 1))]) \(occasion.day)" + (occasion.year.map { ", \($0)" } ?? ""))
+                                    Text("\(AssistantFormatters.monthSymbols[max(0, min(11, occasion.month - 1))]) \(occasion.day)" + (occasion.year.map { ", \($0)" } ?? ""))
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
