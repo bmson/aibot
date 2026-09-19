@@ -328,11 +328,37 @@ async function openRoute(page: Page, path: string, mobile = true) {
   );
   // NOT networkidle: the chat holds a long poll open against /api/chat/status
   // for as long as twenty seconds at a time, and opens the next one as soon as
-  // it returns, so that page has no idle network and never will. `load` is the
-  // real precondition here anyway — the contract below measures layout, which
-  // needs the document and its stylesheets, not a quiet socket.
+  // it returns, so that page has no idle network and never will.
   await page.waitForLoadState('load');
-  await assertResponsiveContract(page, path, mobile);
+  await measureSettledPage(page, path, mobile);
+}
+
+/**
+ * Measure the page the route settles on, not the one it lands on first.
+ *
+ * `load` fires before React has hydrated, and several routes navigate again
+ * once it has. Measuring in that window throws from inside page.evaluate —
+ * "Execution context was destroyed, most likely because of a navigation" —
+ * because the document being measured is replaced mid-measurement.
+ *
+ * The networkidle wait this file used to do hid that by outlasting it. It had
+ * to go (the chat holds a long poll open, so that page never goes idle), and
+ * the navigations it was absorbing became visible: first as aborted gotos on
+ * the route after them, then as this. Waiting for `load` again is waiting for
+ * the navigation that destroyed the context, so the second measurement runs
+ * against the settled page. A route that is genuinely broken still fails.
+ */
+async function measureSettledPage(page: Page, path: string, mobile: boolean) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await assertResponsiveContract(page, path, mobile);
+    } catch (error) {
+      const navigatedAway =
+        error instanceof Error && error.message.includes('Execution context was destroyed');
+      if (!navigatedAway || attempt > 0) throw error;
+      await page.waitForLoadState('load');
+    }
+  }
 }
 
 async function createConversationFixture(): Promise<{ db: Db; id: string } | undefined> {
