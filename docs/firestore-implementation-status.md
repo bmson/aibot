@@ -4,6 +4,12 @@ Updated 2026-09-19. This tracks the implementation batches of the [migration and
 
 ## Current recovery checkpoint
 
+The owner-card and version-3 snapshot release is deployed at `a409c173a0bf4eda0b1076105948258c879f4dd5`; CI, deployment, and the public health endpoint agree on that commit. Production still uses PostgreSQL.
+
+The next runtime batch adds owner-facing memory commands and watches. Profile and knowledge edits from web and mobile share one command facade; the portable commands use explicit memory, owner-card, and graph-maintenance repositories. PostgreSQL compatibility delegates to the same commands. Corrections embed before entering the transaction and compare the original content hash; mutations invalidate the compiled card atomically. This batch does not switch the web composition root to Firestore or port bulk privacy deletion, people/occasion edits, or graph projection writers.
+
+Watch tools and email/web polling use PostgreSQL or Firestore repositories. Atomic fire recording preserves trigger deduplication and maximum-fire limits. Claimed poll timestamps fence late fetch results; cancellation and a later claim prevent stale state updates and notifications. Firestore queries are covered by the shared index manifest and a synthetic live-validation workload. Full application composition, notifier delivery recovery, and the remaining module paths are separate cutover gates.
+
 Application chat, historical and graph recall, recall metrics, memory save/recall and supersession, generated cards and refresh requests, task dispatch, and scheduled follow-ups have portable persistence adapters. Synthetic application and executor checks include historical/graph recall and assert zero SQL access for the exercised paths. These checks do not cover full startup, all enabled integrations, management routes, or context writers.
 
 The migration registry/exporter now covers all 66 source tables, including skills. A September 12 snapshot containing 61,382 source records passed full emulator import and verification with 14,565 derived documents. New version 3 exports preserve timestamp microseconds and bigint values with locale-independent Unicode ordering and checksums. Version 1 and 2 remain readable with their historical algorithms; final cutover requires a fresh version 3 snapshot. Lossless Firestore encoding handles nested JSON arrays and reserved-key collisions. Shared index definitions drive both customer Terraform and live validation, including vector indexes and large-payload exemptions.
