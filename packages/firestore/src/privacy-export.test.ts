@@ -147,6 +147,7 @@ describe('Firestore privacy export repository', () => {
         version: 1,
         archived: false,
         data: { decisions: ['visible'] },
+        secretSentinel: 'must-not-export-pack-secret',
         createdAt,
         updatedAt: createdAt,
       }),
@@ -172,6 +173,7 @@ describe('Firestore privacy export repository', () => {
 
     expect(result.knowledgeGraph.entities.map((row) => row.id)).toEqual(['owner-entity']);
     expect(result.situationPacks.map((row) => row.id)).toEqual(['owner-pack']);
+    expect(JSON.stringify(result.situationPacks)).not.toContain('must-not-export-pack-secret');
     expect(result.compiledOwnerCard).toEqual({
       id: 1,
       content: 'Current compiled owner card',

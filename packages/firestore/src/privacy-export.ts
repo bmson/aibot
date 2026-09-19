@@ -169,7 +169,19 @@ export class FirestorePrivacyExportRepository implements PrivacyExportRepository
         cardRow.compiledAt instanceof Date
           ? { id: 1, content: cardRow.content, compiledAt: cardRow.compiledAt }
           : null,
-      situationPacks: packs as unknown as Records['situationPacks'][],
+      situationPacks: packs.map((row) =>
+        pick(row, [
+          'id',
+          'agentId',
+          'creationKey',
+          'title',
+          'version',
+          'archived',
+          'data',
+          'createdAt',
+          'updatedAt',
+        ]),
+      ) as Records['situationPacks'][],
     };
   }
 }
