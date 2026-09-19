@@ -71,15 +71,15 @@ function rawClient(databaseId: string, populatedAtOrAfter = 0): ManagedFirestore
               integer: { integerValue: '1' },
               double: { doubleValue: 1 },
               reference: { referenceValue: 'projects/source/databases/(default)/documents/x/y' },
-                timestamp: { timestampValue: { seconds: '123', nanos: 456 } },
-                protobufDefaults: {
-                  nullValue: null,
-                  booleanValue: null,
-                  integerValue: null,
-                  doubleValue: null,
-                  timestampValue: null,
-                  stringValue: 'kept',
-                },
+              timestamp: { timestampValue: { seconds: '123', nanos: 456 } },
+              protobufDefaults: {
+                nullValue: null,
+                booleanValue: null,
+                integerValue: null,
+                doubleValue: null,
+                timestampValue: null,
+                stringValue: 'kept',
+              },
             },
           },
         ]);
@@ -167,9 +167,9 @@ describe('raw managed Firestore inventory', () => {
         };
       return result;
     });
-    expect(
-      (await inventoryFirestoreDatabase(normalized, identity, at)).canonicalHash,
-    ).toBe(inventory.canonicalHash);
+    expect((await inventoryFirestoreDatabase(normalized, identity, at)).canonicalHash).toBe(
+      inventory.canonicalHash,
+    );
     const changed = rawClient(identity.databaseId);
     const original = changed.listDocuments;
     changed.listDocuments = vi.fn(async (input) => {

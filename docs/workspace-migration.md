@@ -93,6 +93,8 @@ pnpm exec tsx scripts/firestore-managed-backup.ts --restore --execute \
 
 The Firestore emulator does not implement managed export/import, so unit tests exercise mocked control-plane operations, raw document traversal, and wire-type hashing. The live rehearsal remains a customer-project acceptance step. Firestore export does not copy referenced workspace objects from GCS; those objects require their own versioned backup and digest-verified restore rehearsal.
 
+For a synthetic managed export/import rehearsal, run `pnpm firestore:backup-smoke --project PROJECT --location REGION --gcs-prefix gs://CUSTOMER_BUCKET/synthetic-firestore-validation/UNIQUE_RUN`. Preview performs no authentication or writes; add `--run` to create the two temporary databases. The smoke seeds native types and missing-parent descendants, exports a consistent snapshot, restores it, verifies the inventory, and deletes only databases whose creation it owns. Export files remain in the supplied bucket prefix. The validation, backup, and smoke CLIs accept explicit `--gcloud-auth` for development sessions with an active Google CLI account; credentials stay in memory and ADC remains the default.
+
 ## PostgreSQL retirement gate
 
 Do not delete PostgreSQL based only on a successful import. Retirement requires all of the following evidence:

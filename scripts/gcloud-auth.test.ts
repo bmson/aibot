@@ -23,7 +23,7 @@ describe('gcloud auth client', () => {
     expect(run).toHaveBeenLastCalledWith([
       'auth',
       'print-access-token',
-      'developer@example.test',
+      '--account=developer@example.test',
       '--quiet',
     ]);
   });

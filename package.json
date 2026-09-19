@@ -52,6 +52,7 @@
     "eval:questions:config": "tsx scripts/question-regression-config.ts",
     "test:firestore": "tsx scripts/test-firestore.ts",
     "firestore:validate": "tsx scripts/validate-firestore.ts",
+    "firestore:backup-smoke": "tsx scripts/firestore-backup-smoke.ts",
     "workspace:export": "tsx scripts/workspace-migration-export.ts",
     "workspace:import": "tsx scripts/workspace-migration-import.ts",
     "consumer:install": "tsx scripts/consumer-install.ts"

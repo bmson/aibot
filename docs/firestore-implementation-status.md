@@ -12,6 +12,8 @@ The production asset audit found 17 snapshot references without current or noncu
 
 The [cutover checklist](firestore-cutover-checklist.md) records the remaining acceptance gates. Production stays on PostgreSQL until complete runtime composition, enabled modules, management/context writers, customer deployment/onboarding, asset parity, real-cloud backup/restore, a PostgreSQL-offline rehearsal, and final write fencing pass. The sections below describe earlier implementation checkpoints; their validation counts and limitations are historical.
 
+Validation (2026-09-19): the PostgreSQL/unit suite passed 2,635 tests, the separate Firestore suite passed 214 tests, and Terraform passed five mocked-provider tests. Lint, architecture boundaries, typechecks, safe production build, and whitespace checks passed. The real Google validator built 49 indexes and 16 field exemptions, passed the exercised application/executor workflows with historical and graph recall enabled, and deleted its synthetic database. Optional development-only CLI authentication reused the existing Google login without credential files or token logging. Managed backup/restore has a separate synthetic cloud smoke; its completion must be recorded separately from these query/runtime checks.
+
 ## Implemented
 
 - `packages/persistence`: SDK-independent shapes for all 66 current tables, money/embedding value types, and command contracts. A compile-time compatibility test checks both table coverage and every PostgreSQL record shape. This is type coverage, not full Firestore repository coverage.

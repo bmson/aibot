@@ -51,7 +51,7 @@ export async function createGcloudAuthClient(
   });
   let pending: Promise<{ access_token: string; expiry_date: number }> | undefined;
   client.refreshHandler = () => {
-    pending ??= runGcloud(['auth', 'print-access-token', account, '--quiet'])
+    pending ??= runGcloud(['auth', 'print-access-token', `--account=${account}`, '--quiet'])
       .then((stdout) => {
         const accessToken = stdout.trim();
         if (!TOKEN_PATTERN.test(accessToken))
