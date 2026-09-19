@@ -58,9 +58,13 @@ export class FirestoreWatchRepository implements WatchRepository {
             trust: 'owner',
             title: `Watch: ${input.name}`.slice(0, 80),
             isPrimary: false,
+            archived: false,
             createdAt: now,
             updatedAt: now,
             archivedAt: null,
+            modelOverride: null,
+            metadata: {},
+            lastReadAt: null,
           }),
         );
       }
@@ -130,6 +134,8 @@ export class FirestoreWatchRepository implements WatchRepository {
   }
 
   async claimDueWeb(now: Date, batch: number, defaultIntervalSeconds: number) {
+    if (!Number.isFinite(defaultIntervalSeconds) || defaultIntervalSeconds <= 0)
+      throw new Error('default web watch poll interval must be positive');
     return this.store.db.runTransaction(async (tx) => {
       const snapshots = await tx.get(
         this.store
@@ -147,9 +153,12 @@ export class FirestoreWatchRepository implements WatchRepository {
           tx.update(snapshot.ref, { status: 'expired', updatedAt: now });
           continue;
         }
-        const nextPollAt = new Date(
-          now.getTime() + (row.pollIntervalSeconds ?? defaultIntervalSeconds) * 1000,
-        );
+        const configured = row.pollIntervalSeconds;
+        const intervalSeconds =
+          configured != null && Number.isFinite(configured) && configured > 0
+            ? configured
+            : defaultIntervalSeconds;
+        const nextPollAt = new Date(now.getTime() + intervalSeconds * 1000);
         tx.update(snapshot.ref, { nextPollAt, updatedAt: now });
         claimed.push({ ...row, nextPollAt, updatedAt: now });
       }

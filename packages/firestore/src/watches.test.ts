@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { FirestoreApplicationChatPersistence } from './application-chat.js';
 import { decodeRecord } from './store.js';
 import { disposeStore, emulatorStore } from './test-store.js';
 import { FirestoreWatchRepository } from './watches.js';
@@ -19,6 +20,13 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore watches', () =>
         expiresAt: new Date('2026-10-19T12:00:00Z'),
       });
       expect((await repository.list('agent-a')).map((row) => row.id)).toContain(watch.id);
+      const history = await new FirestoreApplicationChatPersistence(store).listConversations(
+        'agent-a',
+        { archived: false, limit: 10 },
+      );
+      expect(history.conversations.map((conversation) => conversation.id)).toContain(
+        watch.conversationId,
+      );
       expect(await repository.list('agent-b')).toEqual([]);
       expect(await repository.cancel('agent-b', watch.id, now)).toBeNull();
       expect(await repository.cancel('agent-a', watch.id, now)).toEqual({
@@ -157,6 +165,33 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore watches', () =>
       const status = (await store.doc('watches', watch.id).get()).get('status');
       if (cancelled?.cancelled) expect(status).toBe('cancelled');
       else expect(status).toBe('expired');
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('advances malformed legacy poll intervals with the positive default', async () => {
+    const store = emulatorStore();
+    try {
+      const repository = new FirestoreWatchRepository(store);
+      const now = new Date('2026-09-19T12:00:00Z');
+      const watch = await repository.create({
+        agentId: 'agent-a',
+        kind: 'web',
+        tier: 'notify',
+        name: 'Legacy interval',
+        match: { url: 'https://example.com', mode: 'change' },
+        maxFires: null,
+        expiresAt: new Date('2026-09-20T12:00:00Z'),
+        nextPollAt: now,
+        pollIntervalSeconds: -60,
+      });
+      const [claimed] = await repository.claimDueWeb(now, 10, 300);
+      expect(claimed?.id).toBe(watch.id);
+      expect(claimed?.nextPollAt).toEqual(new Date(now.getTime() + 300_000));
+      await expect(repository.claimDueWeb(now, 10, 0)).rejects.toThrow(
+        'default web watch poll interval must be positive',
+      );
     } finally {
       await disposeStore(store);
     }

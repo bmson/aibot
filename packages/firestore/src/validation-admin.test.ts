@@ -271,4 +271,19 @@ it('keeps deployable composite indexes and field overrides in their correct sect
     });
     expect(override).not.toHaveProperty('fields');
   }
+  const watchIndexes = spec.indexes
+    .filter((index: { collectionGroup: string }) => index.collectionGroup === 'watches')
+    .map((index: { fields: Array<{ fieldPath: string; order: string }> }) =>
+      index.fields.map((field) => `${field.fieldPath}:${field.order}`).join(','),
+    );
+  expect(watchIndexes).toEqual(
+    expect.arrayContaining([
+      'agentId:ASCENDING,createdAt:DESCENDING',
+      'agentId:ASCENDING,status:ASCENDING,createdAt:DESCENDING',
+      'status:ASCENDING,expiresAt:ASCENDING',
+      'agentId:ASCENDING,status:ASCENDING,expiresAt:ASCENDING',
+      'agentId:ASCENDING,status:ASCENDING,kind:ASCENDING,expiresAt:ASCENDING',
+      'status:ASCENDING,kind:ASCENDING,nextPollAt:ASCENDING',
+    ]),
+  );
 });

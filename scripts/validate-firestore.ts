@@ -13,6 +13,7 @@ import { firestoreExecutorSmoke } from './firestore-executor-smoke.js';
 import { firestoreRuntimeSmoke } from './firestore-runtime-smoke.js';
 import { firestoreScheduleSmoke } from './firestore-schedule-smoke.js';
 import { firestoreTaskSmoke } from './firestore-task-smoke.js';
+import { firestoreWatchSmoke } from './firestore-watch-smoke.js';
 import { createGcloudAuthClient } from './gcloud-auth.js';
 
 const { values } = parseArgs({
@@ -48,6 +49,7 @@ const indexes = spec.indexes.filter((index) =>
     'skills',
     'locationPings',
     'commitments',
+    'watches',
   ].includes(index.collectionGroup),
 );
 const input = {
@@ -93,6 +95,7 @@ if (!values.run) {
     executor: await firestoreExecutorSmoke(store),
     chat: await firestoreChatSmoke(store, { recall: true }),
     application: await firestoreApplicationSmoke(store),
+    watches: await firestoreWatchSmoke(store),
   }));
   console.log(JSON.stringify({ stage: 'complete', ...report }, null, 2));
 }
