@@ -37,3 +37,16 @@ endpoint catalogs on 2026-09-08. Reservation rates use conservative regular
 provider rates (including DeepSeek Pro's peak rate), rather than temporary
 discounts or the cheapest advertised endpoint. Actual billing uses OpenRouter's
 reported `usage.cost`; stored rates are estimates, not fixed-price guarantees.
+
+Reasoning support does not imply that reasoning can be disabled. Gemini 3.8
+Flash, MiniMax M2.7, and GPT-OSS 120B require it. The router keeps reasoning
+enabled, with output and cost headroom, for required and unrecognized models.
+Lightweight calls disable reasoning only for the exact OpenRouter models in
+the provider's verified optional-reasoning list (catalog checked 2026-09-19).
+New models or variants must be checked against the catalog's
+`reasoning.mandatory` field before being added to that list. Tool-calling and
+deliberating roles continue to request reasoning even when it is optional.
+
+`pnpm exec tsx scripts/smoke-models.ts [model-id ...]` runs synthetic live
+checks through the router, including streamed replies. It requires the existing
+OpenRouter key and a local seeded database, where usage is metered.

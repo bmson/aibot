@@ -40,6 +40,7 @@ function provider(overrides: Partial<ModelProvider> = {}): ModelProvider {
     assertModelId: vi.fn(),
     chat: vi.fn(() => ({}) as LanguageModel),
     textEmbeddingModel: vi.fn(() => ({}) as EmbeddingModel),
+    canDisableReasoning: vi.fn(() => true),
     optionsFor: vi.fn(() => undefined),
     embeddingOptions: vi.fn(() => undefined),
     cacheHint: vi.fn(() => undefined),
@@ -53,12 +54,12 @@ const db = {
 } as unknown as Db;
 
 /** A router whose routing decision is fixed, so only the call shape is under test. */
-function routerWith(modelProvider: ModelProvider, thinking = true) {
+function routerWith(modelProvider: ModelProvider, thinking = true, modelId = 'vendor/model-test') {
   const router = new ModelRouter(db, 'unused', 'off', modelProvider);
   vi.spyOn(router, 'route').mockResolvedValue({
     ok: true,
     model: {} as LanguageModel,
-    modelId: 'vendor/model-test',
+    modelId,
     degraded: false,
     thinking,
     decision: { mode: 'primary' },
@@ -137,6 +138,69 @@ describe('reasoning is spent only where it earns its latency', () => {
 });
 
 describe('OpenRouter reasoning parameters', () => {
+  it.each([
+    'google/gemini-3.8-flash',
+    'minimax/minimax-m2.7',
+    'openai/gpt-oss-120b',
+    'vendor/new-thinking-model',
+    'moonshotai/kimi-k2-thinking',
+  ])('keeps mandatory or unknown reasoning enabled for streamed replies on %s', async (modelId) => {
+    const router = routerWith(createOpenRouterModelProvider('unused'), true, modelId);
+    stubs.streamText.mockReturnValue({ toUIMessageStream: vi.fn(), text: Promise.resolve('hi') });
+
+    await router.stream('draft', { prompt: 'hello' });
+
+    expect(stubs.streamText.mock.calls[0]?.[0]).toMatchObject({
+      maxOutputTokens: 2_048 + 4_096,
+      providerOptions: { openrouter: { reasoning: { max_tokens: 4_096 } } },
+    });
+    // Reservation must cover mandatory reasoning as well as the visible answer.
+    expect(stubs.reserveCost).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ estimatedUsd: ((2 + 2_048 + 4_096) / 1_000_000) * 1.25 }),
+    );
+  });
+
+  it('preserves required reasoning in classification and retried queued replies', async () => {
+    const router = routerWith(createOpenRouterModelProvider('unused'), true, 'openai/gpt-oss-120b');
+    await router.object('classify', {
+      prompt: 'classify',
+      schema: z.object({ needsAction: z.boolean() }),
+    });
+    await router.generate('draft', { prompt: 'retry' });
+
+    expect(stubs.generateObject.mock.calls[0]?.[0]).toMatchObject({
+      maxOutputTokens: 512 + 4_096,
+      providerOptions: { openrouter: { reasoning: { max_tokens: 4_096 } } },
+    });
+    expect(stubs.generateText.mock.calls[0]?.[0]).toMatchObject({
+      maxOutputTokens: 2_048 + 4_096,
+      providerOptions: { openrouter: { reasoning: { max_tokens: 4_096 } } },
+    });
+  });
+
+  it.each([
+    'deepseek/deepseek-v4-pro-0813',
+    'deepseek/deepseek-v4-flash-0731',
+    'moonshotai/kimi-k2.5',
+    'moonshotai/kimi-k2.6',
+    'moonshotai/kimi-k3',
+  ])('disables optional reasoning on lightweight calls to %s', async (modelId) => {
+    const router = routerWith(createOpenRouterModelProvider('unused'), true, modelId);
+    await router.generate('draft', { prompt: 'hello' });
+    expect(stubs.generateText.mock.calls[0]?.[0]).toMatchObject({
+      maxOutputTokens: 2_048,
+      providerOptions: { openrouter: { reasoning: { enabled: false } } },
+    });
+  });
+
+  it('keeps reasoning when a provider has not declared an off switch', async () => {
+    const optionsFor = vi.fn(() => undefined);
+    const router = routerWith(provider({ optionsFor, canDisableReasoning: undefined }));
+    await router.generate('draft', { prompt: 'hello' });
+    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'enabled' });
+  });
+
   it('maps each mode to a distinct request, silence included', () => {
     const openrouter = createOpenRouterModelProvider('unused');
     expect(openrouter.optionsFor({ reasoning: 'enabled' })).toEqual({
