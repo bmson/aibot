@@ -11,6 +11,7 @@ import {
   setMessageHidden,
 } from '@assistant/core/chat';
 import { compactChatMessageParts, stripBackgroundNoticeEcho } from '@assistant/core/chat-card';
+import { truncateAtBoundary } from '@assistant/core/owner-text';
 import {
   approvals,
   conversations,
@@ -564,7 +565,7 @@ export async function hydrateChatApprovals(
           // completion update visible without rerunning the action.
           acceptedTaskSummary:
             suggestion.acceptedTaskStatus === 'done' && !suggestion.acceptedTaskConversationId
-              ? suggestion.acceptedTaskProgress?.trim().slice(0, 500) || undefined
+              ? truncateAtBoundary(suggestion.acceptedTaskProgress ?? '', 180) || undefined
               : undefined,
           snoozedUntil: suggestion.snoozedUntil?.toISOString(),
         };
