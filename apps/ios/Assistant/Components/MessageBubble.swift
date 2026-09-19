@@ -1467,7 +1467,7 @@ enum MessageResponseCard: Identifiable {
 
     private static func inferredLegacyAlert(_ text: String) -> Self? {
         let pattern = #"^\"([^\"]{1,120})\" starts in (\d{1,3}) minutes?(?: at (.*?))?\.\s+"#
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+        guard let expression = NSRegularExpression.cached(pattern, options: [.caseInsensitive]),
               let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let titleRange = Range(match.range(at: 1), in: text),
               let minutesRange = Range(match.range(at: 2), in: text) else { return nil }
@@ -1487,7 +1487,7 @@ enum MessageResponseCard: Identifiable {
     }
 
     private static func inferredNumberedAgenda(_ text: String) -> Self? {
-        let marker = try? NSRegularExpression(pattern: #"(?:^|\s)(\d+)\)\s"#)
+        let marker = NSRegularExpression.cached(#"(?:^|\s)(\d+)\)\s"#)
         guard let marker else { return nil }
         let fullRange = NSRange(text.startIndex..., in: text)
         let matches = marker.matches(in: text, range: fullRange)
@@ -1522,7 +1522,7 @@ enum MessageResponseCard: Identifiable {
             #"^(.*?)\s+at\s+("# + clock + #")(?:\s+at\s+(.+?))?\.?$"#,
         ]
         for pattern in patterns {
-            guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+            guard let expression = NSRegularExpression.cached(pattern, options: [.caseInsensitive]),
                   let match = expression.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
                   let titleRange = Range(match.range(at: 1), in: value),
                   let timeRange = Range(match.range(at: 2), in: value) else { continue }
@@ -1684,7 +1684,7 @@ enum WeatherUnits {
         pattern: String,
         transform: (NSTextCheckingResult, String) -> String?
     ) -> String {
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return text }
+        guard let expression = NSRegularExpression.cached(pattern, options: [.caseInsensitive]) else { return text }
         var result = text
         let matches = expression.matches(in: result, range: NSRange(result.startIndex..., in: result))
         for match in matches.reversed() {
@@ -2049,16 +2049,12 @@ struct RichResponseCards: View {
     private func eventDateCaption(_ start: String) -> String? {
         guard !start.isEmpty else { return nil }
 
-        let internetDate = ISO8601DateFormatter()
-        if let date = internetDate.date(from: start) {
+        if let date = AssistantFormatters.internetDateTime.date(from: start) {
             return date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().year())
         }
 
-        let dateOnly = DateFormatter()
-        dateOnly.locale = Locale(identifier: "en_US_POSIX")
-        dateOnly.timeZone = .current
-        dateOnly.dateFormat = "yyyy-MM-dd"
-        return dateOnly.date(from: start)?.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().year())
+        return AssistantFormatters.calendarDay.date(from: start)?
+            .formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().year())
     }
 
     private func eventAttendee(_ value: String) -> EventAttendee {
@@ -2107,7 +2103,7 @@ struct RichResponseCards: View {
 
     private func inlineURLs(in value: String) -> [String] {
         let pattern = #"https?://[^\s<>\"']+"#
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+        guard let expression = NSRegularExpression.cached(pattern, options: [.caseInsensitive]) else {
             return []
         }
         let range = NSRange(value.startIndex..., in: value)
@@ -2262,7 +2258,7 @@ struct RichResponseCards: View {
     private func weatherTemperatureReading(_ temperature: String, preferFahrenheit: Bool) -> (value: String, unit: String) {
         let localized = WeatherUnits.localized(temperature, preferFahrenheit: preferFahrenheit)
         let pattern = #"(-?\d{1,3})\s*[°º]\s*([CF])"#
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+        guard let expression = NSRegularExpression.cached(pattern, options: [.caseInsensitive]),
               let match = expression.firstMatch(in: localized, range: NSRange(localized.startIndex..., in: localized)),
               let valueRange = Range(match.range(at: 1), in: localized),
               let unitRange = Range(match.range(at: 2), in: localized) else {
@@ -4231,7 +4227,7 @@ enum CardText {
             "nbsp": " ", "ndash": "–", "mdash": "—", "hellip": "…", "rsquo": "’",
             "lsquo": "‘", "ldquo": "“", "rdquo": "”", "bull": "•"]
         var text = value
-        if let expression = try? NSRegularExpression(pattern: #"&(#x[0-9a-fA-F]+|#[0-9]+|[A-Za-z]+);"#) {
+        if let expression = NSRegularExpression.cached(#"&(#x[0-9a-fA-F]+|#[0-9]+|[A-Za-z]+);"#) {
             for match in expression.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
                 guard let range = Range(match.range, in: text),
                       let keyRange = Range(match.range(at: 1), in: text) else { continue }
@@ -4405,21 +4401,84 @@ enum CardText {
 /// A lightweight GFM-inspired block parser. Keeping this local avoids a dependency while
 /// making partially streamed replies render gracefully as they arrive.
 enum AssistantMarkdown {
+    /// Everything below is a pure function of its source string, and a
+    /// transcript asks for the same answers over and over — see `RenderMemo`.
+    ///
+    /// The limits are sized to hold a long open conversation rather than just
+    /// the rows on screen, because the transcript builds every row it has. Full
+    /// at these sizes they come to a few megabytes; a miss costs exactly what
+    /// every call used to cost, so they degrade into the old behaviour rather
+    /// than into a cliff.
+    private static let blockMemo = RenderMemo<String, [Block]>(limit: 512)
+    private static let inlineMemo = RenderMemo<String, AttributedString>(limit: 1024)
+    private static let attributedMemo = RenderMemo<AttributedRequest, AttributedString>(limit: 1024)
+    private static let plainTextMemo = RenderMemo<String, String>(limit: 512)
+
     /// Compact structured cards can still include a short Markdown label from
     /// a legacy/plain-text reply. Parse that inline fragment instead of
     /// exposing delimiter characters such as `**` in the card.
     static func inlineAttributed(_ source: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace
-        )
-        return (try? AttributedString(markdown: source, options: options))
-            ?? AttributedString(source)
+        inlineMemo.value(for: source) { source in
+            let options = AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace
+            )
+            return (try? AttributedString(markdown: source, options: options))
+                ?? AttributedString(source)
+        }
     }
+
+    /// A body's Markdown request: the text and the one flag that changes how it
+    /// is read. The rendered font and colour are view modifiers applied to the
+    /// result, so they are deliberately not part of the key.
+    private struct AttributedRequest: Hashable {
+        let source: String
+        let inline: Bool
+    }
+
+    /// One block of prose, or one table cell, as the renderer draws it.
+    ///
+    /// Table cells use inline-only interpretation: a block-level construct
+    /// inside a cell (a heading marker, a hard break) would otherwise tear the
+    /// row layout apart.
+    static func attributed(_ source: String, inline: Bool) -> AttributedString {
+        attributedMemo.value(for: AttributedRequest(source: source, inline: inline)) { request in
+            let readable = readableInlineVariables(request.source)
+            let withBreaks = request.inline
+                ? tableCellText(readable)
+                : preservingSoftBreaks(readable)
+            return (try? AttributedString(
+                markdown: withBreaks,
+                options: .init(
+                    interpretedSyntax: request.inline ? .inlineOnlyPreservingWhitespace : .full
+                )
+            )) ?? AttributedString(request.source)
+        }
+    }
+
+    /// The same Markdown with its syntax resolved away, for the screen reader.
+    static func plainText(_ source: String) -> String {
+        plainTextMemo.value(for: source) { source in
+            guard let attributed = try? AttributedString(
+                markdown: source,
+                options: .init(interpretedSyntax: .full)
+            ) else {
+                return source
+            }
+            return String(attributed.characters)
+        }
+    }
+
+    /// Built once: compiling a pattern costs more than matching it, and these
+    /// run per table cell per block of prose.
+    private static let tableBreakExpression = try? NSRegularExpression(
+        pattern: #"`+[^`]*`+|<br\s*/?>"#,
+        options: .caseInsensitive
+    )
 
     /// GFM table cells commonly use HTML line breaks. Preserve inline code
     /// examples while displaying actual break tags as line breaks.
     static func tableCellText(_ source: String) -> String {
-        guard let pattern = try? NSRegularExpression(pattern: #"`+[^`]*`+|<br\s*/?>"#, options: .caseInsensitive) else { return source }
+        guard let pattern = tableBreakExpression else { return source }
         let output = NSMutableString(string: source)
         let matches = pattern.matches(in: source, range: NSRange(source.startIndex..., in: source))
         for match in matches.reversed() where output.substring(with: match.range).hasPrefix("<") {
@@ -4470,6 +4529,10 @@ enum AssistantMarkdown {
     }
 
     static func blocks(in source: String) -> [Block] {
+        blockMemo.value(for: source, compute: parseBlocks(in:))
+    }
+
+    private static func parseBlocks(in source: String) -> [Block] {
         let lines = source
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -4699,8 +4762,12 @@ enum AssistantMarkdown {
         return value
     }
 
+    private static let inlineVariableExpression = try? NSRegularExpression(
+        pattern: #"`+[^`]*`+|(?<!\$)\$([A-Za-z])\$(?!\$)"#
+    )
+
     static func readableInlineVariables(_ source: String) -> String {
-        guard let expression = try? NSRegularExpression(pattern: #"`+[^`]*`+|(?<!\$)\$([A-Za-z])\$(?!\$)"#) else { return source }
+        guard let expression = inlineVariableExpression else { return source }
         var result = source
         for match in expression.matches(in: source, range: NSRange(source.startIndex..., in: source)).reversed() {
             guard match.range(at: 1).location != NSNotFound,
@@ -4859,15 +4926,17 @@ private struct AssistantMarkdownView: View {
     let accent: Color
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    private var blocks: [AssistantMarkdown.Block] {
-        AssistantMarkdown.blocks(in: source)
-    }
-
     /// A response card can use the full row for evidence such as tables and
     /// code, but prose should stop at a comfortable reading measure on iPad.
     private let proseMaxWidth: CGFloat = 560
 
     var body: some View {
+        // Read the parse once per body rather than per block. As a computed
+        // property, the `blocks[index - 1]` lookup below re-entered the parser
+        // for every block in the message — quadratic in a long reply, on every
+        // frame of a streaming turn.
+        let blocks = AssistantMarkdown.blocks(in: source)
+
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 if case let .heading(level, _) = block, level <= 2, index > 0,
@@ -5046,19 +5115,7 @@ private struct AssistantMarkdownView: View {
     }
 
     private func markdownText(_ source: String, strikethrough: Bool = false, inline: Bool = false, font: Font? = nil) -> some View {
-        // Table cells use inline-only interpretation: a block-level construct
-        // inside a cell (a heading marker, a hard break) would otherwise tear
-        // the row layout apart.
-        let readable = AssistantMarkdown.readableInlineVariables(source)
-        let withBreaks = inline ? AssistantMarkdown.tableCellText(readable) : AssistantMarkdown.preservingSoftBreaks(readable)
-        let attributed = (try? AttributedString(
-            markdown: withBreaks,
-            options: .init(
-                interpretedSyntax: inline ? .inlineOnlyPreservingWhitespace : .full
-            )
-        )) ?? AttributedString(source)
-
-        return Text(attributed)
+        Text(AssistantMarkdown.attributed(source, inline: inline))
             .font(font ?? .system(size: baseFontSize, weight: .regular))
             .tracking(-0.08)
             .foregroundStyle(ink)
@@ -5138,20 +5195,48 @@ private struct AssistantMarkdownView: View {
     }
 
     private func plainText(_ markdown: String) -> String {
-        guard let attributed = try? AttributedString(
-            markdown: markdown,
-            options: .init(interpretedSyntax: .full)
-        ) else {
-            return markdown
-        }
-        return String(attributed.characters)
+        AssistantMarkdown.plainText(markdown)
+    }
+}
+
+/// Lets the transcript skip a row whose content has not changed.
+///
+/// The stack of rows is eager on purpose (see `ChatView.conversationSurface`),
+/// so every row in the conversation is offered a rebuild whenever anything in
+/// the chat view changes — and a streaming reply changes something on every
+/// token while touching exactly one row. Comparing a row is far cheaper than
+/// rebuilding it: the message values come straight out of the same array, so
+/// their strings compare by buffer identity.
+///
+/// The actions cannot be compared, but none of them varies while a row's
+/// content holds still. Each either captures only `AppModel`, which is a
+/// reference, or captures the message itself; the three that switch off do it by
+/// going nil — `runForReal` and `retry` while a turn is in flight, `hide` for a
+/// row the server has not stored — so comparing presence separates those cases.
+/// `@State` and `@Environment` are not part of this: SwiftUI tracks them per row
+/// and invalidates it directly, so a colour scheme or Dynamic Type change still
+/// redraws every bubble.
+extension MessageBubble: Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.message == rhs.message
+            && lhs.userPrompt == rhs.userPrompt
+            && lhs.isCurrentAnswer == rhs.isCurrentAnswer
+            && lhs.isStreaming == rhs.isStreaming
+            && (lhs.runForReal == nil) == (rhs.runForReal == nil)
+            && (lhs.retry == nil) == (rhs.retry == nil)
+            && (lhs.decideApproval == nil) == (rhs.decideApproval == nil)
+            && (lhs.decideSuggestion == nil) == (rhs.decideSuggestion == nil)
+            && (lhs.openActivity == nil) == (rhs.openActivity == nil)
+            && (lhs.hide == nil) == (rhs.hide == nil)
     }
 }
 
 /// One compact transcript card for adjacent approvals that have all been
 /// resolved. Expanding it keeps each approval's summary and short code
 /// available without making a rapid approval run dominate the conversation.
-struct ApprovedReceiptGroup: View {
+struct ApprovedReceiptGroup: View, Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.messages == rhs.messages }
+
     let messages: [ChatMessage]
 
     @State private var isExpanded = false

@@ -409,6 +409,7 @@ struct ActivityView: View {
 
 func relative(_ value: String) -> String {
     // Both fractional and whole-second ISO timestamps are valid server dates.
-    guard let date = value.assistantDate ?? ISO8601DateFormatter().date(from: value) else { return value }
-    return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: .now)
+    guard let date = value.assistantDate
+        ?? AssistantFormatters.internetDateTime.date(from: value) else { return value }
+    return AssistantFormatters.relative.localizedString(for: date, relativeTo: .now)
 }
