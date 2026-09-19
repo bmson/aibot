@@ -4,42 +4,35 @@ import {
   CARD_AUTO_MIN_IMPORTANCE,
 } from '@assistant/core/memory/consolidation';
 import { getMemoryHealth, type MemoryHealth } from '@assistant/core/memory/health';
-import { GRAPH_EXTRACTION_VERSION } from '@assistant/core/memory/knowledge-graph';
 import { detectOccasionInText, listOccasionsForContact } from '@assistant/core/memory/occasions';
 import { type VoiceSampleStats, voiceSampleStats } from '@assistant/core/memory/voice-ingest';
 import {
   contacts,
+  createPostgresProfileLibraryRepository,
   type Db,
   findDuplicateContactSuggestions,
   importSources,
-  knowledgeGraphSources,
   memories,
   ownerCard,
   tasks,
   voiceProfile,
 } from '@assistant/db';
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  gt,
-  ilike,
-  inArray,
-  isNotNull,
-  isNull,
-  like,
-  ne,
-  or,
-  type SQL,
-  sql,
-} from 'drizzle-orm';
-import {
-  activeKnowledgeGraphConnectionCountForMemory,
-  activeKnowledgeGraphRelationExistsForMemory,
-} from '../knowledge-graph.js';
+import { and, count, desc, eq, gt, inArray, isNull, like, ne, or, sql } from 'drizzle-orm';
 import { getRecallFeedbackSummary, type RecallFeedbackSummary } from '../recall-feedback.js';
+import {
+  type MemoryLibraryFilters,
+  type MemoryLibraryInput,
+  type MemoryProjectionStatus,
+  profileLibraryQueries,
+} from './library-queries.js';
+
+export type {
+  MemoryFilter,
+  MemoryLibraryFilters,
+  MemoryProjectionStatus,
+  MemoryState,
+} from './library-queries.js';
+export { profileLibraryQueries } from './library-queries.js';
 
 export interface MemorySnapshot {
   id: string;
@@ -418,9 +411,6 @@ export async function getVoiceOverview(db: Db): Promise<VoiceOverview> {
   };
 }
 
-export type MemoryState = 'in-use' | 'review';
-export type MemoryFilter = 'all' | 'verified' | 'untidied';
-
 export interface MemoryLibrary {
   rows: Array<{
     memory: MemorySnapshot;
@@ -437,169 +427,14 @@ export interface MemoryLibrary {
   totalPages: number;
 }
 
-export type MemoryProjectionStatus = 'connected' | 'mapping' | 'needs_attention' | 'no_connections';
-
-export interface MemoryLibraryFilters {
-  subjects: Array<{ id: string; label: string; trust: string }>;
-  sources: string[];
-}
-
 export async function listMemoryLibraryFilters(db: Db): Promise<MemoryLibraryFilters> {
   const agent = await getAgent(db);
-  const [subjectRows, sourceRows] = await Promise.all([
-    db
-      .select({ id: contacts.id, label: contacts.name, trust: contacts.trust })
-      .from(memories)
-      .innerJoin(contacts, eq(memories.subjectContactId, contacts.id))
-      .where(and(eq(memories.agentId, agent.id), eq(memories.category, 'knowledge')))
-      .groupBy(contacts.id, contacts.name, contacts.trust)
-      .orderBy(asc(contacts.name)),
-    db
-      .select({ source: memories.source })
-      .from(memories)
-      .where(
-        and(
-          eq(memories.agentId, agent.id),
-          eq(memories.category, 'knowledge'),
-          isNotNull(memories.source),
-        ),
-      )
-      .groupBy(memories.source)
-      .orderBy(asc(memories.source)),
-  ]);
-  return {
-    subjects: subjectRows,
-    sources: sourceRows.flatMap((row) => (row.source ? [row.source] : [])),
-  };
+  return profileLibraryQueries(createPostgresProfileLibraryRepository(db), agent.id).listFilters();
 }
 
-export async function listMemoryLibrary(
-  db: Db,
-  input: {
-    state: MemoryState;
-    filter: MemoryFilter;
-    query: string;
-    page: number;
-    pageSize?: number;
-    subjectId?: string;
-    domain?: string;
-    source?: string;
-    ageDays?: number;
-    connectivity?: 'all' | 'connected' | 'unconnected';
-  },
-): Promise<MemoryLibrary> {
+export async function listMemoryLibrary(db: Db, input: MemoryLibraryInput): Promise<MemoryLibrary> {
   const agent = await getAgent(db);
-  const pageSize = input.pageSize ?? 60;
-  const activeConnectionExists = activeKnowledgeGraphRelationExistsForMemory(agent.id, memories.id);
-  const activeConnectionCount = activeKnowledgeGraphConnectionCountForMemory(agent.id, memories.id);
-  const unexpired = or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`));
-  const stateCondition: SQL | undefined =
-    input.state === 'review'
-      ? eq(memories.quarantined, true)
-      : input.filter === 'verified'
-        ? and(eq(memories.quarantined, false), eq(memories.ownerConfirmed, true))
-        : input.filter === 'untidied'
-          ? and(eq(memories.quarantined, false), isNull(memories.lastConsolidatedAt))
-          : eq(memories.quarantined, false);
-  const filters = and(
-    eq(memories.agentId, agent.id),
-    eq(memories.category, 'knowledge'),
-    unexpired,
-    stateCondition,
-    input.query
-      ? ilike(memories.content, `%${input.query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`)
-      : undefined,
-    input.subjectId ? eq(memories.subjectContactId, input.subjectId) : undefined,
-    input.domain ? eq(memories.domain, input.domain) : undefined,
-    input.source ? eq(memories.source, input.source) : undefined,
-    input.ageDays
-      ? gt(memories.createdAt, sql`now() - (${input.ageDays} * interval '1 day')`)
-      : undefined,
-    input.connectivity === 'connected'
-      ? activeConnectionExists
-      : input.connectivity === 'unconnected'
-        ? sql<boolean>`NOT ${activeConnectionExists}`
-        : undefined,
-  );
-  const [totalRow] = await db.select({ value: count() }).from(memories).where(filters);
-  const total = Number(totalRow?.value ?? 0);
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const page = Math.min(input.page, totalPages);
-  // One correlated subquery per row, not three. The status used to repeat
-  // `activeConnectionExists` inside a CASE beside this same count, over the
-  // identical three-table join — a count of zero already answers it, and the
-  // rest of the CASE only reads columns the source join has to hand.
-  const rows = await db
-    .select({
-      memory: memories,
-      subjectId: contacts.id,
-      subjectLabel: contacts.name,
-      subjectTrust: contacts.trust,
-      connectionCount: activeConnectionCount,
-      sourceStatus: knowledgeGraphSources.status,
-      sourceContentHash: knowledgeGraphSources.contentHash,
-      sourceExtractionVersion: knowledgeGraphSources.extractionVersion,
-    })
-    .from(memories)
-    .leftJoin(contacts, eq(memories.subjectContactId, contacts.id))
-    .leftJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
-    .where(filters)
-    .orderBy(
-      desc(memories.pinned),
-      desc(memories.ownerConfirmed),
-      desc(memories.importance),
-      desc(memories.createdAt),
-    )
-    .limit(pageSize)
-    .offset((page - 1) * pageSize);
-  return {
-    rows: rows.map(({ sourceStatus, sourceContentHash, sourceExtractionVersion, ...row }) => {
-      const connectionCount = Number(row.connectionCount ?? 0);
-      return {
-        ...row,
-        connectionCount,
-        projectionStatus: projectionStatusOf({
-          connectionCount,
-          sourceStatus,
-          sourceContentHash,
-          sourceExtractionVersion,
-          memoryContentHash: row.memory.contentHash,
-        }),
-      };
-    }),
-    total,
-    page,
-    totalPages,
-  };
-}
-
-/**
- * Why a source has no active graph edge. Distinguishes "nothing to connect"
- * from "not mapped yet" and from "extraction is stuck", so the library can say
- * which without surfacing the stale projection rows behind it.
- */
-function projectionStatusOf(input: {
-  connectionCount: number;
-  sourceStatus: string | null;
-  sourceContentHash: string | null;
-  sourceExtractionVersion: number | null;
-  memoryContentHash: string;
-}): MemoryProjectionStatus {
-  if (input.connectionCount > 0) return 'connected';
-  if (input.sourceStatus === 'failed' || input.sourceStatus === 'quarantined') {
-    return 'needs_attention';
-  }
-  // No checkpoint at all, one still queued, or one that predates the memory's
-  // current text or the current extractor — all of them mean "not mapped yet".
-  if (
-    input.sourceStatus === null ||
-    input.sourceStatus === 'pending' ||
-    input.sourceContentHash !== input.memoryContentHash ||
-    (input.sourceExtractionVersion ?? 0) < GRAPH_EXTRACTION_VERSION
-  ) {
-    return 'mapping';
-  }
-  return 'no_connections';
+  return profileLibraryQueries(createPostgresProfileLibraryRepository(db), agent.id).list(input);
 }
 
 export interface PersonProfile {

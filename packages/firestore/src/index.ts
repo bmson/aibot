@@ -25,6 +25,7 @@ export {
 export { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 export { FirestoreOwnerContextRepository } from './owner-context.js';
 export { FirestorePrivacyExportRepository } from './privacy-export.js';
+export { FirestoreProfileLibraryRepository } from './profile-library.js';
 export { createFirestoreProfileMemoryCommandPersistence } from './profile-memory-commands.js';
 export { FirestoreProfileMemoryMaintenance } from './profile-memory-maintenance.js';
 export { FirestoreProfileMemoryManagementRepository } from './profile-memory-management.js';
