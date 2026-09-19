@@ -1,22 +1,16 @@
-import { createHash } from 'node:crypto';
 import { getAgent } from '@assistant/core/chat';
 import { InboundEventSchema } from '@assistant/core/events';
 import { compileOwnerCard } from '@assistant/core/memory/consolidation';
-import { MEMORY_DOMAINS } from '@assistant/core/memory/extraction';
-import {
-  removeOrphanedKnowledgeGraphEntities,
-  retryBlockedKnowledgeGraphSource,
-} from '@assistant/core/memory/knowledge-graph';
 import { isOccasionKind, saveOccasion } from '@assistant/core/memory/occasions';
 import { purgeVoiceSamples } from '@assistant/core/memory/voice-ingest';
 import { enqueueTask } from '@assistant/core/workflow/machine';
 import {
-  addTombstone,
   contacts,
+  createPostgresOwnerCardCompilationRepository,
+  createPostgresProfileMemoryMaintenance,
+  createPostgresProfileMemoryManagementRepository,
   type Db,
   deleteContact,
-  isTombstoned,
-  memories,
   mergeContacts,
   normalizeContactAliases,
   occasions,
@@ -25,6 +19,61 @@ import {
   voiceProfile,
 } from '@assistant/db';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import {
+  type CreateProfileMemoryInput,
+  createProfileMemoryCommands,
+  type ProfileMemoryCommandPersistence,
+  type ProfileMemoryEmbeddingPort,
+} from './memory-commands.js';
+
+export function createPostgresProfileMemoryCommandPersistence(
+  db: Db,
+): ProfileMemoryCommandPersistence {
+  return {
+    kind: 'profile-memory-command-persistence',
+    memories: createPostgresProfileMemoryManagementRepository(db),
+    ownerCards: createPostgresOwnerCardCompilationRepository(db),
+    maintenance: createPostgresProfileMemoryMaintenance(db, async (input) => {
+      await enqueueTask(db, {
+        event: InboundEventSchema.parse(input.trigger),
+        type: input.type,
+      });
+    }),
+  };
+}
+
+export function profileMemoryCommands(
+  store: Db | ProfileMemoryCommandPersistence,
+  router: ProfileMemoryEmbeddingPort = {
+    async embed() {
+      throw new Error('Memory authoring requires an embedding provider');
+    },
+  },
+) {
+  const persistence =
+    'kind' in store && store.kind === 'profile-memory-command-persistence'
+      ? (store as ProfileMemoryCommandPersistence)
+      : createPostgresProfileMemoryCommandPersistence(store as Db);
+  const commands = createProfileMemoryCommands(persistence, router);
+  if ('kind' in store && store.kind === 'profile-memory-command-persistence') return commands;
+  // Legacy callers silently ignore missing/foreign facts. Keep that behavior
+  // while transactional adapters enforce the single-owner invariant themselves.
+  const existing = async (id: string, run: () => Promise<void>): Promise<void> => {
+    if (await persistence.memories.get(id)) await run();
+  };
+  return {
+    ...commands,
+    confirmMemory: (id: string) => existing(id, () => commands.confirmMemory(id)),
+    restoreMemory: (id: string) => existing(id, () => commands.restoreMemory(id)),
+    forgetMemory: (id: string) => existing(id, () => commands.forgetMemory(id)),
+    setMemoryProminence: (id: string, level: ProminenceLevel) =>
+      existing(id, () => commands.setMemoryProminence(id, level)),
+    approveQuarantinedMemory: (id: string) =>
+      existing(id, () => commands.approveQuarantinedMemory(id)),
+    rejectQuarantinedMemory: (id: string) =>
+      existing(id, () => commands.rejectQuarantinedMemory(id)),
+  };
+}
 
 export interface EmbeddingPort {
   embed(texts: string[]): Promise<number[][]>;
@@ -36,173 +85,58 @@ export interface WorkspaceDeletePort {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/**
- * Corrections make the graph source dirty through its changed content hash;
- * this short-lived task makes that repair prompt instead of waiting for the
- * next scheduled sweep. A single agent never needs competing graph-sync jobs.
- *
- * The pending-job check is an optimisation, not the guard — two owner edits
- * in the same second would both pass it. The event id is what actually holds:
- * it is stable per memory and minute, so a duplicate collides on
- * `external_event_id` and the second enqueue is dropped rather than becoming a
- * second sweep. A minute of granularity keeps a correction made later from
- * being swallowed by the earlier one's id.
- */
-async function queueKnowledgeGraphSync(db: Db, agentId: string, memoryId: string): Promise<void> {
-  const [active] = await db
-    .select({ id: tasks.id })
-    .from(tasks)
-    .where(
-      and(
-        eq(tasks.agentId, agentId),
-        inArray(tasks.status, ['pending', 'running']),
-        sql`${tasks.trigger} #>> '{payload,job}' = 'memory.graph_sync'`,
-      ),
-    )
-    .limit(1);
-  if (active) return;
-  const minute = new Date().toISOString().slice(0, 16);
-  const event = InboundEventSchema.parse({
-    source: 'internal',
-    externalEventId: `profile:graph-sync:${memoryId}:${minute}`,
-    agentId,
-    trust: 'assistant',
-    payload: { job: 'memory.graph_sync', instruction: 'refresh corrected source knowledge' },
-  });
-  await enqueueTask(db, { event, type: 'scheduled' });
+export type ProminenceLevel = 'always' | 'auto' | 'minor';
+
+export function confirmMemory(
+  store: Db | ProfileMemoryCommandPersistence,
+  memoryId: string,
+): Promise<void> {
+  return profileMemoryCommands(store).confirmMemory(memoryId);
 }
 
-/** Resolve a source only in the single owner's memory space. */
-async function ownerMemory(db: Db, memoryId: string) {
-  const agent = await getAgent(db);
-  const [memory] = await db
-    .select()
-    .from(memories)
-    .where(and(eq(memories.id, memoryId), eq(memories.agentId, agent.id)))
-    .limit(1);
-  return memory;
+export function restoreMemory(
+  store: Db | ProfileMemoryCommandPersistence,
+  memoryId: string,
+): Promise<void> {
+  return profileMemoryCommands(store).restoreMemory(memoryId);
 }
 
-export async function confirmMemory(db: Db, memoryId: string): Promise<void> {
-  const existing = await ownerMemory(db, memoryId);
-  if (!existing) return;
-  await db
-    .update(memories)
-    .set({ confidence: '1.00', ownerConfirmed: true, quarantined: false })
-    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
-  await compileOwnerCard(db);
-}
-
-/**
- * An expired or superseded fact is a suggestion to review, not an irreversible
- * deletion. When its owner keeps it, bring it back into the active library
- * instead of merely acknowledging a cleanup card that would immediately
- * reappear.
- */
-export async function restoreMemory(db: Db, memoryId: string): Promise<void> {
-  const existing = await ownerMemory(db, memoryId);
-  if (!existing) return;
-  await db
-    .update(memories)
-    .set({
-      expiresAt: null,
-      supersededById: null,
-      confidence: '1.00',
-      ownerConfirmed: true,
-      quarantined: false,
-    })
-    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
-  await compileOwnerCard(db);
-  await queueKnowledgeGraphSync(db, existing.agentId, memoryId);
-}
-
-export async function correctMemory(
-  db: Db,
+export function correctMemory(
+  store: Db | ProfileMemoryCommandPersistence,
   router: EmbeddingPort,
   memoryId: string,
   content: string,
 ): Promise<{ error?: string }> {
-  const trimmed = content.trim();
-  if (trimmed.length < 3) return { error: 'Correction is too short.' };
-  const existing = await ownerMemory(db, memoryId);
-  if (!existing) return { error: 'Fact not found.' };
-  await addTombstone(db, existing.contentHash, 'owner_correct');
-  const [embedding] = await router.embed([trimmed]);
-  const contentHash = createHash('sha256').update(trimmed).digest('hex');
-  await db
-    .update(memories)
-    .set({
-      content: trimmed,
-      contentHash,
-      embedding,
-      confidence: '1.00',
-      ownerConfirmed: true,
-      originTrust: 'owner',
-      quarantined: false,
-    })
-    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
-  await compileOwnerCard(db);
-  await queueKnowledgeGraphSync(db, existing.agentId, memoryId);
-  return {};
+  return profileMemoryCommands(store, router).correctMemory(memoryId, content);
 }
 
-export async function forgetMemory(db: Db, memoryId: string): Promise<void> {
-  const existing = await ownerMemory(db, memoryId);
-  if (!existing) return;
-  await addTombstone(db, existing.contentHash, 'owner_forget');
-  await db
-    .delete(memories)
-    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
-  await removeOrphanedKnowledgeGraphEntities(db, existing.agentId);
-  await compileOwnerCard(db);
+export function forgetMemory(
+  store: Db | ProfileMemoryCommandPersistence,
+  memoryId: string,
+): Promise<void> {
+  return profileMemoryCommands(store).forgetMemory(memoryId);
 }
 
-export type ProminenceLevel = 'always' | 'auto' | 'minor';
-
-export async function setMemoryProminence(
-  db: Db,
+export function setMemoryProminence(
+  store: Db | ProfileMemoryCommandPersistence,
   memoryId: string,
   level: ProminenceLevel,
 ): Promise<void> {
-  const existing = await ownerMemory(db, memoryId);
-  if (!existing) return;
-  const ownMemory = and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId));
-  if (level === 'always') {
-    await db.update(memories).set({ pinned: true }).where(ownMemory);
-  } else if (level === 'minor') {
-    await db.update(memories).set({ pinned: false, importance: 1 }).where(ownMemory);
-  } else {
-    await db
-      .update(memories)
-      .set({
-        pinned: false,
-        importance: sql`CASE WHEN ${memories.importance} <= 1 THEN 3 ELSE ${memories.importance} END`,
-      })
-      .where(ownMemory);
-  }
-  await compileOwnerCard(db);
+  return profileMemoryCommands(store).setMemoryProminence(memoryId, level);
 }
 
-export async function approveQuarantinedMemory(db: Db, memoryId: string): Promise<void> {
-  const existing = await ownerMemory(db, memoryId);
-  if (!existing) return;
-  await db
-    .update(memories)
-    .set({ quarantined: false })
-    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
-  await retryBlockedKnowledgeGraphSource(db, existing.agentId, memoryId);
-  await compileOwnerCard(db);
-  await queueKnowledgeGraphSync(db, existing.agentId, memoryId);
+export function approveQuarantinedMemory(
+  store: Db | ProfileMemoryCommandPersistence,
+  memoryId: string,
+): Promise<void> {
+  return profileMemoryCommands(store).approveQuarantinedMemory(memoryId);
 }
 
-export async function rejectQuarantinedMemory(db: Db, memoryId: string): Promise<void> {
-  const existing = await ownerMemory(db, memoryId);
-  if (!existing) return;
-  await addTombstone(db, existing.contentHash, 'quarantine_reject');
-  await db
-    .delete(memories)
-    .where(and(eq(memories.id, memoryId), eq(memories.agentId, existing.agentId)));
-  await removeOrphanedKnowledgeGraphEntities(db, existing.agentId);
+export function rejectQuarantinedMemory(
+  store: Db | ProfileMemoryCommandPersistence,
+  memoryId: string,
+): Promise<void> {
+  return profileMemoryCommands(store).rejectQuarantinedMemory(memoryId);
 }
 
 export async function updatePersonRelationship(
@@ -432,53 +366,12 @@ export async function createPerson(
   return { contactId: row?.id };
 }
 
-export async function createMemory(
-  db: Db,
+export function createMemory(
+  store: Db | ProfileMemoryCommandPersistence,
   router: EmbeddingPort,
-  input: {
-    content: string;
-    domain: string;
-    importance: string;
-    pinned: boolean;
-    subjectContactId: string;
-  },
+  input: CreateProfileMemoryInput,
 ): Promise<{ error?: string }> {
-  const content = input.content.trim();
-  if (content.length < 3) return { error: 'Write a little more.' };
-  if (!UUID_RE.test(input.subjectContactId)) return { error: 'Invalid subject.' };
-  const contentHash = createHash('sha256').update(content).digest('hex');
-  if (await isTombstoned(db, contentHash)) {
-    return { error: 'You previously forgot this fact, so it is not saved again.' };
-  }
-  const importance = Math.min(Math.max(Math.trunc(Number(input.importance)) || 3, 1), 5);
-  const domain = (MEMORY_DOMAINS as readonly string[]).includes(input.domain)
-    ? input.domain
-    : undefined;
-  const [embedding] = await router.embed([content]);
-  const agent = await getAgent(db);
-  const [row] = await db
-    .insert(memories)
-    .values({
-      agentId: agent.id,
-      category: 'knowledge',
-      kind: 'fact',
-      content,
-      contentHash,
-      embedding,
-      importance,
-      confidence: '1.00',
-      originTrust: 'owner',
-      ownerConfirmed: true,
-      pinned: input.pinned,
-      subjectContactId: input.subjectContactId,
-      domain,
-      source: 'manual',
-    })
-    .onConflictDoNothing({ target: memories.contentHash })
-    .returning({ id: memories.id });
-  if (!row) return { error: 'That fact is already saved.' };
-  await compileOwnerCard(db);
-  return {};
+  return profileMemoryCommands(store, router).createMemory(input);
 }
 
 export interface PersonOccasionInput {

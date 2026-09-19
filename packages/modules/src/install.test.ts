@@ -1,5 +1,6 @@
 import { type Config, loadConfig, resetConfigForTest } from '@assistant/config';
 import type { Db } from '@assistant/db';
+import type { ExecutionPersistence } from '@assistant/persistence';
 import { ToolRegistry } from '@assistant/tools/registry';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ModuleMeta } from './contract.js';
@@ -25,6 +26,7 @@ function contextFor(config: Config): ModulePlatformContext {
     workspacePrefix: 'workspace/test',
     workspaceRoot: '/tmp/assistant-test',
     repoRoot: '/tmp/assistant-test',
+    persistence: {} as ExecutionPersistence,
   };
 }
 

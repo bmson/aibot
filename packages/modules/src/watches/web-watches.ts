@@ -1,4 +1,4 @@
-import { type WatchRow, watches } from '@assistant/db';
+import type { WatchRow } from '@assistant/db';
 import {
   extractWebText,
   fetchPublicWebPage,
@@ -9,8 +9,7 @@ import {
   type WebWatchState,
   webWatchOutcome,
 } from '@assistant/tools';
-import { and, eq, inArray, lte, sql } from 'drizzle-orm';
-import { recordWatchFire, type WatchFireDeps } from './fire.js';
+import type { WatchFireDeps } from './fire.js';
 
 /**
  * Web-watch polling (`watch.poll_web`). Unlike email watches, which are driven
@@ -76,32 +75,7 @@ export async function pollDueWebWatches(
   const fetchPage = opts.fetch ?? defaultFetch;
   const batch = opts.batch ?? DEFAULT_BATCH;
 
-  const dueIds = deps.db
-    .select({ id: watches.id })
-    .from(watches)
-    .where(and(eq(watches.status, 'active'), eq(watches.kind, 'web'), lte(watches.nextPollAt, now)))
-    .orderBy(watches.nextPollAt)
-    .limit(batch);
-
-  // Claim: bump nextPollAt by the per-row interval. The WHERE re-checks
-  // `nextPollAt <= now`, so under READ COMMITTED a second instance whose
-  // subselect overlapped re-evaluates against the already-bumped row and skips
-  // it — single-claim without an advisory lock.
-  const claimed = await deps.db
-    .update(watches)
-    .set({
-      nextPollAt: sql`${now.toISOString()}::timestamptz + make_interval(secs => coalesce(${watches.pollIntervalSeconds}, ${DEFAULT_INTERVAL_SECONDS}))`,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        inArray(watches.id, dueIds),
-        eq(watches.status, 'active'),
-        eq(watches.kind, 'web'),
-        lte(watches.nextPollAt, now),
-      ),
-    )
-    .returning();
+  const claimed = await deps.watches.claimDueWeb(now, batch, DEFAULT_INTERVAL_SECONDS);
 
   let fired = 0;
   for (let i = 0; i < claimed.length; i += CONCURRENCY) {
@@ -119,6 +93,7 @@ async function pollOne(
   fetchPage: WebWatchFetch,
   now: Date,
 ): Promise<boolean> {
+  if (!watch.nextPollAt) return false;
   const match = parseWebWatchMatch(watch.match);
   if (!match) {
     console.error(`web watch ${watch.id} has an unreadable match; skipping`);
@@ -136,24 +111,46 @@ async function pollOne(
   const outcome = webWatchOutcome(match, observed.text, prior);
   // Persist the new detection state and clear the failure counter regardless of
   // whether it fired — the baseline poll records state without notifying.
-  await deps.db
-    .update(watches)
-    .set({ state: { ...outcome.nextState, failures: 0 }, updatedAt: now })
-    .where(eq(watches.id, watch.id));
-
-  if (!outcome.triggered) return false;
-  return recordWatchFire(
-    deps,
-    watch,
-    {
-      // Idempotency net; the atomic claim already bounds a poll to once per
-      // window, and outcome is measured against the persisted prior state.
-      triggerRef: `web:${fingerprintText(observed.text)}`,
-      text: noticeText(watch, match, outcome.summary),
-      channelMessageId: `watch-fire:${watch.id}:${fingerprintText(observed.text).slice(0, 16)}`,
-    },
+  const state = { ...outcome.nextState, failures: 0 };
+  if (!outcome.triggered) {
+    await deps.watches.updateWeb({
+      watchId: watch.id,
+      state,
+      now,
+      expectedNextPollAt: watch.nextPollAt,
+    });
+    return false;
+  }
+  const fingerprint = fingerprintText(observed.text);
+  const result = await deps.watches.recordFire({
+    watchId: watch.id,
+    agentId: watch.agentId,
+    // Idempotency net; the atomic claim already bounds a poll to once per
+    // window, and outcome is measured against the persisted prior state.
+    triggerRef: `web:${fingerprint}`,
+    summary: noticeText(watch, match, outcome.summary),
+    excerpt: '',
     now,
-  );
+    state,
+    expectedNextPollAt: watch.nextPollAt,
+  });
+  if (!result.recorded) return false;
+  const text = noticeText(watch, match, outcome.summary);
+  if (watch.conversationId)
+    await deps.messages
+      .append({
+        conversationId: watch.conversationId,
+        role: 'assistant',
+        origin: 'assistant',
+        parts: [{ type: 'text', text }],
+        text,
+        channelMessageId: `watch-fire:${watch.id}:${fingerprint.slice(0, 16)}`,
+      })
+      .catch((err) => console.error('watch notice failed', err));
+  await deps
+    .notifyOwner({ text, urgency: 'ambient' })
+    .catch((err) => console.error('watch owner notification failed', err));
+  return true;
 }
 
 /**
@@ -174,10 +171,14 @@ async function handleFetchFailure(
   const failures = (prior.failures ?? 0) + 1;
   console.error(`web watch ${watch.id} poll failed (${failures}): ${String(err)}`);
   if (failures >= MAX_CONSECUTIVE_FAILURES) {
-    await deps.db
-      .update(watches)
-      .set({ status: 'expired', state: { ...prior, failures }, updatedAt: now })
-      .where(and(eq(watches.id, watch.id), eq(watches.status, 'active')));
+    const expired = await deps.watches.updateWeb({
+      watchId: watch.id,
+      state: { ...prior, failures },
+      now,
+      expire: true,
+      expectedNextPollAt: watch.nextPollAt as Date,
+    });
+    if (!expired) return false;
     await deps
       .notifyOwner({
         text: `Your "${watch.name}" web watch keeps failing to load ${match.url}, so I've stopped it. Re-create it if you still want it.`,
@@ -185,9 +186,11 @@ async function handleFetchFailure(
       .catch((notifyErr) => console.error('web watch failure notice failed', notifyErr));
     return false;
   }
-  await deps.db
-    .update(watches)
-    .set({ state: { ...prior, failures }, updatedAt: now })
-    .where(eq(watches.id, watch.id));
+  await deps.watches.updateWeb({
+    watchId: watch.id,
+    state: { ...prior, failures },
+    now,
+    expectedNextPollAt: watch.nextPollAt as Date,
+  });
   return false;
 }

@@ -20,6 +20,7 @@ import { createPostgresRecallMetricsRepository } from './recall-metrics-reposito
 import { createPostgresSkillContextRepository } from './skill-context-repository.js';
 import { createPostgresTaskRepository } from './task-lifecycle-repository.js';
 import { createPostgresToolExecutionRepository } from './tool-execution-repository.js';
+import { createPostgresWatchRepository } from './watch-repository.js';
 
 export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence {
   return {
@@ -44,5 +45,6 @@ export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence
     generatedCards: createPostgresGeneratedCardRepository(db),
     cardRefresh: createPostgresCardRefreshRepository(db),
     recallMetrics: createPostgresRecallMetricsRepository(db),
+    watches: createPostgresWatchRepository(db),
   };
 }

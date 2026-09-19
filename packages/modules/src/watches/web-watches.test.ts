@@ -1,4 +1,13 @@
-import { conversations, createDb, type Db, messages, watches, watchFires } from '@assistant/db';
+import {
+  conversations,
+  createDb,
+  createPostgresMessageRepository,
+  createPostgresWatchRepository,
+  type Db,
+  messages,
+  watches,
+  watchFires,
+} from '@assistant/db';
 import { and, eq, inArray, like } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { WatchFireDeps } from './fire.js';
@@ -78,7 +87,8 @@ beforeAll(async () => {
     if (!agent) throw new Error('unseeded');
     agentId = agent.id;
     deps = {
-      db,
+      watches: createPostgresWatchRepository(db),
+      messages: createPostgresMessageRepository(db),
       notifyOwner: async ({ text }) => {
         notices.push(text);
       },

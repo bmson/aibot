@@ -1,13 +1,5 @@
-import {
-  approveQuarantinedMemory,
-  confirmMemory,
-  correctMemory,
-  forgetMemory,
-  type ProminenceLevel,
-  rejectQuarantinedMemory,
-  setMemoryProminence,
-} from '@assistant/application/profile';
-import { getDb, getRouter } from '@/lib/server';
+import type { ProminenceLevel } from '@assistant/application/profile';
+import { getApplication } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -24,7 +16,7 @@ export async function PATCH(
   const body = (await request.json().catch(() => null)) as { content?: unknown } | null;
   if (typeof body?.content !== 'string')
     return mobileJson({ error: 'content is required' }, { status: 400 });
-  const result = await correctMemory(getDb(), getRouter(), id, body.content);
+  const result = await getApplication().correctMemory(id, body.content);
   return result.error ? mobileJson(result, { status: 400 }) : mobileJson({ ok: true });
 }
 
@@ -40,15 +32,15 @@ export async function POST(
     prominence?: unknown;
   } | null;
   try {
-    if (body?.action === 'confirm') await confirmMemory(getDb(), id);
-    else if (body?.action === 'approve') await approveQuarantinedMemory(getDb(), id);
-    else if (body?.action === 'reject') await rejectQuarantinedMemory(getDb(), id);
-    else if (body?.action === 'forget') await forgetMemory(getDb(), id);
+    if (body?.action === 'confirm') await getApplication().confirmMemory(id);
+    else if (body?.action === 'approve') await getApplication().approveQuarantinedMemory(id);
+    else if (body?.action === 'reject') await getApplication().rejectQuarantinedMemory(id);
+    else if (body?.action === 'forget') await getApplication().forgetMemory(id);
     else if (body?.action === 'prominence') {
       if (!['always', 'auto', 'minor'].includes(String(body.prominence))) {
         return mobileJson({ error: 'invalid prominence level' }, { status: 400 });
       }
-      await setMemoryProminence(getDb(), id, body.prominence as ProminenceLevel);
+      await getApplication().setMemoryProminence(id, body.prominence as ProminenceLevel);
     } else {
       return mobileJson(
         { error: 'action must be confirm, approve, reject, forget, or prominence' },

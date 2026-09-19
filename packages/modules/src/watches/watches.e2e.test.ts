@@ -1,6 +1,9 @@
 import {
   conversations,
   createDb,
+  createPostgresMessageRepository,
+  createPostgresTaskRepository,
+  createPostgresWatchRepository,
   type Db,
   messages,
   tasks,
@@ -81,7 +84,12 @@ beforeAll(async () => {
     const [agent] = await db.query.agents.findMany({ limit: 1 });
     if (!agent) throw new Error('unseeded');
     agentId = agent.id;
-    deps = { db, notifyOwner: noopOwnerNotifier.notifyOwner };
+    deps = {
+      watches: createPostgresWatchRepository(db),
+      messages: createPostgresMessageRepository(db),
+      tasks: createPostgresTaskRepository(db),
+      notifyOwner: noopOwnerNotifier.notifyOwner,
+    };
     dbUp = true;
   } catch {
     console.warn('watches.e2e: database unreachable — skipping');

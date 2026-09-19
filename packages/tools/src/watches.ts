@@ -1,5 +1,5 @@
-import { conversations, watches } from '@assistant/db';
-import { and, desc, eq } from 'drizzle-orm';
+import { createPostgresWatchRepository } from '@assistant/db';
+import type { WatchRepository } from '@assistant/persistence';
 import { z } from 'zod';
 import { validateWebUrl } from './builtin/index.js';
 import type { ToolRegistry } from './registry.js';
@@ -141,7 +141,12 @@ function register<S extends z.ZodType, Out>(
  * only drafts an inert proposal from the trigger — accepting it runs the
  * normal approval path. See docs/anticipation-layer.md.
  */
-export function registerWatchTools(registry: ToolRegistry): ToolRegistry {
+export function registerWatchTools(
+  registry: ToolRegistry,
+  repository?: WatchRepository,
+): ToolRegistry {
+  const watchesFor = (ctx: { db: Parameters<typeof createPostgresWatchRepository>[0] }) =>
+    repository ?? createPostgresWatchRepository(ctx.db);
   register(
     registry,
     {
@@ -158,38 +163,16 @@ export function registerWatchTools(registry: ToolRegistry): ToolRegistry {
           keywords: args.keywords,
         };
 
-        // Notices need somewhere the owner can see them. Reuse the originating
-        // chat when there is one; otherwise open a dedicated watch chat (the
-        // same fallback the application-confirmation watch uses).
-        let conversationId = ctx.conversationId;
-        if (!conversationId) {
-          const [conversation] = await ctx.db
-            .insert(conversations)
-            .values({
-              agentId: ctx.agentId,
-              channel: 'chat',
-              trust: 'owner',
-              title: `Watch: ${args.name}`.slice(0, 80),
-            })
-            .returning({ id: conversations.id });
-          if (!conversation) throw new Error('failed to create watch chat');
-          conversationId = conversation.id;
-        }
-
-        const [record] = await ctx.db
-          .insert(watches)
-          .values({
-            agentId: ctx.agentId,
-            conversationId,
-            kind: 'email',
-            tier: args.tier,
-            name: args.name,
-            match,
-            maxFires: args.maxFires ?? null,
-            expiresAt,
-          })
-          .returning();
-        if (!record) throw new Error('failed to create watch');
+        const record = await watchesFor(ctx).create({
+          agentId: ctx.agentId,
+          conversationId: ctx.conversationId,
+          kind: 'email',
+          tier: args.tier,
+          name: args.name,
+          match,
+          maxFires: args.maxFires ?? null,
+          expiresAt,
+        });
         return {
           watchId: record.id,
           name: record.name,
@@ -224,39 +207,20 @@ export function registerWatchTools(registry: ToolRegistry): ToolRegistry {
         const expiresAt = new Date(now.getTime() + args.expiresInDays * 24 * 60 * 60_000);
         const match: WebWatchMatch = { url: args.url, mode: args.mode, pattern: args.pattern };
 
-        let conversationId = ctx.conversationId;
-        if (!conversationId) {
-          const [conversation] = await ctx.db
-            .insert(conversations)
-            .values({
-              agentId: ctx.agentId,
-              channel: 'chat',
-              trust: 'owner',
-              title: `Watch: ${args.name}`.slice(0, 80),
-            })
-            .returning({ id: conversations.id });
-          if (!conversation) throw new Error('failed to create watch chat');
-          conversationId = conversation.id;
-        }
-
-        const [record] = await ctx.db
-          .insert(watches)
-          .values({
-            agentId: ctx.agentId,
-            conversationId,
-            kind: 'web',
-            tier: 'notify',
-            name: args.name,
-            match,
-            maxFires: args.maxFires ?? null,
-            // Poll on the next sweep; the poller reschedules by this interval.
-            nextPollAt: now,
-            pollIntervalSeconds: args.intervalMinutes * 60,
-            state: {},
-            expiresAt,
-          })
-          .returning();
-        if (!record) throw new Error('failed to create web watch');
+        const record = await watchesFor(ctx).create({
+          agentId: ctx.agentId,
+          conversationId: ctx.conversationId,
+          kind: 'web',
+          tier: 'notify',
+          name: args.name,
+          match,
+          maxFires: args.maxFires ?? null,
+          // Poll on the next sweep; the poller reschedules by this interval.
+          nextPollAt: now,
+          pollIntervalSeconds: args.intervalMinutes * 60,
+          state: {},
+          expiresAt,
+        });
         return {
           watchId: record.id,
           name: record.name,
@@ -285,16 +249,7 @@ export function registerWatchTools(registry: ToolRegistry): ToolRegistry {
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
-        const rows = await ctx.db
-          .select()
-          .from(watches)
-          .where(
-            args.status
-              ? and(eq(watches.agentId, ctx.agentId), eq(watches.status, args.status))
-              : eq(watches.agentId, ctx.agentId),
-          )
-          .orderBy(desc(watches.createdAt))
-          .limit(100);
+        const rows = await watchesFor(ctx).list(ctx.agentId, args.status, 100);
         return {
           watches: rows.map((row) => {
             const email = row.kind === 'email' ? emailWatchMatchSchema.safeParse(row.match) : null;
@@ -338,25 +293,9 @@ export function registerWatchTools(registry: ToolRegistry): ToolRegistry {
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
-        const [cancelled] = await ctx.db
-          .update(watches)
-          .set({ status: 'cancelled', updatedAt: ctx.now() })
-          .where(
-            and(
-              eq(watches.id, args.watchId),
-              eq(watches.agentId, ctx.agentId),
-              eq(watches.status, 'active'),
-            ),
-          )
-          .returning({ id: watches.id });
-        if (cancelled) return { watchId: cancelled.id, status: 'cancelled', cancelled: true };
-
-        const [current] = await ctx.db
-          .select({ id: watches.id, status: watches.status })
-          .from(watches)
-          .where(and(eq(watches.id, args.watchId), eq(watches.agentId, ctx.agentId)));
-        if (!current) throw new Error('watch not found');
-        return { watchId: current.id, status: current.status, cancelled: false };
+        const result = await watchesFor(ctx).cancel(ctx.agentId, args.watchId, ctx.now());
+        if (!result) throw new Error('watch not found');
+        return { watchId: args.watchId, ...result };
       },
     },
     { privateWrite: true },

@@ -24,6 +24,9 @@ export {
 } from './outbox.js';
 export { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 export { FirestoreOwnerContextRepository } from './owner-context.js';
+export { createFirestoreProfileMemoryCommandPersistence } from './profile-memory-commands.js';
+export { FirestoreProfileMemoryMaintenance } from './profile-memory-maintenance.js';
+export { FirestoreProfileMemoryManagementRepository } from './profile-memory-management.js';
 export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 export { FirestoreReminderRepository } from './reminders.js';
 export { FirestoreScheduleRepository } from './schedules.js';
@@ -32,3 +35,4 @@ export { createInstallationStore, InstallationStore } from './store.js';
 export { FirestoreTaskRepository } from './task-lifecycle.js';
 export { FirestoreTaskLeaseRepository } from './tasks.js';
 export { FirestoreToolExecutionRepository } from './tool-execution.js';
+export { FirestoreWatchRepository } from './watches.js';

@@ -2,13 +2,8 @@
 
 import {
   addPersonOccasion,
-  approveQuarantinedMemory,
-  confirmMemory,
-  correctMemory,
-  createMemory,
   createPerson,
   deletePerson,
-  forgetMemory,
   forgetPersonOccasion,
   mergePeople,
   type OrganizeMemoryState,
@@ -17,9 +12,7 @@ import {
   type ProminenceLevel,
   purgeProfileVoiceSamples,
   recompileProfileCard,
-  rejectQuarantinedMemory,
   reviewPersonOccasion,
-  setMemoryProminence,
   updatePersonIdentity,
   updatePersonOccasion,
   updatePersonRelationship,
@@ -27,7 +20,7 @@ import {
 } from '@assistant/application/profile';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getApplication, getDb, getRouter, getWorkspace } from '@/lib/server';
+import { getApplication, getDb, getWorkspace } from '@/lib/server';
 
 export type { OrganizeMemoryState, ProminenceLevel } from '@assistant/application/profile';
 
@@ -82,38 +75,38 @@ export async function correctCommitmentFormAction(id: string, formData: FormData
 
 export async function confirmFact(memoryId: string): Promise<void> {
   await requireOwner();
-  await confirmMemory(getDb(), memoryId);
+  await getApplication().confirmMemory(memoryId);
   revalidateProfile();
 }
 
 export async function correctFact(memoryId: string, content: string): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await correctMemory(getDb(), getRouter(), memoryId, content);
+  const result = await getApplication().correctMemory(memoryId, content);
   revalidateProfile();
   return result;
 }
 
 export async function forgetFact(memoryId: string): Promise<void> {
   await requireOwner();
-  await forgetMemory(getDb(), memoryId);
+  await getApplication().forgetMemory(memoryId);
   revalidateProfile();
 }
 
 export async function setFactProminence(memoryId: string, level: ProminenceLevel): Promise<void> {
   await requireOwner();
-  await setMemoryProminence(getDb(), memoryId, level);
+  await getApplication().setMemoryProminence(memoryId, level);
   revalidateProfile();
 }
 
 export async function approveQuarantined(memoryId: string): Promise<void> {
   await requireOwner();
-  await approveQuarantinedMemory(getDb(), memoryId);
+  await getApplication().approveQuarantinedMemory(memoryId);
   revalidateProfile();
 }
 
 export async function rejectQuarantined(memoryId: string): Promise<void> {
   await requireOwner();
-  await rejectQuarantinedMemory(getDb(), memoryId);
+  await getApplication().rejectQuarantinedMemory(memoryId);
   revalidateProfile();
 }
 
@@ -217,7 +210,7 @@ export async function createMemoryAction(input: {
   subjectContactId: string;
 }): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await createMemory(getDb(), getRouter(), input);
+  const result = await getApplication().createMemory(input);
   revalidateProfile();
   return result;
 }

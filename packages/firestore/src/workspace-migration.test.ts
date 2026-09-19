@@ -12,6 +12,7 @@ import {
 import { FieldValue, Timestamp } from '@google-cloud/firestore';
 import { describe, expect, it, vi } from 'vitest';
 import { embeddingSpaceKey } from './memory.js';
+import { FirestoreProfileMemoryMaintenance } from './profile-memory-maintenance.js';
 import { FirestoreScheduleRepository } from './schedules.js';
 import { decodeRecord } from './store.js';
 import { FirestoreTaskLeaseRepository } from './tasks.js';
@@ -131,6 +132,41 @@ function addApproval(source: MigrationBundle, shortCode: string): void {
     data: { id: approvalId, taskId, toolCallId, shortCode },
     checksum: '',
   });
+}
+
+function addGraphSource(source: MigrationBundle): string {
+  const agentId = source.manifest.source.agentId;
+  const memoryId = randomUUID();
+  addRecord(source, {
+    table: 'memories',
+    collection: 'memories',
+    id: memoryId,
+    data: {
+      id: memoryId,
+      agentId,
+      category: 'knowledge',
+      kind: 'fact',
+      content: 'Graph source migration fixture',
+      contentHash: randomUUID(),
+    },
+    checksum: '',
+  });
+  addRecord(source, {
+    table: 'knowledge_graph_sources',
+    collection: 'knowledgeGraphSources',
+    id: memoryId,
+    data: {
+      memoryId,
+      contentHash: randomUUID(),
+      status: 'quarantined',
+      extractionVersion: 1,
+      nextRetryAt: null,
+      attempts: 1,
+      lastError: 'owner review required',
+    },
+    checksum: '',
+  });
+  return memoryId;
 }
 
 function upgradeFixtureToV3(source: MigrationBundle): void {
@@ -380,6 +416,81 @@ describe.skipIf(!enabled)('Firestore workspace migration import', () => {
       await disposeStore(store);
     }
   });
+
+  it('projects v3 graph-source ownership into destination checksums and cleanup', async () => {
+    const store = emulatorStore();
+    const target = {
+      projectId: 'demo-assistant-test',
+      databaseId: '(default)',
+      installationId: store.installationId,
+    };
+    try {
+      const source = bundle(target);
+      const memoryId = addGraphSource(source);
+      upgradeFixtureToV3(source);
+      await importWorkspaceBundle(store, source, {
+        sourceAgentId: source.manifest.source.agentId,
+        target,
+        mode: 'write',
+      });
+      const graphSource = store.doc('knowledgeGraphSources', memoryId);
+      expect((await graphSource.get()).get('agentId')).toBe(source.manifest.source.agentId);
+      await graphSource.update({ agentId: 'foreign-agent' });
+      await expect(
+        importWorkspaceBundle(store, source, {
+          sourceAgentId: source.manifest.source.agentId,
+          target,
+          mode: 'verify',
+        }),
+      ).rejects.toThrow('checksum mismatch');
+      await graphSource.update({ agentId: source.manifest.source.agentId });
+      const deletionHash = `deleted-${memoryId}`;
+      await Promise.all([
+        store.doc('graphDeletionIntents', memoryId).set({
+          memoryId,
+          agentId: source.manifest.source.agentId,
+          contentHash: deletionHash,
+          cleanupCompletedAt: null,
+        }),
+        store.doc('memoryTombstones', deletionHash).set({ contentHash: deletionHash }),
+      ]);
+      await store.doc('memories', memoryId).delete();
+      await new FirestoreProfileMemoryMaintenance(store).removeOrphanedGraphEntities({
+        agentId: source.manifest.source.agentId,
+        memoryId,
+      });
+      expect((await graphSource.get()).exists).toBe(false);
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it.each([1, 2] as const)(
+    'keeps v%s graph-source documents free of v3 projections',
+    async (version) => {
+      const store = emulatorStore();
+      const target = {
+        projectId: 'demo-assistant-test',
+        databaseId: '(default)',
+        installationId: store.installationId,
+      };
+      try {
+        const source = bundle(target);
+        const memoryId = addGraphSource(source);
+        source.manifest.formatVersion = version;
+        await importWorkspaceBundle(store, source, {
+          sourceAgentId: source.manifest.source.agentId,
+          target,
+          mode: 'write',
+        });
+        expect(
+          (await store.doc('knowledgeGraphSources', memoryId).get()).get('agentId'),
+        ).toBeUndefined();
+      } finally {
+        await disposeStore(store);
+      }
+    },
+  );
 
   it('materializes distinct sub-millisecond timestamps as native Firestore timestamps', async () => {
     const store = emulatorStore();

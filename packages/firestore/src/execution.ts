@@ -20,6 +20,7 @@ import { FirestoreSkillContextRepository } from './skill-context.js';
 import type { InstallationStore } from './store.js';
 import { FirestoreTaskRepository } from './task-lifecycle.js';
 import { FirestoreToolExecutionRepository } from './tool-execution.js';
+import { FirestoreWatchRepository } from './watches.js';
 
 /** Composes migrated operations only; this is not a complete application driver switch. */
 export function createFirestoreExecutionPersistence(
@@ -49,5 +50,6 @@ export function createFirestoreExecutionPersistence(
     generatedCards: new FirestoreGeneratedCardRepository(store),
     cardRefresh: createFirestoreCardRefreshRepository(store),
     recallMetrics: new FirestoreRecallMetricsRepository(store),
+    watches: new FirestoreWatchRepository(store),
   };
 }
