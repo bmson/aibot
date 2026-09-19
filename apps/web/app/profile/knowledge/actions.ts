@@ -4,8 +4,6 @@ import {
   addOwnerKnowledgeGraphFact,
   cleanKnowledgeProjectionOrphans,
   correctKnowledgeGraphRelation,
-  correctKnowledgeSource,
-  forgetKnowledgeSource,
   getKnowledgeGraphNeighborhood,
   getKnowledgeGraphRelation,
   getKnowledgeSourceImpact,
@@ -220,14 +218,14 @@ export async function correctKnowledgeMemory(
   content: string,
 ): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await correctKnowledgeSource(getDb(), getRouter(), memoryId, content);
+  const result = await getApplication().correctMemory(memoryId, content);
   revalidateKnowledgeGraph();
   return result;
 }
 
 export async function forgetKnowledgeMemory(memoryId: string): Promise<void> {
   await requireOwner();
-  await forgetKnowledgeSource(getDb(), memoryId);
+  await getApplication().forgetMemory(memoryId);
   revalidateKnowledgeGraph();
 }
 

@@ -1,6 +1,5 @@
 import {
   cleanKnowledgeProjectionOrphans,
-  forgetKnowledgeSource,
   getKnowledgeCleanupFindings,
   retryQuarantinedKnowledgeGraphSources,
 } from '@assistant/application';
@@ -21,7 +20,7 @@ export async function POST(request: Request): Promise<Response> {
   const memoryId = typeof body?.memoryId === 'string' ? body.memoryId : '';
   if (action === 'remove-orphans') await cleanKnowledgeProjectionOrphans(getDb());
   else if (action === 'retry') await retryQuarantinedKnowledgeGraphSources(getDb());
-  else if (action === 'forget' && memoryId) await forgetKnowledgeSource(getDb(), memoryId);
+  else if (action === 'forget' && memoryId) await getApplication().forgetMemory(memoryId);
   else if (action === 'approve' && memoryId)
     await getApplication().approveQuarantinedMemory(memoryId);
   else if (action === 'keep' && memoryId) await getApplication().restoreMemory(memoryId);
