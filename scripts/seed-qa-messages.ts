@@ -57,6 +57,18 @@ const markdown = [
   'Inline `code`, **bold**, *italic*, ~~struck~~, and a [link](https://example.com).',
 ].join('\n');
 
+const longReply =
+  'Waiting probably makes sense unless your current rate is well above today’s. Refinancing costs money up front, usually two to five percent of the loan, so the savings need time to pay that back. If rates fall another half point in the next year, refinancing then saves more than refinancing now. On the other hand, nobody can promise rates will fall, and a lower payment starting today is a certain benefit. The break-even point is the number that decides it: divide the closing costs by the monthly saving. If you plan to stay in the house longer than that many months, refinancing now is reasonable. If you might move sooner, waiting costs you nothing.';
+
+const briefingText = [
+  'Two events overlap this morning, and one approval is waiting on you.',
+  '**Today**\n- **9:30 AM – 10:30 AM** — Dentist — Laugavegur 12 · Overlaps another event\n- **10:00 AM – 11:00 AM** — Interview with Linear · Overlaps another event',
+  '**Tomorrow**\n- **All day** — Team offsite',
+  '**Weather**\n- 18°C, overcast · 14–21°C — San Francisco',
+  '**Needs you**\n- **A128DY** — Fetch public web page en.wikipedia.org/wiki/Berlin',
+  '**Mail worth reading**\n- Delta — Your itinerary changed for Friday',
+].join('\n\n');
+
 const primary = await db
   .select({ id: conversations.id })
   .from(conversations)
@@ -70,6 +82,9 @@ await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-us
 await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-cards`));
 await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-answer`));
 await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-answer-user`));
+for (const suffix of ['weather-user', 'weather', 'briefing', 'reflow-user', 'reflow']) {
+  await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-${suffix}`));
+}
 
 if (process.argv.includes('--cleanup')) {
   console.log('QA messages removed');
@@ -240,6 +255,159 @@ await db.insert(messages).values([
       },
     ],
     channelMessageId: `${FIXTURE_TAG}-cards`,
+  },
+  // A model reply that ignored the short-paragraph rule: both clients split
+  // it at sentence boundaries when they render it.
+  {
+    conversationId,
+    role: 'user',
+    origin: 'owner',
+    text: 'Should I refinance now or wait?',
+    parts: [{ type: 'text', text: 'Should I refinance now or wait?' }],
+    channelMessageId: `${FIXTURE_TAG}-reflow-user`,
+  },
+  {
+    conversationId,
+    role: 'assistant',
+    origin: 'assistant',
+    text: longReply,
+    parts: [{ type: 'text', text: longReply }],
+    channelMessageId: `${FIXTURE_TAG}-reflow`,
+  },
+  {
+    conversationId,
+    role: 'user',
+    origin: 'owner',
+    text: "What's the weather this week?",
+    parts: [{ type: 'text', text: "What's the weather this week?" }],
+    channelMessageId: `${FIXTURE_TAG}-weather-user`,
+  },
+  {
+    conversationId,
+    role: 'assistant',
+    origin: 'assistant',
+    text: 'Mild and mostly dry in San Francisco; Wednesday is the wet day.',
+    parts: [
+      { type: 'text', text: 'Mild and mostly dry in San Francisco; Wednesday is the wet day.' },
+      {
+        type: 'data-card',
+        data: {
+          kind: 'weather',
+          id: `${FIXTURE_TAG}-weather-card`,
+          location: 'San Francisco',
+          condition: 'partly cloudy',
+          temperature: '18°C',
+          symbol: 'partly-cloudy',
+          current: { tempC: 18, lowC: 14, highC: 21, precipPct: 40, windKmh: 18, humidity: 70 },
+          days: [
+            {
+              weekday: 'Today',
+              lowC: 14,
+              highC: 21,
+              precipPct: 40,
+              description: 'partly cloudy',
+              symbol: 'partly-cloudy',
+            },
+            {
+              weekday: 'Wed',
+              lowC: 12,
+              highC: 17,
+              precipPct: 80,
+              description: 'light rain',
+              symbol: 'rain',
+            },
+            {
+              weekday: 'Thu',
+              lowC: 11,
+              highC: 19,
+              precipPct: 10,
+              description: 'overcast',
+              symbol: 'cloudy',
+            },
+            {
+              weekday: 'Fri',
+              lowC: 13,
+              highC: 24,
+              precipPct: 0,
+              description: 'clear',
+              symbol: 'clear',
+            },
+          ],
+          details: [
+            { label: 'Today', value: '14–21°C' },
+            { label: 'Wind', value: '18 km/h' },
+            { label: 'Wed', value: '12–17°C, light rain, 80% chance of rain', symbol: 'rain' },
+          ],
+        },
+      },
+    ],
+    channelMessageId: `${FIXTURE_TAG}-weather`,
+  },
+  {
+    conversationId,
+    role: 'assistant',
+    origin: 'assistant',
+    text: briefingText,
+    parts: [
+      { type: 'text', text: briefingText },
+      {
+        type: 'data-card',
+        data: {
+          kind: 'briefing',
+          id: `${FIXTURE_TAG}-briefing-card`,
+          date: 'Tuesday, Sep 22',
+          timeZone: 'America/Los_Angeles',
+          lead: 'Two events overlap this morning, and one approval is waiting on you.',
+          sections: [
+            {
+              type: 'agenda',
+              title: 'Schedule',
+              complete: true,
+              items: [
+                {
+                  day: 'Today',
+                  time: '9:30 AM – 10:30 AM',
+                  title: 'Dentist',
+                  location: 'Laugavegur 12',
+                  flag: 'conflict',
+                  note: 'Overlaps another event',
+                },
+                {
+                  day: 'Today',
+                  time: '10:00 AM – 11:00 AM',
+                  title: 'Interview with Linear',
+                  flag: 'conflict',
+                  note: 'Overlaps another event',
+                },
+                { day: 'Tomorrow', time: 'All day', title: 'Team offsite' },
+              ],
+            },
+            {
+              type: 'weather',
+              title: 'Weather',
+              location: 'San Francisco',
+              temperature: '18°C',
+              condition: 'overcast',
+              symbol: 'cloudy',
+              range: '14–21°C',
+            },
+            {
+              type: 'attention',
+              title: 'Needs you',
+              items: [
+                { title: 'Fetch public web page en.wikipedia.org/wiki/Berlin', meta: 'A128DY' },
+              ],
+            },
+            {
+              type: 'mail',
+              title: 'Mail worth reading',
+              items: [{ title: 'Delta', detail: 'Your itinerary changed for Friday' }],
+            },
+          ],
+        },
+      },
+    ],
+    channelMessageId: `${FIXTURE_TAG}-briefing`,
   },
 ]);
 

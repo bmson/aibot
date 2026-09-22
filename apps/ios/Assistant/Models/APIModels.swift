@@ -433,6 +433,13 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     /// cards and authored/generated answer cards still own their presentation.
     var hasSupportingResultCards: Bool {
         guard role == .assistant, !visibleTextBubbles.isEmpty, noticeKind == nil else { return false }
+        // A briefing card is the answer itself; the conflicts card riding with
+        // it must not fold the briefing into "Sources and details".
+        let hasBriefing = parts.contains { part in
+            guard part.type == "data-card", case let .object(data) = part.data else { return false }
+            return data["kind"]?.string == "briefing"
+        }
+        if hasBriefing { return false }
         let resultKinds: Set<String> = [
             "calendar-event", "email-results", "document-results", "drive-results",
             "web-search-results", "availability", "email-thread", "sheet-rows",

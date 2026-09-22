@@ -24,6 +24,7 @@ import {
   CloudRain,
   CloudSnow,
   CloudSun,
+  Droplets,
   FileText,
   FolderOpen,
   GitBranch,
@@ -41,8 +42,10 @@ import {
   Table2,
   Ticket,
   Trophy,
+  Umbrella,
   Users,
   Video,
+  Wind,
 } from 'lucide-react';
 import Image from 'next/image';
 import type { ReactNode } from 'react';
@@ -323,12 +326,124 @@ function WeatherDayRow({ day, facts }: { day: string; facts: ReturnType<typeof w
   );
 }
 
+interface WeatherDay {
+  weekday: string;
+  lowC: number;
+  highC: number;
+  precipPct?: number;
+  description: string;
+  symbol: string;
+}
+
+/** The forecast as numbers (`days` on newer payloads); empty on older ones. */
+function weatherDays(value: unknown): WeatherDay[] {
+  return recs(value).flatMap((entry) => {
+    const weekday = str(entry.weekday);
+    const lowC = num(entry.lowC);
+    const highC = num(entry.highC);
+    if (!weekday || lowC === undefined || highC === undefined) return [];
+    const precipPct = num(entry.precipPct);
+    return [
+      {
+        weekday,
+        lowC: Math.round(lowC),
+        highC: Math.round(highC),
+        ...(precipPct === undefined ? {} : { precipPct: Math.round(precipPct) }),
+        description: str(entry.description),
+        symbol: str(entry.symbol),
+      },
+    ];
+  });
+}
+
+/**
+ * Apple-Weather-style day rows: weekday, sky, rain chance, and the day's
+ * low–high on a bar spanning the whole list's range. Fixed columns and
+ * `whitespace-nowrap`, so a row never wraps on a phone. Mirrors
+ * `weatherDayList` on iOS.
+ */
+function WeatherDayList({ days }: { days: WeatherDay[] }) {
+  const floor = Math.min(...days.map((day) => day.lowC));
+  const span = Math.max(Math.max(...days.map((day) => day.highC)) - floor, 1);
+  return (
+    <ul className="mt-2.5 flex flex-col gap-1.5 border-t border-edge/60 pt-2.5 text-sm">
+      {days.map((day) => {
+        const Icon = weatherIcon(day.symbol);
+        const rain = day.precipPct !== undefined && day.precipPct >= 30 ? `${day.precipPct}%` : '';
+        return (
+          <li
+            key={`${day.weekday}-${day.lowC}-${day.highC}`}
+            className="grid grid-cols-[3.25rem_1.25rem_2.5rem_2rem_minmax(2.5rem,1fr)_2rem] items-center gap-2 whitespace-nowrap tabular-nums"
+            aria-label={`${day.weekday}, ${day.description}, low ${day.lowC}°, high ${day.highC}°${rain ? `, ${rain} chance of rain` : ''}`}
+          >
+            <span className="font-medium text-strong" aria-hidden="true">
+              {day.weekday}
+            </span>
+            <Icon className="size-4 text-accent" aria-hidden="true" />
+            <span className="text-xs font-semibold text-accent" aria-hidden="true">
+              {rain}
+            </span>
+            <span className="text-right text-muted" aria-hidden="true">
+              {day.lowC}°
+            </span>
+            <span className="relative h-1.5 rounded-full bg-sunken" aria-hidden="true">
+              <span
+                className="absolute inset-y-0 rounded-full bg-accent"
+                style={{
+                  left: `${((day.lowC - floor) / span) * 100}%`,
+                  width: `max(${((day.highC - day.lowC) / span) * 100}%, 0.375rem)`,
+                }}
+              />
+            </span>
+            <span className="text-strong" aria-hidden="true">
+              {day.highC}°
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Wind, humidity, and rain chance as one quiet row of icon-led readings. */
+function WeatherMetrics({ current }: { current: Raw }) {
+  const readings = [
+    { label: 'Wind', value: num(current.windKmh), unit: ' km/h', Icon: Wind },
+    { label: 'Humidity', value: num(current.humidity), unit: '%', Icon: Droplets },
+    { label: 'Rain chance', value: num(current.precipPct), unit: '%', Icon: Umbrella },
+  ].filter((reading) => reading.value !== undefined);
+  if (!readings.length) return null;
+  return (
+    <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-strong tabular-nums">
+      {readings.map(({ label, value, unit, Icon }) => (
+        <span key={label} className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <Icon className="size-3.5 text-accent" aria-hidden="true" />
+          <span className="sr-only">{label} </span>
+          {Math.round(value ?? 0)}
+          {unit}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function WeatherCard({ data }: { data: Raw }) {
   const { current, days } = splitWeatherDays(weatherDetails(data.details));
+  const forecast = weatherDays(data.days);
+  const reading = rec(data.current);
   // "Day" names which day the card is about; it is the card's caption rather
   // than one of its readings, so it never renders as a metric.
   const caption = current.find((detail) => detail.label.toLowerCase() === 'day')?.value;
-  const metrics = current.filter((detail) => detail.label.toLowerCase() !== 'day');
+  // With numeric days, plain day rows come from those; the text details only
+  // add named parts of a day ("Thu Morning") and, on a dated card, its rain.
+  const windows = forecast.length
+    ? days.filter((entry) => entry.facts.some((fact) => fact.label))
+    : days;
+  const metrics = current.filter(
+    (detail) =>
+      detail.label.toLowerCase() !== 'day' &&
+      !(forecast.length && (reading || detail.label.toLowerCase() === 'today')),
+  );
   return (
     <CardShell icon={weatherIcon(data.symbol)} label={str(data.location) || 'Weather'}>
       <div className="flex items-baseline justify-between gap-3">
@@ -338,18 +453,170 @@ function WeatherCard({ data }: { data: Raw }) {
         </p>
         {caption ? <p className="shrink-0 text-xs text-muted">{caption}</p> : null}
       </div>
+      {forecast.length && reading ? <WeatherMetrics current={reading} /> : null}
       {metrics.length > 0 ? (
         <div className="mt-2">
           <DetailRows items={metrics} />
         </div>
       ) : null}
-      {days.length > 0 ? (
+      {windows.length > 0 ? (
         <div className="mt-2.5 divide-y divide-edge/50 border-t border-edge/60 pt-1">
-          {days.map((entry) => (
-            <WeatherDayRow key={entry.day} day={entry.day} facts={entry.facts} />
+          {windows.map((entry) => (
+            <WeatherDayRow
+              key={entry.day}
+              day={entry.day}
+              facts={forecast.length ? entry.facts.filter((fact) => fact.label) : entry.facts}
+            />
           ))}
         </div>
       ) : null}
+      {forecast.length ? <WeatherDayList days={forecast} /> : null}
+    </CardShell>
+  );
+}
+
+/** One heading per briefing section, quiet and small, above its rows. */
+function BriefingHeading({ children }: { children: ReactNode }) {
+  return (
+    <h3 className="mb-1.5 text-[0.6875rem] font-semibold tracking-wide text-accent uppercase">
+      {children}
+    </h3>
+  );
+}
+
+function BriefingAgenda({ section }: { section: Raw }) {
+  const items = recs(section.items);
+  const days = [...new Set(items.map((item) => str(item.day)))];
+  return (
+    <>
+      {days.map((day) => (
+        <div key={day}>
+          <BriefingHeading>{day}</BriefingHeading>
+          <ul className="flex flex-col gap-1.5">
+            {items
+              .filter((item) => str(item.day) === day)
+              .map((item) => {
+                const flag = str(item.flag);
+                return (
+                  <li
+                    key={`${str(item.time)}-${str(item.title)}`}
+                    className="grid grid-cols-[4.75rem_1fr] gap-x-3 text-sm"
+                  >
+                    {/* Start over end in a fixed column, so titles line up and
+                        a clock range never crowds the event it belongs to. */}
+                    <span className="flex flex-col whitespace-nowrap tabular-nums">
+                      <span className="text-strong">{str(item.time).split(' – ')[0]}</span>
+                      {str(item.time).includes(' – ') ? (
+                        <span className="text-xs text-muted">
+                          {str(item.time).split(' – ').slice(1).join(' – ')}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="font-medium text-strong">{str(item.title)}</span>
+                      {str(item.location) ? (
+                        <span className="block truncate text-xs text-muted">
+                          {str(item.location)}
+                        </span>
+                      ) : null}
+                      {str(item.note) ? (
+                        <span
+                          className={`mt-0.5 flex items-center gap-1 text-xs ${flag === 'conflict' ? 'text-amber-800 dark:text-amber-300' : 'text-accent'}`}
+                        >
+                          {flag === 'conflict' ? (
+                            <AlertTriangle className="size-3 shrink-0" aria-hidden="true" />
+                          ) : null}
+                          {str(item.note)}
+                        </span>
+                      ) : null}
+                    </span>
+                  </li>
+                );
+              })}
+          </ul>
+        </div>
+      ))}
+      {section.complete === false ? (
+        <p className="text-xs text-muted">
+          Some calendars could not be read, so this may be incomplete.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+function BriefingWeather({ section }: { section: Raw }) {
+  const Icon = weatherIcon(section.symbol);
+  const extra = [str(section.range), str(section.rain)].filter(Boolean).join(' · ');
+  return (
+    <div>
+      <BriefingHeading>{str(section.title) || 'Weather'}</BriefingHeading>
+      <p className="flex items-center gap-2 text-sm text-strong">
+        <Icon className="size-4 shrink-0 text-accent" aria-hidden="true" />
+        <span className="font-semibold tabular-nums">{str(section.temperature)}</span>
+        <span className="min-w-0 truncate text-muted">
+          {str(section.condition)}
+          {extra ? ` · ${extra}` : ''}
+        </span>
+      </p>
+    </div>
+  );
+}
+
+function BriefingList({ section }: { section: Raw }) {
+  return (
+    <div>
+      <BriefingHeading>{str(section.title)}</BriefingHeading>
+      <ul className="flex flex-col gap-1.5">
+        {recs(section.items).map((item) => (
+          <li
+            key={`${str(item.meta)}-${str(item.title)}`}
+            className="flex items-baseline gap-2 text-sm"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="text-strong">{str(item.title)}</span>
+              {str(item.detail) ? (
+                <span className="block text-xs text-muted [overflow-wrap:anywhere]">
+                  {str(item.detail)}
+                </span>
+              ) : null}
+            </span>
+            {str(item.meta) ? (
+              <span className="shrink-0 rounded bg-sunken px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted">
+                {str(item.meta)}
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * The daily briefing: its one-line lead, then short labelled sections built
+ * from the same rows the text fallback lists. Mirrors BriefingCardView on iOS.
+ */
+function BriefingCard({ data }: { data: Raw }) {
+  const sections = recs(data.sections);
+  return (
+    <CardShell icon={Sun} label={['Briefing', str(data.date)].filter(Boolean).join(' · ')}>
+      {str(data.lead) ? (
+        <p className="text-sm font-medium text-strong text-pretty">{str(data.lead)}</p>
+      ) : null}
+      <div className="mt-3 flex flex-col gap-3.5 border-t border-edge/60 pt-3">
+        {sections.map((section, index) => {
+          const key = `${str(section.type)}-${index}`;
+          switch (str(section.type)) {
+            case 'agenda':
+              return <BriefingAgenda key={key} section={section} />;
+            case 'weather':
+              return <BriefingWeather key={key} section={section} />;
+            default:
+              return <BriefingList key={key} section={section} />;
+          }
+        })}
+      </div>
     </CardShell>
   );
 }
@@ -1483,6 +1750,8 @@ function ResponseCardView({
       return <AgendaCard data={data} />;
     case 'weather':
       return <WeatherCard data={data} />;
+    case 'briefing':
+      return <BriefingCard data={data} />;
     case 'calendar-event':
       return <CalendarEventCard data={data} />;
     case 'email-results':
@@ -1637,6 +1906,7 @@ export function rendersAllCards(cards: Raw[]): boolean {
       'knowledge-graph',
       'calendar-conflicts',
       'proactive-alert',
+      'briefing',
     ].includes(str(card.kind));
   });
 }

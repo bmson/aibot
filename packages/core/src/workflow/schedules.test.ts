@@ -14,6 +14,7 @@ import {
   nextRun,
   runDueSchedules,
   upsertSchedule,
+  WAKE_BRIEF_SCHEDULE,
 } from './schedules.js';
 
 const DATABASE_URL =
@@ -472,7 +473,7 @@ describe('cancelQueuedGoalWork (integration)', () => {
 });
 
 describe('maybeFireWakeBrief (integration)', () => {
-  // The function under test owns the single 'morning-brief' row by name, so
+  // The function under test owns the single 'daily-briefing' row by name, so
   // the seeded row (when present) is parked for the duration and restored.
   let parkedBrief: (typeof schedules.$inferSelect)[] = [];
 
@@ -521,9 +522,9 @@ describe('maybeFireWakeBrief (integration)', () => {
   async function insertBriefSchedule(lastRunAt: Date | null): Promise<void> {
     await db.insert(schedules).values({
       agentId,
-      name: 'morning-brief',
+      name: WAKE_BRIEF_SCHEDULE,
       cron: '30 7 * * *',
-      taskTemplate: { type: 'scheduled', instruction: 'test wake brief' },
+      taskTemplate: { type: 'scheduled', instruction: 'test wake brief', job: 'briefing.compose' },
       enabled: true,
       nextRunAt: atLocal(7, 30, new Date()),
       ...(lastRunAt ? { lastRunAt } : {}),
@@ -534,7 +535,7 @@ describe('maybeFireWakeBrief (integration)', () => {
     const [row] = await db
       .select()
       .from(schedules)
-      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, 'morning-brief')))
+      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, WAKE_BRIEF_SCHEDULE)))
       .limit(1);
     return row;
   }
@@ -544,10 +545,10 @@ describe('maybeFireWakeBrief (integration)', () => {
     parkedBrief = await db
       .select()
       .from(schedules)
-      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, 'morning-brief')));
+      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, WAKE_BRIEF_SCHEDULE)));
     await db
       .delete(schedules)
-      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, 'morning-brief')));
+      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, WAKE_BRIEF_SCHEDULE)));
   });
 
   afterEach(async () => {
@@ -555,7 +556,7 @@ describe('maybeFireWakeBrief (integration)', () => {
     await db.delete(tasks).where(sql`${tasks.externalEventId} like 'schedule:%:wake:%'`);
     await db
       .delete(schedules)
-      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, 'morning-brief')));
+      .where(and(eq(schedules.agentId, agentId), eq(schedules.name, WAKE_BRIEF_SCHEDULE)));
   });
 
   afterAll(async () => {
@@ -579,10 +580,15 @@ describe('maybeFireWakeBrief (integration)', () => {
     );
 
     const [enqueued] = await db
-      .select({ id: tasks.id })
+      .select({ id: tasks.id, trigger: tasks.trigger })
       .from(tasks)
       .where(sql`${tasks.externalEventId} = ${`schedule:${row.id}:wake:${localDateString(now)}`}`);
     expect(enqueued).toBeDefined();
+    // The briefing is a code job: the wake path must carry the job name, or
+    // the executor runs a model loop over the instruction instead.
+    expect((enqueued?.trigger as { payload?: { job?: string } } | undefined)?.payload?.job).toBe(
+      'briefing.compose',
+    );
 
     // A second open the same morning is a no-op.
     expect(

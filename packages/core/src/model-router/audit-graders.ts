@@ -27,7 +27,8 @@ export type AuditDefectKind =
   | 'fabricated-interface-element'
   | 'empty-output'
   | 'truncated-output'
-  | 'emoji';
+  | 'emoji'
+  | 'wall-of-text';
 
 export interface AuditDefect {
   kind: AuditDefectKind;
@@ -143,6 +144,38 @@ function cueOveruse(text: string): AuditDefect[] {
   return defects;
 }
 
+/**
+ * The longest a plain paragraph may run before it reads as a wall on a phone:
+ * roughly four lines of chat text at 390pt, or more than four sentences.
+ */
+const WALL_CHARACTERS = 400;
+const WALL_SENTENCES = 4;
+/** A block that already carries structure: list, table, quote, heading, math. */
+const STRUCTURED_BLOCK = /^\s*(?:[-*+]\s|\d+[.)]\s|\||>|#{1,6}\s|\$\$)/;
+/** Sentence ends that are not abbreviations or decimals ("e.g.", "3.5"). */
+const SENTENCE_END =
+  /(?<!\b(?:e\.g|i\.e|etc|vs|Dr|Mr|Mrs|Ms|St|No|U\.S|approx))[.!?](?=\s+["'([]?[A-Z0-9])/g;
+
+/**
+ * A plain paragraph long enough to read as a block of text. A review signal
+ * for `pnpm audit:llm`, not a repair: the clients reflow long paragraphs at
+ * render time, which leaves persisted and streamed text byte-identical.
+ */
+function wallOfText(text: string): AuditDefect | undefined {
+  for (const block of prose(text).split(/\n\s*\n/)) {
+    const paragraph = block.trim();
+    if (!paragraph || STRUCTURED_BLOCK.test(paragraph)) continue;
+    const sentences = (paragraph.match(SENTENCE_END)?.length ?? 0) + 1;
+    if (paragraph.length > WALL_CHARACTERS || sentences > WALL_SENTENCES) {
+      return {
+        kind: 'wall-of-text',
+        detail: `${paragraph.length} characters, ${sentences} sentences: ${excerpt(paragraph, 0)}`,
+      };
+    }
+  }
+  return undefined;
+}
+
 function fabricatedInterfaceElement(text: string): AuditDefect | undefined {
   const match = FAKE_BUTTON_ROW.exec(prose(text));
   if (!match) return undefined;
@@ -187,6 +220,7 @@ export function gradeAuditedOutput(
     forbiddenThemeTag(text),
     leakedMarkup(text),
     fabricatedInterfaceElement(text),
+    wallOfText(text),
   ];
   for (const defect of found) if (defect) defects.push(defect);
   defects.push(...cueOveruse(text));

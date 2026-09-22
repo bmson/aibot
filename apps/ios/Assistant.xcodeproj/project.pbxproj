@@ -53,6 +53,8 @@
 		B00000000000000000000074 /* Views/RelationshipGraphCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000074 /* Views/RelationshipGraphCanvas.swift */; };
 		B00000000000000000000075 /* Views/RelationshipGraphScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000075 /* Views/RelationshipGraphScreen.swift */; };
 		B00000000000000000000080 /* Components/SpeakableText.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000080 /* Components/SpeakableText.swift */; };
+		B00000000000000000000088 /* Components/ParagraphReflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000088 /* Components/ParagraphReflow.swift */; };
+		B00000000000000000000089 /* Components/BriefingCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000089 /* Components/BriefingCardView.swift */; };
 		B00000000000000000000081 /* System/SpeechPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000081 /* System/SpeechPlayer.swift */; };
 		B00000000000000000000082 /* SpeakableTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000082 /* SpeakableTextTests.swift */; };
 		B00000000000000000000085 /* SpeechVoiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000085 /* SpeechVoiceTests.swift */; };
@@ -144,6 +146,8 @@
 		C00000000000000000000074 /* Views/RelationshipGraphCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RelationshipGraphCanvas.swift; sourceTree = "<group>"; };
 		C00000000000000000000075 /* Views/RelationshipGraphScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RelationshipGraphScreen.swift; sourceTree = "<group>"; };
 		C00000000000000000000080 /* Components/SpeakableText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/SpeakableText.swift; sourceTree = "<group>"; };
+		C00000000000000000000088 /* Components/ParagraphReflow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/ParagraphReflow.swift; sourceTree = "<group>"; };
+		C00000000000000000000089 /* Components/BriefingCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/BriefingCardView.swift; sourceTree = "<group>"; };
 		C00000000000000000000081 /* System/SpeechPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/SpeechPlayer.swift; sourceTree = "<group>"; };
 		C00000000000000000000082 /* SpeakableTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakableTextTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000085 /* SpeechVoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechVoiceTests.swift; sourceTree = "<group>"; };
@@ -239,6 +243,8 @@
 				C00000000000000000000073 /* Models/RelationshipGraph.swift */,
 				C00000000000000000000059 /* Views/PeopleView.swift */,
 				C00000000000000000000080 /* Components/SpeakableText.swift */,
+				C00000000000000000000088 /* Components/ParagraphReflow.swift */,
+				C00000000000000000000089 /* Components/BriefingCardView.swift */,
 				C00000000000000000000081 /* System/SpeechPlayer.swift */,
 				C00000000000000000000083 /* System/SpeechListener.swift */,
 				C00000000000000000000084 /* Views/TalkView.swift */,
@@ -445,6 +451,8 @@
 				B00000000000000000000083 /* System/SpeechListener.swift in Sources */,
 				B00000000000000000000081 /* System/SpeechPlayer.swift in Sources */,
 				B00000000000000000000080 /* Components/SpeakableText.swift in Sources */,
+				B00000000000000000000088 /* Components/ParagraphReflow.swift in Sources */,
+				B00000000000000000000089 /* Components/BriefingCardView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

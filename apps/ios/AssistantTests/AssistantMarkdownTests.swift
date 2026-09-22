@@ -210,6 +210,104 @@ final class AssistantMarkdownTests: XCTestCase {
         }
     }
 
+    /// Numeric forecast days render as fixed-column single-line rows; the
+    /// same card without `days` keeps its older text layout.
+    @MainActor
+    func testWeatherForecastRowsSnapshots() throws {
+        let data = Data(#"""
+        {"id":"weather","role":"assistant","parts":[
+          {"type":"data-card","data":{"kind":"weather","id":"w","location":"San Francisco","temperature":"18°C","condition":"Partly cloudy with scattered showers","symbol":"partly-cloudy",
+            "current":{"tempC":18,"lowC":14,"highC":21,"precipPct":40,"windKmh":18,"humidity":70},
+            "days":[
+              {"weekday":"Today","lowC":14,"highC":21,"precipPct":40,"description":"partly cloudy","symbol":"partly-cloudy"},
+              {"weekday":"Wed","lowC":12,"highC":17,"precipPct":80,"description":"light rain","symbol":"rain"},
+              {"weekday":"Thu","lowC":11,"highC":19,"description":"overcast","symbol":"cloudy"},
+              {"weekday":"Fri","lowC":13,"highC":24,"description":"clear","symbol":"clear"}
+            ],
+            "details":[{"label":"Today","value":"14–21°C"},{"label":"Wind","value":"18 km/h"},{"label":"Wed","value":"12–17°C, light rain, 80% chance of rain","symbol":"rain"}]}}
+        ]}
+        """#.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        let cards = message.parts.compactMap(MessageResponseCard.init(part:))
+        guard case let .weather(_, _, _, _, _, forecast)? = cards.first else {
+            return XCTFail("expected a weather card")
+        }
+        XCTAssertEqual(forecast.days.map(\.weekday), ["Today", "Wed", "Thu", "Fri"])
+        XCTAssertNil(forecast.days[2].precipPct)
+        XCTAssertEqual(forecast.current?.windKmh, 18)
+
+        let legacy = try JSONDecoder().decode(ChatMessage.self, from: Data(#"{"id":"old","role":"assistant","parts":[{"type":"data-card","data":{"kind":"weather","id":"w","temperature":"18°C","condition":"Clear","details":[{"label":"Tue","value":"16–23°C, clear"}]}}]}"#.utf8))
+        guard case let .weather(_, _, _, details, _, oldForecast)? = legacy.parts.compactMap(MessageResponseCard.init(part:)).first else {
+            return XCTFail("expected a legacy weather card")
+        }
+        XCTAssertTrue(oldForecast.days.isEmpty)
+        XCTAssertEqual(details.count, 1)
+
+        for (name, size, width) in [
+            ("390", DynamicTypeSize.large, CGFloat(390)),
+            ("320", .large, 320),
+            ("accessible", .accessibility3, 390),
+        ] {
+            let view = RichResponseCards(cards: cards)
+                .padding(16).frame(width: width).background(AssistantTheme.stage)
+                .environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            let image = try XCTUnwrap(renderer.uiImage)
+            XCTAssertEqual(image.size.width, width)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "weather-rows-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    /// The briefing renders as a lead and labelled sections and stays the
+    /// primary surface even when a conflicts card rides along with it.
+    @MainActor
+    func testBriefingCardSnapshots() throws {
+        let data = Data(#"""
+        {"id":"brief","role":"assistant","parts":[
+          {"type":"text","text":"Two overlapping events this morning.\n\n**Today**\n- **9:30 AM – 10:30 AM** — Dentist"},
+          {"type":"data-card","data":{"kind":"briefing","id":"b1","date":"Tuesday, Sep 22","timeZone":"America/Los_Angeles",
+            "lead":"Two overlapping events this morning, and one approval is waiting on you.",
+            "sections":[
+              {"type":"agenda","title":"Schedule","complete":true,"items":[
+                {"day":"Today","time":"9:30 AM – 10:30 AM","title":"Dentist","location":"Laugavegur 12, Reykjavík","flag":"conflict","note":"Overlaps another event"},
+                {"day":"Today","time":"10:00 AM – 11:00 AM","title":"Interview with Linear","flag":"conflict","note":"Overlaps another event"},
+                {"day":"Tomorrow","time":"All day","title":"Team offsite"}]},
+              {"type":"weather","title":"Weather","location":"San Francisco","temperature":"18°C","condition":"overcast","symbol":"cloudy","range":"14–21°C"},
+              {"type":"attention","title":"Needs you","items":[{"title":"Fetch public web page en.wikipedia.org/wiki/Berlin","meta":"A128DY"},{"title":"Job search","detail":"Waiting on whether to search remote only or specific locations."}]},
+              {"type":"mail","title":"Mail worth reading","items":[{"title":"Delta","detail":"Your itinerary changed for Friday"}]}
+            ]}},
+          {"type":"data-card","data":{"kind":"calendar-conflicts","id":"c1","title":"Schedule conflict","conflicts":[]}}
+        ]}
+        """#.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        XCTAssertFalse(message.hasSupportingResultCards)
+        let cards = message.parts.compactMap(MessageResponseCard.init(part:))
+        guard case let .briefing(briefing)? = cards.first else { return XCTFail("expected a briefing card") }
+        XCTAssertEqual(briefing.sections.count, 4)
+        XCTAssertTrue(MessageResponseCard.replacesProse(cards))
+
+        for (name, size, width) in [
+            ("390", DynamicTypeSize.large, CGFloat(390)),
+            ("320", .large, 320),
+            ("accessible", .accessibility3, 390),
+        ] {
+            let view = RichResponseCards(cards: [.briefing(briefing)])
+                .padding(16).frame(width: width).background(AssistantTheme.stage)
+                .environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            let image = try XCTUnwrap(renderer.uiImage)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "briefing-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     @MainActor
     func testApprovalSummaryDecisionTransitionSnapshots() throws {
         let pending = ChatMessage(id: "approval-summary", role: .assistant, parts: [
@@ -801,6 +899,28 @@ final class AssistantMarkdownTests: XCTestCase {
             add(attachment)
         }
     }
+    /// Both clients split an overlong paragraph at the same places: the web
+    /// renderer and this one run the same fixture file.
+    func testParagraphReflowMatchesSharedFixtures() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let url = repository.appendingPathComponent("apps/web/lib/paragraph-reflow.fixtures.json")
+        struct Fixture: Decodable { let name: String; let input: String; let expected: String }
+        let fixtures = try JSONDecoder().decode([Fixture].self, from: Data(contentsOf: url))
+        XCTAssertFalse(fixtures.isEmpty)
+        for fixture in fixtures {
+            XCTAssertEqual(ParagraphReflow.reflow(fixture.input), fixture.expected, fixture.name)
+            XCTAssertEqual(ParagraphReflow.reflow(fixture.expected), fixture.expected, "\(fixture.name) (idempotent)")
+        }
+    }
+
+    func testOverlongParagraphRendersAsSeveralBlocks() {
+        let sentence = "The review moved to Thursday because finance needs two more days to close."
+        let blocks = AssistantMarkdown.blocks(in: Array(repeating: sentence, count: 8).joined(separator: " "))
+        XCTAssertGreaterThan(blocks.count, 1)
+    }
+
     /// Reuses the two generated prompt runs without bundling private QA output
     /// into the app. XCTest keeps the native renders as reviewable attachments.
     @MainActor

@@ -45,7 +45,7 @@ function recordingRouter(text = `${MARKER} composed digest`) {
         ok: true,
         modelId: 'fake',
         degraded: false,
-        object: { text },
+        object: { lead: text },
       };
     },
   } as unknown as ModelRouter;
@@ -186,8 +186,23 @@ describe('runBriefing', () => {
     const [posted] = await db
       .select({ parts: messages.parts })
       .from(messages)
-      .where(eq(messages.text, `${MARKER} composed digest`));
+      .where(like(messages.text, `${MARKER} composed digest%`));
     const parts = (posted?.parts ?? []) as Array<{ type?: string; suggestionId?: string }>;
+    // The message leads with the model's one-line lead and lists the rows
+    // under bold labels, so it stays scannable even where the card is unknown.
+    const [text] = await db
+      .select({ text: messages.text })
+      .from(messages)
+      .where(like(messages.text, `${MARKER} composed digest%`));
+    expect(text?.text).toMatch(/\*\*Mail worth reading[^*]*\*\*\n- .*Your itinerary/);
+    expect(parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'data-card',
+          data: expect.objectContaining({ kind: 'briefing' }),
+        }),
+      ]),
+    );
     expect(
       parts.some((part) => part.type === 'suggestion' && part.suggestionId === suggestion.id),
     ).toBe(true);
@@ -387,7 +402,7 @@ describe('runBriefing — richer inputs', () => {
     const [posted] = await db
       .select({ parts: messages.parts })
       .from(messages)
-      .where(eq(messages.text, digest));
+      .where(like(messages.text, `${digest}%`));
     expect(posted?.parts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -396,6 +411,20 @@ describe('runBriefing — richer inputs', () => {
         }),
       ]),
     );
+    // The briefing card leads, and its schedule marks both overlapping events.
+    const briefing = ((posted?.parts ?? []) as Array<{ data?: Record<string, unknown> }>).find(
+      (part) => part.data?.kind === 'briefing',
+    )?.data as {
+      lead: string;
+      sections: Array<{ type: string; items?: Array<Record<string, unknown>> }>;
+    };
+    expect(briefing.lead).toBe(digest);
+    const agenda = briefing.sections.find((section) => section.type === 'agenda');
+    expect(
+      agenda?.items
+        ?.filter((item) => String(item.title).startsWith(MARKER))
+        .map((item) => item.flag),
+    ).toEqual(['conflict', 'conflict']);
   });
 
   it('merges duplicate match listings from family and team calendars', () => {

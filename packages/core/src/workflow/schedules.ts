@@ -16,6 +16,7 @@ import { Cron } from 'croner';
 import { and, desc, eq, gt, like, notInArray, sql } from 'drizzle-orm';
 import { persistMessage } from '../chat.js';
 import { InboundEventSchema } from '../events.js';
+import { isCodeJobEnabled } from '../memory/jobs.js';
 import { getQueueNotifier } from '../queue.js';
 import { buildAutonomyGrant } from './autonomy.js';
 import { completeTask, deriveTaskTitle, type TaskType } from './machine.js';
@@ -646,8 +647,12 @@ function startOfZonedDay(timeZone: string, at: Date): Date {
   return new Date(start);
 }
 
-/** The schedule a wake-up app-open fires early. */
-export const WAKE_BRIEF_SCHEDULE = 'morning-brief';
+/**
+ * The schedule a wake-up app-open fires early. 'morning-brief' was retired
+ * (migration 0076) in favour of the deterministic briefing job; pointing the
+ * wake path at the retired row made the wake-up brief silently stop.
+ */
+export const WAKE_BRIEF_SCHEDULE = 'daily-briefing';
 /** Before this local hour an app open is insomnia, not waking up. */
 const WAKE_BRIEF_EARLIEST_HOUR = 4;
 
@@ -688,7 +693,10 @@ export async function maybeFireWakeBrief(
     instruction?: string;
     budgetUsdLimit?: string;
     maxSteps?: number;
+    job?: string;
   };
+  // Same gate as the sweep: a disabled code job never fires, early or not.
+  if (template.job && !isCodeJobEnabled(template.job)) return false;
   const event = InboundEventSchema.parse({
     source: 'schedule',
     externalEventId: `schedule:${row.id}:wake:${localNow.date}`,
@@ -699,6 +707,9 @@ export async function maybeFireWakeBrief(
       scheduleId: row.id,
       occurrenceId: `schedule:${row.id}:wake:${localNow.date}`,
       instruction: template.instruction ?? row.name,
+      // A code-job schedule (the briefing) runs its registered job, not a
+      // model loop over the instruction; the cron path forwards it the same way.
+      ...(template.job ? { job: template.job } : {}),
     },
   });
   const committed = await repository.commitOccurrence({

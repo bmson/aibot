@@ -877,6 +877,61 @@ enum MessageResponseCard: Identifiable {
         var id: String { "\(time)-\(title)" }
     }
 
+    /// The forecast as numbers (`days`/`current` on the payload), drawn as
+    /// fixed-column rows that never wrap. Empty on an older payload, which
+    /// keeps rendering its text `details`.
+    struct WeatherForecast: Hashable {
+        struct Day: Hashable {
+            let weekday: String
+            let lowC: Double
+            let highC: Double
+            let precipPct: Double?
+            let description: String
+            let symbol: String
+        }
+        struct Current: Hashable {
+            let windKmh: Double?
+            let humidity: Double?
+            let precipPct: Double?
+        }
+        var days: [Day] = []
+        var current: Current?
+
+        init(days: [Day] = [], current: Current? = nil) {
+            self.days = days
+            self.current = current
+        }
+
+        init(data: [String: JSONValue]) {
+            func number(_ value: JSONValue?) -> Double? {
+                if case let .number(number)? = value, number.isFinite { return number }
+                return nil
+            }
+            if case let .array(values)? = data["days"] {
+                days = values.compactMap { value in
+                    guard case let .object(day) = value,
+                          let weekday = day["weekday"]?.string, !weekday.isEmpty,
+                          let low = number(day["lowC"]), let high = number(day["highC"]) else { return nil }
+                    return Day(
+                        weekday: weekday,
+                        lowC: low,
+                        highC: high,
+                        precipPct: number(day["precipPct"]),
+                        description: day["description"]?.string ?? "",
+                        symbol: day["symbol"]?.string ?? ""
+                    )
+                }
+            }
+            if case let .object(reading)? = data["current"] {
+                current = Current(
+                    windKmh: number(reading["windKmh"]),
+                    humidity: number(reading["humidity"]),
+                    precipPct: number(reading["precipPct"])
+                )
+            }
+        }
+    }
+
     struct WeatherDetail: Identifiable {
         let label: String
         let value: String
@@ -1001,6 +1056,75 @@ enum MessageResponseCard: Identifiable {
         let error: String
     }
 
+    /// The daily briefing: a lead and labelled sections, all pre-formatted
+    /// in the owner's zone by the server.
+    struct BriefingCard: Hashable {
+        struct AgendaItem: Hashable {
+            let day: String
+            let time: String
+            let title: String
+            let location: String
+            let flag: String
+            let note: String
+        }
+        struct ListItem: Hashable {
+            let title: String
+            let detail: String
+            let meta: String
+        }
+        enum Section: Hashable {
+            case agenda(title: String, complete: Bool, items: [AgendaItem])
+            case weather(title: String, location: String, temperature: String, condition: String, symbol: String, detail: String)
+            case list(kind: String, title: String, items: [ListItem])
+        }
+        let id: String
+        let date: String
+        let lead: String
+        let sections: [Section]
+
+        init?(data: [String: JSONValue]) {
+            guard let id = data["id"]?.string else { return nil }
+            func text(_ object: [String: JSONValue], _ key: String) -> String { object[key]?.string ?? "" }
+            var sections: [Section] = []
+            if case let .array(values)? = data["sections"] {
+                for value in values {
+                    guard case let .object(section) = value else { continue }
+                    let items: [[String: JSONValue]] = {
+                        guard case let .array(rows)? = section["items"] else { return [] }
+                        return rows.compactMap { if case let .object(row) = $0 { return row } else { return nil } }
+                    }()
+                    switch text(section, "type") {
+                    case "agenda":
+                        let rows = items.map { AgendaItem(day: text($0, "day"), time: text($0, "time"), title: text($0, "title"),
+                                                          location: text($0, "location"), flag: text($0, "flag"), note: text($0, "note")) }
+                            .filter { !$0.title.isEmpty }
+                        if !rows.isEmpty {
+                            sections.append(.agenda(title: text(section, "title"), complete: section["complete"] != .bool(false), items: rows))
+                        }
+                    case "weather":
+                        guard !text(section, "temperature").isEmpty else { continue }
+                        let detail = [text(section, "range"), text(section, "rain")].filter { !$0.isEmpty }.joined(separator: " · ")
+                        sections.append(.weather(title: text(section, "title"), location: text(section, "location"),
+                                                 temperature: text(section, "temperature"), condition: text(section, "condition"),
+                                                 symbol: text(section, "symbol"), detail: detail))
+                    case let kind where !kind.isEmpty:
+                        let rows = items.map { ListItem(title: text($0, "title"), detail: text($0, "detail"), meta: text($0, "meta")) }
+                            .filter { !$0.title.isEmpty }
+                        if !rows.isEmpty { sections.append(.list(kind: kind, title: text(section, "title"), items: rows)) }
+                    default:
+                        continue
+                    }
+                }
+            }
+            let lead = text(data, "lead")
+            guard !lead.isEmpty || !sections.isEmpty else { return nil }
+            self.id = id
+            self.date = text(data, "date")
+            self.lead = lead
+            self.sections = sections
+        }
+    }
+
     struct GeneratedCard {
         let id: String
         /// The composer read this card out of the reply rather than out of a
@@ -1045,7 +1169,7 @@ enum MessageResponseCard: Identifiable {
 
     case agenda(title: String, subtitle: String, items: [AgendaItem])
     case event(id: String, start: String, time: String, title: String, location: String, attendees: [String], calendars: [String], calendarLinkURL: String?, meetingLinkURL: String?)
-    case weather(location: String, temperature: String, condition: String, details: [WeatherDetail], symbol: String)
+    case weather(location: String, temperature: String, condition: String, details: [WeatherDetail], symbol: String, forecast: WeatherForecast = .init())
     case duration(title: String, duration: String, detail: String?, confidence: String?)
     case reminder(id: String, title: String, schedule: String, nextFires: String, enabled: Bool)
     case emails(id: String, title: String, query: String, mailbox: String, complete: Bool, matchingMessagesEstimate: Int?, messages: [EmailResult])
@@ -1061,12 +1185,13 @@ enum MessageResponseCard: Identifiable {
     case calendarConflicts(id: String, title: String, conflicts: [CalendarConflict], complete: Bool)
     case proactiveAlert(id: String, category: String, urgency: String, title: String, summary: String, startsAt: String, dueAt: String, details: [Detail])
     case generated(GeneratedCard)
+    case briefing(BriefingCard)
 
     var id: String {
         switch self {
         case let .agenda(title, _, _): "agenda-\(title)"
         case let .event(id, _, _, _, _, _, _, _, _): id
-        case let .weather(location, temperature, _, details, _):
+        case let .weather(location, temperature, _, details, _, _):
             // Per-day forecast cards share their location and can share a
             // reading; the day name keeps each card's identity distinct.
             "weather-\(location)-\(details.first { $0.label.caseInsensitiveCompare("Day") == .orderedSame }?.value ?? "")-\(temperature)"
@@ -1085,6 +1210,7 @@ enum MessageResponseCard: Identifiable {
         case let .calendarConflicts(id, _, _, _): id
         case let .proactiveAlert(id, _, _, _, _, _, _, _): id
         case let .generated(card): card.id
+        case let .briefing(card): card.id
         }
     }
 
@@ -1138,7 +1264,8 @@ enum MessageResponseCard: Identifiable {
                 temperature: temperature,
                 condition: condition,
                 details: details,
-                symbol: data["symbol"]?.string ?? ""
+                symbol: data["symbol"]?.string ?? "",
+                forecast: WeatherForecast(data: data)
             )
         case "duration", "time-estimate":
             guard let duration = data["duration"]?.string else { return nil }
@@ -1409,6 +1536,9 @@ enum MessageResponseCard: Identifiable {
                 dueAt: data["dueAt"]?.string ?? "",
                 details: Self.details(from: data)
             )
+        case "briefing":
+            guard let card = BriefingCard(data: data) else { return nil }
+            self = .briefing(card)
         case "generated-card":
             guard let spec = data["spec"]?.objectValue,
                   spec["version"]?.integerValue == 1,
@@ -1807,6 +1937,45 @@ enum WeatherPresentation {
         return (current, order.map { DayFacts(day: $0, facts: byDay[$0] ?? []) })
     }
 
+    /// One compact current-conditions reading for the metrics row.
+    struct Metric {
+        let label: String
+        let value: String
+        let symbol: String
+    }
+
+    /// Wind, humidity, and rain chance from the numeric reading; a dated card
+    /// without one shows its remaining text facts ("Rain chance 1%") instead.
+    static func metrics(
+        _ current: MessageResponseCard.WeatherForecast.Current?,
+        fallback: [MessageResponseCard.WeatherDetail]
+    ) -> [Metric] {
+        if let current {
+            return [
+                current.windKmh.map { Metric(label: "Wind", value: "\(Int($0.rounded())) km/h", symbol: "wind") },
+                current.humidity.map { Metric(label: "Humidity", value: "\(Int($0.rounded()))%", symbol: "humidity") },
+                current.precipPct.map { Metric(label: "Rain chance", value: "\(Int($0.rounded()))%", symbol: "umbrella") },
+            ].compactMap { $0 }
+        }
+        return fallback
+            .filter { $0.label.caseInsensitiveCompare("Today") != .orderedSame }
+            .map { detail in
+                let lower = detail.label.lowercased()
+                let symbol = lower.contains("rain") ? "umbrella" : lower.contains("wind") ? "wind"
+                    : lower.contains("humid") ? "humidity" : "thermometer.medium"
+                return Metric(label: detail.label, value: detail.value, symbol: symbol)
+            }
+    }
+
+    /// The named parts of a day ("Thu Morning") among the day groups. Plain
+    /// per-day rows are drawn from the numeric days instead, so they drop out.
+    static func windowGroups(_ groups: [DayFacts]) -> [DayFacts] {
+        groups.compactMap { group in
+            let facts = group.facts.filter { $0.label != "Forecast" }
+            return facts.isEmpty ? nil : DayFacts(day: group.day, facts: facts)
+        }
+    }
+
     /// The card's top-right stamp: a per-day forecast card names its day
     /// ("Saturday"), a current card shows its freshness time, and anything
     /// else falls back to the plain Today/Forecast label.
@@ -2049,8 +2218,8 @@ struct RichResponseCards: View {
                 agendaCard(title: title, subtitle: subtitle, items: items)
             case .event:
                 EmptyView()
-            case let .weather(location, temperature, condition, details, symbol):
-                weatherCard(location: location, temperature: temperature, condition: condition, details: details, symbol: symbol)
+            case let .weather(location, temperature, condition, details, symbol, forecast):
+                weatherCard(location: location, temperature: temperature, condition: condition, details: details, symbol: symbol, forecast: forecast)
             case let .duration(title, duration, detail, confidence):
                 durationCard(title: title, duration: duration, detail: detail, confidence: confidence)
             case let .reminder(_, title, schedule, nextFires, enabled):
@@ -2089,6 +2258,9 @@ struct RichResponseCards: View {
                 )
             case let .generated(card):
                 generatedCard(card)
+            case let .briefing(card):
+                BriefingCardView(card: card)
+                    .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 22)
             }
         }
     }
@@ -2346,12 +2518,18 @@ struct RichResponseCards: View {
         temperature: String,
         condition: String,
         details: [MessageResponseCard.WeatherDetail],
-        symbol: String = ""
+        symbol: String = "",
+        forecast: MessageResponseCard.WeatherForecast = .init()
     ) -> some View {
         let preferFahrenheit = WeatherUnits.prefersFahrenheit
         let reading = weatherTemperatureReading(temperature, preferFahrenheit: preferFahrenheit)
         let split = WeatherPresentation.split(weatherFacts(details, preferFahrenheit: preferFahrenheit))
-        let hasForecast = !split.days.isEmpty
+        // A payload with numeric days draws them as rows; its text details
+        // then only add what the rows cannot say — named parts of a day.
+        let dayRows = forecast.days
+        let windows = dayRows.isEmpty ? split.days : WeatherPresentation.windowGroups(split.days)
+        let hasForecast = !split.days.isEmpty || !dayRows.isEmpty
+        let metrics = dayRows.isEmpty ? [] : WeatherPresentation.metrics(forecast.current, fallback: split.current)
 
         return VStack(alignment: .leading, spacing: 15) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -2368,37 +2546,11 @@ struct RichResponseCards: View {
                     .lineLimit(1)
             }
 
-            HStack(alignment: .center, spacing: 14) {
-                HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    Text(reading.value)
-                        .font(.system(size: 52, weight: .regular, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                    if !reading.unit.isEmpty {
-                        Text(reading.unit)
-                            .font(.title2.weight(.medium))
-                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    }
-                }
-                .fixedSize(horizontal: true, vertical: false)
+            weatherHeadline(reading: reading, condition: condition, symbol: symbol)
 
-                Text(AssistantMarkdown.inlineAttributed(condition))
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Spacer(minLength: 0)
-
-                Image(systemName: weatherSymbol(condition, symbol: symbol))
-                    .font(.system(size: 27, weight: .medium))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                    .frame(width: 54, height: 54)
-                    .background(AssistantTheme.sunken(for: colorScheme), in: Circle())
-            }
-
-            if !split.current.isEmpty {
+            if !metrics.isEmpty {
+                weatherMetricsRow(metrics)
+            } else if dayRows.isEmpty, !split.current.isEmpty {
                 Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(split.current.enumerated()), id: \.offset) { _, fact in
@@ -2407,10 +2559,10 @@ struct RichResponseCards: View {
                 }
             }
 
-            if hasForecast {
+            if !windows.isEmpty {
                 Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
                 VStack(alignment: .leading, spacing: 12) {
-                    ForEach(split.days, id: \.day) { group in
+                    ForEach(windows, id: \.day) { group in
                         VStack(alignment: .leading, spacing: 7) {
                             Text(group.day)
                                 .font(.caption.weight(.bold))
@@ -2423,8 +2575,163 @@ struct RichResponseCards: View {
                     }
                 }
             }
+
+            if !dayRows.isEmpty {
+                Divider().overlay(AssistantTheme.inkMuted(for: colorScheme).opacity(0.16))
+                weatherDayList(dayRows, preferFahrenheit: preferFahrenheit)
+            }
         }
         .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 22)
+    }
+
+    /// The big reading beside its condition and sky. The condition keeps one
+    /// line — scaling down before it wraps — and at accessibility sizes moves
+    /// under the reading instead of squeezing beside it.
+    @ViewBuilder
+    private func weatherHeadline(reading: (value: String, unit: String), condition: String, symbol: String) -> some View {
+        let temperature = HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(reading.value)
+                .font(.system(size: 52, weight: .regular, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+            if !reading.unit.isEmpty {
+                Text(reading.unit)
+                    .font(.title2.weight(.medium))
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        let conditionText = Text(AssistantMarkdown.inlineAttributed(condition))
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+        let icon = Image(systemName: weatherSymbol(condition, symbol: symbol))
+            .font(.system(size: 27, weight: .medium))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+            .frame(width: 54, height: 54)
+            .background(AssistantTheme.sunken(for: colorScheme), in: Circle())
+
+        let stacked = VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 14) {
+                temperature
+                Spacer(minLength: 0)
+                icon
+            }
+            conditionText.fixedSize(horizontal: false, vertical: true)
+        }
+        if usesAccessibilityLayout {
+            stacked
+        } else {
+            // Beside the reading only while it fits on one line; otherwise it
+            // moves underneath whole rather than wrapping or truncating.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 14) {
+                    temperature
+                    conditionText.lineLimit(1).fixedSize()
+                    Spacer(minLength: 0)
+                    icon
+                }
+                stacked
+            }
+        }
+    }
+
+    /// Wind, humidity, and rain as one quiet row; it falls back to a stacked
+    /// list only when the row cannot fit, never to a wrapped half-row.
+    private func weatherMetricsRow(_ metrics: [WeatherPresentation.Metric]) -> some View {
+        let chip = { (metric: WeatherPresentation.Metric) in
+            HStack(spacing: 5) {
+                Image(systemName: metric.symbol)
+                    .font(.caption)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                    .accessibilityHidden(true)
+                Text(metric.value)
+                    .font(.subheadline.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+            }
+            .lineLimit(1)
+            .fixedSize()
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(metric.label) \(metric.value)")
+        }
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) {
+                ForEach(metrics, id: \.label) { chip($0) }
+                Spacer(minLength: 0)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(metrics, id: \.label) { chip($0) }
+            }
+        }
+    }
+
+    /// Apple-Weather-style day rows: weekday, sky, rain chance, and the day's
+    /// low–high placed on a bar spanning the whole list's range. Every column
+    /// is fixed-width and single-line, so no row can wrap on a narrow phone.
+    private func weatherDayList(_ days: [MessageResponseCard.WeatherForecast.Day], preferFahrenheit: Bool) -> some View {
+        let convert = { (celsius: Double) -> Int in
+            let rounded = Int(celsius.rounded())
+            return preferFahrenheit ? WeatherUnits.fahrenheit(fromCelsius: rounded) : rounded
+        }
+        let floor = Double(days.map { convert($0.lowC) }.min() ?? 0)
+        let ceiling = Double(days.map { convert($0.highC) }.max() ?? 0)
+        return VStack(alignment: .leading, spacing: usesAccessibilityLayout ? 12 : 9) {
+            ForEach(Array(days.enumerated()), id: \.offset) { _, day in
+                let low = convert(day.lowC)
+                let high = convert(day.highC)
+                let rain = day.precipPct.flatMap { $0 >= 30 ? "\(Int($0.rounded()))%" : nil }
+                if usesAccessibilityLayout {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 8) {
+                            Text(day.weekday).font(.subheadline.weight(.semibold))
+                            Image(systemName: weatherSymbol(day.description, symbol: day.symbol))
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                        }
+                        Text([ "\(low)°–\(high)°", rain.map { "\($0) rain" } ].compactMap { $0 }.joined(separator: " · "))
+                            .font(.subheadline)
+                            .monospacedDigit()
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    }
+                    .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                } else {
+                    HStack(spacing: 10) {
+                        Text(day.weekday)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                            .frame(width: 50, alignment: .leading)
+                        Image(systemName: weatherSymbol(day.description, symbol: day.symbol))
+                            .font(.subheadline)
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            .frame(width: 24)
+                            .accessibilityHidden(true)
+                        Text(rain ?? "")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                            .frame(width: 36, alignment: .leading)
+                        Text("\(low)°")
+                            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            .frame(width: 34, alignment: .trailing)
+                        WeatherRangeBar(low: Double(low), high: Double(high), floor: floor, ceiling: ceiling,
+                                        track: AssistantTheme.sunken(for: colorScheme),
+                                        fill: AssistantTheme.accent(for: colorScheme))
+                            .frame(height: 5)
+                        Text("\(high)°")
+                            .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                            .frame(width: 34, alignment: .leading)
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(day.weekday), \(day.description), low \(low), high \(high)\(rain.map { ", \($0) chance of rain" } ?? "")")
+                }
+            }
+        }
     }
 
     /// The big reading and its unit sit on one baseline — "63°F", never a
@@ -2478,9 +2785,12 @@ struct RichResponseCards: View {
         }
     }
 
+    /// The value up to its first sentence end. A period followed by a space
+    /// ends a phrase; one inside a number ("3.5 mm") does not.
     private func weatherFirstPhrase(_ value: String) -> String {
-        value.components(separatedBy: ".").first?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? value
+        let phrase = value.range(of: #"\.(\s|$)"#, options: .regularExpression)
+            .map { String(value[..<$0.lowerBound]) } ?? value
+        return phrase.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func durationCard(title: String, duration: String, detail: String?, confidence: String?) -> some View {
@@ -4869,9 +5179,12 @@ enum AssistantMarkdown {
     }
 
     private static func parseBlocks(in source: String) -> [Block] {
-        let lines = source
+        let normalized = source
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
+        // Overlong prose paragraphs render as several short ones; see
+        // ParagraphReflow. Whitespace-only, so the stored text is untouched.
+        let lines = ParagraphReflow.reflow(normalized)
             .components(separatedBy: "\n")
         var result: [Block] = []
         var index = 0
@@ -5704,5 +6017,30 @@ struct ApprovedReceiptGroup: View, Equatable {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// A day's low–high as a capsule placed within the whole forecast's range, so
+/// warmer and cooler days read at a glance.
+private struct WeatherRangeBar: View {
+    let low: Double
+    let high: Double
+    let floor: Double
+    let ceiling: Double
+    let track: Color
+    let fill: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            let span = max(ceiling - floor, 1)
+            let start = (low - floor) / span * proxy.size.width
+            let width = max((high - low) / span * proxy.size.width, proxy.size.height)
+            ZStack(alignment: .leading) {
+                Capsule().fill(track)
+                Capsule().fill(fill).frame(width: width).offset(x: min(start, proxy.size.width - width))
+            }
+        }
+        .frame(minWidth: 40)
+        .accessibilityHidden(true)
     }
 }

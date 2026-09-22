@@ -87,6 +87,15 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(23);
   });
 
+  it('asks for scan-first answers, not only for result sets (v40)', () => {
+    const prompt = buildSystemPrompt(agent, {});
+    expect(prompt).toMatch(/answer for quick scanning/i);
+    expect(prompt).toMatch(/at most three sentences/i);
+    expect(prompt).toMatch(/\*\*bold label\*\*/);
+    expect(prompt).not.toMatch(/prose for conversation/i);
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(40);
+  });
+
   it('shows the result-set shape concretely, not just as a rule (v24)', () => {
     const prompt = buildSystemPrompt(agent, {});
     // Models imitate an exemplar far more reliably than they obey an abstract

@@ -21,6 +21,7 @@ export interface ResponseCard {
     | 'knowledge-graph'
     | 'calendar-conflicts'
     | 'proactive-alert'
+    | 'briefing'
     | 'generated-card';
   id: string;
   [key: string]: unknown;
@@ -306,6 +307,43 @@ function weatherDayValue(day: RecordValue): string {
     .join(', ');
 }
 
+/**
+ * One forecast day as numbers, for clients that draw a fixed-column row
+ * (weekday, sky, rain, low–high bar) that never wraps. `details` keeps the
+ * same days as text for clients that predate this field.
+ */
+export interface WeatherCardDay {
+  weekday: string;
+  date?: string;
+  lowC: number;
+  highC: number;
+  precipPct?: number;
+  description: string;
+  symbol?: string;
+}
+
+function weatherCardDay(
+  weekday: string,
+  day: RecordValue,
+  description = string(day.description),
+): WeatherCardDay | undefined {
+  const lowC = numeric(day.lowC);
+  const highC = numeric(day.highC);
+  if (!weekday || lowC === undefined || highC === undefined) return undefined;
+  const precipPct = numeric(day.precipProbabilityMax ?? day.precipPct);
+  const symbol = weatherSymbol(description);
+  const date = string(day.date);
+  return {
+    weekday,
+    ...(date ? { date } : {}),
+    lowC,
+    highC,
+    ...(precipPct === undefined ? {} : { precipPct }),
+    description,
+    ...(symbol ? { symbol } : {}),
+  };
+}
+
 /** Ambient data is already trusted context, but only a tiny literal subset becomes a card. */
 export function weatherResponseCards(ambient?: string): ResponseCard[] {
   if (!ambient) return [];
@@ -330,6 +368,22 @@ export function weatherResponseCards(ambient?: string): ResponseCard[] {
     // is all the sky classification needs to give each day its own icon.
     .map((day) => weatherDetail(day[1] ?? '', day[2] ?? '', day[2] ?? ''));
   const symbol = weatherSymbol(condition);
+  const days = [
+    weatherCardDay('Today', { lowC: low, highC: high, precipProbabilityMax: rain }, condition),
+    ...coming.split(';').map((entry) => {
+      const day = /^(\w+)\s+(-?\d+)–(-?\d+)°C,\s*([^,]+?)(?:,\s*(\d+)% chance of rain)?\.?$/.exec(
+        entry.trim(),
+      );
+      if (!day) return undefined;
+      const [, weekday = '', dayLow, dayHigh, description = '', dayRain] = day;
+      // The ambient line omits a rain chance under 30%; absent is not zero.
+      return weatherCardDay(
+        weekday,
+        { lowC: dayLow, highC: dayHigh, ...(dayRain ? { precipProbabilityMax: dayRain } : {}) },
+        description.trim(),
+      );
+    }),
+  ].filter((day): day is WeatherCardDay => day !== undefined);
   return [
     {
       kind: 'weather',
@@ -338,6 +392,15 @@ export function weatherResponseCards(ambient?: string): ResponseCard[] {
       condition,
       temperature: `${temperature}°C`,
       ...(symbol ? { symbol } : {}),
+      current: {
+        tempC: Number(temperature),
+        lowC: Number(low),
+        highC: Number(high),
+        precipPct: Number(rain),
+        windKmh: Number(wind),
+        ...(humidity ? { humidity: Number(humidity) } : {}),
+      },
+      days,
       details: [
         { label: 'Today', value: `${low}–${high}°C` },
         { label: 'Wind', value: `${wind} km/h` },
@@ -431,6 +494,29 @@ export function weatherLookupResponseCards(evidence: ActionEvidence[]): Response
       .filter((detail) => detail.label && detail.value);
 
     const cardDetails = [...headlineDetails, ...windows, ...comingDays];
+    // The same days as numbers. The forecast starts tomorrow, so "Today"
+    // leads unless today is the day the card already headlines.
+    const headlinesToday = !!targetDay && !forecast.some((day) => string(day.date) === targetDate);
+    const today = current && !headlinesToday ? weatherCardDay('Today', current) : undefined;
+    const days = [
+      today,
+      ...forecast
+        .filter((day) => !targetDate || string(day.date) !== targetDate)
+        .map((day) => weatherCardDay(string(day.weekday), day)),
+    ].filter((day): day is WeatherCardDay => day !== undefined);
+    const currentReading =
+      current && !targetDay
+        ? Object.fromEntries(
+            Object.entries({
+              tempC: numeric(current.tempC),
+              lowC: numeric(current.lowC),
+              highC: numeric(current.highC),
+              precipPct: numeric(current.precipProbabilityMax),
+              windKmh: numeric(current.windKmh),
+              humidity: numeric(current.humidity),
+            }).filter(([, value]) => value !== undefined),
+          )
+        : undefined;
     if (!temperature && !condition && cardDetails.length === 0) return [];
     const symbol = weatherSymbol(condition);
     return [
@@ -443,6 +529,8 @@ export function weatherLookupResponseCards(evidence: ActionEvidence[]): Response
         // The headline sky, for the client that draws an icon for it. Older
         // clients ignore the field and keep the one weather glyph they have.
         ...(symbol ? { symbol } : {}),
+        ...(currentReading ? { current: currentReading } : {}),
+        ...(days.length ? { days } : {}),
         details: cardDetails,
       },
     ];

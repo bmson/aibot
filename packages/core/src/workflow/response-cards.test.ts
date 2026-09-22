@@ -193,6 +193,24 @@ describe('response cards', () => {
     ]);
   });
 
+  it('carries the ambient days as numbers for single-line forecast rows', () => {
+    const [card] = weatherResponseCards(
+      "Right now (ambient context):\nOwner's current location: near San Francisco (37.7749, -122.4194), as of just now.\nWeather there: overcast, 18°C (today 17–19°C, 2% chance of rain, wind 18 km/h, humidity 70%).\nComing days: Tue 16–23°C, clear; Wed 14–21°C, light rain, 80% chance of rain.",
+    );
+    expect(card).toMatchObject({
+      current: { tempC: 18, lowC: 17, highC: 19, precipPct: 2, windKmh: 18, humidity: 70 },
+      days: [
+        { weekday: 'Today', lowC: 17, highC: 19, precipPct: 2, symbol: 'cloudy' },
+        { weekday: 'Tue', lowC: 16, highC: 23, description: 'clear', symbol: 'clear' },
+        { weekday: 'Wed', lowC: 14, highC: 21, precipPct: 80, symbol: 'rain' },
+      ],
+    });
+    // Under 30% the ambient line omits the chance; the card must not claim 0%.
+    expect((card?.days as Array<Record<string, unknown>> | undefined)?.[1]).not.toHaveProperty(
+      'precipPct',
+    );
+  });
+
   it('attaches the ambient card to a plain here-and-now weather question', () => {
     const result = responseCardsForFinal({
       evidence: [],
@@ -288,6 +306,67 @@ describe('response cards', () => {
         ],
       },
     ]);
+  });
+
+  it('gives a lookup card its days as numbers, today first and the headline day omitted', () => {
+    const forecast = [
+      {
+        date: '2026-09-17',
+        weekday: 'Thu',
+        description: 'overcast',
+        lowC: 14,
+        highC: 17,
+        precipProbabilityMax: 1,
+      },
+      {
+        date: '2026-09-18',
+        weekday: 'Fri',
+        description: 'light rain',
+        lowC: 11,
+        highC: 15,
+        precipProbabilityMax: 80,
+      },
+    ];
+    const current = {
+      tempC: 12,
+      description: 'clear',
+      lowC: 9,
+      highC: 14,
+      precipProbabilityMax: 5,
+      windKmh: 20,
+    };
+    const now = weatherLookupResponseCards([
+      {
+        toolName: 'weather.lookup',
+        status: 'succeeded',
+        result: { place: 'Reykjavík', current, forecast },
+      },
+    ])[0];
+    expect(now).toMatchObject({
+      current: { tempC: 12, lowC: 9, highC: 14, precipPct: 5, windKmh: 20 },
+      days: [
+        { weekday: 'Today', lowC: 9, highC: 14, precipPct: 5, symbol: 'clear' },
+        { weekday: 'Thu', date: '2026-09-17', lowC: 14, highC: 17 },
+        { weekday: 'Fri', precipPct: 80, symbol: 'rain' },
+      ],
+    });
+
+    const dated = weatherLookupResponseCards([
+      {
+        toolName: 'weather.lookup',
+        status: 'succeeded',
+        result: {
+          place: 'Reykjavík',
+          current,
+          forecast,
+          target: { date: '2026-09-17', weekday: 'Thu', windows: [], hours: [], day: forecast[0] },
+        },
+      },
+    ])[0];
+    expect(dated).not.toHaveProperty('current');
+    expect(
+      (dated?.days as Array<{ weekday: string }> | undefined)?.map((day) => day.weekday),
+    ).toEqual(['Today', 'Fri']);
   });
 
   const window = (

@@ -141,3 +141,31 @@ describe('repairPresentationDefects', () => {
     expect(repairPresentationDefects(once).text).toBe(once);
   });
 });
+
+describe('wall-of-text', () => {
+  const sentence =
+    'The quarterly review moved to Thursday because the finance team needs more time.';
+
+  it('flags a plain paragraph that runs past four sentences', () => {
+    expect(kinds(Array(5).fill(sentence).join(' '))).toEqual(['wall-of-text']);
+  });
+
+  it('passes the same content split into short paragraphs', () => {
+    const text = `${[sentence, sentence, sentence].join(' ')}\n\n${[sentence, sentence].join(' ')}`;
+    expect(kinds(text)).toEqual([]);
+  });
+
+  it('does not count abbreviations or decimals as sentence ends', () => {
+    expect(
+      kinds('Rain is 3.5 mm, e.g. light. Wind is calm. It is dry by noon. Take a jacket.'),
+    ).toEqual([]);
+  });
+
+  it('ignores long lists, tables, quotes, and code', () => {
+    const long = Array(8).fill(sentence).join(' ');
+    expect(kinds(`- ${long}`)).toEqual([]);
+    expect(kinds(`| a | b |\n|---|---|\n| ${long} | x |`)).toEqual([]);
+    expect(kinds(`> ${long}`)).toEqual([]);
+    expect(kinds(`\`\`\`\n${long}\n\`\`\``)).toEqual([]);
+  });
+});
