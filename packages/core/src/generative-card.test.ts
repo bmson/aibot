@@ -4,6 +4,7 @@ import {
   answerLooksCardShaped,
   GenerativeCardSpecV1Schema,
   generateEvidenceCard,
+  scoreboardCardSpec,
   validateGroundedCard,
 } from './generative-card.js';
 import type { ModelRouter } from './model-router/index.js';
@@ -434,6 +435,69 @@ describe('an answer with no tool behind it', () => {
         evidence: [],
         answerText: travelAnswer,
       }),
+    ).toBeNull();
+  });
+});
+
+describe('scoreboardCardSpec', () => {
+  const side = (name: string, shortName: string, score?: string) => ({
+    id: shortName,
+    name,
+    shortName,
+    abbreviation: shortName.slice(0, 3).toUpperCase(),
+    ...(score === undefined ? {} : { score }),
+  });
+  const scores = (games: unknown[]) => ({
+    toolName: 'sports.scores',
+    status: 'succeeded',
+    args: { team: 'Giants' },
+    result: { games },
+  });
+
+  it('compiles a grounded score card without a model', () => {
+    const card = scoreboardCardSpec([
+      scores([
+        {
+          id: '401',
+          league: 'mlb',
+          leagueLabel: 'MLB',
+          state: 'in',
+          statusText: 'Top 7th',
+          home: side('San Francisco Giants', 'Giants', '5'),
+          away: side('Minnesota Twins', 'Twins', '2'),
+        },
+      ]),
+    ]);
+    expect(card?.spec).toMatchObject({
+      title: 'Twins at Giants',
+      subtitle: 'MLB',
+      icon: 'sport',
+      blocks: [{ type: 'score', leftValueFact: 'g0_away_score', statusFact: 'g0_status' }],
+    });
+    expect(card?.spec.facts.map((fact) => fact.value)).toEqual(
+      expect.arrayContaining(['Minnesota Twins', '2', 'San Francisco Giants', '5', 'Top 7th']),
+    );
+    expect(card?.grounding).toBe('evidence');
+  });
+
+  it('lists a fixture without inventing a score, and needs a scores row at all', () => {
+    const card = scoreboardCardSpec([
+      scores([
+        {
+          id: '402',
+          leagueLabel: 'NFL',
+          state: 'pre',
+          statusText: 'Sun, Sep 27 10:00 AM',
+          home: side('New York Giants', 'Giants'),
+          away: side('Tennessee Titans', 'Titans'),
+        },
+      ]),
+    ]);
+    expect(card?.spec.blocks).toEqual([
+      { type: 'facts', factIds: ['g0_away', 'g0_home', 'g0_status'] },
+    ]);
+    expect(
+      scoreboardCardSpec([{ toolName: 'web.search', status: 'succeeded', result: {} }]),
     ).toBeNull();
   });
 });

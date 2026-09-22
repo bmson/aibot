@@ -1016,6 +1016,12 @@ struct SavedCardsResponse: Codable, Sendable {
     let cards: [SavedCardRecord]
 }
 
+/// A live scoreboard re-read: the same game objects a scoreboard card carries.
+struct LiveScoresPayload: Decodable, Sendable {
+    let fetchedAt: String?
+    let games: [JSONValue]
+}
+
 struct CardRefreshResult: Codable, Sendable {
     let ok: Bool
     let taskId: String?
@@ -1935,6 +1941,7 @@ struct ToolActivity: Codable, Sendable {
         "web.fetch": "Reading a web page",
         "web.search": "Searching the web",
         "weather.lookup": "Checking the weather",
+        "sports.scores": "Checking the scores",
         "memory.recall": "Recalling memory",
         "memory.save": "Saving a note to memory",
         "contacts.lookup": "Looking up a contact",
@@ -1992,6 +1999,7 @@ enum ToolStepLabel {
         "web.fetch": "Read a web page",
         "web.search": "Searched the web",
         "weather.lookup": "Checked the weather",
+        "sports.scores": "Checked the scores",
         "memory.recall": "Recalled memory",
         "memory.save": "Saved a note to memory",
         "contacts.lookup": "Looked up a contact",

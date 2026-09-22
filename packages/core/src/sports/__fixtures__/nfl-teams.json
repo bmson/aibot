@@ -1,0 +1,32 @@
+{
+  "sports": [
+    {
+      "leagues": [
+        {
+          "teams": [
+            {
+              "team": {
+                "id": "19",
+                "displayName": "New York Giants",
+                "shortDisplayName": "Giants",
+                "name": "Giants",
+                "location": "New York",
+                "abbreviation": "NYG"
+              }
+            },
+            {
+              "team": {
+                "id": "25",
+                "displayName": "San Francisco 49ers",
+                "shortDisplayName": "49ers",
+                "name": "49ers",
+                "location": "San Francisco",
+                "abbreviation": "SF"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

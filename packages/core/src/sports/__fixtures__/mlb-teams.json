@@ -1,0 +1,42 @@
+{
+  "sports": [
+    {
+      "leagues": [
+        {
+          "teams": [
+            {
+              "team": {
+                "id": "9",
+                "displayName": "Minnesota Twins",
+                "shortDisplayName": "Twins",
+                "name": "Twins",
+                "location": "Minnesota",
+                "abbreviation": "MIN"
+              }
+            },
+            {
+              "team": {
+                "id": "10",
+                "displayName": "New York Yankees",
+                "shortDisplayName": "Yankees",
+                "name": "Yankees",
+                "location": "New York",
+                "abbreviation": "NYY"
+              }
+            },
+            {
+              "team": {
+                "id": "26",
+                "displayName": "San Francisco Giants",
+                "shortDisplayName": "Giants",
+                "name": "Giants",
+                "location": "San Francisco",
+                "abbreviation": "SF"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

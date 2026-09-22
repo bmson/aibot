@@ -1,0 +1,150 @@
+{
+  "events": [
+    {
+      "id": "401872956",
+      "date": "2026-09-27T17:00Z",
+      "name": "Tennessee Titans at New York Giants",
+      "links": [
+        {
+          "href": "https://www.espn.com/nfl/game/_/gameId/401872956/titans-giants"
+        }
+      ],
+      "competitions": [
+        {
+          "date": "2026-09-27T17:00Z",
+          "venue": {
+            "fullName": "MetLife Stadium"
+          },
+          "status": {
+            "type": {
+              "id": "1",
+              "name": "STATUS_SCHEDULED",
+              "state": "pre",
+              "completed": false,
+              "description": "Scheduled",
+              "detail": "Sun, September 27th at 1:00 PM EDT",
+              "shortDetail": "9/27 - 1:00 PM EDT"
+            }
+          },
+          "broadcasts": [
+            {
+              "market": "national",
+              "names": ["CBS"]
+            }
+          ],
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "0",
+              "records": [
+                {
+                  "type": "total",
+                  "summary": "1-1"
+                }
+              ],
+              "team": {
+                "id": "19",
+                "displayName": "New York Giants",
+                "shortDisplayName": "Giants",
+                "name": "Giants",
+                "abbreviation": "NYG",
+                "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/nyg.png"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "0",
+              "records": [
+                {
+                  "type": "total",
+                  "summary": "0-2"
+                }
+              ],
+              "team": {
+                "id": "10",
+                "displayName": "Tennessee Titans",
+                "shortDisplayName": "Titans",
+                "name": "Titans",
+                "abbreviation": "TEN",
+                "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/ten.png"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "401872958",
+      "date": "2026-09-27T20:05Z",
+      "name": "Arizona Cardinals at San Francisco 49ers",
+      "links": [
+        {
+          "href": "https://www.espn.com/nfl/game/_/gameId/401872958/cardinals-49ers"
+        }
+      ],
+      "competitions": [
+        {
+          "date": "2026-09-27T20:05Z",
+          "venue": {
+            "fullName": "Levi's Stadium"
+          },
+          "status": {
+            "type": {
+              "id": "1",
+              "name": "STATUS_SCHEDULED",
+              "state": "pre",
+              "completed": false,
+              "description": "Scheduled",
+              "detail": "Sun, September 27th at 4:05 PM EDT",
+              "shortDetail": "9/27 - 4:05 PM EDT"
+            }
+          },
+          "broadcasts": [
+            {
+              "market": "national",
+              "names": ["FOX"]
+            }
+          ],
+          "competitors": [
+            {
+              "homeAway": "home",
+              "score": "0",
+              "records": [
+                {
+                  "type": "total",
+                  "summary": "2-0"
+                }
+              ],
+              "team": {
+                "id": "25",
+                "displayName": "San Francisco 49ers",
+                "shortDisplayName": "49ers",
+                "name": "49ers",
+                "abbreviation": "SF",
+                "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/sf.png"
+              }
+            },
+            {
+              "homeAway": "away",
+              "score": "0",
+              "records": [
+                {
+                  "type": "total",
+                  "summary": "1-1"
+                }
+              ],
+              "team": {
+                "id": "22",
+                "displayName": "Arizona Cardinals",
+                "shortDisplayName": "Cardinals",
+                "name": "Cardinals",
+                "abbreviation": "ARI",
+                "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/ari.png"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

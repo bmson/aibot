@@ -54,6 +54,7 @@ import { focusRing } from '@/lib/ui';
 import { requestCardPolling } from './card-refresh-events';
 import { CardSteps, cardStepsOf } from './card-steps';
 import { type CardRefreshAttempt, cardIsRefreshing } from './generated-card-state';
+import { ScoreboardCard } from './scoreboard-card';
 import { SensitiveValue } from './sensitive-value';
 
 // Cards fill the transcript column, matching the native chat surface. The
@@ -1752,6 +1753,12 @@ function ResponseCardView({
       return <WeatherCard data={data} />;
     case 'briefing':
       return <BriefingCard data={data} />;
+    case 'scoreboard':
+      return (
+        <CardShell icon={Trophy} label={str(data.title) || 'Scores'}>
+          <ScoreboardCard data={data} />
+        </CardShell>
+      );
     case 'calendar-event':
       return <CalendarEventCard data={data} />;
     case 'email-results':
@@ -1873,7 +1880,12 @@ function legacyTextCards(text: string): Raw[] {
  * leave — replacing the reply with it would delete the rest of the answer.
  */
 export function cardsReplaceProse(cards: Raw[]): boolean {
-  return cards.length > 0 && !cards.every((card) => str(card.grounding) === 'answer');
+  // A card built from the answer, or one marked to sit under it (a live
+  // scoreboard), leaves the reply's own words in place.
+  return (
+    cards.length > 0 &&
+    !cards.every((card) => str(card.grounding) === 'answer' || card.accompaniesProse === true)
+  );
 }
 
 /** True when every card on the message is one this surface can render. */
@@ -1907,6 +1919,7 @@ export function rendersAllCards(cards: Raw[]): boolean {
       'calendar-conflicts',
       'proactive-alert',
       'briefing',
+      'scoreboard',
     ].includes(str(card.kind));
   });
 }

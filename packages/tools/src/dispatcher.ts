@@ -78,7 +78,8 @@ async function authorizedPublicSourceRead(
       history.push({ role: 'user', content: trigger.payload.text });
     lookup = detectLiveLookup(history);
   }
-  if (lookup?.kind !== 'web') return false;
+  // A sports lookup falls back to search-then-fetch for an uncovered league.
+  if (lookup?.kind !== 'web' && lookup?.kind !== 'sports') return false;
   const searches = await repository.searchResults(input.task.id);
   return searches.some((result) => {
     const value = result as { results?: Array<{ url?: unknown }>; error?: unknown } | null;

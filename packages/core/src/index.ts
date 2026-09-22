@@ -13,6 +13,7 @@ export * from './memory/index.js';
 export * from './model-router/index.js';
 export * from './otel.js';
 export * from './queue.js';
+export * from './sports/index.js';
 export * from './voice.js';
 export { dispatchOutbox } from './workflow/dispatch.js';
 export * from './workflow/index.js';

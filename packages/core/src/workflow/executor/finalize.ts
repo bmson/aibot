@@ -28,6 +28,7 @@ import {
   persistGeneratedCard,
   prefersAnswerCard,
   revalidatedCardEvidence,
+  scoreboardCardSpec,
 } from '../../generative-card.js';
 import type { RecallSource } from '../../memory/recall.js';
 import { recordSkillOutcome } from '../../memory/skills.js';
@@ -532,7 +533,39 @@ export async function stageModelFinalResponse(
   const provenance = cardRuntimeProvenance(refreshTarget?.revision.spec);
   const refreshEvidence = provenance ? revalidatedCardEvidence(provenance.sources, evidence) : null;
   let generatedCard: GeneratedCardPayload | undefined;
+  // A scoreboard is already the structured answer and keeps ticking in chat.
+  // "Make a card for it" saves a copy compiled from the same rows; the model
+  // composer, built for prose pages, is where score cards used to fail.
+  const scoreboard = refreshCardId
+    ? undefined
+    : specializedCards.find((card) => card.kind === 'scoreboard');
+  let savedScoreCard: GeneratedCardPayload | undefined;
+  if (scoreboard && cardRequested && !checked.blocked) {
+    const compiled = scoreboardCardSpec(evidence);
+    savedScoreCard = compiled
+      ? await persistGeneratedCard(generatedCardsRepository, {
+          agentId: task.agentId,
+          conversationId: task.conversationId,
+          payload: compiled,
+          evidence,
+          sourceText: ownerRequest,
+        }).catch((error) => {
+          console.error('scoreboard card persistence failed', error);
+          return undefined;
+        })
+      : undefined;
+    if (savedScoreCard && state.requestChecklist) {
+      state.requestChecklist.savedCards = [
+        {
+          id: savedScoreCard.id,
+          revisionId: savedScoreCard.revisionId,
+          title: savedScoreCard.spec.title,
+        },
+      ];
+    }
+  }
   if (
+    !scoreboard &&
     (refreshCardId || cardRequested || answerCardPreferred || specializedCards.length === 0) &&
     (!refreshCardId || refreshEvidence) &&
     !checked.blocked &&
@@ -639,12 +672,16 @@ export async function stageModelFinalResponse(
     ? generatedCard
       ? `Refreshed “${generatedCard.spec.title}” from its sources.\n\n${truncateAtBoundary(checked.text.trim(), 500)}`
       : 'I could not verify the latest source data, so I left your saved card unchanged. Please try again.'
-    : cardRequested && !checked.blocked
-      ? generatedCard
-        ? `Saved “${generatedCard.spec.title}” to your Cards page.`
+    : scoreboard && cardRequested && !checked.blocked
+      ? savedScoreCard
+        ? `${checked.text.trim()}\n\nSaved “${savedScoreCard.spec.title}” to your Cards page; the scoreboard here stays live while the game is on.`
         : CARD_NOT_BUILT
-      : checked.text;
-  if ((cardRequested || refreshCardId) && !generatedCard) {
+      : cardRequested && !checked.blocked
+        ? generatedCard
+          ? `Saved “${generatedCard.spec.title}” to your Cards page.`
+          : CARD_NOT_BUILT
+        : checked.text;
+  if ((cardRequested || refreshCardId) && !generatedCard && !savedScoreCard) {
     pending.terminalStatus = 'needs_attention';
     pending.outcome = 'needs_attention';
   }

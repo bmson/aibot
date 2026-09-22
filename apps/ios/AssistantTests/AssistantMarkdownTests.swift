@@ -308,6 +308,56 @@ final class AssistantMarkdownTests: XCTestCase {
         }
     }
 
+    /// A scoreboard decodes both teams, keeps the reply above it, asks the
+    /// live endpoint only for games that can still change, and renders.
+    @MainActor
+    func testScoreboardCardSnapshots() throws {
+        let data = Data(#"""
+        {"id":"scores","role":"assistant","parts":[
+          {"type":"text","text":"The Giants lead the Twins 5-2 in the 7th."},
+          {"type":"data-card","data":{"kind":"scoreboard","id":"s1","title":"MLB","fetchedAt":"2026-09-22T02:10:00Z","accompaniesProse":true,
+            "live":{"provider":"espn","pollSeconds":30,"leagues":[{"league":"mlb","eventIds":["2"]}]},
+            "games":[
+              {"id":"1","league":"mlb","leagueLabel":"MLB","state":"post","statusText":"Final","startsAt":"2026-09-21T01:45Z",
+               "home":{"id":"10","name":"New York Yankees","shortName":"Yankees","abbreviation":"NYY","score":"2","winner":true,"record":"90-66"},
+               "away":{"id":"30","name":"Tampa Bay Rays","shortName":"Rays","abbreviation":"TB","score":"0","winner":false,"record":"72-84"}},
+              {"id":"2","league":"mlb","leagueLabel":"MLB","state":"in","statusText":"Top 7th","startsAt":"2026-09-22T01:45Z","venue":"Oracle Park","broadcast":"NBC Sports Bay Area",
+               "link":"https://www.espn.com/mlb/game/_/gameId/2","home":{"id":"26","name":"San Francisco Giants","shortName":"Giants","abbreviation":"SF","score":"5"},
+               "away":{"id":"9","name":"Minnesota Twins","shortName":"Twins","abbreviation":"MIN","score":"2","logo":"https://attacker.example/x.png"}}
+            ]}}
+        ]}
+        """#.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        let cards = message.parts.compactMap(MessageResponseCard.init(part:))
+        guard case let .scoreboard(_, title, games, _, poll, live)? = cards.first else {
+            return XCTFail("expected a scoreboard")
+        }
+        XCTAssertEqual(title, "MLB")
+        XCTAssertEqual(poll, 30)
+        XCTAssertTrue(live)
+        XCTAssertEqual(games.map(\.state), ["post", "in"])
+        XCTAssertNil(games[1].away.logo, "logos only from the provider CDN")
+        XCTAssertEqual(liveScoreQuery(games), "mlb:2")
+        XCTAssertFalse(MessageResponseCard.replacesProse(cards), "the reply stays above the board")
+
+        for (name, size, width) in [
+            ("390", DynamicTypeSize.large, CGFloat(390)),
+            ("320", .large, 320),
+            ("accessible", .accessibility3, 390),
+        ] {
+            let view = RichResponseCards(cards: cards)
+                .padding(16).frame(width: width).background(AssistantTheme.stage)
+                .environment(\.dynamicTypeSize, size)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            let image = try XCTUnwrap(renderer.uiImage)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "scoreboard-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     @MainActor
     func testApprovalSummaryDecisionTransitionSnapshots() throws {
         let pending = ChatMessage(id: "approval-summary", role: .assistant, parts: [

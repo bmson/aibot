@@ -128,6 +128,15 @@ export function evaluateQuestion(
     } | null;
     return data?.kind === 'generated-card' && data.id && data.revisionId ? [data] : [];
   });
+  const hasScoreboard = result.parts.some(
+    (part) =>
+      typeof part === 'object' &&
+      part !== null &&
+      'data' in part &&
+      (part.data as { kind?: string } | null)?.kind === 'scoreboard',
+  );
+  if (fixture.expect.scoreboard && !hasScoreboard)
+    failures.push('formatting: missing scoreboard card');
   if (fixture.expect.card && !cards.length)
     failures.push('formatting: missing persisted generated card');
   const cardFacts = cards
@@ -191,6 +200,44 @@ function replayRegistry(
       { networkEgress: true, returnsUntrustedContent: true },
     );
   }
+  if (fixture.sports)
+    add(
+      'sports.scores',
+      'Live scores, results, and fixtures for a team or league.',
+      z.object({ team: z.string().optional(), league: z.string().optional() }),
+      () => ({
+        timeZone: 'America/Los_Angeles',
+        date: '2026-09-22',
+        fetchedAt: '2026-09-22T02:10:00.000Z',
+        selection: 'today',
+        games: [
+          {
+            id: '401873650',
+            league: 'mlb',
+            leagueLabel: 'MLB',
+            state: 'in',
+            statusText: 'Top 7th',
+            startsAt: '2026-09-22T01:45Z',
+            home: {
+              id: '26',
+              name: 'San Francisco Giants',
+              shortName: 'Giants',
+              abbreviation: 'SF',
+              score: '5',
+            },
+            away: {
+              id: '9',
+              name: 'Minnesota Twins',
+              shortName: 'Twins',
+              abbreviation: 'MIN',
+              score: '2',
+            },
+            line: 'Minnesota Twins at San Francisco Giants: 2-5, Top 7th',
+          },
+        ],
+      }),
+      {},
+    );
   if (fixture.weather)
     add(
       'weather.lookup',

@@ -8,7 +8,6 @@ import {
 
 describe('live lookup routing from home-screen regressions', () => {
   it.each([
-    'What is the current SF giants score',
     'Who is the current president of Iceland',
     'Search the web',
     'Look it up, don’t think this is correct',
@@ -35,6 +34,58 @@ describe('live lookup routing from home-screen regressions', () => {
   ])('does not turn %s into a public lookup', (content) => {
     expect(detectLiveLookup([{ role: 'user', content }])).toBeUndefined();
   });
+  it.each([
+    'What is the current SF giants score',
+    "What's the Giants score?",
+    'Who won the Arsenal match?',
+    'Any Premier League results today?',
+    'Is there an NFL game tonight?',
+    'Create a dynamic card that shows live sport scores',
+  ])('answers %s from the scores tool', (content) => {
+    expect(detectLiveLookup([{ role: 'user', content }])?.kind).toBe('sports');
+  });
+  it.each([
+    "What's my credit score?",
+    'When is my soccer game on Saturday?',
+    'I love this game',
+    'Explain how a match works in tennis scoring history',
+  ])('does not treat %s as a sports lookup', (content) => {
+    expect(detectLiveLookup([{ role: 'user', content }])?.kind).not.toBe('sports');
+  });
+  it('asks the scores tool first, then falls back to the web for an uncovered team', () => {
+    const lookup = { kind: 'sports' as const, request: 'What was the Valur score?' };
+    expect(nextLiveLookup(lookup, [])).toEqual({ toolName: 'sports.scores' });
+    const answered = {
+      toolName: 'sports.scores',
+      status: 'succeeded' as const,
+      result: { games: [{ line: 'Valur at KR: 2-1, FT' }] },
+    };
+    expect(nextLiveLookup(lookup, [answered])).toBeUndefined();
+    expect(liveLookupFailure(lookup, [answered])).toBeUndefined();
+    const uncovered = {
+      toolName: 'sports.scores',
+      status: 'succeeded' as const,
+      result: { games: [], unsupported: true, error: 'No team matched' },
+    };
+    expect(nextLiveLookup(lookup, [uncovered])).toEqual({
+      toolName: 'web.search',
+      input: { query: 'What was the Valur score?', count: 5 },
+    });
+  });
+  it('grounds a score against the game lines the scores tool returned', () => {
+    const lookup = { kind: 'sports' as const, request: "What's the Giants score?" };
+    const evidence = [
+      {
+        toolName: 'sports.scores',
+        status: 'succeeded' as const,
+        result: { games: [{ line: 'Minnesota Twins at San Francisco Giants: 2-5, Final' }] },
+      },
+    ];
+    expect(ungroundedLiveFigure(lookup, 'The Giants won 5-2.', evidence)).toBeUndefined();
+    expect(ungroundedLiveFigure(lookup, 'The Giants won 7-3.', evidence)).toMatch(
+      /do not state 7-3/,
+    );
+  });
   it('resolves a typo follow-up without querying the previous assistant guess', () => {
     expect(
       detectLiveLookup([
@@ -42,7 +93,7 @@ describe('live lookup routing from home-screen regressions', () => {
         { role: 'assistant', content: 'I think they won 7-3.' },
         { role: 'user', content: 'Check the wcore' },
       ]),
-    ).toEqual({ kind: 'web', request: 'What is the current SF giants score' });
+    ).toEqual({ kind: 'sports', request: 'What is the current SF giants score' });
   });
   it('continues a weather question after its missing address arrives', () => {
     expect(

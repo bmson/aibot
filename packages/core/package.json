@@ -45,6 +45,7 @@
     "./queue": "./src/queue.ts",
     "./situations": "./src/situations.ts",
     "./situations-schema": "./src/situations-schema.ts",
+    "./sports": "./src/sports/index.ts",
     "./workflow/anomaly": "./src/workflow/anomaly.ts",
     "./workflow/approval-policies": "./src/workflow/approvals.ts",
     "./workflow/approvals": "./src/workflow/approvals.ts",

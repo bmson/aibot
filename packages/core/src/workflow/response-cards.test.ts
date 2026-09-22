@@ -3,6 +3,7 @@ import {
   availabilityResponseCards,
   calendarResponseCards,
   responseCardsForFinal,
+  scoreboardResponseCards,
   searchResponseCards,
   sheetRowsResponseCards,
   statusResponseCards,
@@ -1176,5 +1177,57 @@ describe('response cards', () => {
         ],
       }),
     ).toEqual([]);
+  });
+});
+
+describe('scoreboardResponseCards', () => {
+  const game = (id: string, state: string, league = 'mlb') => ({
+    id,
+    league,
+    leagueLabel: league.toUpperCase(),
+    state,
+    statusText: state === 'post' ? 'Final' : 'Top 7th',
+    startsAt: '2026-09-22T01:45Z',
+    home: {
+      id: '26',
+      name: 'San Francisco Giants',
+      shortName: 'Giants',
+      abbreviation: 'SF',
+      score: '5',
+    },
+    away: { id: '9', name: 'Minnesota Twins', shortName: 'Twins', abbreviation: 'MIN', score: '2' },
+    line: 'Minnesota Twins at San Francisco Giants: 2-5, Final',
+  });
+  const row = (games: unknown[], extra: Record<string, unknown> = {}) => ({
+    toolName: 'sports.scores',
+    status: 'succeeded',
+    result: { timeZone: 'America/Los_Angeles', fetchedAt: '2026-09-22T19:00:00Z', games, ...extra },
+  });
+
+  it('draws one board from the tool rows, live only for games still to finish', () => {
+    const [card] = scoreboardResponseCards([row([game('1', 'post'), game('2', 'in')])]);
+    expect(card).toMatchObject({
+      kind: 'scoreboard',
+      title: 'MLB',
+      accompaniesProse: true,
+      live: { provider: 'espn', pollSeconds: 30, leagues: [{ league: 'mlb', eventIds: ['2'] }] },
+    });
+    expect(card?.games).toHaveLength(2);
+  });
+
+  it('stops being live once every game is final, and ignores failed lookups', () => {
+    const [card] = scoreboardResponseCards([row([game('1', 'post')])]);
+    expect(card).not.toHaveProperty('live');
+    expect(scoreboardResponseCards([row([], { error: 'provider down' })])).toEqual([]);
+    expect(
+      scoreboardResponseCards([{ ...row([game('1', 'post')]), fromCurrentTask: false }]),
+    ).toEqual([]);
+  });
+
+  it('titles a team fallback as its last and next game', () => {
+    const [card] = scoreboardResponseCards([
+      row([game('1', 'post'), game('3', 'pre')], { selection: 'last-and-next' }),
+    ]);
+    expect(card?.title).toBe('Last result and next game');
   });
 });

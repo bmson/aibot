@@ -91,6 +91,8 @@ const rateLimitSeed = [
   // free public API reachable by strangers. Generous enough that no real
   // question is refused, low enough to cap a loop.
   { scope: 'tool:weather.lookup', maxPerHour: 60, maxPerDay: 300 },
+  // Same shape as weather: keyless, fixed host, reachable at unknown trust.
+  { scope: 'tool:sports.scores', maxPerHour: 60, maxPerDay: 300 },
   { scope: 'channel:sms', maxPerHour: 30, maxPerDay: 200 },
   { scope: 'task', maxPerHour: 120, maxPerDay: 1000 },
 ] as const;

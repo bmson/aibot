@@ -6,6 +6,8 @@ export interface QuestionCase {
   history?: Array<{ role: 'user' | 'assistant'; text: string }>;
   source?: { url: string; text: string; snippet?: string; failed?: boolean };
   weather?: 'current' | 'failed';
+  /** Stub `sports.scores` with a live Twins at Giants game. */
+  sports?: 'live';
   mailbox?: 'hotel' | 'empty';
   memory?: boolean;
   plan?: 'reply' | 'workflow';
@@ -24,6 +26,8 @@ export interface QuestionCase {
     statuses?: string[];
     maxApprovals?: number;
     card?: boolean;
+    /** A scoreboard card rides the reply. */
+    scoreboard?: boolean;
     cardValues?: string[];
   };
 }
@@ -119,6 +123,54 @@ export const QUESTION_CASES: QuestionCase[] = [
       },
     }),
   ),
+  // The scores tool answers directly; the September web path stays covered
+  // above for registries without it.
+  {
+    id: 'giants-score-live',
+    records: [744],
+    request: "What's the Giants score?",
+    sports: 'live',
+    script: [
+      { toolCalls: [{ toolName: 'sports.scores', input: { team: 'Giants' } }] },
+      { text: 'The Giants lead the Twins 5-2 in the top of the 7th.' },
+    ],
+    expect: {
+      matches: ['Giants', '5', '2', 'Twins'],
+      tools: ['sports.scores'],
+      scoreboard: true,
+    },
+  },
+  {
+    id: 'giants-score-invented',
+    records: [748],
+    request: "What's the Giants score?",
+    sports: 'live',
+    script: [
+      { toolCalls: [{ toolName: 'sports.scores', input: { team: 'Giants' } }] },
+      { text: 'The Giants are ahead 7-3.' },
+    ],
+    expect: {
+      matches: ['do not state 7-3|retried'],
+      excludes: ['ahead 7-3'],
+      tools: ['sports.scores'],
+      statuses: ['needs_attention', 'failed'],
+    },
+  },
+  {
+    id: 'score-card-request',
+    records: [750],
+    request: 'Create a card for the Giants game',
+    sports: 'live',
+    script: [
+      { toolCalls: [{ toolName: 'sports.scores', input: { team: 'Giants' } }] },
+      { text: 'The Giants lead the Twins 5-2 in the top of the 7th.' },
+    ],
+    expect: {
+      matches: ['5-2', 'Saved “Twins at Giants”'],
+      tools: ['sports.scores'],
+      scoreboard: true,
+    },
+  },
   ...[
     {
       id: 'weather-work',

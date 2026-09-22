@@ -225,7 +225,15 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   const ownerText = latestUserText(rc.window) ?? '';
   const directOwner = task.trust === 'owner' && !isForwardedIngest(task) && !state.untrustedContext;
   const memoryWrite = directOwner && isMemoryWriteRequest(ownerText);
-  const liveLookup = directOwner ? detectLiveLookup(rc.window) : undefined;
+  const detectedLookup = directOwner ? detectLiveLookup(rc.window) : undefined;
+  // A registry without the scores tool (a trimmed install or trust tier) takes
+  // a sports question down the general search-then-fetch path instead of
+  // failing on a tool that is not there.
+  const liveLookup =
+    detectedLookup?.kind === 'sports' &&
+    !dispatcher.toolDefs(task.trust as Trust).some((tool) => tool.name === 'sports.scores')
+      ? { ...detectedLookup, kind: 'web' as const }
+      : detectedLookup;
   const birthdaySaves = directOwner ? requestedBirthdaySaves(rc.window) : [];
   const situationRequest =
     task.trust === 'owner' && !isForwardedIngest(task) && isSituationRequest(ownerText);

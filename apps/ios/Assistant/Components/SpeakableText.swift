@@ -124,6 +124,11 @@ enum SpeakableText {
             sentence = generatedCardSpeech(generated)
         case let .briefing(briefing):
             sentence = spoken(briefing.lead)
+        case let .scoreboard(_, _, games, _, _, _):
+            sentence = join(games.prefix(2).map { game in
+                let scores = game.state == "pre" ? "" : " \(game.away.score ?? "") to \(game.home.score ?? "")"
+                return "\(spoken(game.away.shortName)) at \(spoken(game.home.shortName))\(scores), \(spoken(game.statusText))"
+            })
         case let .agenda(title, subtitle, items):
             let lines = items.map { "\(spoken($0.time)): \(spoken($0.title))" }
             sentence = join([spoken(title), spoken(subtitle)] + lines)

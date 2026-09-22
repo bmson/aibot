@@ -1186,6 +1186,7 @@ enum MessageResponseCard: Identifiable {
     case proactiveAlert(id: String, category: String, urgency: String, title: String, summary: String, startsAt: String, dueAt: String, details: [Detail])
     case generated(GeneratedCard)
     case briefing(BriefingCard)
+    case scoreboard(id: String, title: String, games: [ScoreGame], fetchedAt: Date?, pollSeconds: Int, live: Bool)
 
     var id: String {
         switch self {
@@ -1211,6 +1212,7 @@ enum MessageResponseCard: Identifiable {
         case let .proactiveAlert(id, _, _, _, _, _, _, _): id
         case let .generated(card): card.id
         case let .briefing(card): card.id
+        case let .scoreboard(id, _, _, _, _, _): id
         }
     }
 
@@ -1539,6 +1541,23 @@ enum MessageResponseCard: Identifiable {
         case "briefing":
             guard let card = BriefingCard(data: data) else { return nil }
             self = .briefing(card)
+        case "scoreboard":
+            guard let id = data["id"]?.string, case let .array(values)? = data["games"] else { return nil }
+            let games = values.compactMap(ScoreGame.init)
+            guard !games.isEmpty else { return nil }
+            let live = data["live"]?.objectValue
+            let poll: Int = {
+                if case let .number(seconds)? = live?["pollSeconds"] { return Int(seconds) }
+                return 30
+            }()
+            self = .scoreboard(
+                id: id,
+                title: data["title"]?.string ?? "Scores",
+                games: games,
+                fetchedAt: (data["fetchedAt"]?.string).flatMap { ISO8601DateFormatter().date(from: $0) },
+                pollSeconds: poll,
+                live: live != nil
+            )
         case "generated-card":
             guard let spec = data["spec"]?.objectValue,
                   spec["version"]?.integerValue == 1,
@@ -1657,6 +1676,8 @@ enum MessageResponseCard: Identifiable {
 
     var summarizesAnswer: Bool {
         if case let .generated(card) = self { return card.groundedOnAnswer }
+        // A scoreboard sits under the reply's one-line takeaway, not in place of it.
+        if case .scoreboard = self { return true }
         return false
     }
     static func inferredLegacy(from text: String) -> [Self] {
@@ -2261,6 +2282,10 @@ struct RichResponseCards: View {
             case let .briefing(card):
                 BriefingCardView(card: card)
                     .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 22)
+            case let .scoreboard(_, title, games, fetchedAt, pollSeconds, live):
+                ScoreboardCardView(title: title, initialGames: games, fetchedAt: fetchedAt,
+                                   pollSeconds: pollSeconds, live: live)
+                    .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
             }
         }
     }
