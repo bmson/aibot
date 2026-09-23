@@ -116,7 +116,7 @@ function fakeRunner(
     assets_bucket_name: { value: 'customer-project-consumer-install-assets' },
     source_bucket_name: { value: 'customer-project-consumer-install-source' },
     artifact_registry_repository: {
-      value: 'projects/customer-project/locations/us-central1/repositories/consumer-install',
+      value: 'consumer-install',
     },
     runtime_service_account_email: {
       value: 'consumer-install-runtime@customer-project.iam.gserviceaccount.com',
@@ -954,6 +954,10 @@ describe('consumer installation', () => {
       expect.arrayContaining([
         expect.objectContaining({ kind: 'state-bucket', owner: 'bootstrap' }),
         expect.objectContaining({ kind: 'release-receipt', owner: 'bootstrap' }),
+        expect.objectContaining({
+          kind: 'artifact-registry',
+          name: 'projects/customer-project/locations/us-central1/repositories/consumer-install',
+        }),
       ]),
     );
     expect(result.runtimeReady).toBe(false);
@@ -962,7 +966,9 @@ describe('consumer installation', () => {
     expect(
       terraformLog.some((entry) => entry.includes('init -input=false -lockfile=readonly')),
     ).toBe(true);
-    expect(terraformLog.some((entry) => entry.includes('apply -auto-approve'))).toBe(true);
+    expect(terraformLog.some((entry) => entry.includes('apply -auto-approve -parallelism=1'))).toBe(
+      true,
+    );
     expect(verifiedIndexInputs).toBe(true);
     expect(JSON.parse(await readFile(state, 'utf8')).stage.current).toBe('provisioned');
   });

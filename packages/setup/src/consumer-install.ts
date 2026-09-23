@@ -501,9 +501,12 @@ function validateTerraformOutputs(
     throw new Error('Terraform output assets bucket does not match manifest');
   if (outputValue('source_bucket_name') !== `${project}-${installation}-source`)
     throw new Error('Terraform output source bucket does not match manifest');
+  const repositoryName = `projects/${project}/locations/${manifest.identity.region}/repositories/${installation}`;
+  // The Google provider returns the short repository ID from `.name`; older
+  // Terraform outputs may carry the fully qualified resource name instead.
   if (
-    outputValue('artifact_registry_repository') !==
-    `projects/${project}/locations/${manifest.identity.region}/repositories/${installation}`
+    outputValue('artifact_registry_repository') !== installation &&
+    outputValue('artifact_registry_repository') !== repositoryName
   )
     throw new Error('Terraform output Artifact Registry does not match manifest');
   if (
@@ -528,7 +531,11 @@ function foundationResources(output: Record<string, unknown>, manifest: Installa
     owned('firestore-database', outputValue('firestore_database_name'), 'project'),
     owned('assets-bucket', outputValue('assets_bucket_name'), 'installation'),
     owned('source-bucket', outputValue('source_bucket_name'), 'installation'),
-    owned('artifact-registry', outputValue('artifact_registry_repository'), 'installation'),
+    owned(
+      'artifact-registry',
+      `projects/${manifest.identity.projectId}/locations/${manifest.identity.region}/repositories/${id}`,
+      'installation',
+    ),
     owned('runtime-service-account', outputValue('runtime_service_account_email'), 'installation'),
   ];
 }
@@ -1139,6 +1146,9 @@ export async function provisionConsumerInstallation(
     await terraform(terraformRunner, terraformOptions, [
       'apply',
       '-auto-approve',
+      // Firestore field exemptions in one database can conflict if created
+      // concurrently, even when the provider does not wait for backfill.
+      '-parallelism=1',
       ...terraformVars(current, options.stateBucket),
     ]);
     const output = await terraform(terraformRunner, terraformOptions, ['output', '-json']);
