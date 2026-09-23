@@ -148,10 +148,17 @@ export function createInstallationStore(input: {
   projectId: string;
   installationId: string;
   databaseId?: string;
+  /** Optional development auth client for local operator tools. */
+  authClient?: object;
 }): InstallationStore {
   if (!input.projectId) throw new Error('Firestore requires a project ID');
+  const settings = {
+    projectId: input.projectId,
+    databaseId: input.databaseId ?? '(default)',
+    ...(input.authClient ? { authClient: input.authClient } : {}),
+  } as ConstructorParameters<typeof Firestore>[0] & { authClient?: object };
   return new InstallationStore(
-    new Firestore({ projectId: input.projectId, databaseId: input.databaseId ?? '(default)' }),
+    new Firestore(settings),
     input.installationId,
     undefined,
     input.projectId,
