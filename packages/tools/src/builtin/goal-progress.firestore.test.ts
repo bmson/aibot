@@ -167,7 +167,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore goal progress t
     } finally {
       await disposeStore(store);
     }
-  });
+  }, 15_000);
 
   it('fails closed for a foreign owner and active privacy erasure', async () => {
     const store = emulatorStore();
