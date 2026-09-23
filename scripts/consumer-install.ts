@@ -17,12 +17,13 @@ import {
   planConsumerRuntimeSeed,
 } from './consumer-runtime-seed.js';
 
-const usage = `Usage: pnpm consumer:install --manifest PATH --archive PATH --state PATH --state-bucket NAME --terraform-dir PATH [--seed-plan PATH] [--images PATH --runtime-config PATH] [--apply]
+const usage = `Usage: pnpm consumer:install --manifest PATH --archive PATH --state PATH --state-bucket NAME --terraform-dir PATH [--seed-plan PATH] [--images PATH --runtime-config PATH] [--owner-access-callback HTTPS_URL] [--apply]
 
 Without --apply this verifies the release archive, customer project, and selected Firestore database absence.
 With --apply it bootstraps customer-owned state, runs Terraform, and records resumable foundation stages.
 Supply both --images and --runtime-config to opt in to digest-pinned Cloud Run deployment after the foundation.
 Supply --seed-plan with an explicit customer runtime seed plan to create required data before Cloud Run.
+On an initialized private runtime, pass --owner-access-callback with the exact Google OAuth Web client redirect URI. Preview is read-only; --apply grants public invocation to web only after the customer has configured the OAuth client and HTTPS routing.
 `;
 
 type SeedSummary = {
@@ -130,6 +131,7 @@ async function main(): Promise<void> {
       images: { type: 'string' },
       'runtime-config': { type: 'string' },
       'seed-plan': { type: 'string' },
+      'owner-access-callback': { type: 'string' },
       state: { type: 'string' },
       'state-bucket': { type: 'string' },
       'terraform-dir': { type: 'string' },
@@ -162,6 +164,7 @@ async function main(): Promise<void> {
       values.images && values['runtime-config']
         ? { images: await json(values.images), config: await json(values['runtime-config']) }
         : undefined,
+    ownerAccessCallback: values['owner-access-callback'],
   };
   const result = await provisionConsumerInstallationWithSeed(
     { runner: systemRunner },

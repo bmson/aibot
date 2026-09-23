@@ -244,17 +244,45 @@ describe('consumer installation', () => {
     const source = manifest(await sha256File(archive));
     const logs: string[] = [];
     const runner = fakeRunner(logs);
+    let agentPublic = false;
+    let agentIamDisabled = false;
+    let broadPlan = false;
+    let secretEnabled = true;
     const baseRun = runner.run.bind(runner);
     runner.run = async (command, args) => {
       if (command === 'gcloud' && args[0] === 'secrets')
-        return { ok: true, stdout: JSON.stringify({ state: 'ENABLED' }), stderr: '' };
+        return {
+          ok: true,
+          stdout: JSON.stringify({ state: secretEnabled ? 'ENABLED' : 'DISABLED' }),
+          stderr: '',
+        };
+      if (command === 'gcloud' && args[0] === 'run' && args[2] === 'get-iam-policy') {
+        const publicWeb =
+          args[3]?.endsWith('-web') &&
+          logs.some((entry) => entry.includes('apply') && entry.includes('owner-access.tfplan'));
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            bindings:
+              publicWeb || (agentPublic && args[3]?.endsWith('-agent'))
+                ? [{ role: 'roles/run.invoker', members: ['allUsers'] }]
+                : [],
+          }),
+          stderr: '',
+        };
+      }
       if (command === 'gcloud' && args[0] === 'run') {
         const name = args[3]?.endsWith('-web') ? 'web' : 'agent';
         if (name === 'agent')
           return {
             ok: true,
             stdout: JSON.stringify({
-              metadata: { name: 'consumer-install-agent' },
+              metadata: {
+                name: 'consumer-install-agent',
+                annotations: {
+                  'run.googleapis.com/invoker-iam-disabled': agentIamDisabled ? 'true' : 'false',
+                },
+              },
               spec: {
                 template: {
                   spec: { containers: [{ image: runtimeImages.images.agent.reference }] },
@@ -272,7 +300,21 @@ describe('consumer installation', () => {
           ok: true,
           stdout: JSON.stringify({
             name: `consumer-install-${name}`,
-            template: { containers: [{ image: runtimeImages.images[name].reference }] },
+            uri: 'https://consumer-install-web-abc.a.run.app',
+            invokerIamDisabled: false,
+            template: {
+              containers: [
+                {
+                  image: runtimeImages.images[name].reference,
+                  env: [
+                    { name: 'OWNER_EMAIL', value: runtimeConfig.ownerEmail },
+                    { name: 'AUTH_URL', value: runtimeConfig.webAuthUrl },
+                    { name: 'AUTH_DEV_BYPASS', value: 'false' },
+                    { name: 'AUTH_LOCALHOST_BYPASS', value: 'false' },
+                  ],
+                },
+              ],
+            },
             conditions: [{ type: 'Ready', state: 'CONDITION_SUCCEEDED' }],
             latestCreatedRevision: 'rev-1',
             latestReadyRevision: 'rev-1',
@@ -289,6 +331,35 @@ describe('consumer installation', () => {
             cloud_run_web_service_name: { value: 'consumer-install-web' },
             cloud_run_agent_service_name: { value: 'consumer-install-agent' },
           }),
+        };
+      }
+      if (command === 'terraform' && args.includes('show')) {
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            resource_changes: [
+              {
+                address: 'google_cloud_run_v2_service_iam_member.web_public["current"]',
+                change: {
+                  actions: ['create'],
+                  after: {
+                    member: 'allUsers',
+                    role: 'roles/run.invoker',
+                    name: 'consumer-install-web',
+                  },
+                },
+              },
+              ...(broadPlan
+                ? [
+                    {
+                      address: 'google_cloud_run_v2_service.agent["current"]',
+                      change: { actions: ['update'] },
+                    },
+                  ]
+                : []),
+            ],
+          }),
+          stderr: '',
         };
       }
       return baseRun(command, args);
@@ -312,13 +383,110 @@ describe('consumer installation', () => {
     expect(
       logs.filter((entry) => entry.includes('terraform') && entry.includes('apply')).length,
     ).toBe(2);
+    const callback = 'https://assistant.example.com/api/auth/callback/google';
+    secretEnabled = false;
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          ...options,
+          runtime,
+          ownerAccessCallback: callback,
+          apply: false,
+        },
+      ),
+    ).rejects.toThrow('secret version must be enabled');
+    secretEnabled = true;
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          ...options,
+          runtime,
+          ownerAccessCallback: 'https://wrong.example.com/api/auth/callback/google',
+        },
+      ),
+    ).rejects.toThrow('Confirmed OAuth callback must exactly match');
+    const preview = await provisionConsumerInstallation(
+      { runner },
+      {
+        ...options,
+        runtime,
+        ownerAccessCallback: callback,
+        apply: false,
+      },
+    );
+    expect(preview.ownerAccess?.publicInvoker).toBe(false);
+    expect(preview.ownerAccess?.webUrl).toBe('https://consumer-install-web-abc.a.run.app');
+    expect(logs.filter((entry) => entry.includes('allow_public_web_invoker=true'))).toHaveLength(0);
+    agentPublic = true;
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          ...options,
+          runtime,
+          ownerAccessCallback: callback,
+        },
+      ),
+    ).rejects.toThrow('Agent service has a public invoker binding');
+    agentPublic = false;
+    agentIamDisabled = true;
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          ...options,
+          runtime,
+          ownerAccessCallback: callback,
+        },
+      ),
+    ).rejects.toThrow('Cloud Run IAM configuration differs');
+    agentIamDisabled = false;
+    expect(logs.filter((entry) => entry.includes('allow_public_web_invoker=true'))).toHaveLength(0);
+    broadPlan = true;
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          ...options,
+          runtime,
+          ownerAccessCallback: callback,
+        },
+      ),
+    ).rejects.toThrow('Owner-access Terraform plan includes unexpected changes');
+    broadPlan = false;
+    expect(
+      logs.filter((entry) => entry.includes('apply') && entry.includes('owner-access.tfplan')),
+    ).toHaveLength(0);
+    const exposed = await provisionConsumerInstallation(
+      { runner },
+      {
+        ...options,
+        runtime,
+        ownerAccessCallback: callback,
+      },
+    );
+    expect(exposed.ownerAccess?.publicInvoker).toBe(true);
+    expect(exposed.runtimeReady).toBe(false);
+    expect(exposed.manifest.stage.current).toBe('initialized');
+    expect(logs.filter((entry) => entry.includes('allow_public_web_invoker=true'))).toHaveLength(2);
+    const retried = await provisionConsumerInstallation(
+      { runner },
+      {
+        ...options,
+        runtime,
+        ownerAccessCallback: callback,
+      },
+    );
+    expect(retried.ownerAccess?.publicInvoker).toBe(true);
     expect(logs.some((entry) => entry.includes('web_image_digest=sha256:'))).toBe(true);
     expect(JSON.parse(await readFile(state, 'utf8')).stage.current).toBe('initialized');
     const resumed = await provisionConsumerInstallation({ runner }, { ...options, runtime });
     expect(resumed.manifest.stage.current).toBe('initialized');
     expect(
       logs.filter((entry) => entry.includes('terraform') && entry.includes('apply')).length,
-    ).toBe(2);
+    ).toBe(3);
     await expect(
       provisionConsumerInstallation(
         { runner },
