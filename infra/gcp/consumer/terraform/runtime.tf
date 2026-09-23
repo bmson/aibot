@@ -160,11 +160,13 @@ resource "google_secret_manager_secret_iam_member" "web_auth" {
 resource "google_cloud_run_v2_service" "agent" {
   for_each = local.runtime_instances
 
-  project              = var.project_id
-  location             = var.region
-  name                 = "${var.installation_id}-agent"
-  description          = "Customer-owned minimal Firestore agent and local task poller."
-  ingress              = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  project     = var.project_id
+  location    = var.region
+  name        = "${var.installation_id}-agent"
+  description = "Customer-owned minimal Firestore agent and local task poller."
+  # Cloud Run web traffic is not recognized as internal without VPC routing.
+  # Keep IAM invocation mandatory; only the dedicated web identity is granted it.
+  ingress              = "INGRESS_TRAFFIC_ALL"
   invoker_iam_disabled = false
   deletion_protection  = true
   labels               = local.runtime_labels
@@ -253,6 +255,11 @@ resource "google_cloud_run_v2_service" "web" {
         }
       }
 
+      env {
+        name  = "AGENT_URL"
+        value = google_cloud_run_v2_service.agent[each.key].uri
+      }
+
       dynamic "env" {
         for_each = local.web_auth_secrets
         content {
@@ -278,6 +285,18 @@ resource "google_cloud_run_v2_service" "web" {
     google_project_iam_member.web_vertex,
     google_secret_manager_secret_iam_member.web_auth,
   ]
+}
+
+# The agent has no anonymous invoker binding. Web's own Cloud Run identity can
+# present an audience-bound ID token to read its secret-safe /ready response.
+resource "google_cloud_run_v2_service_iam_member" "agent_web_invoker" {
+  for_each = local.runtime_instances
+
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.agent[each.key].name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.web[each.key].email}"
 }
 
 # Cloud Run IAM stays private by default. This is an explicit second gate:
