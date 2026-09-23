@@ -1,12 +1,12 @@
+import {
+  isSupportedFirestoreTextDocument,
+  uploadFirestoreTextDocument,
+} from '@assistant/application/documents';
 import { isModuleEnabled, loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import {
   FirestoreDocumentCatalogRepository,
   FirestoreDocumentReadRepository,
 } from '@assistant/firestore';
-import {
-  isSupportedFirestoreTextDocument,
-  uploadFirestoreTextDocument,
-} from '@/lib/firestore-document-upload';
 import { getApplication, getFirestoreInstallationStore, getWorkspace } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
