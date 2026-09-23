@@ -57,6 +57,7 @@ export { FirestoreShellStatusRepository } from './shell-status.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { createInstallationStore, InstallationStore } from './store.js';
 export { FirestoreTaskActivityRepository } from './task-activity.js';
+export { FirestoreTaskActivityCommandRepository } from './task-activity-commands.js';
 export { FirestoreTaskRepository } from './task-lifecycle.js';
 export { FirestoreTaskLeaseRepository } from './tasks.js';
 export { FirestoreToolExecutionRepository } from './tool-execution.js';

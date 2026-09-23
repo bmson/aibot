@@ -1,11 +1,18 @@
 import {
   archiveActivity,
+  archiveActivityWithRepository,
   cancelActivity,
   raiseTaskBudget,
   restoreActivity,
+  restoreActivityWithRepository,
   retryActivity,
   revokeTaskAutonomy,
 } from '@assistant/application/tasks';
+import { loadConfig } from '@assistant/config';
+import {
+  createInstallationStore,
+  FirestoreTaskActivityCommandRepository,
+} from '@assistant/firestore';
 import { getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -26,6 +33,27 @@ export async function POST(
     budgetUsdLimit?: unknown;
   } | null;
   try {
+    const config = loadConfig();
+    if (config.PERSISTENCE_DRIVER === 'firestore') {
+      if (body?.action !== 'archive' && body?.action !== 'restore')
+        return mobileJson(
+          { error: 'This Activity action is unavailable in Firestore mode.' },
+          { status: 503 },
+        );
+      const store = createInstallationStore({
+        projectId: config.GCP_PROJECT,
+        installationId: config.ASSISTANT_WORKSPACE_ID,
+      });
+      try {
+        const repository = new FirestoreTaskActivityCommandRepository(store);
+        if (body.action === 'archive')
+          await archiveActivityWithRepository(repository, config.FIRESTORE_AGENT_ID, id);
+        else await restoreActivityWithRepository(repository, config.FIRESTORE_AGENT_ID, id);
+        return mobileJson({ ok: true });
+      } finally {
+        await store.db.terminate();
+      }
+    }
     if (body?.action === 'archive') await archiveActivity(getDb(), id);
     else if (body?.action === 'restore') await restoreActivity(getDb(), id);
     else if (body?.action === 'retry') await retryActivity(getDb(), id);
