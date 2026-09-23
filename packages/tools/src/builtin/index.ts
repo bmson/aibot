@@ -69,9 +69,11 @@ export interface BuiltinDeps {
   memory?: MemoryToolRepository;
 }
 
-export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps): ToolRegistry {
-  registerSituationTools(registry);
-  registerSportsTools(registry, deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {});
+/** Memory tools use persistence ports and can be installed without the SQL-only built-ins. */
+export function registerPortableMemoryTools(
+  registry: ToolRegistry,
+  deps: Pick<BuiltinDeps, 'embed' | 'memory' | 'supersede'>,
+): ToolRegistry {
   // ── memory ─────────────────────────────────────────────────────────────────
   register(
     registry,
@@ -205,6 +207,14 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     // the owner card from every later step.
     { confidentialRead: true },
   );
+
+  return registry;
+}
+
+export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps): ToolRegistry {
+  registerSituationTools(registry);
+  registerSportsTools(registry, deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {});
+  registerPortableMemoryTools(registry, deps);
 
   register(
     registry,

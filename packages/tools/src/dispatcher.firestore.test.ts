@@ -2,11 +2,13 @@ import {
   FirestoreApprovalPolicyRepository,
   FirestoreApprovalRepository,
   FirestoreCostRepository,
+  FirestoreMemoryToolRepository,
   FirestoreToolExecutionRepository,
 } from '@assistant/firestore';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { disposeStore, emulatorStore, seedBudget } from '../../firestore/src/test-store.js';
+import { registerPortableMemoryTools } from './builtin/index.js';
 import { ToolDispatcher } from './dispatcher.js';
 import { ToolRegistry } from './registry.js';
 import type { ToolContext } from './types.js';
@@ -14,6 +16,90 @@ import type { ToolContext } from './types.js';
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
   'ToolDispatcher Firestore composition',
   () => {
+    it('saves and recalls memory through the portable registry with PostgreSQL unavailable', async () => {
+      const store = emulatorStore();
+      try {
+        const agentId = 'agent';
+        const taskId = 'memory-task';
+        await store.doc('tasks', taskId).set({
+          id: taskId,
+          agentId,
+          type: 'adhoc',
+          status: 'running',
+        });
+        const registry = registerPortableMemoryTools(new ToolRegistry(), {
+          memory: new FirestoreMemoryToolRepository(store, {
+            provider: 'test',
+            model: 'unit',
+            dimensions: 3,
+            revision: '1',
+          }),
+          embed: async () => [[1, 0, 0]],
+        });
+        const db = new Proxy({} as ToolContext['db'], {
+          get() {
+            throw new Error('PostgreSQL access is unavailable');
+          },
+        });
+        const dispatcher = new ToolDispatcher(
+          db,
+          registry,
+          new FirestoreToolExecutionRepository(store),
+          new FirestoreCostRepository(store),
+          new FirestoreApprovalRepository(store),
+          new FirestoreApprovalPolicyRepository(store),
+        );
+        const task = {
+          id: taskId,
+          agentId,
+          type: 'adhoc',
+          trust: 'owner',
+          status: 'running',
+          createdAt: new Date(),
+          trigger: null,
+          conversationId: null,
+          goalId: null,
+        } as never;
+        const ctx = {
+          taskId,
+          agentId,
+          trust: 'owner',
+          tainted: false,
+          db,
+          now: () => new Date(),
+          signal: new AbortController().signal,
+          log: async () => {},
+        } as ToolContext;
+        const dispatch = (step: number, toolName: string, args: Record<string, unknown>) =>
+          dispatcher.dispatch({
+            task,
+            step,
+            toolName,
+            args,
+            ctx,
+            provenance: { plannerVersion: 1, promptVersion: 1, model: 'test' },
+          });
+        expect(
+          await dispatch(1, 'memory.save', {
+            content: 'The owner prefers coffee in the morning.',
+            category: 'knowledge',
+            kind: 'preference',
+            subject: '',
+            importance: 3,
+            confidence: 0.9,
+          }),
+        ).toMatchObject({ kind: 'executed', result: { saved: true } });
+        expect(await dispatch(2, 'memory.recall', { query: 'coffee', limit: 5 })).toMatchObject({
+          kind: 'executed',
+          result: {
+            memories: [expect.objectContaining({ content: expect.stringContaining('coffee') })],
+          },
+        });
+      } finally {
+        await disposeStore(store);
+      }
+    });
+
     it('executes an idempotent autonomous call once under concurrent retries and reuses cache', async () => {
       const store = emulatorStore();
       try {
