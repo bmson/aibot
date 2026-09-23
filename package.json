@@ -55,7 +55,8 @@
     "firestore:backup-smoke": "tsx scripts/firestore-backup-smoke.ts",
     "workspace:export": "tsx scripts/workspace-migration-export.ts",
     "workspace:import": "tsx scripts/workspace-migration-import.ts",
-    "consumer:install": "tsx scripts/consumer-install.ts"
+    "consumer:install": "tsx scripts/consumer-install.ts",
+    "consumer:publish-images": "tsx scripts/consumer-publish-images.ts"
   },
   "devDependencies": {
     "@assistant/config": "workspace:^",
