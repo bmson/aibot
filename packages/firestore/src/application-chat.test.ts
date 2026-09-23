@@ -61,13 +61,23 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect((await repository.listMessages(agentId, conversation.id))?.messages).toHaveLength(1);
     });
 
-    it('returns the same live primary conversation on repeated bootstrap reads', async () => {
-      const first = await repository.getOrCreatePrimaryConversation(agentId);
-      const second = await repository.getOrCreatePrimaryConversation(agentId);
+    it('returns one primary conversation to concurrent bootstrap callers', async () => {
+      const [first, second] = await Promise.all([
+        repository.getOrCreatePrimaryConversation(agentId),
+        repository.getOrCreatePrimaryConversation(agentId),
+      ]);
+      const third = await repository.getOrCreatePrimaryConversation(agentId);
 
       expect(first.isPrimary).toBe(true);
       expect(first.archivedAt).toBeNull();
       expect(second.id).toBe(first.id);
+      expect(third.id).toBe(first.id);
+      expect(
+        (await store.collection('conversations').where('isPrimary', '==', true).get()).size,
+      ).toBe(1);
+      expect((await store.doc('primaryConversations', agentId).get()).get('conversationId')).toBe(
+        first.id,
+      );
     });
 
     it('uses bounded keyset pages for conversation and message lists', async () => {

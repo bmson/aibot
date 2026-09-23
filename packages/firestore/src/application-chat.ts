@@ -98,6 +98,33 @@ export class FirestoreApplicationChatPersistence implements ApplicationChatPersi
 
   async getOrCreatePrimaryConversation(agentId: string) {
     return this.store.db.runTransaction(async (tx) => {
+      // All bootstrap callers contend on one owner-scoped document. A query for
+      // `isPrimary` alone does not prevent concurrent transactions from each
+      // creating a different conversation when the query is initially empty.
+      const markerRef = this.store.doc('primaryConversations', agentId);
+      const marker = await tx.get(markerRef);
+      if (marker.exists) {
+        const conversationId = marker.get('conversationId');
+        if (
+          marker.get('agentId') !== agentId ||
+          typeof conversationId !== 'string' ||
+          !conversationId
+        )
+          throw new Error('Primary conversation marker is malformed');
+        const current = await tx.get(this.store.doc('conversations', conversationId));
+        if (
+          !current.exists ||
+          !isOwnedChat(current.data(), agentId) ||
+          current.get('isPrimary') !== true
+        )
+          throw new Error('Primary conversation marker does not match an owned chat');
+        const conversation = decodeRecord<ApplicationChatConversation>(current.data());
+        if (!conversation.archivedAt) return conversation;
+        const now = this.store.now();
+        tx.update(current.ref, { archivedAt: null, archived: false, updatedAt: now });
+        return { ...conversation, archivedAt: null, updatedAt: now };
+      }
+
       const primarySnapshot = await tx.get(
         this.store
           .collection('conversations')
@@ -106,8 +133,15 @@ export class FirestoreApplicationChatPersistence implements ApplicationChatPersi
           .limit(1),
       );
       const primary = primarySnapshot.docs[0];
-      if (primary && isOwnedChat(primary.data(), agentId)) {
+      if (primary) {
+        if (!isOwnedChat(primary.data(), agentId))
+          throw new Error('Primary conversation belongs to another agent');
         const conversation = decodeConversation(primary);
+        tx.create(markerRef, {
+          agentId,
+          conversationId: conversation.id,
+          createdAt: this.store.now(),
+        });
         if (conversation.archivedAt) {
           const now = this.store.now();
           tx.update(primary.ref, { archivedAt: null, archived: false, updatedAt: now });
@@ -134,6 +168,7 @@ export class FirestoreApplicationChatPersistence implements ApplicationChatPersi
         const conversation = decodeConversation(recent);
         const now = this.store.now();
         tx.update(recent.ref, { isPrimary: true, updatedAt: now });
+        tx.create(markerRef, { agentId, conversationId: conversation.id, createdAt: now });
         return { ...conversation, isPrimary: true, updatedAt: now };
       }
 
@@ -154,6 +189,7 @@ export class FirestoreApplicationChatPersistence implements ApplicationChatPersi
         updatedAt: now,
       };
       tx.create(this.store.doc('conversations', id), encodeRecord({ ...created, archived: false }));
+      tx.create(markerRef, { agentId, conversationId: id, createdAt: now });
       return created;
     });
   }
