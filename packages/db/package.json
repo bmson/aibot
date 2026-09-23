@@ -14,6 +14,7 @@
     "repair-agent-identity": "tsx src/repair-agent-identity.ts",
     "diagnose-schema": "tsx src/diagnose-schema.ts",
     "reconcile": "tsx src/reconcile.ts",
+    "workspace-export-job": "tsx src/workspace-export-job-cli.ts",
     "reconcile:direct": "pnpm migrate && pnpm repair-agent-identity && pnpm seed",
     "seed": "tsx src/seed.ts",
     "test:prepare": "tsx src/test-db.ts && pnpm migrate && pnpm seed",
