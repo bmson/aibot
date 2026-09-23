@@ -74,6 +74,23 @@ export function restoreActivityWithRepository(
   return repository.restore(agentId, taskId);
 }
 
+export function revokeTaskAutonomyWithRepository(
+  repository: TaskActivityCommandRepository,
+  agentId: string,
+  taskId: string,
+): Promise<void> {
+  return repository.revokeAutonomy(agentId, taskId);
+}
+
+export function raiseTaskBudgetWithRepository(
+  repository: TaskActivityCommandRepository,
+  agentId: string,
+  taskId: string,
+  limit: number,
+): Promise<void> {
+  return repository.raiseBudget(agentId, taskId, limit);
+}
+
 /** Archives old terminal activity through the configured persistence adapter. */
 export function archiveOldActivityWithRepository(
   repository: TaskActivityCommandRepository,

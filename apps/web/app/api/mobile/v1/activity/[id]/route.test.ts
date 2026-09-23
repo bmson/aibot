@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resetConfigForTest } from '@assistant/config';
 import { createInstallationStore } from '@assistant/firestore';
+import { taskFixture } from '@assistant/persistence/testing';
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,6 +23,8 @@ describe.skipIf(!localEmulator)(
     const foreignAgentId = randomUUID();
     const doneId = randomUUID();
     const runningId = randomUUID();
+    const attentionId = randomUUID();
+    const autonomyId = randomUUID();
     const foreignId = randomUUID();
     const initial = new Date('2026-09-20T12:00:00Z');
     const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
@@ -48,6 +51,7 @@ describe.skipIf(!localEmulator)(
 
     beforeEach(async () => {
       auth.allowed.mockResolvedValue(true);
+      await store.db.recursiveDelete(store.root);
       await Promise.all([
         store.doc('agents', agentId).set({ id: agentId }),
         store
@@ -63,6 +67,23 @@ describe.skipIf(!localEmulator)(
           archivedAt: null,
           updatedAt: initial,
         }),
+        store.doc('tasks', attentionId).set({
+          ...taskFixture({
+            id: attentionId,
+            agentId,
+            conversationId: randomUUID(),
+            reminderId: '',
+          }),
+          status: 'needs_attention',
+          budgetUsdLimit: '0.5000',
+          spentUsd: '0.2500',
+          queueGeneration: 4,
+          state: { pendingFinal: { text: 'already delivered' }, checkpoint: 'continue here' },
+        }),
+        store.doc('tasks', autonomyId).set({
+          ...taskFixture({ id: autonomyId, agentId, conversationId: randomUUID(), reminderId: '' }),
+          autonomyGrant: { scope: 'task', grantedAt: initial.toISOString() },
+        }),
       ]);
     });
 
@@ -73,12 +94,12 @@ describe.skipIf(!localEmulator)(
       resetConfigForTest();
     });
 
-    const post = (id: string, action: string) =>
+    const post = (id: string, action: string, extra: Record<string, unknown> = {}) =>
       route.POST(
         new Request(`http://localhost/api/mobile/v1/activity/${id}`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ action }),
+          body: JSON.stringify({ action, ...extra }),
         }),
         { params: Promise.resolve({ id }) },
       );
@@ -138,9 +159,75 @@ describe.skipIf(!localEmulator)(
     it('requires auth and denies every other Firestore Activity mutation', async () => {
       auth.allowed.mockResolvedValueOnce(false);
       expect((await post(doneId, 'archive')).status).toBe(401);
-      for (const action of ['retry', 'cancel', 'revoke-autonomy', 'raise-budget', 'archive-old'])
+      for (const action of ['retry', 'cancel', 'archive-old'])
         expect((await post(doneId, action)).status).toBe(503);
       expect((await store.doc('tasks', doneId).get()).get('archivedAt')).toBeNull();
+    });
+
+    it('revokes only owner autonomy grants and preserves an existing revocation', async () => {
+      expect((await post(autonomyId, 'revoke-autonomy')).status).toBe(200);
+      const revoked = await store.doc('tasks', autonomyId).get();
+      const revokedAt = revoked.get('autonomyGrant').revokedAt;
+      expect(typeof revokedAt).toBe('string');
+      expect(revoked.get('updatedAt').toDate()).toBeInstanceOf(Date);
+      expect((await post(autonomyId, 'revoke-autonomy')).status).toBe(200);
+      expect((await store.doc('tasks', autonomyId).get()).get('autonomyGrant').revokedAt).toBe(
+        revokedAt,
+      );
+      expect((await post(foreignId, 'revoke-autonomy')).status).toBe(200);
+      expect((await store.doc('tasks', foreignId).get()).get('autonomyGrant')).toBeUndefined();
+    });
+
+    it('raises a stalled task budget with its runnable transition and queue intent atomically', async () => {
+      expect((await post(attentionId, 'raise-budget', { budgetUsdLimit: 1 })).status).toBe(200);
+      const task = await store.doc('tasks', attentionId).get();
+      expect(task.get('status')).toBe('pending');
+      expect(task.get('budgetUsdLimit')).toBe('1.0000');
+      expect(task.get('queueGeneration')).toBe(5);
+      expect(task.get('attempt')).toBe(0);
+      expect(task.get('state')).toEqual({ checkpoint: 'continue here' });
+      expect(task.get('runAfter')).toBeNull();
+      expect(task.get('lockedUntil')).toBeNull();
+      const intents = await store.collection('outbox').get();
+      expect(intents.size).toBe(1);
+      expect(intents.docs[0]?.get('taskId')).toBe(attentionId);
+      expect(intents.docs[0]?.get('generation')).toBe(5);
+    });
+
+    it('validates budget input and fences both owner controls during privacy erasure', async () => {
+      expect((await post(attentionId, 'raise-budget', { budgetUsdLimit: '1' })).status).toBe(400);
+      for (const budgetUsdLimit of [0, 0.25, 10_001])
+        expect((await post(attentionId, 'raise-budget', { budgetUsdLimit })).status).toBe(409);
+      expect((await post(attentionId, 'raise-budget', { budgetUsdLimit: Number.NaN })).status).toBe(
+        400,
+      );
+      expect((await post(attentionId, 'raise-budget', { budgetUsdLimit: 1 })).status).toBe(200);
+
+      const secondAttentionId = randomUUID();
+      await store.doc('tasks', secondAttentionId).set({
+        ...taskFixture({
+          id: secondAttentionId,
+          agentId,
+          conversationId: randomUUID(),
+          reminderId: '',
+        }),
+        status: 'needs_attention',
+      });
+      await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+      try {
+        expect((await post(autonomyId, 'revoke-autonomy')).status).toBe(409);
+        expect((await post(secondAttentionId, 'raise-budget', { budgetUsdLimit: 1 })).status).toBe(
+          409,
+        );
+      } finally {
+        await store.doc('privacyErasureJobs', agentId).delete();
+      }
+      expect((await store.doc('tasks', autonomyId).get()).get('autonomyGrant').revokedAt).toBe(
+        undefined,
+      );
+      expect((await store.doc('tasks', secondAttentionId).get()).get('status')).toBe(
+        'needs_attention',
+      );
     });
 
     it('fails closed for active erasure or ambiguous configured ownership', async () => {
