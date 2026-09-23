@@ -9,6 +9,7 @@ import type { ExecutionJobRepository } from './execution-jobs.js';
 import type { GeneratedCardRepository } from './generated-cards.js';
 import type { GraphRecallRepository } from './graph-recall.js';
 import type { HistoryRecallRepository } from './history-recall.js';
+import type { KnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 import type { MemorySupersedeRepository } from './memory-supersede.js';
 import type { MemoryToolRepository } from './memory-tools.js';
 import type { ModelRoutingRepository } from './model-routing.js';
@@ -39,6 +40,7 @@ export interface ExecutionPersistence {
   readonly memory: MemoryToolRepository;
   readonly memorySupersede: MemorySupersedeRepository;
   readonly graph: GraphRecallRepository;
+  readonly graphSync: KnowledgeGraphSyncRepository;
   readonly generatedCards: GeneratedCardRepository;
   readonly cardRefresh: CardRefreshRepository;
   readonly recallMetrics: RecallMetricsRepository;

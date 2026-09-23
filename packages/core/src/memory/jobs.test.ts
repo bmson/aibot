@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createDb, type Db, messages, schedules, type TaskRow, tasks } from '@assistant/db';
+import type { ExecutionPersistence, KnowledgeGraphSyncRepository } from '@assistant/persistence';
 import { eq, inArray } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { getAgent } from '../chat.js';
@@ -121,6 +122,46 @@ describe('feature-gated code jobs', () => {
       { id: 'unused', agentId: 'unused' } as TaskRow,
     );
     expect(result).toEqual({ done: true, summary: 'knowledge graph dates: disabled' });
+  });
+
+  it('routes a scheduled graph sync through the selected persistence repository', async () => {
+    loadConfig({ GRAPH_RAG_ENABLED: 'true' });
+    const calls: string[] = [];
+    const graphSync = {
+      kind: 'knowledge-graph-sync-repository',
+      now: () => new Date(),
+      async hydrateContactLabels() {
+        calls.push('hydrate');
+      },
+      async candidates() {
+        calls.push('candidates');
+        return [];
+      },
+      async removeOrphanedEntities() {
+        calls.push('orphans');
+        return 0;
+      },
+      async pendingCount() {
+        calls.push('pending');
+        return 0;
+      },
+      async taskSpendUsd() {
+        calls.push('spend');
+        return 0;
+      },
+    } as unknown as KnowledgeGraphSyncRepository;
+    const result = await runCodeJob(
+      {
+        db: {} as Db,
+        persistence: { graphSync } as ExecutionPersistence,
+        router: fakeRouter,
+      },
+      'memory.graph_sync',
+      { id: 'graph-task', agentId: 'graph-owner' } as TaskRow,
+    );
+    expect(result).toMatchObject({ done: true });
+    expect(result.summary).toContain('0 pending');
+    expect(calls).toEqual(['hydrate', 'candidates', 'orphans', 'pending', 'spend']);
   });
 });
 

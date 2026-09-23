@@ -120,6 +120,7 @@ export function codeJobName(task: TaskRow): CodeJobName | null {
 export async function runCodeJob(
   deps: {
     db: Db;
+    persistence?: ExecutionPersistence;
     router: ModelRouter;
     workspace?: WorkspaceReader;
     documentProcessor?: DocumentProcessorConfig;
@@ -333,14 +334,18 @@ export async function runCodeJob(
         return { done: true, summary: 'knowledge graph: disabled' };
       }
       await deps.heartbeat?.();
-      const r = await syncKnowledgeGraph(deps, {
-        taskId: task.id,
-        agentId: task.agentId,
-        heartbeat: deps.heartbeat,
-      });
+      const graphSync = deps.persistence?.graphSync;
+      const r = await syncKnowledgeGraph(
+        { db: deps.db, router: deps.router, graphSync },
+        {
+          taskId: task.id,
+          agentId: task.agentId,
+          heartbeat: deps.heartbeat,
+        },
+      );
       const [pending, spentUsd] = await Promise.all([
-        pendingKnowledgeGraphSourceCount(deps.db, task.agentId),
-        graphSyncSpendUsd(deps.db, task.id),
+        pendingKnowledgeGraphSourceCount(graphSync ?? deps.db, task.agentId),
+        graphSyncSpendUsd(graphSync ?? deps.db, task.id),
       ]);
       return {
         done: true,

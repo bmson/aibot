@@ -10,6 +10,7 @@ import { createPostgresExecutionJobRepository } from './execution-jobs-repositor
 import { createPostgresGeneratedCardRepository } from './generated-card-repository.js';
 import { createPostgresGraphRecallRepository } from './graph-recall-repository.js';
 import { createPostgresHistoryRecallRepository } from './history-recall-repository.js';
+import { createPostgresKnowledgeGraphSyncRepository } from './knowledge-graph-sync-repository.js';
 import { createPostgresMemorySupersedeRepository } from './memory-supersede-repository.js';
 import { createPostgresMemoryToolRepository } from './memory-tool-repository.js';
 import { createPostgresMessageRepository } from './message-repository.js';
@@ -42,6 +43,7 @@ export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence
     skills: createPostgresSkillContextRepository(db),
     history: createPostgresHistoryRecallRepository(db),
     graph: createPostgresGraphRecallRepository(db),
+    graphSync: createPostgresKnowledgeGraphSyncRepository(db),
     generatedCards: createPostgresGeneratedCardRepository(db),
     cardRefresh: createPostgresCardRefreshRepository(db),
     recallMetrics: createPostgresRecallMetricsRepository(db),

@@ -9,6 +9,7 @@ import { FirestoreExecutionJobRepository } from './execution-jobs.js';
 import { FirestoreGeneratedCardRepository } from './generated-cards.js';
 import { FirestoreGraphRecallRepository } from './graph-recall.js';
 import { FirestoreHistoryRecallRepository } from './history-recall.js';
+import { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 import { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 import { FirestoreMemoryToolRepository } from './memory-tools.js';
 import { FirestoreMessageRepository } from './messages.js';
@@ -47,6 +48,7 @@ export function createFirestoreExecutionPersistence(
     skills: new FirestoreSkillContextRepository(store, skillEmbeddingSpace),
     history: new FirestoreHistoryRecallRepository(store, skillEmbeddingSpace),
     graph: new FirestoreGraphRecallRepository(store, skillEmbeddingSpace),
+    graphSync: new FirestoreKnowledgeGraphSyncRepository(store),
     generatedCards: new FirestoreGeneratedCardRepository(store),
     cardRefresh: createFirestoreCardRefreshRepository(store),
     recallMetrics: new FirestoreRecallMetricsRepository(store),

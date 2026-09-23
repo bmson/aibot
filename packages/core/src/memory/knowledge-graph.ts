@@ -3,6 +3,7 @@ import { loadConfig } from '@assistant/config';
 import {
   agents,
   contacts,
+  createPostgresKnowledgeGraphSyncRepository,
   type Db,
   isTombstoned,
   knowledgeGraphEntities,
@@ -13,7 +14,14 @@ import {
   modelCalls,
   namePrefixMatch,
 } from '@assistant/db';
-import { and, desc, eq, gt, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm';
+import {
+  isKnowledgeGraphSyncRepository,
+  type KnowledgeGraphProjectionEntity,
+  type KnowledgeGraphProjectionRelation,
+  type KnowledgeGraphSyncRepository,
+  type KnowledgeGraphSyncSource,
+} from '@assistant/persistence';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getAgent } from '../chat.js';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
@@ -141,13 +149,6 @@ async function agentDateSettings(
     : [];
   const agent = named ?? (await getAgent(db));
   return { id: agent.id, timeZone: agent.timezone || 'UTC', locale: agent.locale || 'en' };
-}
-
-interface GraphSourceClaim {
-  /** Explicit timestamp fencing token; stale workers cannot publish after a reclaim. */
-  claimedAt: Date;
-  /** Attempt number after acquiring this claim; governs the next backoff decision. */
-  attempts: number;
 }
 
 interface ContactLite {
@@ -303,46 +304,6 @@ function relationshipFingerprint(subjectKey: string, predicate: string, objectKe
   return `${subjectKey}|${predicate}|${objectKey}`;
 }
 
-function sourceChanged(source: Pick<MemorySource, 'contentHash' | 'subjectContactId'>) {
-  return or(
-    ne(knowledgeGraphSources.contentHash, source.contentHash),
-    sql`${knowledgeGraphSources.subjectContactId} IS DISTINCT FROM ${source.subjectContactId}`,
-    lt(knowledgeGraphSources.extractionVersion, GRAPH_EXTRACTION_VERSION),
-  );
-}
-
-function failedSourceIsRetryable(now: Date) {
-  return and(
-    eq(knowledgeGraphSources.status, 'failed'),
-    or(isNull(knowledgeGraphSources.nextRetryAt), lte(knowledgeGraphSources.nextRetryAt, now)),
-  );
-}
-
-function sourceNeedsSync(now: Date = new Date()) {
-  const staleBefore = new Date(now.getTime() - SOURCE_LEASE_MS);
-  return or(
-    isNull(knowledgeGraphSources.memoryId),
-    ne(knowledgeGraphSources.contentHash, memories.contentHash),
-    sql`${knowledgeGraphSources.subjectContactId} IS DISTINCT FROM ${memories.subjectContactId}`,
-    lt(knowledgeGraphSources.extractionVersion, GRAPH_EXTRACTION_VERSION),
-    failedSourceIsRetryable(now),
-    and(
-      eq(knowledgeGraphSources.status, 'pending'),
-      lt(knowledgeGraphSources.updatedAt, staleBefore),
-    ),
-  );
-}
-
-function activeClaim(source: MemorySource, claim: GraphSourceClaim) {
-  return and(
-    eq(knowledgeGraphSources.memoryId, source.id),
-    eq(knowledgeGraphSources.contentHash, source.contentHash),
-    eq(knowledgeGraphSources.extractionVersion, GRAPH_EXTRACTION_VERSION),
-    eq(knowledgeGraphSources.status, 'pending'),
-    eq(knowledgeGraphSources.updatedAt, claim.claimedAt),
-  );
-}
-
 async function aliasedEntityId(
   db: Db,
   agentId: string,
@@ -482,6 +443,72 @@ async function extractRelationships(
   return result.object;
 }
 
+function projectionEntity(
+  entity: z.infer<typeof GraphEntitySchema>,
+  contactsByName: ContactLite[],
+  context: ResolutionContext,
+): KnowledgeGraphProjectionEntity | null {
+  const raw = cleanLabel(entity.label);
+  if (!raw) return null;
+  let label = raw;
+  let canonicalKey: string;
+  let contact: ContactLite | undefined;
+  if (entity.kind === 'date') {
+    const canonical = canonicalizeDateLabel(raw, context.anchor, context.timeZone, context.locale);
+    if (!canonical) return null;
+    label = canonical.label;
+    canonicalKey = `date:${canonical.key}`;
+  } else {
+    contact = entity.kind === 'person' ? contactForLabel(contactsByName, raw) : undefined;
+    canonicalKey = entityKey(entity.kind, raw, contact);
+    label = contact?.name ?? raw;
+  }
+  return {
+    canonicalKey,
+    label,
+    kind: entity.kind,
+    contactId: contact?.id ?? null,
+    authoritativeLabel: Boolean(contact) || entity.kind === 'date',
+  };
+}
+
+function buildProjection(
+  source: KnowledgeGraphSyncSource,
+  people: ContactLite[],
+  extracted: GraphExtraction,
+  context: ResolutionContext,
+): KnowledgeGraphProjectionRelation[] {
+  const saved = new Set<string>();
+  const relations: KnowledgeGraphProjectionRelation[] = [];
+  for (const relation of extracted.relationships) {
+    if (!graphRelationshipIsGrounded(source.content, relation)) continue;
+    const predicate = canonicalPredicate(cleanPredicate(relation.predicate)).id;
+    if (!predicate) continue;
+    const subject = projectionEntity(relation.subject, people, context);
+    const object = projectionEntity(relation.object, people, context);
+    if (!subject || !object) continue;
+    const sourceFingerprint = relationshipFingerprint(
+      subject.canonicalKey,
+      predicate,
+      object.canonicalKey,
+    );
+    if (saved.has(sourceFingerprint)) continue;
+    saved.add(sourceFingerprint);
+    relations.push({
+      subject,
+      predicate,
+      object,
+      evidenceQuote: relation.evidenceQuote,
+      sourceFingerprint,
+      ordinal: relations.length + 1,
+      confidence: Math.min(Number(source.confidence), relation.confidence).toFixed(2),
+      validFrom: canonicalQualifier(relation.validFrom, relation.evidenceQuote, context),
+      validUntil: canonicalQualifier(relation.validUntil, relation.evidenceQuote, context),
+    });
+  }
+  return relations;
+}
+
 async function markSource(
   db: Db,
   source: MemorySource,
@@ -520,105 +547,9 @@ async function markSource(
     });
 }
 
-/**
- * Acquire a small lease for one source. A scheduler can overlap, and a model
- * call can be interrupted after checkpointing `pending`; the timestamp is a
- * fencing token so only the current owner is allowed to publish graph edges.
- */
-async function claimSource(db: Db, source: MemorySource): Promise<GraphSourceClaim | null> {
-  const claimedAt = new Date();
-  const staleBefore = new Date(claimedAt.getTime() - SOURCE_LEASE_MS);
-  const changed = sourceChanged(source);
-  const canClaimExisting = or(
-    changed,
-    failedSourceIsRetryable(claimedAt),
-    and(
-      eq(knowledgeGraphSources.status, 'pending'),
-      lt(knowledgeGraphSources.updatedAt, staleBefore),
-    ),
-  );
-  const [updated] = await db
-    .update(knowledgeGraphSources)
-    .set({
-      contentHash: source.contentHash,
-      subjectContactId: source.subjectContactId,
-      extractionVersion: GRAPH_EXTRACTION_VERSION,
-      status: 'pending',
-      // A material source change is a new fact, not another failure of the
-      // old source. It safely releases a previously quarantined checkpoint.
-      attempts: sql`CASE WHEN ${changed} THEN 1 ELSE ${knowledgeGraphSources.attempts} + 1 END`,
-      lastError: null,
-      nextRetryAt: null,
-      updatedAt: claimedAt,
-    })
-    .where(and(eq(knowledgeGraphSources.memoryId, source.id), canClaimExisting))
-    .returning({
-      updatedAt: knowledgeGraphSources.updatedAt,
-      attempts: knowledgeGraphSources.attempts,
-    });
-  if (updated?.updatedAt) return { claimedAt: updated.updatedAt, attempts: updated.attempts };
-
-  // No checkpoint yet. The insert is the atomic claim; a concurrent sync that
-  // won this race leaves us with no row and therefore no right to process it.
-  const [inserted] = await db
-    .insert(knowledgeGraphSources)
-    .values({
-      memoryId: source.id,
-      contentHash: source.contentHash,
-      subjectContactId: source.subjectContactId,
-      extractionVersion: GRAPH_EXTRACTION_VERSION,
-      status: 'pending',
-      attempts: 1,
-      lastError: null,
-      nextRetryAt: null,
-      updatedAt: claimedAt,
-    })
-    .onConflictDoNothing({ target: knowledgeGraphSources.memoryId })
-    .returning({
-      updatedAt: knowledgeGraphSources.updatedAt,
-      attempts: knowledgeGraphSources.attempts,
-    });
-  return inserted?.updatedAt
-    ? { claimedAt: inserted.updatedAt, attempts: inserted.attempts }
-    : null;
-}
-
 function nextGraphRetryAt(attempts: number, now: Date): Date | null {
   const delay = GRAPH_RETRY_DELAYS_MS[attempts - 1];
   return delay === undefined ? null : new Date(now.getTime() + delay);
-}
-
-async function finishClaim(
-  db: Db,
-  source: MemorySource,
-  claim: GraphSourceClaim,
-  values: {
-    status: 'ready' | 'failed' | 'quarantined';
-    lastError?: string | null;
-    nextRetryAt?: Date | null;
-  },
-): Promise<boolean> {
-  const [finished] = await db
-    .update(knowledgeGraphSources)
-    .set({
-      status: values.status,
-      lastError: values.lastError ?? null,
-      nextRetryAt: values.status === 'ready' ? null : (values.nextRetryAt ?? null),
-      updatedAt: new Date(),
-    })
-    .where(activeClaim(source, claim))
-    .returning({ memoryId: knowledgeGraphSources.memoryId });
-  return Boolean(finished);
-}
-
-async function hydrateContactLabels(db: Db): Promise<void> {
-  await db.execute(sql`
-    UPDATE knowledge_graph_entities AS entity
-    SET label = contact.name, updated_at = now()
-    FROM contacts AS contact
-    WHERE entity.contact_id = contact.id
-      AND entity.label IS DISTINCT FROM contact.name
-  `);
 }
 
 /**
@@ -629,132 +560,7 @@ export async function removeOrphanedKnowledgeGraphEntities(
   db: Db,
   agentId?: string,
 ): Promise<number> {
-  const removed = asRows<{ id: string }>(
-    await db.execute(sql`
-    DELETE FROM knowledge_graph_entities AS entity
-    WHERE NOT EXISTS (
-      SELECT 1 FROM knowledge_graph_relations AS relation
-      WHERE relation.subject_entity_id = entity.id OR relation.object_entity_id = entity.id
-    )
-    ${agentId ? sql`AND entity.agent_id = ${agentId}` : sql``}
-    RETURNING id
-  `),
-  );
-  return removed.length;
-}
-
-class GraphSourceLeaseLost extends Error {}
-
-/**
- * Apply one extraction as a transaction. The model call happens before this
- * boundary, but every visible graph mutation and its ready checkpoint either
- * commit together or remain hidden behind the pending source state.
- */
-async function persistRelationships(
-  db: Db,
-  source: MemorySource,
-  claim: GraphSourceClaim,
-  people: ContactLite[],
-  extracted: GraphExtraction,
-  context: ResolutionContext,
-): Promise<{ relationships: number; entities: number } | null> {
-  try {
-    return await db.transaction(async (tx) => {
-      const txDb = tx as unknown as Db;
-      const [owned] = await txDb
-        .select({ memoryId: knowledgeGraphSources.memoryId })
-        .from(knowledgeGraphSources)
-        .where(activeClaim(source, claim))
-        .limit(1);
-      if (!owned) return null;
-
-      const saved = new Set<string>();
-      const touched = new Set<string>();
-      let ordinal = 0;
-      let relationships = 0;
-      for (const relation of extracted.relationships) {
-        // Grounding runs first, and on the wording the model actually produced:
-        // the evidence contract is that the predicate's words appear in the
-        // quote, so checking a canonical form would reject a correctly grounded
-        // edge whose source happened to say "employed by". Canonicalizing after
-        // it has passed keeps the check explainable and still stores one
-        // predicate per relationship rather than one per phrasing.
-        if (!graphRelationshipIsGrounded(source.content, relation)) continue;
-        const predicate = canonicalPredicate(cleanPredicate(relation.predicate)).id;
-        const subjectLabel = cleanLabel(relation.subject.label);
-        const objectLabel = cleanLabel(relation.object.label);
-        if (!predicate || !subjectLabel || !objectLabel) continue;
-        const subject = await upsertEntity(txDb, source.agentId, relation.subject, people, context);
-        const object = await upsertEntity(txDb, source.agentId, relation.object, people, context);
-        // An endpoint with no stable identity takes the edge down with it.
-        if (!subject || !object) continue;
-        const fingerprint = relationshipFingerprint(subject.key, predicate, object.key);
-        if (saved.has(fingerprint)) continue;
-        saved.add(fingerprint);
-        ordinal += 1;
-        const validFrom = canonicalQualifier(relation.validFrom, relation.evidenceQuote, context);
-        const validUntil = canonicalQualifier(relation.validUntil, relation.evidenceQuote, context);
-        await txDb
-          .insert(knowledgeGraphRelations)
-          .values({
-            agentId: source.agentId,
-            subjectEntityId: subject.id,
-            predicate,
-            objectEntityId: object.id,
-            sourceMemoryId: source.id,
-            evidenceQuote: relation.evidenceQuote,
-            sourceFingerprint: fingerprint,
-            ordinal,
-            confidence: Math.min(Number(source.confidence), relation.confidence).toFixed(2),
-            validFrom,
-            validUntil,
-          })
-          .onConflictDoUpdate({
-            target: [
-              knowledgeGraphRelations.sourceMemoryId,
-              knowledgeGraphRelations.sourceFingerprint,
-            ],
-            // Deliberately do not overwrite reviewStatus/reviewedAt: an owner's
-            // validation remains meaningful when extraction is rerun.
-            set: {
-              agentId: source.agentId,
-              subjectEntityId: subject.id,
-              predicate,
-              objectEntityId: object.id,
-              evidenceQuote: relation.evidenceQuote,
-              ordinal,
-              confidence: Math.min(Number(source.confidence), relation.confidence).toFixed(2),
-              validFrom,
-              validUntil,
-            },
-          });
-        touched.add(subject.key);
-        touched.add(object.key);
-        relationships += 1;
-      }
-
-      // New fingerprints are written before stale ones are removed. A failed
-      // extraction therefore leaves the prior, owner-reviewed edge untouched.
-      await txDb
-        .delete(knowledgeGraphRelations)
-        .where(
-          and(
-            eq(knowledgeGraphRelations.sourceMemoryId, source.id),
-            saved.size > 0
-              ? notInArray(knowledgeGraphRelations.sourceFingerprint, [...saved])
-              : undefined,
-          ),
-        );
-      if (!(await finishClaim(txDb, source, claim, { status: 'ready', lastError: null }))) {
-        // A lease loss after writing edges must roll the transaction back.
-        throw new GraphSourceLeaseLost();
-      }
-      return { relationships, entities: touched.size };
-    });
-  } catch (err) {
-    if (err instanceof GraphSourceLeaseLost) return null;
-    throw err;
-  }
+  return createPostgresKnowledgeGraphSyncRepository(db).removeOrphanedEntities(agentId);
 }
 
 /**
@@ -974,36 +780,23 @@ export async function retypeGraphEntity(
  * every writer to this subsystem.
  */
 export async function syncKnowledgeGraph(
-  deps: { db: Db; router: ModelRouter },
+  deps: { db?: Db; graphSync?: KnowledgeGraphSyncRepository; router: ModelRouter },
   options: GraphSyncOptions = {},
 ): Promise<GraphSyncResult> {
   const limit = options.limit ?? graphSyncBatchLimit();
-  const { db, router } = deps;
+  const { router } = deps;
+  const repository =
+    deps.graphSync ?? (deps.db ? createPostgresKnowledgeGraphSyncRepository(deps.db) : undefined);
+  if (!repository) throw new Error('Knowledge graph sync persistence is required');
   return withSpan('memory.graph_sync', { limit, agentId: options.agentId ?? 'all' }, async () => {
-    await hydrateContactLabels(db);
-    const rows = await db
-      .select({
-        id: memories.id,
-        agentId: memories.agentId,
-        content: memories.content,
-        contentHash: memories.contentHash,
-        confidence: memories.confidence,
-        subjectContactId: memories.subjectContactId,
-        createdAt: memories.createdAt,
-      })
-      .from(memories)
-      .leftJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
-      .where(
-        and(
-          options.agentId ? eq(memories.agentId, options.agentId) : undefined,
-          eq(memories.category, 'knowledge'),
-          eq(memories.quarantined, false),
-          or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-          sourceNeedsSync(),
-        ),
-      )
-      .orderBy(memories.createdAt)
-      .limit(limit);
+    await repository.hydrateContactLabels(options.agentId);
+    const rows = await repository.candidates({
+      agentId: options.agentId,
+      limit,
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+      leaseMs: SOURCE_LEASE_MS,
+      now: repository.now(),
+    });
 
     const result: GraphSyncResult = {
       candidates: rows.length,
@@ -1014,30 +807,33 @@ export async function syncKnowledgeGraph(
       quarantined: 0,
     };
     if (rows.length === 0) {
-      await removeOrphanedKnowledgeGraphEntities(db, options.agentId);
+      await repository.removeOrphanedEntities(options.agentId);
       return result;
     }
 
-    const [people, ownSettings] = await Promise.all([
-      db.select({ id: contacts.id, name: contacts.name, aliases: contacts.aliases }).from(contacts),
-      agentDateSettings(db, options.agentId),
-    ]);
     // Date wording is resolved in the terms of the agent who owns the memory.
     // An unscoped sync can touch several agents, so settings resolve per source
     // — cached, since a batch is usually one agent many times over.
-    const settingsByAgent = new Map<string, { id: string; timeZone: string; locale: string }>();
+    const settingsByAgent = new Map<
+      string,
+      { agentId: string; timeZone: string; locale: string; contacts: ContactLite[] }
+    >();
     const settingsFor = async (agentId: string) => {
       const cached = settingsByAgent.get(agentId);
       if (cached) return cached;
-      const resolved =
-        agentId === ownSettings.id ? ownSettings : await agentDateSettings(db, agentId);
+      const resolved = await repository.context(agentId);
       settingsByAgent.set(agentId, resolved);
       return resolved;
     };
 
     for (const source of rows) {
       await options.heartbeat?.();
-      const claim = await claimSource(db, source);
+      const claim = await repository.claim({
+        source,
+        extractionVersion: GRAPH_EXTRACTION_VERSION,
+        leaseMs: SOURCE_LEASE_MS,
+        now: repository.now(),
+      });
       if (!claim) continue;
       // Anchored per source, on the memory's own timestamp.
       const sourceSettings = await settingsFor(source.agentId);
@@ -1052,11 +848,16 @@ export async function syncKnowledgeGraph(
       } catch (err) {
         if (err instanceof BudgetReservationError) throw err;
         if (!isUnparseableObjectError(err)) console.error('knowledge graph extraction failed', err);
-        const retryAt = nextGraphRetryAt(claim.attempts, new Date());
-        const finished = await finishClaim(db, source, claim, {
+        const now = repository.now();
+        const retryAt = nextGraphRetryAt(claim.attempts, now);
+        const finished = await repository.fail({
+          source,
+          claim,
+          extractionVersion: GRAPH_EXTRACTION_VERSION,
           status: retryAt ? 'failed' : 'quarantined',
           nextRetryAt: retryAt,
           lastError: err instanceof Error ? err.message.slice(0, 500) : 'unparseable graph output',
+          now,
         });
         if (finished) {
           if (retryAt) result.failed += 1;
@@ -1065,13 +866,19 @@ export async function syncKnowledgeGraph(
         continue;
       }
 
-      const persisted = await persistRelationships(db, source, claim, people, extracted, context);
+      const persisted = await repository.replaceProjection({
+        source,
+        claim,
+        extractionVersion: GRAPH_EXTRACTION_VERSION,
+        relations: buildProjection(source, sourceSettings.contacts, extracted, context),
+        now: repository.now(),
+      });
       if (!persisted) continue;
       result.entities += persisted.entities;
       result.relationships += persisted.relationships;
       result.processed += 1;
     }
-    await removeOrphanedKnowledgeGraphEntities(db, options.agentId);
+    await repository.removeOrphanedEntities(options.agentId);
     return result;
   });
 }
@@ -1306,12 +1113,14 @@ export async function createOwnerKnowledgeGraphFact(
  * what it cost, which left the only observable answer to "what is this backfill
  * charging me?" on the costs page, disconnected from the backlog driving it.
  */
-export async function graphSyncSpendUsd(db: Db, taskId: string): Promise<number> {
-  const [row] = await db
-    .select({ value: sql<string>`COALESCE(SUM(${modelCalls.costUsd}), 0)` })
-    .from(modelCalls)
-    .where(eq(modelCalls.taskId, taskId));
-  return Number(row?.value ?? 0);
+export async function graphSyncSpendUsd(
+  persistence: Db | KnowledgeGraphSyncRepository,
+  taskId: string,
+): Promise<number> {
+  const repository = isKnowledgeGraphSyncRepository(persistence)
+    ? persistence
+    : createPostgresKnowledgeGraphSyncRepository(persistence);
+  return repository.taskSpendUsd(taskId);
 }
 
 /**
@@ -1333,21 +1142,19 @@ export async function meanExtractionCostUsd(db: Db, sample = 200): Promise<numbe
 }
 
 /** Returns whether there are source memories still waiting to be graph-indexed. */
-export async function pendingKnowledgeGraphSourceCount(db: Db, agentId?: string): Promise<number> {
-  const rows = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(memories)
-    .leftJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
-    .where(
-      and(
-        agentId ? eq(memories.agentId, agentId) : undefined,
-        eq(memories.category, 'knowledge'),
-        eq(memories.quarantined, false),
-        or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-        sourceNeedsSync(),
-      ),
-    );
-  return Number(rows[0]?.count ?? 0);
+export async function pendingKnowledgeGraphSourceCount(
+  persistence: Db | KnowledgeGraphSyncRepository,
+  agentId?: string,
+): Promise<number> {
+  const repository = isKnowledgeGraphSyncRepository(persistence)
+    ? persistence
+    : createPostgresKnowledgeGraphSyncRepository(persistence);
+  return repository.pendingCount({
+    agentId,
+    extractionVersion: GRAPH_EXTRACTION_VERSION,
+    leaseMs: SOURCE_LEASE_MS,
+    now: repository.now(),
+  });
 }
 
 /**
