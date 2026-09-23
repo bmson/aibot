@@ -22,8 +22,10 @@ export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { FirestoreImportOverviewRepository } from './import-overview.js';
 export {
   getFirestoreKnowledgeGraphOverview,
+  getFirestoreKnowledgeGraphRelation,
   getFirestoreKnowledgeGraphReviewQueue,
 } from './knowledge-graph-read.js';
+export { FirestoreKnowledgeGraphRelationMutationRepository } from './knowledge-graph-relation-mutations.js';
 export { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 export type { McpDiscoveryResult } from './mcp-connections.js';
 export {

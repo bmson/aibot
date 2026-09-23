@@ -17,9 +17,11 @@ import {
   reviewKnowledgeGraphRelation,
   searchKnowledgeGraphEntities,
 } from '@assistant/application';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { FirestoreKnowledgeGraphRelationMutationRepository } from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getApplication, getDb, getRouter } from '@/lib/server';
+import { getApplication, getDb, getFirestoreInstallationStore, getRouter } from '@/lib/server';
 
 /**
  * Saving a connection has to embed its source note first, so an unreachable
@@ -45,6 +47,19 @@ function revalidateKnowledgeGraph(): void {
   revalidatePath('/people', 'layout');
 }
 
+async function reviewRelation(relationId: string, status: 'confirmed' | 'rejected') {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    return new FirestoreKnowledgeGraphRelationMutationRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    ).review(relationId, status);
+  }
+  return reviewKnowledgeGraphRelation(getDb(), relationId, status);
+}
+
 /**
  * Shared shape for the curation forms, so each can report what happened. A
  * 'use server' module may only export async functions, so the initial value
@@ -57,13 +72,13 @@ export interface KnowledgeActionState {
 
 export async function confirmKnowledgeRelation(relationId: string): Promise<void> {
   await requireOwner();
-  await reviewKnowledgeGraphRelation(getDb(), relationId, 'confirmed');
+  await reviewRelation(relationId, 'confirmed');
   revalidateKnowledgeGraph();
 }
 
 export async function rejectKnowledgeRelation(relationId: string): Promise<void> {
   await requireOwner();
-  await reviewKnowledgeGraphRelation(getDb(), relationId, 'rejected');
+  await reviewRelation(relationId, 'rejected');
   revalidateKnowledgeGraph();
 }
 
@@ -249,7 +264,7 @@ export async function removeDisconnectedKnowledgeItems(): Promise<void> {
 
 export async function removeKnowledgeConnection(relationId: string): Promise<{ error?: string }> {
   await requireOwner();
-  const removed = await reviewKnowledgeGraphRelation(getDb(), relationId, 'rejected');
+  const removed = await reviewRelation(relationId, 'rejected');
   if (!removed) return { error: 'That connection no longer exists. Refresh and try again.' };
   revalidateKnowledgeGraph();
   return {};
