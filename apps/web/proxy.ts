@@ -1,7 +1,7 @@
 import { loadConfig } from '@assistant/config';
 import { type NextRequest, NextResponse } from 'next/server';
 
-/** Firestore preview exposes only supported chat, polling, and card-image surfaces. */
+/** Firestore preview exposes only supported read surfaces, chat, polling, and card images. */
 export function proxy(request: NextRequest) {
   if (loadConfig().PERSISTENCE_DRIVER !== 'firestore') return NextResponse.next();
   const path = request.nextUrl.pathname;
@@ -18,6 +18,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/health' && request.method === 'GET') ||
     (path === '/' && request.method === 'GET') ||
     (path === '/profile/memories' && request.method === 'GET') ||
+    (path === '/capabilities' && request.method === 'GET') ||
     (chatPage && (request.method === 'GET' || request.method === 'POST')) ||
     (['/icon.svg', '/apple-icon.png', '/favicon.ico', '/manifest.webmanifest'].includes(path) &&
       request.method === 'GET') ||

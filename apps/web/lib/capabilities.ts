@@ -4,12 +4,18 @@ import {
   type Config,
   isModuleEnabled,
   loadConfig,
+  validateAgentPersistenceConfig,
 } from '@assistant/config';
+import {
+  createInstallationStore,
+  FirestoreWorkspaceCapabilityRepository,
+} from '@assistant/firestore';
 import {
   assistantModuleMetas,
   type ModuleDiagnostic,
   moduleDiagnostics,
 } from '@assistant/modules/meta';
+import { getAgentReadinessSource } from './agent-readiness-source';
 
 export type CapabilityStatus = 'off' | 'ready' | 'setup_needed' | 'unavailable';
 
@@ -81,7 +87,39 @@ export async function resolveCapabilityDiagnostics(
 }
 
 export function getCapabilityDiagnostics(): Promise<CapabilityDiagnostics> {
-  return resolveCapabilityDiagnostics(loadConfig());
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER !== 'firestore') return resolveCapabilityDiagnostics(config);
+
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  const store = createInstallationStore({
+    projectId: config.GCP_PROJECT,
+    installationId: config.ASSISTANT_WORKSPACE_ID,
+  });
+  return new FirestoreWorkspaceCapabilityRepository(
+    store,
+    config.FIRESTORE_AGENT_ID,
+    getAgentReadinessSource(),
+  )
+    .load(
+      config.FIRESTORE_AGENT_ID,
+      assistantModuleMetas.map((meta) => meta.name),
+    )
+    .then((result) => ({
+      statusAvailable: result.statusAvailable,
+      diagnostics: assistantModuleMetas.map((meta) => {
+        const diagnostic = result.statusAvailable
+          ? result.diagnostics.find((item) => item.module === meta.name)
+          : undefined;
+        return {
+          module: meta.name,
+          enabled: diagnostic?.enabled ?? true,
+          ready: diagnostic?.ready ?? false,
+          detail: diagnostic?.detail ?? 'agent readiness unavailable',
+        };
+      }),
+    }))
+    .finally(() => store.db.terminate());
 }
 
 export function capabilityStatus(
