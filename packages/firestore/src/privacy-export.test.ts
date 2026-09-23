@@ -180,4 +180,29 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore privacy export 
       compiledAt: createdAt,
     });
   });
+
+  it('refuses partial exports during active or malformed erasure', async () => {
+    const store = emulatorStore();
+    stores.push(store);
+    const agentId = 'privacy-export-erasure-owner';
+    await Promise.all([
+      store.doc('agents', agentId).set({ id: agentId }),
+      store.doc('memories', 'private-memory').set({
+        id: 'private-memory',
+        agentId,
+        contentHash: 'private-hash',
+        content: 'A private owner fact',
+      }),
+    ]);
+    const repository = new FirestorePrivacyExportRepository(store);
+    expect((await repository.exportOwnerData()).memories).toHaveLength(1);
+
+    for (const status of ['active', 'content-erased', 'unknown'] as const) {
+      await store.doc('privacyErasureJobs', agentId).set({ agentId, status });
+      await expect(repository.exportOwnerData()).rejects.toThrow('Privacy erasure is in progress');
+    }
+
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'complete' });
+    expect((await repository.exportOwnerData()).memories).toHaveLength(1);
+  });
 });
