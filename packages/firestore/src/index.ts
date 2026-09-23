@@ -18,6 +18,7 @@ export { FirestoreImportOverviewRepository } from './import-overview.js';
 export { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 export { FirestoreMcpConnectionReadRepository } from './mcp-connections.js';
 export { embeddingSpaceKey, FirestoreMemoryRepository } from './memory.js';
+export { FirestoreMemoryConsolidationRepository } from './memory-consolidation.js';
 export { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 export { FirestoreMemoryToolRepository } from './memory-tools.js';
 export { FirestoreMessageRepository } from './messages.js';

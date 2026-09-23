@@ -1,6 +1,43 @@
 {
   "indexes": [
     {
+      "collectionGroup": "memories",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "category", "order": "ASCENDING" },
+        { "fieldPath": "quarantined", "order": "ASCENDING" },
+        { "fieldPath": "supersededById", "order": "ASCENDING" },
+        { "fieldPath": "lastConsolidatedAt", "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "memories",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "category", "order": "ASCENDING" },
+        { "fieldPath": "quarantined", "order": "ASCENDING" },
+        { "fieldPath": "supersededById", "order": "ASCENDING" },
+        { "fieldPath": "subjectContactId", "order": "ASCENDING" },
+        { "fieldPath": "lastConsolidatedAt", "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "memories",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "category", "order": "ASCENDING" },
+        { "fieldPath": "quarantined", "order": "ASCENDING" },
+        { "fieldPath": "supersededById", "order": "ASCENDING" },
+        { "fieldPath": "subjectContactId", "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "mcpConnections",
       "queryScope": "COLLECTION",
       "fields": [
