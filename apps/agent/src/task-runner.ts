@@ -7,6 +7,12 @@ import { executorDeps } from './executor-deps.js';
 export async function executeAgentTask(deps: AgentDeps, taskId: string, generation?: number) {
   const taskRepository = deps.persistence?.tasks ?? createPostgresTaskRepository(deps.db);
   const task = await taskRepository.getTask(taskId);
+  if (
+    deps.config.PERSISTENCE_DRIVER === 'firestore' &&
+    (!task || task.agentId !== deps.config.FIRESTORE_AGENT_ID)
+  ) {
+    throw new Error('Task is missing or outside the configured Firestore agent');
+  }
   const trigger = task?.trigger as { payload?: Record<string, unknown> } | undefined;
   const kind = typeof trigger?.payload?.kind === 'string' ? trigger.payload.kind : undefined;
   // Module-declared deterministic handlers claim their trigger kinds.

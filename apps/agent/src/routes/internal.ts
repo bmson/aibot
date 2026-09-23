@@ -65,6 +65,8 @@ internal.post('/tasks/execute', async (c) => {
 
 internal.post('/sweep', async (c) => {
   const deps = buildDeps();
+  if (deps.firestoreStore)
+    return c.json({ error: 'SQL maintenance sweeps are unavailable in Firestore agent mode' }, 501);
   const {
     backfillMessageEmbeddings,
     emitBudgetNotices,
@@ -217,7 +219,10 @@ internal.post('/canaries/run', async (c) => {
 });
 
 internal.get('/canaries/status', async (c) => {
-  const latest = await latestCanaryRun(buildDeps().db);
+  const deps = buildDeps();
+  if (deps.firestoreStore)
+    return c.json({ error: 'SQL canaries are unavailable in Firestore agent mode' }, 501);
+  const latest = await latestCanaryRun(deps.db);
   return c.json({ latest });
 });
 
@@ -250,7 +255,10 @@ export function failedCanaryChecks(
 }
 
 internal.on(['GET', 'POST'], '/canaries/health', async (c) => {
-  const latest = await latestCanaryRun(buildDeps().db);
+  const deps = buildDeps();
+  if (deps.firestoreStore)
+    return c.json({ error: 'SQL canaries are unavailable in Firestore agent mode' }, 501);
+  const latest = await latestCanaryRun(deps.db);
   const health = evaluateCanaryHealth(latest);
   if (!health.ok) {
     const { failed, reasons } = failedCanaryChecks(latest);

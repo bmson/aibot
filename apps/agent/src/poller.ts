@@ -49,6 +49,7 @@ export function startPoller(deps: AgentDeps): () => void {
 
   /** One maintenance pass, guarded so a slow sweep never overlaps itself. */
   const sweep = async () => {
+    if (deps.config.PERSISTENCE_DRIVER === 'firestore') return;
     if (sweeping) return;
     sweeping = true;
     // Each maintenance step is independent; guard each so one failure can't
@@ -126,7 +127,13 @@ export function startPoller(deps: AgentDeps): () => void {
     try {
       // Sliced as well as limited: the budget is what this process can afford
       // to run, so it is enforced here rather than assumed of the query.
-      due = (await findDueTasks(deps.db, capacity)).slice(0, capacity);
+      if (deps.config.PERSISTENCE_DRIVER === 'firestore') {
+        const tasks = deps.persistence?.tasks;
+        if (!tasks) throw new Error('Firestore execution persistence is unavailable');
+        due = (await tasks.findDueTasks(capacity)).slice(0, capacity);
+      } else {
+        due = (await findDueTasks(deps.db, capacity)).slice(0, capacity);
+      }
     } finally {
       // Hand back the share of the reservation this pass will not use.
       running -= capacity - due.length;
@@ -135,6 +142,13 @@ export function startPoller(deps: AgentDeps): () => void {
     await Promise.allSettled(
       due.map(async (task) => {
         try {
+          if (
+            deps.config.PERSISTENCE_DRIVER === 'firestore' &&
+            task.agentId !== deps.config.FIRESTORE_AGENT_ID
+          ) {
+            console.error(`refusing task outside configured Firestore agent: ${task.id}`);
+            return;
+          }
           const result = await executeAgentTask(deps, task.id);
           if (result.outcome !== 'not_claimable') {
             console.log(`task ${task.id.slice(0, 8)} [${task.type}] → ${result.outcome}`);

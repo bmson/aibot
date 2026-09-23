@@ -1,5 +1,11 @@
 import path from 'node:path';
-import { type Config, loadConfig, repoRoot } from '@assistant/config';
+import {
+  type Config,
+  loadConfig,
+  parseFirestoreEmbeddingSpace,
+  repoRoot,
+  validateAgentPersistenceConfig,
+} from '@assistant/config';
 import {
   createConfiguredModelProvider,
   type DocumentProcessorConfig,
@@ -12,6 +18,11 @@ import { compileOwnerCard } from '@assistant/core/memory/consolidation';
 import { supersedeContradictedFacts } from '@assistant/core/memory/supersede';
 import { evaluateOutOfBandPing } from '@assistant/core/proactive/nudge-policy';
 import { createDb, createPostgresExecutionPersistence, type Db } from '@assistant/db';
+import {
+  createFirestoreExecutionPersistence,
+  createInstallationStore,
+  type InstallationStore,
+} from '@assistant/firestore';
 import {
   browserModule,
   composedModuleMetas as collectModuleMetas,
@@ -48,6 +59,7 @@ export interface AgentDeps {
   config: Config;
   db: Db;
   persistence?: ExecutionPersistence;
+  firestoreStore?: InstallationStore;
   router: ModelRouter;
   registry: ToolRegistry;
   dispatcher: ToolDispatcher;
@@ -218,7 +230,10 @@ export function agentServices(deps: AgentDeps): ModuleServices {
     registry: deps.registry,
     dispatcher: deps.dispatcher,
     workspace: deps.workspace,
-    ownerNotifier: composeOwnerNotifiers([dashboardOwnerNotifier(deps), deps.outOfBandNotifier]),
+    ownerNotifier:
+      deps.config.PERSISTENCE_DRIVER === 'firestore'
+        ? noopOwnerNotifier
+        : composeOwnerNotifiers([dashboardOwnerNotifier(deps), deps.outOfBandNotifier]),
     emailObservers: deps.modules.emailObservers,
     persistence: deps.persistence ?? createPostgresExecutionPersistence(deps.db),
   };
@@ -226,10 +241,85 @@ export function agentServices(deps: AgentDeps): ModuleServices {
 
 let cached: AgentDeps | undefined;
 
+/** A type-compatible tripwire for legacy paths that have no Firestore adapter yet. */
+function unavailableSqlDb(): Db {
+  return new Proxy({} as Db, {
+    get(_target, property) {
+      throw new Error(
+        `PostgreSQL access is unavailable in Firestore agent mode: ${String(property)}`,
+      );
+    },
+  });
+}
+
+function buildFirestoreDeps(config: Config): AgentDeps {
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  const store = createInstallationStore({
+    projectId: config.GCP_PROJECT,
+    installationId: config.ASSISTANT_WORKSPACE_ID,
+  });
+  const persistence = createFirestoreExecutionPersistence(
+    store,
+    config.FIRESTORE_AGENT_ID,
+    parseFirestoreEmbeddingSpace(config.FIRESTORE_EMBEDDING_SPACE),
+  );
+  const db = unavailableSqlDb();
+  const router = new ModelRouter(
+    persistence.modelRouting,
+    config.OPENROUTER_API_KEY,
+    config.LLM_AUDIT_CAPTURE,
+    createConfiguredModelProvider(config),
+  );
+  const workspacePrefix = `workspace/${config.ASSISTANT_WORKSPACE_ID}`;
+  const workspaceRoot = path.join(repoRoot, '.workspace');
+  const workspace: WorkspaceStore =
+    config.FILES_DRIVER === 'gcs'
+      ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, workspacePrefix)
+      : new LocalWorkspaceStore(workspaceRoot);
+  // No legacy built-ins or provider modules are safe in this preview profile.
+  // The core executor still receives its Firestore persistence ports.
+  const registry = new ToolRegistry();
+  const modules = installModules(composition.modules, {
+    config,
+    db,
+    registry,
+    repoRoot,
+    router,
+    workspace,
+    workspacePrefix,
+    workspaceRoot,
+    persistence,
+  });
+  return {
+    config,
+    db,
+    firestoreStore: store,
+    persistence,
+    router,
+    registry,
+    dispatcher: new ToolDispatcher(
+      db,
+      registry,
+      persistence.toolExecution,
+      persistence.costs,
+      persistence.approvals,
+      persistence.approvalPolicies,
+    ),
+    workspace,
+    modules,
+    outOfBandNotifier: noopOwnerNotifier,
+  };
+}
+
 export function buildDeps(): AgentDeps {
   if (cached) return cached;
 
   const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    cached = buildFirestoreDeps(config);
+    return cached;
+  }
   const db = createDb(config.DATABASE_URL, {
     max: config.DB_POOL_MAX,
     idleTimeoutSeconds: config.DB_IDLE_TIMEOUT_SECONDS,

@@ -67,6 +67,11 @@ const ConfigSchema = z.object({
     }),
 
   DATABASE_URL: z.string().default('postgres://assistant:assistant@localhost:5432/assistant'),
+  /** PostgreSQL remains the default; Firestore is an explicit agent-only preview profile. */
+  PERSISTENCE_DRIVER: z.enum(['postgres', 'firestore']).default('postgres'),
+  FIRESTORE_AGENT_ID: z.string().default(''),
+  /** JSON embedding provenance: provider, model, dimensions, and revision. */
+  FIRESTORE_EMBEDDING_SPACE: z.string().default(''),
   /**
    * Connection pool shape, per process.
    *
@@ -299,6 +304,21 @@ const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
+const FirestoreEmbeddingSpaceSchema = z.strictObject({
+  provider: z.string().trim().min(1),
+  model: z.string().trim().min(1),
+  dimensions: z.number().int().min(1).max(2048),
+  revision: z.string().trim().min(1),
+});
+
+export function parseFirestoreEmbeddingSpace(value: string) {
+  try {
+    return FirestoreEmbeddingSpaceSchema.parse(JSON.parse(value));
+  } catch {
+    throw new Error('FIRESTORE_EMBEDDING_SPACE must be JSON {provider,model,dimensions,revision}');
+  }
+}
+
 /**
  * Every setting name in the schema, including optional ones that are absent
  * from a parsed configuration. Modules declare the keys they own, and a
@@ -325,6 +345,39 @@ export function modelProviderConfigProblems(config: Config): string[] {
     if (!/^(?:global|[a-z][a-z0-9-]*[0-9])$/.test(config.VERTEX_LOCATION))
       problems.push('VERTEX_LOCATION must be an explicit Vertex region or global');
   }
+  return problems;
+}
+
+/** Firestore agent mode is intentionally narrow until the remaining runtime ports migrate. */
+export function validateAgentPersistenceConfig(
+  config: Config,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (config.PERSISTENCE_DRIVER !== 'firestore') return [];
+  const problems: string[] = [];
+  if (!config.GCP_PROJECT.trim()) problems.push('GCP_PROJECT is required in Firestore agent mode');
+  if (!Object.hasOwn(env, 'ASSISTANT_WORKSPACE_ID') || !env.ASSISTANT_WORKSPACE_ID?.trim())
+    problems.push('ASSISTANT_WORKSPACE_ID must be explicit in Firestore agent mode');
+  if (!z.uuid().safeParse(config.FIRESTORE_AGENT_ID).success)
+    problems.push('FIRESTORE_AGENT_ID must be an explicit UUID in Firestore agent mode');
+  if (!config.FIRESTORE_EMBEDDING_SPACE.trim())
+    problems.push(
+      'FIRESTORE_EMBEDDING_SPACE is required as JSON {provider,model,dimensions,revision}',
+    );
+  else {
+    try {
+      parseFirestoreEmbeddingSpace(config.FIRESTORE_EMBEDDING_SPACE);
+    } catch {
+      problems.push('FIRESTORE_EMBEDDING_SPACE must be JSON {provider,model,dimensions,revision}');
+    }
+  }
+  if (config.ASSISTANT_MODULES.length)
+    problems.push('ASSISTANT_MODULES=minimal is required in Firestore agent mode');
+  if (config.QUEUE_DRIVER !== 'local')
+    problems.push('QUEUE_DRIVER=local is required in Firestore agent mode');
+  if (config.CANARY_ENABLED) problems.push('CANARY_ENABLED must be false in Firestore agent mode');
+  if (config.LOCATION_PING_SECRET)
+    problems.push('LOCATION_PING_SECRET must be empty in Firestore agent mode');
   return problems;
 }
 

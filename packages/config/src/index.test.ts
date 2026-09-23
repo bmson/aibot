@@ -3,7 +3,9 @@ import {
   isModuleEnabled,
   loadConfig,
   parseAssistantModules,
+  parseFirestoreEmbeddingSpace,
   resetConfigForTest,
+  validateAgentPersistenceConfig,
   validateProdConfig,
 } from './index.js';
 
@@ -15,6 +17,7 @@ describe('config', () => {
     expect(config.QUEUE_DRIVER).toBe('local');
     expect(config.AGENT_PORT).toBe(8787);
     expect(config.DATABASE_URL).toContain('postgres://');
+    expect(config.PERSISTENCE_DRIVER).toBe('postgres');
     expect(config.INTERNAL_AUTH_MODE).toBe('oidc');
     expect(config.AUTH_DEV_BYPASS).toBe(false);
     expect(config.AUTH_LOCALHOST_BYPASS).toBe(false);
@@ -48,6 +51,45 @@ describe('config', () => {
     expect(() => loadConfig({ AUTH_DEV_BYPASS: 'yes' })).toThrow();
     resetConfigForTest();
     expect(() => loadConfig({ AUTH_LOCALHOST_BYPASS: 'yes' })).toThrow();
+  });
+
+  it('requires an explicit, minimal Firestore agent identity and embedding space', () => {
+    const config = loadConfig({ PERSISTENCE_DRIVER: 'firestore' });
+    expect(validateAgentPersistenceConfig(config, {})).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('GCP_PROJECT'),
+        expect.stringContaining('ASSISTANT_WORKSPACE_ID'),
+        expect.stringContaining('FIRESTORE_AGENT_ID'),
+        expect.stringContaining('FIRESTORE_EMBEDDING_SPACE'),
+        expect.stringContaining('ASSISTANT_MODULES=minimal'),
+      ]),
+    );
+    expect(() => parseFirestoreEmbeddingSpace('{"provider":"test"}')).toThrow(
+      'FIRESTORE_EMBEDDING_SPACE',
+    );
+    const env = {
+      PERSISTENCE_DRIVER: 'firestore',
+      GCP_PROJECT: 'demo-assistant-test',
+      ASSISTANT_WORKSPACE_ID: 'customer-installation',
+      FIRESTORE_AGENT_ID: '5f492da4-b38d-413e-ad4b-ded06f3a0d19',
+      FIRESTORE_EMBEDDING_SPACE:
+        '{"provider":"openai","model":"text-embedding-3-small","dimensions":1536,"revision":"1"}',
+      ASSISTANT_MODULES: 'minimal',
+      QUEUE_DRIVER: 'local',
+    };
+    resetConfigForTest();
+    expect(validateAgentPersistenceConfig(loadConfig(env), env)).toEqual([]);
+    expect(
+      validateAgentPersistenceConfig(
+        { ...loadConfig(env), QUEUE_DRIVER: 'cloudtasks', CANARY_ENABLED: true },
+        env,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('QUEUE_DRIVER=local'),
+        expect.stringContaining('CANARY_ENABLED'),
+      ]),
+    );
   });
 
   it('bounds and explicitly opts into real canary side effects', () => {

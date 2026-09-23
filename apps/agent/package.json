@@ -13,6 +13,7 @@
     "@assistant/config": "workspace:*",
     "@assistant/core": "workspace:*",
     "@assistant/db": "workspace:*",
+    "@assistant/firestore": "workspace:*",
     "@assistant/modules": "workspace:*",
     "@assistant/tools": "workspace:*",
     "@hono/node-server": "^2.1.1",
@@ -29,7 +30,6 @@
     "@assistant/persistence": "workspace:*"
   },
   "devDependencies": {
-    "@assistant/firestore": "workspace:*",
     "esbuild": "^0.28.2",
     "tsx": "^4.23.13"
   }
