@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { verifyConsumerIndexReadiness } from './consumer-index-readiness.js';
+import {
+  provisionTargetFirestoreIndexes,
+  verifyConsumerIndexReadiness,
+} from './consumer-index-readiness.js';
 import type { InstallationIdentity } from './installation-manifest.js';
 import type { CommandRunner } from './runner.js';
 
@@ -25,9 +28,10 @@ const spec = JSON.parse(specBytes.toString('utf8')) as {
 };
 const prefix = `projects/${identity.projectId}/databases/${identity.databaseId}/collectionGroups/`;
 
-function liveIndexes() {
+function liveIndexes(databaseId = identity.databaseId) {
+  const databasePrefix = `projects/${identity.projectId}/databases/${databaseId}/collectionGroups/`;
   return spec.indexes.map((index, number) => ({
-    name: `${prefix}${index.collectionGroup}/indexes/${number + 1}`,
+    name: `${databasePrefix}${index.collectionGroup}/indexes/${number + 1}`,
     queryScope: index.queryScope,
     fields: [
       ...index.fields,
@@ -40,14 +44,15 @@ function liveIndexes() {
   }));
 }
 
-function liveOverrides() {
+function liveOverrides(databaseId = identity.databaseId) {
+  const databasePrefix = `projects/${identity.projectId}/databases/${databaseId}/collectionGroups/`;
   return [
     {
-      name: `${prefix}__default__/fields/*`,
+      name: `${databasePrefix}__default__/fields/*`,
       indexConfig: { indexes: [] },
     },
     ...spec.fieldOverrides.map((field) => ({
-      name: `${prefix}${field.collectionGroup}/fields/${field.fieldPath}`,
+      name: `${databasePrefix}${field.collectionGroup}/fields/${field.fieldPath}`,
       indexConfig: { indexes: [] },
     })),
   ];
@@ -65,6 +70,48 @@ function fakeLists(indexes: unknown, fields: unknown, calls: string[]): CommandR
 }
 
 describe('consumer Firestore index readiness', () => {
+  it('provisions only missing manifest resources for the explicit named database', async () => {
+    const commands: string[][] = [];
+    const runner: CommandRunner = {
+      async run(command, args) {
+        if (args[0] === 'firestore' && args[3] === 'list')
+          return { ok: true, stdout: '[]', stderr: '' };
+        commands.push([command, ...args]);
+        return { ok: true, stdout: '', stderr: '' };
+      },
+    };
+    const result = await provisionTargetFirestoreIndexes(
+      runner,
+      { ...identity, databaseId: 'assistant-production' },
+      specBytes,
+    );
+    expect(result.indexesCreated).toBe(spec.indexes.length);
+    expect(result.exemptionsCreated).toBe(spec.fieldOverrides.length);
+    expect(commands).toHaveLength(spec.indexes.length + spec.fieldOverrides.length);
+    expect(commands.every((args) => args.includes('--database=assistant-production'))).toBe(true);
+    expect(commands.some((args) => args.includes('--disable-indexes'))).toBe(true);
+    expect(
+      commands.some((args) => args.some((arg) => arg.includes('vector-config={dimension='))),
+    ).toBe(true);
+  });
+
+  it('is idempotent when every shared resource already exists', async () => {
+    const calls: string[] = [];
+    const runner = fakeLists(
+      liveIndexes('assistant-production'),
+      liveOverrides('assistant-production'),
+      calls,
+    );
+    await expect(
+      provisionTargetFirestoreIndexes(
+        runner,
+        { ...identity, databaseId: 'assistant-production' },
+        specBytes,
+      ),
+    ).resolves.toEqual({ indexesCreated: 0, exemptionsCreated: 0 });
+    expect(calls).toHaveLength(2);
+  });
+
   it('declares the exact person experience scan index in the shared manifest', () => {
     expect(spec.indexes).toContainEqual({
       collectionGroup: 'memories',

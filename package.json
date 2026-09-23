@@ -29,6 +29,7 @@
     "brand:generate": "tsx scripts/generate-brand-assets.ts",
     "brand:check": "tsx scripts/generate-brand-assets.ts --check",
     "setup": "tsx scripts/setup.ts",
+    "firestore:indexes": "tsx scripts/firestore-target-indexes.ts",
     "config:check": "tsx scripts/config-doctor.ts",
     "modules:plan": "tsx scripts/module-plan.ts",
     "install:plan": "tsx scripts/installation-plan.ts",

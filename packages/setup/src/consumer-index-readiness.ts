@@ -52,7 +52,12 @@ function canonicalField(raw: unknown): IndexField {
   return { fieldPath, vectorConfig: { dimension: vector.dimension as number, flat: {} } };
 }
 
-function canonicalIndex(raw: unknown, prefix: string, trusted: boolean): Index {
+function canonicalIndex(
+  raw: unknown,
+  prefix: string,
+  trusted: boolean,
+  requireReady = true,
+): Index {
   const value = object(raw, 'Firestore composite index');
   let collectionGroup: string;
   if (trusted) {
@@ -64,7 +69,7 @@ function canonicalIndex(raw: unknown, prefix: string, trusted: boolean): Index {
     const match = /^([^/]+)\/indexes\/([^/]+)$/.exec(suffix);
     if (!match?.[1] || !match[2]) throw new Error(`Ambiguous Firestore index name ${name}`);
     collectionGroup = match[1];
-    if (value.state !== 'READY')
+    if (requireReady && value.state !== 'READY')
       throw new Error(`Firestore index ${name} is ${String(value.state ?? 'not READY')}`);
   }
   const queryScope = string(value.queryScope, 'Firestore index query scope');
@@ -82,6 +87,111 @@ function canonicalIndex(raw: unknown, prefix: string, trusted: boolean): Index {
     });
   }
   return { collectionGroup, queryScope, fields };
+}
+
+/** Add only missing shared-manifest indexes and exemptions to an existing database. */
+export async function provisionTargetFirestoreIndexes(
+  runner: CommandRunner,
+  identity: InstallationIdentity,
+  verifiedSpec: Buffer,
+): Promise<{ indexesCreated: number; exemptionsCreated: number }> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(verifiedSpec.toString('utf8'));
+  } catch {
+    throw new Error('Trusted Firestore index manifest is invalid JSON');
+  }
+  const spec = object(parsed, 'Trusted Firestore index manifest') as IndexSpec;
+  const expectedIndexes = array(spec.indexes, 'Trusted Firestore indexes').map((index) =>
+    canonicalIndex(index, '', true),
+  );
+  const expectedFields = array(spec.fieldOverrides, 'Trusted Firestore field overrides').map(
+    (raw) => {
+      const field = object(raw, 'Trusted Firestore field override');
+      if (array(field.indexes, 'Trusted Firestore field indexes').length !== 0)
+        throw new Error('Trusted Firestore field override contains unsupported indexes');
+      return {
+        collectionGroup: string(field.collectionGroup, 'Trusted field collection group'),
+        fieldPath: string(field.fieldPath, 'Trusted field path'),
+      };
+    },
+  );
+  const prefix = `projects/${identity.projectId}/databases/${identity.databaseId}/collectionGroups/`;
+  const flags = [
+    `--project=${identity.projectId}`,
+    `--database=${identity.databaseId}`,
+    '--format=json',
+  ];
+  const [composites, overrides] = await Promise.all([
+    list(runner, ['firestore', 'indexes', 'composite', 'list', ...flags], 'Composite indexes'),
+    list(runner, ['firestore', 'indexes', 'fields', 'list', ...flags], 'Field overrides'),
+  ]);
+  const existingIndexes = new Set(
+    composites.map((index) => indexKey(canonicalIndex(index, prefix, false, false))),
+  );
+  let indexesCreated = 0;
+  for (const index of expectedIndexes) {
+    if (existingIndexes.has(indexKey(index))) continue;
+    const args = [
+      'firestore',
+      'indexes',
+      'composite',
+      'create',
+      `--collection-group=${index.collectionGroup}`,
+      `--database=${identity.databaseId}`,
+      `--project=${identity.projectId}`,
+      `--query-scope=${index.queryScope === 'COLLECTION_GROUP' ? 'collection-group' : 'collection'}`,
+      '--quiet',
+    ];
+    for (const field of index.fields.filter((field) => field.fieldPath !== '__name__')) {
+      const config = [`field-path=${field.fieldPath}`];
+      if (field.order) config.push(`order=${field.order.toLowerCase()}`);
+      if (field.arrayConfig) config.push(`array-config=${field.arrayConfig.toLowerCase()}`);
+      if (field.vectorConfig)
+        config.push(`vector-config={dimension=${field.vectorConfig.dimension},flat}`);
+      args.push(`--field-config=${config.join(',')}`);
+    }
+    const result = await runner.run('gcloud', args);
+    if (!result.ok)
+      throw new Error(
+        `Firestore index create failed for ${index.collectionGroup}: ${result.stderr || 'unknown error'}`,
+      );
+    indexesCreated++;
+  }
+  // Existing non-manifest resources are intentionally left untouched. The exact verifier
+  // will report them, keeping this tool from taking destructive ownership of the database.
+  const existingFieldKeys = new Set<string>();
+  for (const raw of overrides) {
+    const field = object(raw, 'Firestore field override');
+    const name = string(field.name, 'Firestore field name');
+    if (name === `${prefix}__default__/fields/*`) continue;
+    if (!name.startsWith(prefix)) throw new Error(`Foreign Firestore field override ${name}`);
+    const match = /^([^/]+)\/fields\/([^/]+)$/.exec(name.slice(prefix.length));
+    if (!match?.[1] || !match[2]) throw new Error(`Ambiguous Firestore field override ${name}`);
+    existingFieldKeys.add(fieldKey(match[1], match[2]));
+  }
+  let exemptionsCreated = 0;
+  for (const field of expectedFields) {
+    if (existingFieldKeys.has(fieldKey(field.collectionGroup, field.fieldPath))) continue;
+    const result = await runner.run('gcloud', [
+      'firestore',
+      'indexes',
+      'fields',
+      'update',
+      field.fieldPath,
+      `--collection-group=${field.collectionGroup}`,
+      `--database=${identity.databaseId}`,
+      `--project=${identity.projectId}`,
+      '--disable-indexes',
+      '--quiet',
+    ]);
+    if (!result.ok)
+      throw new Error(
+        `Firestore field exemption failed for ${field.collectionGroup}/${field.fieldPath}: ${result.stderr || 'unknown error'}`,
+      );
+    exemptionsCreated++;
+  }
+  return { indexesCreated, exemptionsCreated };
 }
 
 function indexKey(index: Index): string {
