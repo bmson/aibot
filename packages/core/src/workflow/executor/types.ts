@@ -1,5 +1,5 @@
 import type { Db, TaskRow } from '@assistant/db';
-import type { ExecutionPersistence } from '@assistant/persistence';
+import type { DocumentExtractionRepository, ExecutionPersistence } from '@assistant/persistence';
 import type { ZodType } from 'zod';
 import type { StagedJobPending } from '../../code-exec.js';
 import type { Trust } from '../../events.js';
@@ -76,6 +76,8 @@ export interface ExecutorDeps {
   db: Db;
   /** Shared adapters for migrated executor operations; domain helpers still require Db. */
   persistence?: ExecutionPersistence;
+  /** Firestore-backed document lifecycle selected by the Firestore agent composition. */
+  documentExtractionRepository?: DocumentExtractionRepository;
   router: ModelRouter;
   dispatcher: DispatcherPort;
   /** Workspace file store — required only for code jobs that read archives (imports). */

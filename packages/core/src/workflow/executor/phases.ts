@@ -112,6 +112,7 @@ export async function runCodeJobPhase(
         router,
         workspace: deps.workspace,
         documentProcessor: deps.documentProcessor,
+        documentExtractionRepository: deps.documentExtractionRepository,
         calendarReader: deps.calendarReader,
         notifyOwner: deps.notifyOwner,
         persistence: deps.persistence,

@@ -24,6 +24,7 @@ const child = spawn(
     'apps/agent/src/firestore-model-routing.test.ts',
     'apps/agent/src/firestore-runtime-smoke.test.ts',
     'apps/agent/src/firestore-executor.test.ts',
+    'apps/agent/src/firestore-document-extraction.test.ts',
     'apps/agent/src/firestore-chat.test.ts',
     'apps/agent/src/firestore-application.test.ts',
     'apps/agent/src/firestore-graph-sync.test.ts',

@@ -34,6 +34,7 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
   return {
     db: deps.db,
     persistence: deps.persistence,
+    documentExtractionRepository: deps.documentExtractionRepository,
     router: deps.router,
     dispatcher: deps.dispatcher,
     workspace: deps.workspace,
