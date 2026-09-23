@@ -1,6 +1,15 @@
 {
   "indexes": [
     {
+      "collectionGroup": "proactivePings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "delivered", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "conversations",
       "queryScope": "COLLECTION",
       "fields": [

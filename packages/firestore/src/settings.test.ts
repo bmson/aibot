@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Timestamp } from '@google-cloud/firestore';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FirestoreScheduleRepository } from './schedules.js';
 import { FirestoreSettingsRepository } from './settings.js';
@@ -82,6 +83,24 @@ describe('Firestore settings repositories', () => {
         reason: 'quiet-hours',
         createdAt: new Date('2026-09-19T19:00:00.000Z'),
       }),
+      store.doc('proactivePings', 'delivered').set({
+        id: 'delivered',
+        agentId: ownerId,
+        channel: 'in_app',
+        urgency: 'ambient',
+        delivered: true,
+        reason: 'daily-cap',
+        createdAt: new Date('2026-09-19T19:00:00.000Z'),
+      }),
+      store.doc('proactivePings', 'boundary').set({
+        id: 'boundary',
+        agentId: ownerId,
+        channel: 'in_app',
+        urgency: 'ambient',
+        delivered: false,
+        reason: 'quiet-hours',
+        createdAt: new Date('2026-09-18T20:00:00.000Z'),
+      }),
     ]);
     const repository = new FirestoreSettingsRepository(store);
 
@@ -93,7 +112,7 @@ describe('Firestore settings repositories', () => {
     });
     await expect(
       repository.countHeldPings(ownerId, new Date('2026-09-18T20:00:00.000Z')),
-    ).resolves.toEqual({ quietHours: 1, dailyCap: 1 });
+    ).resolves.toEqual({ quietHours: 2, dailyCap: 1 });
     await expect(
       repository.updateOwner(ownerId, {
         timezone: 'America/Los_Angeles',
@@ -147,5 +166,76 @@ describe('Firestore settings repositories', () => {
     expect((await store.doc('schedules', owned.id).get()).get('nextRunAt')).toBeNull();
     await expect(repository.setOwnerEnabled(ownerId, reminder.id, false)).resolves.toBe(false);
     await expect(repository.setOwnerEnabled(randomUUID(), owned.id, false)).resolves.toBe(false);
+  });
+
+  it('orders owners by the stored sub-millisecond timestamp', async () => {
+    const store = emulatorStore();
+    stores.push(store);
+    const laterId = 'a-later';
+    const earlierId = 'z-earlier';
+    const owner = {
+      name: 'Owner',
+      email: 'owner@example.test',
+      calendarId: null,
+      phoneE164: null,
+      avatarUrl: null,
+      signature: '',
+      timezone: 'UTC',
+      locale: 'en-US',
+      workspacePrefix: 'owner',
+      browserProfilePath: null,
+      credentialRefs: {},
+      updatedAt: new Date('2026-09-19T12:34:56.123Z'),
+    };
+    await Promise.all([
+      store
+        .doc('agents', laterId)
+        .set({ ...owner, id: laterId, createdAt: new Timestamp(1_779_281_696, 123_789_000) }),
+      store
+        .doc('agents', earlierId)
+        .set({ ...owner, id: earlierId, createdAt: new Timestamp(1_779_281_696, 123_456_000) }),
+    ]);
+    await expect(new FirestoreSettingsRepository(store).getOwner()).resolves.toMatchObject({
+      id: earlierId,
+    });
+  });
+
+  it('rejects a preferences row with another embedded owner', async () => {
+    const store = emulatorStore();
+    stores.push(store);
+    const ownerId = randomUUID();
+    await store.doc('agents', ownerId).set({ id: ownerId });
+    await store.doc('notificationPrefs', ownerId).set({
+      agentId: randomUUID(),
+      quietStartMin: 10,
+      quietEndMin: 20,
+      ambientDailyCap: 3,
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    });
+    const repository = new FirestoreSettingsRepository(store);
+    await expect(
+      repository.updateNotificationPrefs(ownerId, {
+        quietStartMin: 30,
+        quietEndMin: 40,
+        ambientDailyCap: 5,
+      }),
+    ).resolves.toBe(false);
+    expect((await store.doc('notificationPrefs', ownerId).get()).get('quietStartMin')).toBe(10);
+    await store.doc('notificationPrefs', ownerId).delete();
+    await store.doc('agents', ownerId).delete();
+    await expect(
+      repository.updateNotificationPrefs(ownerId, {
+        quietStartMin: 30,
+        quietEndMin: 40,
+        ambientDailyCap: 5,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      repository.updateOwner(ownerId, {
+        timezone: 'UTC',
+        locale: 'en-US',
+        signature: '',
+      }),
+    ).resolves.toBe(false);
   });
 });

@@ -145,12 +145,12 @@ export function createSettingsFacade(
       const agent = await persistence.settings.getOwner();
       if (!agent) return { error: 'No agent configured.' };
       const both = start.minutes != null && end.minutes != null;
-      await persistence.settings.updateNotificationPrefs(agent.id, {
+      const updated = await persistence.settings.updateNotificationPrefs(agent.id, {
         quietStartMin: both ? start.minutes : null,
         quietEndMin: both ? end.minutes : null,
         ambientDailyCap,
       });
-      return {};
+      return updated ? {} : { error: 'No agent configured.' };
     },
     async updateAssistantSettings(input: {
       timezone: string;
@@ -163,12 +163,12 @@ export function createSettingsFacade(
       if (!locale) return { error: 'Locale is required.' };
       const agent = await persistence.settings.getOwner();
       if (!agent) return { error: 'No agent configured.' };
-      await persistence.settings.updateOwner(agent.id, {
+      const updated = await persistence.settings.updateOwner(agent.id, {
         timezone,
         locale,
         signature: input.signature.trim().slice(0, 500),
       });
-      return {};
+      return updated ? {} : { error: 'No agent configured.' };
     },
     async setRecurringJobEnabled(scheduleId: string, enabled: boolean) {
       const agent = await owner();

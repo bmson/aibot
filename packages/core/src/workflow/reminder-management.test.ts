@@ -33,6 +33,7 @@ function fixture(pages: ScheduleRecord[][]) {
   const schedules: ScheduleRepository = {
     kind: 'schedule-repository',
     listPage,
+    setOwnerEnabled: unused,
     ensure: unused,
     getByName: unused,
     listUninitialized: unused,

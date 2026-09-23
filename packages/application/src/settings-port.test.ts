@@ -101,4 +101,16 @@ describe('portable settings facade', () => {
       signature: 'x'.repeat(500),
     });
   });
+
+  it('reports a missing owner when either repository update loses the race', async () => {
+    const { facade, updateNotificationPrefs, updateOwner } = fixture();
+    updateNotificationPrefs.mockResolvedValueOnce(false);
+    updateOwner.mockResolvedValueOnce(false);
+    await expect(
+      facade.updateNotificationPrefs({ quietStart: '', quietEnd: '', ambientDailyCap: '3' }),
+    ).resolves.toEqual({ error: 'No agent configured.' });
+    await expect(
+      facade.updateAssistantSettings({ timezone: 'UTC', locale: 'en-US', signature: '' }),
+    ).resolves.toEqual({ error: 'No agent configured.' });
+  });
 });

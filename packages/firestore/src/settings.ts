@@ -4,10 +4,16 @@ import type {
   Records,
   SettingsRepository,
 } from '@assistant/persistence';
-import { FieldPath } from '@google-cloud/firestore';
+import { Timestamp } from '@google-cloud/firestore';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 const PAGE_SIZE = 500;
+
+function createdAtOrder(value: unknown): Timestamp {
+  if (value instanceof Timestamp) return value;
+  if (value instanceof Date) return Timestamp.fromDate(value);
+  throw new Error('Agent has invalid creation timestamp');
+}
 
 export class FirestoreSettingsRepository implements SettingsRepository {
   readonly kind = 'settings-repository' as const;
@@ -19,9 +25,11 @@ export class FirestoreSettingsRepository implements SettingsRepository {
     const rows = snapshot.docs
       .map((doc) => ({ doc, row: decodeRecord<Records['agents']>(doc.data()) }))
       .filter(({ doc, row }) => row.id && documentKey(row.id) === doc.id)
+      .map(({ doc, row }) => ({ row, createdAt: createdAtOrder(doc.get('createdAt')) }))
       .sort(
         (a, b) =>
-          a.row.createdAt.getTime() - b.row.createdAt.getTime() ||
+          a.createdAt.seconds - b.createdAt.seconds ||
+          a.createdAt.nanoseconds - b.createdAt.nanoseconds ||
           (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0),
       );
     const owner = rows[0]?.row;
@@ -64,7 +72,9 @@ export class FirestoreSettingsRepository implements SettingsRepository {
       let query = this.store
         .collection('proactivePings')
         .where('agentId', '==', agentId)
-        .orderBy(FieldPath.documentId())
+        .where('delivered', '==', false)
+        .where('createdAt', '>=', since)
+        .orderBy('createdAt', 'asc')
         .limit(PAGE_SIZE);
       if (cursor) query = query.startAfter(cursor);
       const page = await query.get();
@@ -88,6 +98,7 @@ export class FirestoreSettingsRepository implements SettingsRepository {
     return this.store.db.runTransaction(async (tx) => {
       const [owner, existing] = await tx.getAll(agentRef, prefsRef);
       if (!owner?.exists || owner.get('id') !== agentId) return false;
+      if (existing?.exists && existing.get('agentId') !== agentId) return false;
       const now = this.store.now();
       tx.set(
         prefsRef,
