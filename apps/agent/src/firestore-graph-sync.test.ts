@@ -468,6 +468,52 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore knowledge graph
     ).toMatchObject({ empty: true });
   });
 
+  it.each(['active', 'unknown'])(
+    'does not claim a source under a %s privacy erasure fence',
+    async (status) => {
+      await seedMemory('Owner works at Acme.');
+      await store.doc('privacyErasureJobs', agentId).set({ agentId, status });
+      const model = vi.fn(() => {
+        throw new Error('erasure must prevent extraction');
+      });
+      const result = await syncKnowledgeGraph(
+        { graphSync: repository, router: { object: model } as unknown as ModelRouter },
+        { agentId },
+      );
+      expect(result).toMatchObject({ processed: 0, relationships: 0, entities: 0 });
+      expect(model).not.toHaveBeenCalled();
+      expect((await store.collection('knowledgeGraphSources').get()).empty).toBe(true);
+    },
+  );
+
+  it('does not publish a claimed extraction after privacy erasure starts', async () => {
+    const content = 'Owner works at Acme.';
+    const { row } = await seedMemory(content);
+    const started = deferred();
+    const release = deferred();
+    const router = {
+      async object() {
+        started.resolve();
+        await release.promise;
+        return routerFor(content).object('extract', {} as never);
+      },
+    } as unknown as ModelRouter;
+    const syncing = syncKnowledgeGraph({ graphSync: repository, router }, { agentId });
+    await started.promise;
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+    release.resolve();
+    expect(await syncing).toMatchObject({ processed: 0, relationships: 0, entities: 0 });
+    expect(
+      (
+        await store
+          .collection('knowledgeGraphRelations')
+          .where('sourceMemoryId', '==', row.id)
+          .get()
+      ).empty,
+    ).toBe(true);
+    expect((await store.doc('knowledgeGraphSources', row.id).get()).get('status')).toBe('pending');
+  });
+
   it.each(['correction', 'forget'] as const)(
     'drops an extraction that finishes after a source %s',
     async (mutation) => {

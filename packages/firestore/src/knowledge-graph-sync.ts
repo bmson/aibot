@@ -97,18 +97,21 @@ async function readFence(
   const intentRef = store.doc('graphDeletionIntents', source.id);
   const hashRef = store.doc('memoryContentHashes', source.contentHash);
   const tombstoneRef = store.doc('memoryTombstones', source.contentHash);
-  const [memoryDoc, sourceDoc, intentDoc, hashDoc, tombstoneDoc] = await tx.getAll(
+  const erasureRef = store.doc('privacyErasureJobs', source.agentId);
+  const [memoryDoc, sourceDoc, intentDoc, hashDoc, tombstoneDoc, erasureDoc] = await tx.getAll(
     memoryRef,
     sourceRef,
     intentRef,
     hashRef,
     tombstoneRef,
+    erasureRef,
   );
   const memory = memoryDoc ? ownedMemory(memoryDoc, source, now) : null;
   const live =
     Boolean(memory) &&
     !intentDoc?.exists &&
     !tombstoneDoc?.exists &&
+    (!erasureDoc?.exists || erasureDoc.get('status') === 'complete') &&
     hashDoc?.exists === true &&
     hashDoc.get('memoryId') === source.id;
   const checkpoint = sourceDoc?.exists ? decodeRecord<GraphSource>(sourceDoc.data()) : null;
