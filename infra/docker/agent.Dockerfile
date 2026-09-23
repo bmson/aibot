@@ -30,6 +30,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 ENV ASSISTANT_REPO_ROOT=/app
+ARG GIT_SHA=unknown
+ENV BUILD_SHA=${GIT_SHA}
 WORKDIR /app
 
 COPY --from=build --chown=node:node /src/apps/agent/dist/index.mjs ./index.mjs

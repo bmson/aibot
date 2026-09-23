@@ -91,6 +91,7 @@ import {
   createFirestoreExecutionPersistence,
   createInstallationStore,
   FirestoreApplicationChatPersistence,
+  FirestoreShellStatusRepository,
 } from '@assistant/firestore';
 import { inspectMcpConnection } from '@assistant/tools/mcp';
 import {
@@ -125,6 +126,9 @@ export function getDb(): Db {
 }
 
 export function getGeneratedCards() {
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    return getFirestoreChatApplication().getGeneratedCards();
+  }
   return createPostgresGeneratedCardRepository(getDb());
 }
 
@@ -351,6 +355,7 @@ function createFirestoreChatApplication() {
     parseFirestoreEmbeddingSpace(config.FIRESTORE_EMBEDDING_SPACE),
   );
   const chat = new FirestoreApplicationChatPersistence(store, config.FIRESTORE_AGENT_ID);
+  const shellStatus = new FirestoreShellStatusRepository(store, config.FIRESTORE_AGENT_ID);
   const router = new ModelRouter(
     persistence.modelRouting,
     config.OPENROUTER_API_KEY,
@@ -359,10 +364,17 @@ function createFirestoreChatApplication() {
   );
   const chatReads = { chat, generatedCards: persistence.generatedCards };
   return {
+    getGeneratedCards: () => persistence.generatedCards,
     getAgentIdentity: async () => {
       const agent = await chat.resolveAgent();
       return { id: agent.id, name: agent.name || 'Assistant', avatarUrl: agent.avatarUrl ?? null };
     },
+    getShellStatus: (agentId: string) =>
+      unstable_cache(
+        () => getShellStatus(shellStatus, agentId),
+        ['firestore-shell-status', config.GCP_PROJECT, config.ASSISTANT_WORKSPACE_ID, agentId],
+        { revalidate: 30 },
+      )(),
     getPrimaryConversationId: () => getPrimaryConversationId(chat),
     createChat: () => createChatConversation(chat),
     changeChatModel: (conversationId: string, modelId: string | null) =>

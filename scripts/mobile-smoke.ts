@@ -330,6 +330,15 @@ async function navigate(page: Page, url: string) {
 async function openRoute(page: Page, path: string, mobile = true) {
   const response = await navigate(page, `${baseUrl}${path}`);
   assert(response?.ok(), `${path} returned HTTP ${response?.status() ?? 'unknown'}`);
+  if (path === '/profile/memories') {
+    // This legacy URL redirects through Next's streamed response. Its initial
+    // load can finish before the client follows the redirect, so starting the
+    // next route immediately can be interrupted by the late navigation.
+    await page.waitForURL(
+      (url) => url.pathname === '/profile/knowledge' && url.searchParams.get('view') === 'library',
+      { waitUntil: 'load', timeout: 30_000 },
+    );
+  }
   assert(
     new URL(page.url()).origin === new URL(baseUrl).origin,
     `${path} unexpectedly left the smoke-test origin: ${page.url()}`,

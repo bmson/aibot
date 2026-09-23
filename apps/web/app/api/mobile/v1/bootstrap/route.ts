@@ -1,4 +1,4 @@
-import { getAgentIdentity, getApplication } from '@/lib/server';
+import { getAgentIdentity, getChatApplication } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
 
-  const application = getApplication();
+  const application = getChatApplication();
   const identity = await getAgentIdentity();
   if (!identity.id) return mobileJson({ error: 'assistant not configured' }, { status: 503 });
 
