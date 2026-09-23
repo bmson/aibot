@@ -44,6 +44,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/activity' && request.method === 'GET') ||
     (activityIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/workspace' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/memory/profile' && request.method === 'GET') ||
     (path === '/api/card-image' && request.method === 'GET') ||
     (path === '/api/mobile/v1/cards' && request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/library' && request.method === 'GET') ||
