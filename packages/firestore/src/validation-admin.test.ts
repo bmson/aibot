@@ -304,4 +304,10 @@ it('keeps deployable composite indexes and field overrides in their correct sect
       index.fields.map((field) => `${field.fieldPath}:${field.order}`).join(','),
     );
   expect(commitmentIndexes).toContain('agentId:ASCENDING,status:ASCENDING');
+  const modelCallIndexes = spec.indexes
+    .filter((index: { collectionGroup: string }) => index.collectionGroup === 'modelCalls')
+    .map((index: { fields: Array<{ fieldPath: string; order: string }> }) =>
+      index.fields.map((field) => `${field.fieldPath}:${field.order}`).join(','),
+    );
+  expect(modelCallIndexes).toContain('agentId:ASCENDING,role:ASCENDING,createdAt:DESCENDING');
 });
