@@ -1,6 +1,6 @@
 import { moduleDiagnostics } from '@assistant/modules/meta';
 import { Hono } from 'hono';
-import { buildDeps } from './deps.js';
+import { buildDeps, firestoreOwnerReady } from './deps.js';
 import { api } from './routes/api.js';
 import { internal } from './routes/internal.js';
 import { webhooks } from './routes/webhooks.js';
@@ -12,10 +12,15 @@ export function createApp() {
   app.get('/ready', async (c) => {
     const deps = buildDeps();
     try {
-      await deps.db.execute('select 1');
+      if (deps.firestoreStore) {
+        if (!(await firestoreOwnerReady(deps)))
+          throw new Error('configured Firestore agent is unavailable');
+      } else {
+        await deps.db.execute('select 1');
+      }
       return c.json({
         ready: true,
-        database: 'ready',
+        database: deps.firestoreStore ? 'firestore' : 'ready',
         modules: moduleDiagnostics(deps.config),
       });
     } catch {

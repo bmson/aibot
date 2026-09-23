@@ -28,7 +28,7 @@ export function createFirestoreExecutionPersistence(
   store: InstallationStore,
   agentId: string,
   skillEmbeddingSpace: EmbeddingSpace,
-): ExecutionPersistence {
+): ExecutionPersistence & { tasks: FirestoreTaskRepository } {
   return {
     driver: 'firestore',
     tasks: new FirestoreTaskRepository(store),

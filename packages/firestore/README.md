@@ -47,6 +47,8 @@ The [index specification](../../infra/gcp/firestore/firestore.indexes.json) cove
 
 The due-task OR query needs both `(status, updatedAt, runAfter)` for scheduled work and `(runAfter, status, updatedAt)` for the `runAfter == null` branch. The first real-cloud validation exposed the latter missing index even though the emulator suite passed. Keep both indexes when changing the deployment specification.
 
+The agent-local poller uses owner-scoped variants of the recovery and due queries. Their composite indexes prepend `agentId` to `(status, lockedUntil)`, `(status, updatedAt, runAfter)`, and `(runAfter, status, updatedAt)` so foreign tasks are excluded before either reclaim writes or the batch limit.
+
 Task recovery reads at most the requested batch (1–200) of expired running tasks ordered by lease expiry, then rechecks each inside its own transaction. The due query returns at most that batch of pending or elapsed sleeping/budget tasks ordered by `updatedAt`. Both queries stay within one installation collection. Document result bounds do not bound index entries scanned: preserving the existing oldest-update ordering can require scanning scheduled tasks whose `runAfter` is still in the future. Measure this with Query Explain before enabling the runtime; see [Google's index ordering guidance](https://firebase.google.com/docs/firestore/query-data/multiple-range-fields). Future wakes are durably recorded in the outbox, so the eventual scheduler should dispatch from its `availableAt` index and use task recovery as bounded repair.
 
 See the [implementation status](../../docs/firestore-implementation-status.md) for completed work and the remaining installation gates.

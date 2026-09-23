@@ -24,12 +24,17 @@ vi.mock('./task-runner.js', () => ({ executeAgentTask }));
 vi.mock('./executor-deps.js', () => ({
   executorDeps: () => ({ notifyApproval: vi.fn(), notifyOwner: vi.fn() }),
 }));
-vi.mock('./deps.js', () => ({ agentServices: () => ({}) }));
+vi.mock('./deps.js', () => ({ agentServices: () => ({}), firestoreOwnerReady: vi.fn() }));
 
 const { startPoller } = await import('./poller.js');
 
 /** Just enough of AgentDeps for the loop; everything it touches is mocked. */
-const deps = { db: {}, router: {}, modules: { sweepSteps: [], ticks: [] } } as never;
+const deps = {
+  config: { PERSISTENCE_DRIVER: 'postgres' },
+  db: {},
+  router: {},
+  modules: { sweepSteps: [], ticks: [] },
+} as never;
 
 function due(...ids: string[]) {
   return ids.map((id) => ({ id, type: 'adhoc' }));
