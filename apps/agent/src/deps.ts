@@ -21,6 +21,8 @@ import { createDb, createPostgresExecutionPersistence, type Db } from '@assistan
 import {
   createFirestoreExecutionPersistence,
   createInstallationStore,
+  FirestoreReminderRepository,
+  FirestoreScheduleRepository,
   type FirestoreTaskRepository,
   type InstallationStore,
 } from '@assistant/firestore';
@@ -349,6 +351,19 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     workspacePrefix,
     workspaceRoot,
     persistence,
+    portableReminders: {
+      schedules: new FirestoreScheduleRepository(store),
+      reminders: new FirestoreReminderRepository(store),
+      getTimezone: async (agentId) => {
+        if (agentId !== config.FIRESTORE_AGENT_ID)
+          throw new Error('Reminder owner is outside the configured Firestore agent');
+        const owner = await store.doc('agents', agentId).get();
+        const timezone = owner.exists ? owner.get('timezone') : null;
+        if (typeof timezone !== 'string' || !timezone)
+          throw new Error('Firestore reminder owner timezone is unavailable');
+        return timezone;
+      },
+    },
   });
   return {
     config,

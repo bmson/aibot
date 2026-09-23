@@ -8,6 +8,7 @@ import {
   reminderScheduleTemplate,
   upsertSchedule,
 } from '@assistant/core';
+import type { ReminderRepository, ScheduleRepository } from '@assistant/persistence';
 import { z } from 'zod';
 import type { ToolRegistry } from './registry.js';
 import type { AssistantTool, ToolFlags } from './types.js';
@@ -51,7 +52,16 @@ function cronFromTime(time: string, weekdays?: number[]): string {
  * thread (owner.notify's default sink). Registered unconditionally — no provider
  * needed.
  */
-export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
+export interface PortableReminderTools {
+  schedules: ScheduleRepository;
+  reminders: ReminderRepository;
+  getTimezone(agentId: string): Promise<string>;
+}
+
+export function registerReminderTools(
+  registry: ToolRegistry,
+  portable?: PortableReminderTools,
+): ToolRegistry {
   const createSchema = z
     .object({
       text: z.string().min(1).max(500),
@@ -98,7 +108,9 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
-        const agent = await getAgent(ctx.db);
+        const timezone = portable
+          ? await portable.getTimezone(ctx.agentId)
+          : (await getAgent(ctx.db)).timezone;
         const relativeFiresAt = args.inMinutes
           ? new Date(ctx.now().getTime() + args.inMinutes * 60 * 1000)
           : undefined;
@@ -108,12 +120,12 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
           if (firesAt.getTime() <= ctx.now().getTime()) {
             throw new Error('one-time reminder must be in the future');
           }
-          const cron = cronForInstant(firesAt, agent.timezone);
-          const row = await upsertSchedule(ctx.db, {
+          const cron = cronForInstant(firesAt, timezone);
+          const row = await upsertSchedule(portable?.schedules ?? ctx.db, {
             agentId: ctx.agentId,
             name: `${REMINDER_PREFIX}${randomUUID()}`,
             cron,
-            timezone: agent.timezone,
+            timezone,
             nextRunAt: firesAt,
             taskTemplate: {
               type: 'scheduled',
@@ -122,7 +134,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
               budgetUsdLimit: '0.05',
               reminderKind: 'once',
               reminderText: args.text,
-              timezone: agent.timezone,
+              timezone,
               instruction: `Reminder for the owner: ${args.text}\n\nCall owner.notify once with exactly this reminder text, then finish. Do nothing else.`,
               ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
             },
@@ -131,25 +143,25 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
             reminderId: row.id,
             kind: 'once' as const,
             nextFires: firesAt.toISOString(),
-            timezone: agent.timezone,
+            timezone,
             text: args.text,
           };
         }
         const cron = args.cron ?? cronFromTime(args.time as string, args.weekdays);
         // Validate the cron by computing its next run; nextRun throws if invalid.
-        const next = nextRun(cron, agent.timezone);
-        const row = await upsertSchedule(ctx.db, {
+        const next = nextRun(cron, timezone);
+        const row = await upsertSchedule(portable?.schedules ?? ctx.db, {
           agentId: ctx.agentId,
           name: `${REMINDER_PREFIX}${randomUUID()}`,
           cron,
-          timezone: agent.timezone,
+          timezone,
           taskTemplate: {
             type: 'scheduled',
             job: 'reminder.notify',
             maxSteps: 3,
             budgetUsdLimit: '0.05',
             reminderKind: 'recurring',
-            timezone: agent.timezone,
+            timezone,
             reminderText: args.text,
             instruction: `Reminder for the owner: ${args.text}\n\nCall owner.notify once with exactly this reminder text, then finish. Do nothing else.`,
             // Fire back into the originating chat when there is one.
@@ -161,7 +173,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
           kind: 'recurring' as const,
           cron,
           nextFires: next.toISOString(),
-          timezone: agent.timezone,
+          timezone,
           text: args.text,
         };
       },
@@ -178,8 +190,10 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (_args, ctx) => {
-        const agent = await getAgent(ctx.db);
-        const rows = await listReminderSchedules(ctx.db, ctx.agentId);
+        const timezone = portable
+          ? await portable.getTimezone(ctx.agentId)
+          : (await getAgent(ctx.db)).timezone;
+        const rows = await listReminderSchedules(portable?.schedules ?? ctx.db, ctx.agentId);
         rows.sort(
           (a, b) =>
             Number(b.enabled) - Number(a.enabled) ||
@@ -193,7 +207,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
             text: reminderScheduleTemplate(r.taskTemplate).reminderText ?? '',
             kind: reminderScheduleTemplate(r.taskTemplate).reminderKind ?? 'recurring',
             cron: r.cron,
-            timezone: agent.timezone,
+            timezone,
             enabled: r.enabled,
             nextFires: r.enabled ? (r.nextRunAt?.toISOString() ?? null) : null,
           })),
@@ -220,7 +234,7 @@ export function registerReminderTools(registry: ToolRegistry): ToolRegistry {
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
-        return cancelNamedReminder(ctx.db, ctx.agentId, args, ctx.now());
+        return cancelNamedReminder(portable ?? ctx.db, ctx.agentId, args, ctx.now());
       },
     },
     { privateWrite: true },

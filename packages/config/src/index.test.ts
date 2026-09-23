@@ -59,7 +59,7 @@ describe('config', () => {
     );
   });
 
-  it('requires an explicit, minimal Firestore agent identity and embedding space', () => {
+  it('requires an explicit Firestore identity and permits only the portable reminders module', () => {
     const config = loadConfig({ PERSISTENCE_DRIVER: 'firestore' });
     expect(validateAgentPersistenceConfig(config, {})).toEqual(
       expect.arrayContaining([
@@ -67,7 +67,7 @@ describe('config', () => {
         expect.stringContaining('ASSISTANT_WORKSPACE_ID'),
         expect.stringContaining('FIRESTORE_AGENT_ID'),
         expect.stringContaining('FIRESTORE_EMBEDDING_SPACE'),
-        expect.stringContaining('ASSISTANT_MODULES=minimal'),
+        expect.stringContaining('only ASSISTANT_MODULES=reminders'),
       ]),
     );
     expect(() => parseFirestoreEmbeddingSpace('{"provider":"test"}')).toThrow(
@@ -81,11 +81,14 @@ describe('config', () => {
       FIRESTORE_DATABASE_ID: 'assistant-production',
       FIRESTORE_EMBEDDING_SPACE:
         '{"provider":"openai","model":"text-embedding-3-small","dimensions":1536,"revision":"1"}',
-      ASSISTANT_MODULES: 'minimal',
+      ASSISTANT_MODULES: 'reminders',
       QUEUE_DRIVER: 'local',
     };
     resetConfigForTest();
     expect(validateAgentPersistenceConfig(loadConfig(env), env)).toEqual([]);
+    expect(
+      validateAgentPersistenceConfig({ ...loadConfig(env), ASSISTANT_MODULES: ['documents'] }, env),
+    ).toContain('only ASSISTANT_MODULES=reminders is supported in Firestore agent mode');
     expect(
       validateAgentPersistenceConfig(loadConfig(env), {
         ...env,

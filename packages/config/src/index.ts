@@ -363,7 +363,7 @@ export function modelProviderConfigProblems(config: Config): string[] {
   return problems;
 }
 
-/** Firestore agent mode is intentionally narrow until the remaining runtime ports migrate. */
+/** Firestore agent mode stays narrow until the remaining runtime ports migrate. */
 export function validateAgentPersistenceConfig(
   config: Config,
   env: NodeJS.ProcessEnv = process.env,
@@ -388,8 +388,8 @@ export function validateAgentPersistenceConfig(
       problems.push('FIRESTORE_EMBEDDING_SPACE must be JSON {provider,model,dimensions,revision}');
     }
   }
-  if (config.ASSISTANT_MODULES.length)
-    problems.push('ASSISTANT_MODULES=minimal is required in Firestore agent mode');
+  if (config.ASSISTANT_MODULES.some((module) => module !== 'reminders'))
+    problems.push('only ASSISTANT_MODULES=reminders is supported in Firestore agent mode');
   if (config.QUEUE_DRIVER !== 'local')
     problems.push('QUEUE_DRIVER=local is required in Firestore agent mode');
   if (config.CANARY_ENABLED) problems.push('CANARY_ENABLED must be false in Firestore agent mode');
