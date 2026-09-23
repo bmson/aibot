@@ -12,7 +12,14 @@
  * decides layout; the server decides what the data is allowed to say.
  */
 
-import type { PersonDossier, PersonSummary } from './people.js';
+import type {
+  PersonConnection,
+  PersonDossier,
+  PersonEvent,
+  PersonRelation,
+  PersonSummary,
+  UpcomingOccasionView,
+} from './people.js';
 import {
   birthdayLabel,
   countdownPhrase,
@@ -128,23 +135,33 @@ function occasionNoun(kind: string, label: string): string {
   return kind;
 }
 
-export function toPersonCardView(dossier: PersonDossier, now: Date): PersonCardView {
-  const { profile } = dossier;
-  const firstName = profile.contact.name.split(' ')[0] ?? profile.contact.name;
+export function toPersonCardViewFromParts(
+  input: {
+    summary: PersonSummary;
+    origins: Pick<PersonConnection, 'sentence'>[];
+    relations: PersonRelation[];
+    connections: PersonConnection[];
+    events: PersonEvent[];
+    upcomingOccasion: UpcomingOccasionView | null;
+  },
+  now: Date,
+): PersonCardView {
+  const { summary } = input;
+  const firstName = summary.name.split(' ')[0] ?? summary.name;
 
   return {
-    id: profile.contact.id,
-    name: profile.contact.name,
-    initials: personInitials(profile.contact.name),
-    relationship: profile.contact.relationship,
-    group: dossier.group,
-    groupLabel: groupLabelFor(dossier.group),
-    trust: profile.contact.trust,
-    location: dossier.location,
-    birthday: dossier.birthday ? birthdayLabel(dossier.birthday, now) : null,
-    lastContact: lastContactLabel(dossier.lastContactAt, now),
-    howWeMet: dossier.origins.map((origin) => origin.sentence),
-    relations: dossier.relations.map((relation) => ({
+    id: summary.id,
+    name: summary.name,
+    initials: personInitials(summary.name),
+    relationship: summary.relationship,
+    group: summary.group,
+    groupLabel: groupLabelFor(summary.group),
+    trust: summary.trust,
+    location: summary.location,
+    birthday: summary.birthday ? birthdayLabel(summary.birthday, now) : null,
+    lastContact: lastContactLabel(summary.lastContactAt, now),
+    howWeMet: input.origins.map((origin) => origin.sentence),
+    relations: input.relations.map((relation) => ({
       id: relation.id,
       sentence: relation.sentence,
       otherLabel: relation.otherLabel,
@@ -153,27 +170,51 @@ export function toPersonCardView(dossier: PersonDossier, now: Date): PersonCardV
       span: relationSpanLabel(relation.validFrom, relation.validUntil, now),
       unreviewed: relation.reviewStatus === 'unreviewed',
     })),
-    connections: dossier.connections.map((connection) => ({
+    connections: input.connections.map((connection) => ({
       id: connection.id,
       sentence: connection.sentence,
       span: relationSpanLabel(connection.validFrom, connection.validUntil, now),
     })),
-    events: dossier.events.map((event) => ({
+    events: input.events.map((event) => ({
       id: event.id,
       content: event.content,
       date: eventDateLabel(event.occurredAt, now),
       dateIsRecordTime: event.dateIsRecordTime,
     })),
-    eventsAreRecent: dossier.events.length > 0,
-    reminder: dossier.upcomingOccasion
+    eventsAreRecent: input.events.length > 0,
+    reminder: input.upcomingOccasion
       ? {
           headline: `${firstName}’s ${occasionNoun(
-            dossier.upcomingOccasion.kind,
-            dossier.upcomingOccasion.label,
-          )} is ${countdownPhrase(dossier.upcomingOccasion.daysUntil)}`,
+            input.upcomingOccasion.kind,
+            input.upcomingOccasion.label,
+          )} is ${countdownPhrase(input.upcomingOccasion.daysUntil)}`,
           detail: 'Reminder · the assistant will raise it in your morning brief.',
         }
       : null,
-    factCount: profile.totalFacts,
+    factCount: summary.factCount,
   };
+}
+
+export function toPersonCardView(dossier: PersonDossier, now: Date): PersonCardView {
+  return toPersonCardViewFromParts(
+    {
+      summary: {
+        id: dossier.profile.contact.id,
+        name: dossier.profile.contact.name,
+        relationship: dossier.profile.contact.relationship,
+        trust: dossier.profile.contact.trust,
+        group: dossier.group,
+        location: dossier.location,
+        factCount: dossier.profile.totalFacts,
+        birthday: dossier.birthday,
+        lastContactAt: dossier.lastContactAt,
+      },
+      origins: dossier.origins,
+      relations: dossier.relations,
+      connections: dossier.connections,
+      events: dossier.events,
+      upcomingOccasion: dossier.upcomingOccasion,
+    },
+    now,
+  );
 }
