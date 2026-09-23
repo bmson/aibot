@@ -6,6 +6,7 @@ const findDueTasks = vi.hoisted(() => vi.fn());
 const executeAgentTask = vi.hoisted(() => vi.fn());
 const sweepStep = vi.hoisted(() => vi.fn());
 const firestoreOwnerReady = vi.hoisted(() => vi.fn());
+const runDueSchedules = vi.hoisted(() => vi.fn());
 
 vi.mock('@assistant/core', () => ({
   findDueTasks,
@@ -19,7 +20,13 @@ vi.mock('@assistant/core', () => ({
   renotifyStalledApprovals: vi.fn(async () => 0),
   renotifyStalledAttention: vi.fn(async () => 0),
   resumeResolvedApprovalTasks: vi.fn(async () => []),
-  runDueSchedules: vi.fn(async () => []),
+  runDueSchedules,
+}));
+vi.mock('@assistant/firestore', () => ({
+  FirestoreScheduleRepository: class {
+    readonly kind = 'schedule-repository';
+    constructor(readonly store: unknown) {}
+  },
 }));
 vi.mock('./task-runner.js', () => ({ executeAgentTask }));
 vi.mock('./executor-deps.js', () => ({
@@ -51,9 +58,11 @@ beforeEach(() => {
   findDueTasks.mockReset();
   executeAgentTask.mockReset();
   firestoreOwnerReady.mockReset();
+  runDueSchedules.mockReset();
   findDueTasks.mockResolvedValue([]);
   executeAgentTask.mockResolvedValue({ outcome: 'done' });
   firestoreOwnerReady.mockResolvedValue(true);
+  runDueSchedules.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -150,6 +159,65 @@ describe('startPoller', () => {
     expect(resumeResolved).toHaveBeenCalled();
     expect(expireWatches).toHaveBeenCalledWith('owner-agent', expect.any(Date));
     expect(sweepStep).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('ticks due Firestore schedules with the stored owner timezone', async () => {
+    const ownerTimezone = 'America/Los_Angeles';
+    const firestoreStore = {
+      doc: () => ({
+        get: async () => ({
+          get: (field: string) =>
+            ({ id: 'owner-agent', timezone: ownerTimezone })[field as 'id' | 'timezone'],
+        }),
+      }),
+    };
+    const firestoreDeps = {
+      config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: 'owner-agent' },
+      db: {},
+      router: {},
+      modules: { sweepSteps: [], ticks: [] },
+      firestoreStore,
+      persistence: {
+        approvals: { expireStale: vi.fn(async () => []), resumeResolved: vi.fn(async () => []) },
+        watches: { expire: vi.fn(async () => 0) },
+      },
+    } as never;
+    runDueSchedules.mockResolvedValue([{ schedule: 'daily-briefing', taskId: 'task-12345678' }]);
+
+    const stop = startPoller(firestoreDeps);
+    await vi.advanceTimersByTimeAsync(62_000);
+
+    expect(runDueSchedules).toHaveBeenCalledTimes(1);
+    const [repository, timezone] = runDueSchedules.mock.calls[0] as [
+      { kind: string; store: unknown },
+      string,
+    ];
+    expect(repository.kind).toBe('schedule-repository');
+    expect(repository.store).toBe(firestoreStore);
+    expect(timezone).toBe(ownerTimezone);
+    stop();
+  });
+
+  it('does not tick Firestore schedules until the configured owner is ready', async () => {
+    firestoreOwnerReady.mockResolvedValue(false);
+    const firestoreDeps = {
+      config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: 'owner-agent' },
+      db: {},
+      router: {},
+      modules: { sweepSteps: [], ticks: [] },
+      firestoreStore: {},
+      persistence: {
+        approvals: { expireStale: vi.fn(async () => []), resumeResolved: vi.fn(async () => []) },
+        watches: { expire: vi.fn(async () => 0) },
+      },
+    } as never;
+
+    const stop = startPoller(firestoreDeps);
+    await vi.advanceTimersByTimeAsync(62_000);
+
+    expect(firestoreOwnerReady).toHaveBeenCalled();
+    expect(runDueSchedules).not.toHaveBeenCalled();
     stop();
   });
 });
