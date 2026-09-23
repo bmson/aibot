@@ -2,7 +2,7 @@ import { getCostsDashboard, getProfileOverview } from '@assistant/application';
 import { assistantModuleMetas } from '@assistant/modules/meta';
 import { policyLabels, scheduleLabels } from '@/app/settings/labels';
 import { capabilityStatus, getCapabilityDiagnostics } from '@/lib/capabilities';
-import { getApplication, getDb } from '@/lib/server';
+import { getApplication, getDb, getWorkspaceSettings } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -34,7 +34,7 @@ export async function GET(request: Request): Promise<Response> {
     application.listChatHistory(true),
     getProfileOverview(db),
     application.listSkills(),
-    application.getSettings(),
+    getWorkspaceSettings(),
     getCostsDashboard(db),
     application.listAnomalies(),
     application.listImprovementProposals(),

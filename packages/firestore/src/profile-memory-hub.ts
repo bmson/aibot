@@ -49,13 +49,23 @@ export interface ProfileHubSource {
   fence: Awaited<ReturnType<typeof readPrivacyErasureFence>>;
 }
 
-export async function loadProfileHubSource(store: InstallationStore): Promise<ProfileHubSource> {
-  const configured = await store.collection('agents').limit(2).get();
-  if (configured.size !== 1 || !configured.docs[0])
+export async function loadProfileHubSource(
+  store: InstallationStore,
+  pinnedAgentId?: string,
+): Promise<ProfileHubSource> {
+  const configured = pinnedAgentId ? null : await store.collection('agents').limit(2).get();
+  if (configured && (configured.size !== 1 || !configured.docs[0]))
     throw new Error('Memory hub requires exactly one configured agent');
-  const agentDoc = configured.docs[0];
+  const agentDoc = pinnedAgentId
+    ? await store.doc('agents', pinnedAgentId).get()
+    : configured?.docs[0];
+  if (!agentDoc?.exists) throw new Error('Configured Memory hub agent is missing');
   const agentId = agentDoc.get('id');
-  if (typeof agentId !== 'string' || documentKey(agentId) !== agentDoc.id)
+  if (
+    typeof agentId !== 'string' ||
+    documentKey(agentId) !== agentDoc.id ||
+    (pinnedAgentId !== undefined && agentId !== pinnedAgentId)
+  )
     throw new Error('Configured agent record is malformed');
   const fence = await readPrivacyErasureFence(store, agentId);
 

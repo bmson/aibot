@@ -62,6 +62,8 @@ The preview derives optional workers, API intent, scheduler declarations, and mo
 
 The new `consumer:install` command builds the customer-owned infrastructure foundation. It does **not** deploy the application or finish owner onboarding. It always reports `runtimeReady: false`.
 
+Before a later runtime stage starts containers, `pnpm firestore:runtime-data-preflight` can read the selected installation's configured owner agent, budget policy, and eight model roles/catalog entries. It requires explicit `GCP_PROJECT`, `ASSISTANT_WORKSPACE_ID`, `FIRESTORE_AGENT_ID`, `FIRESTORE_EMBEDDING_SPACE`, and `LLM_PROVIDER` environment values. The JSON result identifies missing or inconsistent records without printing owner content; a non-ready result exits nonzero. This is a read-only data check, not an authenticated model call, IAM test, or readiness claim.
+
 Use Node/pnpm, gcloud credentials for the target project, Application Default Credentials for Terraform, and Terraform 1.14.5. The target project must have billing available. Generate a canonical source archive from the selected release checkout:
 
 ```sh

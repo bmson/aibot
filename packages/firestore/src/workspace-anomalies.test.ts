@@ -1,0 +1,152 @@
+import { randomUUID } from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { InstallationStore } from './store.js';
+import { disposeStore, emulatorStore } from './test-store.js';
+import { FirestoreWorkspaceAnomalyRepository } from './workspace-anomalies.js';
+
+describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
+  'Firestore mobile workspace anomalies',
+  () => {
+    let store: InstallationStore;
+    let repository: FirestoreWorkspaceAnomalyRepository;
+    const agentId = randomUUID();
+
+    beforeEach(() => {
+      store = emulatorStore();
+      repository = new FirestoreWorkspaceAnomalyRepository(store);
+    });
+
+    afterEach(async () => disposeStore(store));
+
+    async function seed(
+      id: string,
+      patch: Record<string, unknown> = {},
+      documentId = id,
+    ): Promise<void> {
+      await store.doc('anomalies', documentId).set({
+        id,
+        agentId,
+        status: 'open',
+        kind: 'frequency',
+        toolName: 'calendar.create',
+        detail: 'Unexpected automatic calendar writes',
+        observed: 12,
+        expected: 2,
+        toolCallIds: ['call-one', 'call-two'],
+        policyId: null,
+        createdAt: new Date('2026-09-01T00:00:00.000Z'),
+        ...patch,
+      });
+    }
+
+    it('matches the newest 100 open rows, excludes other owners, and counts citations exactly', async () => {
+      const batch = store.db.batch();
+      for (let index = 0; index < 105; index += 1) {
+        const id = `open-${String(index).padStart(3, '0')}`;
+        batch.set(store.doc('anomalies', id), {
+          id,
+          agentId,
+          status: 'open',
+          kind: 'burst',
+          toolName: 'email.send',
+          detail: 'Burst',
+          observed: index,
+          expected: 1,
+          toolCallIds: ['one', 'two', 'three'],
+          policyId: 'policy-one',
+          createdAt: new Date(Date.UTC(2026, 8, 1, 0, index)),
+        });
+      }
+      batch.set(store.doc('anomalies', 'foreign'), {
+        id: 'foreign',
+        agentId: 'another-owner',
+        status: 'open',
+        kind: 'off_hours',
+        toolName: 'email.send',
+        detail: 'Foreign owner alert',
+        observed: 1,
+        expected: 0,
+        toolCallIds: [],
+        policyId: null,
+        createdAt: new Date('2026-12-01T00:00:00.000Z'),
+      });
+      await batch.commit();
+      await seed('dismissed', { status: 'dismissed', createdAt: new Date('2026-12-01') });
+
+      const rows = await repository.listOpen(agentId);
+      expect(rows).toHaveLength(100);
+      expect(rows.map((row) => row.id)).toEqual(
+        Array.from({ length: 100 }, (_, index) => `open-${String(104 - index).padStart(3, '0')}`),
+      );
+      expect(rows[0]).toEqual({
+        id: 'open-104',
+        kind: 'burst',
+        toolName: 'email.send',
+        detail: 'Burst',
+        observed: 104,
+        expected: 1,
+        toolCallIds: ['one', 'two', 'three'],
+        policyId: 'policy-one',
+        createdAt: new Date(Date.UTC(2026, 8, 1, 0, 104)),
+      });
+      expect((await repository.listOpen('another-owner')).map((row) => row.id)).toEqual([
+        'foreign',
+      ]);
+      await expect(repository.listOpen('')).rejects.toThrow('agent is required');
+    });
+
+    it('fails closed on malformed owner identity or open anomaly fields', async () => {
+      await seed('wrong-id', {}, 'different-document');
+      await expect(repository.listOpen(agentId)).rejects.toThrow('Invalid owner anomaly document');
+      await store.doc('anomalies', 'different-document').delete();
+
+      await seed('bad-count', { toolCallIds: ['call', 7] });
+      await expect(repository.listOpen(agentId)).rejects.toThrow('Invalid open anomaly document');
+    });
+
+    it('rejects a scan beyond its cap instead of returning a partial top 100', async () => {
+      for (let offset = 0; offset < 2_001; offset += 500) {
+        const batch = store.db.batch();
+        for (let index = offset; index < Math.min(offset + 500, 2_001); index += 1) {
+          const id = `old-${index}`;
+          batch.set(store.doc('anomalies', id), { id, agentId, status: 'dismissed' });
+        }
+        await batch.commit();
+      }
+      await expect(repository.listOpen(agentId)).rejects.toThrow(
+        'Owner anomalies exceed the mobile workspace scan limit',
+      );
+    });
+
+    it('rejects reads during erasure and an erasure that completes mid-read', async () => {
+      await seed('open-one');
+      await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+      await expect(repository.listOpen(agentId)).rejects.toThrow('Privacy erasure is in progress');
+      await store.doc('privacyErasureJobs', agentId).delete();
+
+      const originalDoc = store.doc.bind(store);
+      let fenceReads = 0;
+      const spy = vi.spyOn(store, 'doc').mockImplementation((collection, id) => {
+        const ref = originalDoc(collection, id);
+        if (collection === 'privacyErasureJobs' && id === agentId) {
+          const get = ref.get.bind(ref);
+          vi.spyOn(ref, 'get').mockImplementation(async () => {
+            fenceReads += 1;
+            if (fenceReads === 2)
+              await originalDoc('privacyErasureJobs', agentId).set({ agentId, status: 'complete' });
+            return get();
+          });
+        }
+        return ref;
+      });
+      try {
+        await expect(repository.listOpen(agentId)).rejects.toThrow(
+          'Privacy erasure changed during read',
+        );
+        expect(fenceReads).toBe(2);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  },
+);
