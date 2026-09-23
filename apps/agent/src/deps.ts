@@ -21,6 +21,7 @@ import { createDb, createPostgresExecutionPersistence, type Db } from '@assistan
 import {
   createFirestoreExecutionPersistence,
   createInstallationStore,
+  FirestoreDocumentExtractionRepository,
   FirestoreGoalProgressRepository,
   FirestoreOwnerNoticeRepository,
   FirestoreReminderRepository,
@@ -42,6 +43,7 @@ import {
   smsModule,
 } from '@assistant/modules';
 import {
+  type DocumentExtractionRepository,
   type EmbeddingSpace,
   type ExecutionPersistence,
   embeddingModelId,
@@ -78,6 +80,7 @@ export interface AgentDeps {
   persistence?: ExecutionPersistence;
   firestoreStore?: InstallationStore;
   firestoreTasks?: FirestoreTaskRepository;
+  documentExtractionRepository?: DocumentExtractionRepository;
   router: ModelRouter;
   registry: ToolRegistry;
   dispatcher: ToolDispatcher;
@@ -342,6 +345,10 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     config.FIRESTORE_AGENT_ID,
     embeddingSpace,
   );
+  const documentExtractionRepository = new FirestoreDocumentExtractionRepository(
+    store,
+    config.FIRESTORE_AGENT_ID,
+  );
   const db = unavailableSqlDb();
   const router = new ModelRouter(
     persistence.modelRouting,
@@ -417,6 +424,7 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     db,
     firestoreStore: store,
     firestoreTasks: persistence.tasks,
+    documentExtractionRepository,
     persistence,
     router,
     registry,

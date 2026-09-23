@@ -1,5 +1,5 @@
 import { type Db, type ScheduleRow, schedules, type TaskRow } from '@assistant/db';
-import type { ExecutionPersistence } from '@assistant/persistence';
+import type { DocumentExtractionRepository, ExecutionPersistence } from '@assistant/persistence';
 import { and, eq, sql } from 'drizzle-orm';
 import { getOrCreateNotificationsConversation, persistMessage } from '../chat.js';
 import { loadConfig } from '../config.js';
@@ -135,6 +135,7 @@ export async function runCodeJob(
      */
     notifyOwner?: ProactiveNotifier;
     persistence?: ExecutionPersistence;
+    documentExtractionRepository?: DocumentExtractionRepository;
     heartbeat?: () => Promise<void>;
     /**
      * Supplied by the composition root: returns a completion summary when the
@@ -414,8 +415,39 @@ export async function runCodeJob(
         summary: `self-improve: ${r.proposalsDrafted} proposal(s) from ${r.patterns} failure pattern(s)${r.experienceSaved ? ', experience saved' : ''}`,
       };
     }
-    case 'documents.extract':
-      return runDocumentExtraction(deps, task);
+    case 'documents.extract': {
+      const payload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload;
+      const documentId = String(payload?.documentId ?? '');
+      if (!documentId) throw new Error('document extract payload needs a documentId');
+      const repository = deps.documentExtractionRepository;
+      return runDocumentExtraction(
+        {
+          db: deps.db,
+          router: deps.router,
+          workspace: deps.workspace,
+          heartbeat: deps.heartbeat,
+          ...(repository
+            ? {
+                documentExtraction: {
+                  repository,
+                  fence: () => {
+                    if (!task.leaseToken)
+                      throw new Error('document extraction task has no active lease token');
+                    return {
+                      agentId: task.agentId,
+                      documentId,
+                      taskId: task.id,
+                      queueGeneration: task.queueGeneration,
+                      leaseToken: task.leaseToken,
+                    };
+                  },
+                },
+              }
+            : {}),
+        },
+        task,
+      );
+    }
     case 'documents.process':
       return runDocumentProcessing(
         {
