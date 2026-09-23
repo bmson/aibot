@@ -66,7 +66,7 @@ node -e '
     "MIGRATION_SOURCE_AGENT_ID", "FIRESTORE_TARGET_DATABASE_ID",
     "MIGRATION_EMBEDDING_PROVIDER", "MIGRATION_EMBEDDING_MODEL",
     "MIGRATION_EMBEDDING_DIMENSIONS", "MIGRATION_EMBEDDING_REVISION"];
-  fs.writeFileSync(process.argv[1], JSON.stringify(Object.fromEntries(keys.map((key) => [key, process.env[key]]))));
+  fs.writeFileSync(process.argv[1], keys.map((key) => key + ": " + JSON.stringify(process.env[key])).join("\n") + "\n");
 ' "$env_file"
 
 job_args=(
