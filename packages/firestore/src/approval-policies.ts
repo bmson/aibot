@@ -1,4 +1,5 @@
 import type { ApprovalPolicyRepository, Records } from '@assistant/persistence';
+import { assertPrivacyErasureInactiveInTransaction } from './privacy-erasure.js';
 import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
 
 function policyTime(now: Date): Date {
@@ -28,6 +29,7 @@ export class FirestoreApprovalPolicyRepository implements ApprovalPolicyReposito
     return this.store.db.runTransaction(async (tx) => {
       const ref = this.store.doc('approvalPolicies', policyId);
       const policy = await tx.get(ref);
+      await assertPrivacyErasureInactiveInTransaction(tx, this.store, agentId);
       if (!policy.exists || policy.get('agentId') !== agentId) return false;
       tx.update(ref, encodeRecord({ enabled, updatedAt: now }));
       return true;
@@ -38,6 +40,7 @@ export class FirestoreApprovalPolicyRepository implements ApprovalPolicyReposito
     return this.store.db.runTransaction(async (tx) => {
       const policyRef = this.store.doc('approvalPolicies', policyId);
       const policy = await tx.get(policyRef);
+      await assertPrivacyErasureInactiveInTransaction(tx, this.store, agentId);
       if (!policy.exists || policy.get('agentId') !== agentId) return false;
       const mappings = await tx.get(
         this.store.collection('approvalPolicyKeys').where('policyId', '==', policyId),

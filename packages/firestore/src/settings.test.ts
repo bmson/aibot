@@ -168,6 +168,26 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore settings reposi
     await expect(repository.setOwnerEnabled(randomUUID(), owned.id, false)).resolves.toBe(false);
   });
 
+  it('blocks schedule toggles in the transaction while privacy erasure is active', async () => {
+    const store = emulatorStore(() => new Date('2026-09-19T20:00:00.000Z'));
+    stores.push(store);
+    const ownerId = randomUUID();
+    const repository = new FirestoreScheduleRepository(store);
+    const schedule = await repository.ensure({
+      agentId: ownerId,
+      name: 'daily job',
+      cron: '0 9 * * *',
+      taskTemplate: {},
+      nextRunAt: new Date('2026-09-20T09:00:00.000Z'),
+    });
+    await store.doc('privacyErasureJobs', ownerId).set({ agentId: ownerId, status: 'active' });
+
+    await expect(repository.setOwnerEnabled(ownerId, schedule.id, false)).rejects.toThrow(
+      'Privacy erasure is in progress',
+    );
+    expect((await store.doc('schedules', schedule.id).get()).get('enabled')).toBe(true);
+  });
+
   it('orders owners by the stored sub-millisecond timestamp', async () => {
     const store = emulatorStore();
     stores.push(store);

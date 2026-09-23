@@ -114,6 +114,21 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore approval polici
     expect((await store.doc('approvalPolicies', id).get()).exists).toBe(false);
   });
 
+  it('blocks policy enable and delete in their transactions during privacy erasure', async () => {
+    const owner = 'agent-erasing';
+    const id = await seedPolicy(owner, { id: 'policy-erasure-fence' });
+    await store.doc('privacyErasureJobs', owner).set({ agentId: owner, status: 'active' });
+
+    await expect(policies.setEnabled(owner, id, false)).rejects.toThrow(
+      'Privacy erasure is in progress',
+    );
+    await expect(policies.delete(owner, id)).rejects.toThrow('Privacy erasure is in progress');
+    expect((await store.doc('approvalPolicies', id).get()).data()).toMatchObject({
+      enabled: true,
+      agentId: owner,
+    });
+  });
+
   it('deletes only verified policy mappings while preserving historical approval IDs', async () => {
     const owner = 'agent-owner';
     const policyId = await seedPolicy(owner, { id: 'policy-delete' });
