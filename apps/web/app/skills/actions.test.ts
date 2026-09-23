@@ -10,9 +10,21 @@ const mocks = vi.hoisted(() => ({
   },
   getApplication: vi.fn(),
   revalidate: vi.fn(),
+  driver: 'postgres' as 'postgres' | 'firestore',
+  mobileSkill: {
+    write: vi.fn(),
+    delete: vi.fn(),
+    deprecate: vi.fn(),
+  },
 }));
 vi.mock('@/auth', () => ({ requireOwner: mocks.owner }));
 vi.mock('@/lib/server', () => ({ getChatApplication: mocks.getApplication }));
+vi.mock('@assistant/config', () => ({ loadConfig: () => ({ PERSISTENCE_DRIVER: mocks.driver }) }));
+vi.mock('@/lib/mobile-skill-write', () => ({
+  writeFirestoreMobileSkill: mocks.mobileSkill.write,
+  deleteFirestoreMobileSkill: mocks.mobileSkill.delete,
+  setFirestoreMobileSkillDeprecated: mocks.mobileSkill.deprecate,
+}));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidate }));
 
 import {
@@ -27,6 +39,7 @@ const input = { name: 'Planning', preconditions: '', steps: 'Check the goal', go
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.driver = 'postgres';
   mocks.owner.mockResolvedValue(undefined);
   mocks.getApplication.mockReturnValue(mocks.application);
   mocks.application.addSkill.mockResolvedValue({});
@@ -63,5 +76,24 @@ describe('owner Skills actions', () => {
     expect(mocks.application.editSkill).not.toHaveBeenCalled();
     expect(mocks.application.deleteSkill).not.toHaveBeenCalled();
     expect(mocks.application.setSkillDeprecated).not.toHaveBeenCalled();
+  });
+
+  it('uses the Firestore mobile write path for all mutations without touching the SQL application', async () => {
+    mocks.driver = 'firestore';
+    mocks.mobileSkill.write.mockResolvedValue(undefined);
+    mocks.mobileSkill.delete.mockResolvedValue(undefined);
+    mocks.mobileSkill.deprecate.mockResolvedValue(undefined);
+
+    await expect(addSkillAction(input)).resolves.toEqual({});
+    await expect(editSkillAction(id, input)).resolves.toEqual({});
+    await deleteSkillAction(id);
+    await toggleSkillDeprecatedAction(id, true);
+
+    expect(mocks.mobileSkill.write).toHaveBeenNthCalledWith(1, input);
+    expect(mocks.mobileSkill.write).toHaveBeenNthCalledWith(2, input, id);
+    expect(mocks.mobileSkill.delete).toHaveBeenCalledWith(id);
+    expect(mocks.mobileSkill.deprecate).toHaveBeenCalledWith(id, true);
+    expect(mocks.getApplication).not.toHaveBeenCalled();
+    expect(mocks.revalidate).toHaveBeenCalledTimes(4);
   });
 });
