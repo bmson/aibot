@@ -499,8 +499,14 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       readRequest || situationRequest || liveLookup || birthdaySaves.length > 0
         ? await evidence.taskEvidence({ agentId: task.agentId, taskId: task.id })
         : [];
+    const forcedReadTool =
+      !mustRecordGoalProgress && readRequest
+        ? nextRequiredReadTool(readRequest, readToolEvidence)
+        : undefined;
+    // A request that also reads the calendar or mail ("what's on tomorrow and
+    // what's the weather?") reads first, then looks up, then answers once.
     const forcedLiveLookup =
-      liveLookup && !readRequest
+      liveLookup && !forcedReadTool
         ? nextLiveLookups(
             liveLookups,
             readToolEvidence.map((row) => ({ ...row, result: row.result })),
@@ -508,7 +514,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
           )
         : undefined;
     const liveFailures =
-      liveLookup && !readRequest && !forcedLiveLookup
+      liveLookup && !forcedReadTool && !forcedLiveLookup
         ? liveLookupFailures(
             liveLookups,
             readToolEvidence.map((row) => ({ ...row, result: row.result })),
@@ -517,8 +523,10 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         : [];
     // A compound request answers the parts it can: only when every lookup came
     // back empty is there nothing left for a model turn to report honestly.
+    // With a calendar or mail answer still owed, even a total lookup failure
+    // is one missing part of that answer rather than the whole of it.
     const failedLiveLookup =
-      liveFailures.length > 0 && liveFailures.length === liveLookups.length
+      !readRequest && liveFailures.length > 0 && liveFailures.length === liveLookups.length
         ? [...new Set(liveFailures.map((entry) => entry.failure))].join(' ')
         : undefined;
     if (failedLiveLookup) {
@@ -554,10 +562,6 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         (row) => row.toolName === 'situations.read' && row.status === 'succeeded',
       ) &&
       readToolEvidence.filter((row) => row.toolName === 'situations.read').length < 2;
-    const forcedReadTool =
-      !mustRecordGoalProgress && readRequest
-        ? nextRequiredReadTool(readRequest, readToolEvidence)
-        : undefined;
     // Once every required read has either succeeded or exhausted its bounded
     // retries, the lookup is ready to be answered. A coverage gap is still
     // answered straight from the ledger, which names the gap far more reliably
@@ -565,7 +569,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
     // reading it. Otherwise the model writes the answer and the response
     // contract checks it against this same ledger before it goes out.
     let readAnswerTurn = false;
-    if (readRequest && !mustRecordGoalProgress && !forcedReadTool) {
+    if (readRequest && !mustRecordGoalProgress && !forcedReadTool && !forcedLiveLookup) {
       const checked = enforcePersonalReadResponse(
         readRequest,
         readToolEvidence.map((row) => ({ ...row, result: row.result })),

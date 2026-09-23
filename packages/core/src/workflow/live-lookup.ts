@@ -168,6 +168,8 @@ export function detectLiveLookups(history: ReadonlyArray<ReadIntentMessage>): Li
   const asks = QUESTION.test(request) || request.includes('?');
   const found: LiveLookup[] = [];
   for (const clause of clauses) {
+    // "Look it up" means the question before it; alone it names nothing.
+    if (CORRECTION.test(clause)) continue;
     const content = asks && !clause.endsWith('?') ? `${clause}?` : clause;
     // Judged alone, not against the thread: "I work at 181 Fremont Street"
     // after a question about the weather reads as the answer to an earlier
@@ -179,7 +181,12 @@ export function detectLiveLookups(history: ReadonlyArray<ReadIntentMessage>): Li
       continue;
     found.push(lookup);
   }
-  return found.length >= 2 && found.length <= MAX_LOOKUPS ? found : fallback;
+  if (found.length >= 2 && found.length <= MAX_LOOKUPS) return found;
+  // "What's on my calendar tomorrow and the Giants score?" reads as a private
+  // read as a whole, which hides its one public half. That half still needs
+  // its lookup; the private read runs beside it.
+  if (!single && found.length === 1 && detectPersonalReadRequest(history)) return found;
+  return fallback;
 }
 
 export function successfulLookup(row: ActionEvidence): boolean {
@@ -458,14 +465,19 @@ export function liveLookupDirective(
   const trip = lookups.some((lookup) => lookup.destination === 'calendar')
     ? "\nThe trip destination is an event on the owner's calendar. The runtime read the calendar, chose that event, and routed to its own location arriving by its start. Name the event, the travel time, and when to leave; never route to or suggest a different event."
     : '';
-  if (lookups.length === 1)
-    return `This request needs fresh ${first.kind} evidence: ${first.request}\n${rules}${trip}`;
-  const parts = lookups.map((lookup, index) => `${index + 1}. ${lookup.kind}: ${lookup.request}`);
-  const now = context.next ? [`Look up this part now: ${context.next.request}`] : [];
   const failed = (context.failures ?? []).map(
     ({ lookup }) =>
       `The ${lookup.kind} lookup for "${lookup.request}" failed. Say so for that part instead of answering it, and answer the other parts.`,
   );
+  if (lookups.length === 1)
+    return [
+      `This request needs fresh ${first.kind} evidence: ${first.request}\n${rules}${trip}`,
+      // Only a turn that also reads the calendar or mail gets this far with a
+      // failed lookup; alone, the failure is the whole answer.
+      ...failed,
+    ].join('\n');
+  const parts = lookups.map((lookup, index) => `${index + 1}. ${lookup.kind}: ${lookup.request}`);
+  const now = context.next ? [`Look up this part now: ${context.next.request}`] : [];
   const lines = [
     `This request has ${lookups.length} parts that each need fresh evidence. Answer every part, in the order asked:`,
     ...parts,
@@ -502,6 +514,25 @@ function retrievedCorpus(evidence: ActionEvidence[]): string {
       return parts.filter((part) => typeof part === 'string').join('\n');
     })
     .join('\n');
+}
+
+/**
+ * Everything this turn's live lookups returned, for the calendar-answer
+ * contract to license the non-calendar half of a mixed answer: the retrieved
+ * text plus the structured route and game rows, whose venue names, route
+ * names and departure times are what that half legitimately says. Kept apart
+ * from `retrievedCorpus` so the scoreline check stays exactly as strict.
+ */
+export function liveLookupCorpus(evidence: ActionEvidence[]): string {
+  const rows = evidence.filter((row) => row.fromCurrentTask !== false);
+  const structured = rows
+    .filter(
+      (row) =>
+        (row.toolName === 'maps.directions' || row.toolName === 'sports.scores') &&
+        successfulLookup(row),
+    )
+    .map((row) => JSON.stringify(row.result));
+  return [retrievedCorpus(rows), ...structured].filter(Boolean).join('\n');
 }
 
 /** Digits only, so "5 - 4", "5–4" and "5-4" all compare equal. */

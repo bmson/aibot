@@ -351,6 +351,17 @@ describe('several live lookups in one request', () => {
     expect(ask(content)).toEqual([]);
   });
 
+  it('keeps the public half of a question that is otherwise a private read', () => {
+    expect(ask("What's on my calendar tomorrow and the Giants score?")).toEqual([
+      { kind: 'sports', request: 'the Giants score?' },
+    ]);
+    expect(kinds("What's on my calendar tomorrow and what's the weather?")).toEqual(['weather']);
+  });
+
+  it('never turns a bare "look it up" clause into a search for those words', () => {
+    expect(ask('Check my email from Sam and look it up')).toEqual([]);
+  });
+
   it('does not treat a long list as questions to answer live', () => {
     expect(
       kinds('Weather in Paris? Weather in Rome? Weather in Oslo? Weather in Bern? Weather in Riga?')

@@ -70,6 +70,13 @@ interface ResponseContractOptions {
    * to close on. Without it a true local aside reads as an invention.
    */
   groundingCorpus?: string;
+  /**
+   * What a live lookup in this same turn retrieved — weather readings, game
+   * lines, a route. "What's on tomorrow and what's the weather?" is answered
+   * from two sources; the calendar half is still held to the calendar, and
+   * the rest may name only what the lookup returned.
+   */
+  liveCorpus?: string;
 }
 
 const OUTBOUND_OBJECTS = 'email|message|sms|text|call|outreach|reply|follow-?up';
@@ -1263,6 +1270,8 @@ const CARDINALS: Record<string, number> = {
 const MAX_AGENDA_EVENTS = 12;
 
 /** Every wall-clock time stated in a piece of text, as minutes past midnight. */
+const ISO_INSTANT_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})/g;
+
 function statedClocks(value: string): number[] {
   const found: number[] = [];
   for (const match of value.matchAll(DRAFT_CLOCK_RE)) {
@@ -1328,6 +1337,7 @@ export function groundReadDraft(
   request: PersonalReadRequest,
   evidence: ActionEvidence[],
   licensed = '',
+  live = '',
 ): ReadGrounding {
   const draft = text.trim();
   if (!draft) return { grounded: false, reasons: ['empty draft'] };
@@ -1434,6 +1444,15 @@ export function groundReadDraft(
     for (const word of groundingWords(term)) vocabulary.add(word);
   }
   for (const word of groundingWords(licensed)) vocabulary.add(word);
+  // A live lookup's own words and times: a game's start, a route's departure.
+  // Its timestamps are instants, so read them on the owner's clock the way an
+  // event's start is read above.
+  for (const word of groundingWords(live)) vocabulary.add(word);
+  for (const clock of statedClocks(live)) boundaries.add(clock);
+  for (const [instant] of live.matchAll(ISO_INSTANT_RE)) {
+    const clock = zonedClock(instant, request.timeZone);
+    if (clock && clock.minutes >= 0) boundaries.add(clock.minutes);
+  }
 
   // Strip links first: a fabricated URL is enforceUrlProvenance's job, and a
   // link label would otherwise read as an invented proper noun.
@@ -1521,7 +1540,10 @@ export function groundReadDraft(
  * prose. This is intentionally less flexible: a deterministic list of literal
  * fields is preferable to a fluent answer that can add one plausible event.
  */
-function verifiedReadResponse(request: PersonalReadRequest, evidence: ActionEvidence[]): string {
+export function verifiedReadResponse(
+  request: PersonalReadRequest,
+  evidence: ActionEvidence[],
+): string {
   const current = currentSuccessfulEvidence(evidence);
   if (request.kind === 'drive') {
     const rows = matchingPrivateReadRows(request, current);
@@ -1932,7 +1954,13 @@ function enforcePersonalReadGrounding(
       groundingFallback: ['private lookup rendered directly from the current task ledger'],
     };
   }
-  const grounding = groundReadDraft(text, request, evidence, opts?.groundingCorpus ?? '');
+  const grounding = groundReadDraft(
+    text,
+    request,
+    evidence,
+    opts?.groundingCorpus ?? '',
+    opts?.liveCorpus ?? '',
+  );
   if (!grounding.grounded) {
     return {
       text: verifiedReadResponse(request, evidence),
