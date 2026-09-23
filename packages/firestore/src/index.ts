@@ -24,6 +24,7 @@ export {
   getFirestoreKnowledgeGraphReviewQueue,
 } from './knowledge-graph-read.js';
 export { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
+export type { McpDiscoveryResult } from './mcp-connections.js';
 export {
   FirestoreMcpConnectionMutationRepository,
   FirestoreMcpConnectionReadRepository,

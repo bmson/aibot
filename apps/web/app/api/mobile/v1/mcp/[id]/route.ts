@@ -1,6 +1,10 @@
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import { FirestoreMcpConnectionMutationRepository } from '@assistant/firestore';
-import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
+import {
+  discoverFirestoreMcpConnection,
+  getApplication,
+  getFirestoreInstallationStore,
+} from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -17,21 +21,30 @@ export async function POST(
   const body = (await request.json().catch(() => null)) as { action?: unknown } | null;
   const config = loadConfig();
   if (config.PERSISTENCE_DRIVER === 'firestore') {
-    if (body?.action === 'refresh')
-      return mobileJson(
-        { error: 'MCP discovery is unavailable in Firestore mode.' },
-        { status: 503 },
-      );
-    if (body?.action !== 'enable' && body?.action !== 'disable')
+    if (body?.action !== 'refresh' && body?.action !== 'enable' && body?.action !== 'disable')
       return mobileJson({ error: 'action must be refresh, enable, or disable' }, { status: 400 });
     const problems = validateAgentPersistenceConfig(config);
     if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
     const store = getFirestoreInstallationStore();
     try {
-      const result = await new FirestoreMcpConnectionMutationRepository(
+      const repository = new FirestoreMcpConnectionMutationRepository(
         store,
         config.FIRESTORE_AGENT_ID,
-      ).setEnabled(id, body.action === 'enable');
+      );
+      if (body.action === 'refresh') {
+        const discovery = await discoverFirestoreMcpConnection(id);
+        return !('status' in discovery)
+          ? mobileJson({ error: discovery.error }, { status: 404 })
+          : mobileJson(discovery);
+      }
+      const result = await repository.setEnabled(id, body.action === 'enable');
+      if (!result) return mobileJson({ error: 'MCP connection not found.' }, { status: 404 });
+      if (body.action === 'enable') {
+        const discovery = await discoverFirestoreMcpConnection(id);
+        return !('status' in discovery)
+          ? mobileJson({ connectionId: id, status: 'error', error: discovery.error })
+          : mobileJson(discovery);
+      }
       return result
         ? mobileJson(result)
         : mobileJson({ error: 'MCP connection not found.' }, { status: 404 });

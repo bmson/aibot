@@ -279,7 +279,11 @@ export default async function SettingsPage() {
           hint="remote tool servers available to this assistant"
         />
         <Card className="mt-3">
-          <McpConnectionsPanel connections={mcpConnections} discoveryAvailable={!readOnly} />
+          <McpConnectionsPanel
+            connections={mcpConnections}
+            discoveryAvailable
+            executionAvailable={!readOnly}
+          />
         </Card>
       </section>
 
