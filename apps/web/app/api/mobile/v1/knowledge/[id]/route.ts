@@ -1,10 +1,14 @@
 import {
+  GRAPH_EXTRACTION_VERSION,
   getKnowledgeGraphOverview,
   mergeKnowledgeGraphEntities,
+  presentKnowledgeGraphRelation,
   renameKnowledgeGraphEntity,
   retypeKnowledgeGraphEntity,
 } from '@assistant/application';
-import { getDb } from '@/lib/server';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { getFirestoreKnowledgeGraphOverview } from '@assistant/firestore';
+import { getDb, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -18,6 +22,32 @@ export async function GET(
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const { id } = await params;
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid knowledge item id' }, { status: 400 });
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    const graph = await getFirestoreKnowledgeGraphOverview(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+      GRAPH_EXTRACTION_VERSION,
+      { entityId: id },
+      undefined,
+      config.GRAPH_SYNC_BATCH_LIMIT,
+    );
+    return graph.selected
+      ? mobileJson({
+          ...graph,
+          relations: graph.relations.map((row) => ({
+            ...row,
+            presentation: presentKnowledgeGraphRelation({
+              subjectLabel: row.subject.label,
+              predicate: row.predicate,
+              objectLabel: row.object.label,
+            }),
+          })),
+        })
+      : mobileJson({ error: 'knowledge item not found' }, { status: 404 });
+  }
   // Keep the normal compact browse page alongside the selected detail: the
   // native guided editor needs real candidate items for its second endpoint.
   const graph = await getKnowledgeGraphOverview(getDb(), { entityId: id });
