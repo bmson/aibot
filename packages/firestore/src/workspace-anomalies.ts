@@ -1,6 +1,6 @@
 import type { WorkspaceAnomalyRecord, WorkspaceAnomalyRepository } from '@assistant/persistence';
 import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
-import { decodeRecord, documentKey, type InstallationStore } from './store.js';
+import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 const MAX_OWNER_ANOMALIES = 2_000;
 const MOBILE_RESULT_LIMIT = 100;
@@ -87,5 +87,62 @@ export class FirestoreWorkspaceAnomalyRepository implements WorkspaceAnomalyRepo
       .slice(0, MOBILE_RESULT_LIMIT);
     await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
     return result;
+  }
+
+  /** Dismiss an owner anomaly in the same way as the PostgreSQL dashboard action. */
+  dismiss(agentId: string, anomalyId: string): Promise<boolean> {
+    return this.updateStatus(agentId, anomalyId, 'dismissed');
+  }
+
+  /** Disable the linked owner policy and mark its anomaly acted on atomically. */
+  suspendPolicy(agentId: string, anomalyId: string): Promise<boolean> {
+    return this.updateStatus(agentId, anomalyId, 'suspended', true);
+  }
+
+  private async updateStatus(
+    agentId: string,
+    anomalyId: string,
+    status: 'dismissed' | 'suspended',
+    suspendPolicy = false,
+  ): Promise<boolean> {
+    if (!agentId) throw new Error('agent is required');
+    if (!anomalyId) throw new Error('anomaly is required');
+    const anomalyRef = this.store.doc('anomalies', anomalyId);
+    const erasureRef = this.store.doc('privacyErasureJobs', agentId);
+    return this.store.db.runTransaction(async (tx) => {
+      const [anomaly, erasure] = await tx.getAll(anomalyRef, erasureRef);
+      if (erasure?.exists) {
+        if (erasure.get('agentId') !== agentId || erasure.get('status') !== 'complete')
+          throw new Error('Privacy erasure is in progress');
+      }
+      if (!anomaly?.exists) return false;
+      if (
+        anomaly.get('agentId') !== agentId ||
+        anomaly.get('id') !== anomalyId ||
+        documentKey(anomalyId) !== anomaly.id
+      )
+        return false;
+
+      const policyId = anomaly.get('policyId');
+      let policy: FirebaseFirestore.DocumentSnapshot | null = null;
+      if (suspendPolicy && policyId !== null && policyId !== undefined) {
+        if (typeof policyId !== 'string' || !policyId)
+          throw new Error('Anomaly policy link is invalid');
+        const policyRef = this.store.doc('approvalPolicies', policyId);
+        policy = await tx.get(policyRef);
+        if (
+          policy.exists &&
+          (policy.get('agentId') !== agentId ||
+            policy.get('id') !== policyId ||
+            documentKey(policyId) !== policy.id)
+        )
+          throw new Error('Anomaly policy belongs to another owner');
+      }
+
+      const now = this.store.now();
+      if (policy?.exists) tx.update(policy.ref, encodeRecord({ enabled: false, updatedAt: now }));
+      tx.update(anomaly.ref, encodeRecord({ status, updatedAt: now }));
+      return true;
+    });
   }
 }

@@ -1,3 +1,4 @@
+import { loadConfig } from '@assistant/config';
 import { getApplication } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -14,11 +15,17 @@ export async function POST(
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid anomaly id' }, { status: 400 });
   const body = (await request.json().catch(() => null)) as { action?: unknown } | null;
   try {
-    if (body?.action === 'dismiss') await getApplication().dismissAnomaly(id);
-    else if (body?.action === 'suspend-policy') await getApplication().suspendAnomaly(id);
-    else {
+    if (body?.action !== 'dismiss' && body?.action !== 'suspend-policy') {
       return mobileJson({ error: 'action must be dismiss or suspend-policy' }, { status: 400 });
     }
+    if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+      const { updateFirestoreMobileWorkspaceAnomaly } = await import(
+        '@/lib/firestore-mobile-workspace'
+      );
+      const updated = await updateFirestoreMobileWorkspaceAnomaly(id, body.action);
+      if (!updated) return mobileJson({ error: 'Anomaly not found.' }, { status: 409 });
+    } else if (body.action === 'dismiss') await getApplication().dismissAnomaly(id);
+    else await getApplication().suspendAnomaly(id);
     return mobileJson({ ok: true });
   } catch (error) {
     return mobileJson(

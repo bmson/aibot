@@ -154,3 +154,17 @@ export async function getFirestoreMobileWorkspace(readinessSource: AgentReadines
     },
   };
 }
+
+/** Apply an anomaly action using only the configured Firestore owner and store. */
+export async function updateFirestoreMobileWorkspaceAnomaly(
+  anomalyId: string,
+  action: 'dismiss' | 'suspend-policy',
+): Promise<boolean> {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER !== 'firestore')
+    throw new Error('Firestore mobile workspace requires Firestore persistence');
+  const anomalies = new FirestoreWorkspaceAnomalyRepository(getFirestoreInstallationStore());
+  return action === 'dismiss'
+    ? anomalies.dismiss(config.FIRESTORE_AGENT_ID, anomalyId)
+    : anomalies.suspendPolicy(config.FIRESTORE_AGENT_ID, anomalyId);
+}
