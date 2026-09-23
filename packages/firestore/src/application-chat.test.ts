@@ -112,6 +112,34 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect(next?.hasMore).toBe(false);
     });
 
+    it('bounds an imported history to the latest default page', async () => {
+      const conversation = await repository.createConversation(agentId);
+      const batch = store.db.batch();
+      const baseTime = Date.parse('2026-01-01T00:00:00.000Z');
+      for (let index = 0; index < 250; index += 1) {
+        const id = randomUUID();
+        batch.set(store.doc('messages', id), {
+          id,
+          conversationId: conversation.id,
+          role: index % 2 === 0 ? 'user' : 'assistant',
+          origin: index % 2 === 0 ? 'owner' : 'assistant',
+          parts: [{ type: 'text', text: `imported-${index}` }],
+          text: `imported-${index}`,
+          taskId: null,
+          channelMessageId: null,
+          hiddenAt: null,
+          createdAt: new Date(baseTime + index * 1_000),
+        });
+      }
+      await batch.commit();
+
+      const page = await repository.listMessages(agentId, conversation.id);
+
+      expect(page?.messages).toHaveLength(100);
+      expect(page?.messages[0]?.text).toBe('imported-150');
+      expect(page?.messages.at(-1)?.text).toBe('imported-249');
+    });
+
     it('keeps native timestamp precision in message cursors', async () => {
       const conversation = await repository.createConversation(agentId);
       const firstId = randomUUID();
