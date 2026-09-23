@@ -16,12 +16,15 @@ pnpm consumer:prepare \
   --embedding-dimension 1536 \
   --archive ./assistant-source.tar.gz \
   --commit-sha FULL_40_CHARACTER_GIT_SHA \
-  --archive-sha256 FULL_64_CHARACTER_SHA256
+  --archive-sha256 FULL_64_CHARACTER_SHA256 \
+  --daily-backup-retention-days 7
 ```
+
+The optional `--daily-backup-retention-days` selects a daily managed Firestore backup schedule and accepts whole days from 1 through 98. It is omitted by default to avoid adding backup-storage charges. The choice is validated and stored in the private manifest, then reused by `consumer:install` whenever it resumes or reapplies Terraform. Backup storage, PITR, and restores are billed to the customer project; see the [backup cost and restore runbook](../infra/gcp/consumer/terraform/README.md#managed-backups-and-restore).
 
 Create the archive from the selected release checkout with `git archive --format=tar.gz --output=assistant-source.tar.gz HEAD`, and obtain its digest with `shasum -a 256 assistant-source.tar.gz`. The command recomputes the digest from the local regular file and refuses a mismatch. This verifies the archive bytes against the supplied digest; it does not authenticate who produced the archive or prove that the commit is its source.
 
-By default, artifacts go under `.assistant-install/<installation-id>/`. The directory is created with mode `0700`; the manifest, seed template, and notes use mode `0600`. The generated manifest starts at `previewed`, selects the Google provider and no optional modules, binds the project/region/installation/database/release identity, and declares no preexisting resources. The database ID is `assistant-<installation-id>`. It records a create-only installation intent; the later provisioner must verify the database is absent and refuse to adopt it. The generated state path is reserved for later `consumer:install` use and is not created or advanced by preparation.
+By default, artifacts go under `.assistant-install/<installation-id>/`. The directory is created with mode `0700`; the manifest, seed template, and notes use mode `0600`. The generated manifest starts at `previewed`, selects the Google provider and no optional modules, binds the project/region/installation/database/release identity, and declares no preexisting resources. The database ID is `assistant-<installation-id>`. It records a create-only installation intent; the later provisioner must verify the database is absent and refuse to adopt it. Selection values, including optional backup retention, are immutable installation inputs; a later retention change requires a reviewed operator transition that keeps manifest and Terraform state aligned. The generated state path is reserved for later `consumer:install` use and is not created or advanced by preparation.
 
 `consumer-install-command.txt` records the matching read-only `consumer:install` preview command, including the derived customer state-bucket name and the exact archive/manifest/state paths. Run it from the matching Assistant release checkout. Review the preview before adding `--apply` to provision resources.
 

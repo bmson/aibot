@@ -64,6 +64,7 @@ describe('prepareConsumerInstallation', () => {
         modelProvider: string;
         embeddingModel?: string;
         embeddingDimension?: number;
+        backupSchedule?: { recurrence: string; retentionDays: number };
       };
       resources: unknown[];
       stage: { current: string; completed: string[] };
@@ -97,6 +98,7 @@ describe('prepareConsumerInstallation', () => {
       embeddingModel: input.embeddingModel,
       embeddingDimension: input.embeddingDimension,
     });
+    expect(manifest.selection.backupSchedule).toBeUndefined();
     expect(manifest.resources).toEqual([]);
     expect(manifest.stage).toMatchObject({ current: 'previewed', completed: ['previewed'] });
     expect(seed.agent).toMatchObject({
@@ -123,6 +125,23 @@ describe('prepareConsumerInstallation', () => {
       input.ownerEmail,
     );
     expect(result.seedStatus).toBe('incomplete-pricing-review-required');
+  });
+
+  it('persists an opted-in backup retention choice in the prepared installation manifest', async () => {
+    const { input } = await fixture();
+    const result = await prepareConsumerInstallation({ ...input, dailyBackupRetentionDays: 14 });
+    const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8')) as {
+      selection: { backupSchedule?: { recurrence: string; retentionDays: number } };
+    };
+    expect(manifest.selection.backupSchedule).toEqual({ recurrence: 'daily', retentionDays: 14 });
+  });
+
+  it('rejects out-of-range daily backup retention before writing setup artifacts', async () => {
+    const { input } = await fixture();
+    await expect(
+      prepareConsumerInstallation({ ...input, dailyBackupRetentionDays: 99 }),
+    ).rejects.toThrow('daily backup retention must be a whole number from 1 through 98 days');
+    await expect(stat(input.outputDir).catch(() => null)).resolves.toBeNull();
   });
 
   it('rejects an archive whose bytes do not match the supplied SHA before creating output', async () => {

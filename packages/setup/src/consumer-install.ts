@@ -500,6 +500,18 @@ function validateTerraformOutputs(
     throw new Error('Terraform output region does not match manifest');
   if (outputValue('firestore_database_name') !== manifest.identity.databaseId)
     throw new Error('Terraform output database does not match manifest');
+  const backupScheduleName = outputValue('daily_backup_schedule_name');
+  if (manifest.selection.backupSchedule) {
+    const expectedPrefix = `projects/${manifest.identity.projectId}/databases/${manifest.identity.databaseId}/backupSchedules/`;
+    if (
+      typeof backupScheduleName !== 'string' ||
+      !backupScheduleName.startsWith(expectedPrefix) ||
+      backupScheduleName.length === expectedPrefix.length
+    )
+      throw new Error('Terraform output backup schedule does not match manifest');
+  } else if (backupScheduleName !== null) {
+    throw new Error('Terraform created an unselected backup schedule');
+  }
   const project = manifest.identity.projectId;
   const installation = manifest.identity.installationId;
   if (outputValue('assets_bucket_name') !== `${project}-${installation}-assets`)
@@ -532,7 +544,7 @@ function foundationResources(output: Record<string, unknown>, manifest: Installa
     owner: 'terraform' as const,
     installationId: id,
   });
-  return [
+  const resources = [
     owned('firestore-database', outputValue('firestore_database_name'), 'project'),
     owned('assets-bucket', outputValue('assets_bucket_name'), 'installation'),
     owned('source-bucket', outputValue('source_bucket_name'), 'installation'),
@@ -543,6 +555,10 @@ function foundationResources(output: Record<string, unknown>, manifest: Installa
     ),
     owned('runtime-service-account', outputValue('runtime_service_account_email'), 'installation'),
   ];
+  const backupScheduleName = (output.daily_backup_schedule_name as { value: unknown }).value;
+  if (typeof backupScheduleName === 'string')
+    resources.push(owned('firestore-backup-schedule', backupScheduleName, 'installation'));
+  return resources;
 }
 
 function terraformVars(
@@ -571,6 +587,10 @@ function terraformVars(
     `source_bucket_name=${project}-${install}-source`,
     '-var',
     `artifact_repository_id=${install}`,
+    '-var',
+    `daily_backup_schedule_enabled=${manifest.selection.backupSchedule !== undefined}`,
+    '-var',
+    `backup_retention_days=${manifest.selection.backupSchedule?.retentionDays ?? 7}`,
   ];
   return includeBackend
     ? [

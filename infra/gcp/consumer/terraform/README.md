@@ -4,6 +4,7 @@ With no image digests supplied, this directory provisions only the first custome
 
 - required Google APIs;
 - an explicitly selected Firestore Native Standard database with point-in-time recovery (PITR), required for consistent managed snapshot exports;
+- an optional daily managed Firestore backup schedule with configurable retention;
 - application composite/vector indexes and large-payload single-field exemptions from the shared `infra/gcp/firestore/firestore.indexes.json` specification;
 - private, versioned assets and source archive buckets with uniform access, public access prevention, and seven-day soft-delete retention;
 - an immutable-tag Docker Artifact Registry repository; and
@@ -49,7 +50,45 @@ The default consumer path creates `(default)` in a fresh customer-owned project.
 
 Google currently grants free quota only to the eligible default database; named databases are usage-billed. The free quota does not cover all features or the rest of the application. See [Firestore pricing](https://cloud.google.com/firestore/pricing?hl=en). The named-only isolation rule in the real-cloud validation harness is separate and remains unchanged. Choose a Firestore location that is compatible with the customer's region and selected Google model endpoints; the database location is a durable choice.
 
-PITR retains seven days of document history and is billed to the customer's project outside the free storage tier. It is enabled here so managed backups can export the same consistent snapshot used for checksum verification. Disabling PITR prevents that backup workflow; the backup CLI checks the prerequisite before reading the inventory. See [PITR behavior and billing](https://docs.cloud.google.com/firestore/native/docs/pitr).
+PITR retains seven days of document history and is billed to the customer's project outside the free storage tier. It is enabled here so managed exports can request a consistent snapshot for checksum verification. It is distinct from managed scheduled backups and does not create a durable backup schedule. See [PITR behavior and billing](https://docs.cloud.google.com/firestore/native/docs/pitr).
+
+## Managed backups and restore
+
+Recurring managed backups are available as an explicit cost-bearing opt-in. Select retention while preparing the customer-owned installation; the choice is recorded in `install-manifest.json` and replayed by `pnpm consumer:install`, including resume and reapply:
+
+```sh
+pnpm consumer:prepare ... --daily-backup-retention-days 7
+pnpm consumer:install --manifest .assistant-install/INSTALLATION_ID/install-manifest.json ...
+```
+
+The schedule is disabled by default. Retention accepts whole days from 1 through 98 (14 weeks); Firestore chooses the time of each daily backup. Each retained backup incurs storage charges based on the database's stored size for the time retained, and restores incur a size-based restore charge. PITR storage is billed separately. A daily seven-day schedule can therefore retain several database-sized snapshots; check current [Firestore pricing](https://cloud.google.com/firestore/pricing) for the selected location and estimate from the installation's actual stored size before enabling. Billing continues for already-created backups after the schedule is removed; those backups expire at their recorded retention time. See Google's [backup and restore details](https://cloud.google.com/firestore/docs/backups) for current limits and billing behavior.
+
+The manifest validates and preserves the choice as immutable installation selection. On every Terraform invocation, the installer derives both schedule enablement and retention from that manifest, and it verifies the resulting schedule resource belongs to the selected project/database. Changing retention after provisioning is a separate operator change that needs a reviewed manifest/state transition and matching Terraform plan; editing Terraform state or the manifest alone is unsupported.
+
+The operator applying this opt-in needs permission to manage backup schedules, such as `roles/datastore.backupSchedulesAdmin`. A restore operator needs backup-read and restore permissions, such as `roles/datastore.backupsViewer` and `roles/datastore.restoreAdmin`; grant these to the human/operator identity only when recovery work requires them. The application runtime service account receives no backup-administration permissions.
+
+Restore to a **new, unused database ID in the same project and Firestore location**. Firestore managed restore does not overwrite an existing database. Keep application writes fenced during incident recovery, preserve the source database and backup, and do not repoint Cloud Run automatically. First identify and restore a completed backup:
+
+```sh
+gcloud firestore backups list \
+  --location="$FIRESTORE_LOCATION" \
+  --format='table(name,database,state,snapshotTime,expireTime)'
+
+gcloud firestore databases restore \
+  --project="$PROJECT_ID" \
+  --source-backup="projects/$PROJECT_ID/locations/$FIRESTORE_LOCATION/backups/$BACKUP_ID" \
+  --destination-database="$RESTORE_DATABASE_ID"
+```
+
+Record the returned operation name and wait for it to finish:
+
+```sh
+gcloud firestore operations describe "$RESTORE_OPERATION"
+```
+
+Before using the restored database, verify the restore operation completed, compare document counts/checksums with the incident recovery point, confirm the restored index configuration and application preflight, and apply database-scoped IAM to the runtime identity. Keep external actions, queue dispatch, and schedules paused while validating. Backups include documents and index configuration but do not replace the separately managed installation state, secrets, Cloud Run revisions, or external workspace assets. [Restore behavior and limitations](https://cloud.google.com/firestore/docs/backups#restore_data_from_a_database_backup).
+
+This Terraform profile currently manages the configured source database, not an operator-created restored database. Switching a live runtime to that new database requires a separately reviewed Terraform/state and IAM change plus explicit application write-fence and parity evidence. Do not change `firestore_database_id` and apply against the existing installation state as an improvised restore; the database resource is create-only and protected against replacement. The recovery runbook leaves the original database intact and the promotion decision explicit.
 
 The Google provider constraint permits compatible 8.x releases. The committed `.terraform.lock.hcl` records the provider version and package checksums validated for local Apple Silicon and Linux CI/Cloud Shell. Refresh both platform checksums deliberately when upgrading: `terraform providers lock -platform=darwin_arm64 -platform=linux_amd64`. Read-only initialization must be followed by successful validation on the target platform.
 

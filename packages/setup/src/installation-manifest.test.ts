@@ -64,6 +64,20 @@ function manifest(overrides: Partial<CreateInstallationManifestInput> = {}): Ins
 }
 
 describe('installation manifest', () => {
+  it('persists validated daily backup selection and rejects invalid retention', () => {
+    expect(manifest().selection.backupSchedule).toBeUndefined();
+    expect(
+      manifest({ backupSchedule: { recurrence: 'daily', retentionDays: 14 } }).selection
+        .backupSchedule,
+    ).toEqual({ recurrence: 'daily', retentionDays: 14 });
+    expect(() => manifest({ backupSchedule: { recurrence: 'daily', retentionDays: 99 } })).toThrow(
+      'selection.backupSchedule.retentionDays',
+    );
+    expect(() =>
+      manifest({ backupSchedule: { recurrence: 'weekly', retentionDays: 14 } as never }),
+    ).toThrow('selection.backupSchedule.recurrence');
+  });
+
   it('canonicalizes modules and resources into deterministic JSON', () => {
     const value = manifest();
     expect(value.selection.modules).toEqual(['google', 'sms']);
