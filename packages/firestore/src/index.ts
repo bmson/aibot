@@ -1,6 +1,7 @@
 export { FirestoreApplicationChatPersistence } from './application-chat.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 export { FirestoreApprovalRepository } from './approvals.js';
+export { FirestoreBudgetCapsRepository } from './budget-caps.js';
 export { createFirestoreCardRefreshRepository } from './card-refresh.js';
 export { FirestoreCostRepository } from './costs.js';
 export { createFirestoreExecutionPersistence } from './execution.js';
