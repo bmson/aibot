@@ -158,7 +158,7 @@ export async function discoverFirestoreMcpConnection(connectionId: string) {
       bearerTokenEncrypted: connection.bearerTokenEncrypted,
     });
     if (
-      !(await repository.saveDiscovery(connectionId, {
+      !(await repository.saveDiscovery(connectionId, connection.attemptId, {
         status: result.status,
         serverName: result.serverName ?? null,
         serverVersion: result.serverVersion ?? null,

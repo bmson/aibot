@@ -250,8 +250,10 @@ export class FirestoreMcpConnectionMutationRepository {
   async beginDiscovery(id: string): Promise<{
     endpoint: string;
     bearerTokenEncrypted: string | null;
+    attemptId: string;
   } | null> {
     const ref = this.store.doc('mcpConnections', id);
+    const attemptId = this.newId();
     return this.store.db.runTransaction(async (tx) => {
       await this.ownerInTransaction(tx);
       const snapshot = await tx.get(ref);
@@ -264,13 +266,26 @@ export class FirestoreMcpConnectionMutationRepository {
         !row.enabled
       )
         return null;
-      tx.update(ref, { status: 'checking', lastError: null, updatedAt: this.now() });
-      return { endpoint: row.endpoint, bearerTokenEncrypted: row.bearerTokenEncrypted };
+      tx.update(ref, {
+        status: 'checking',
+        lastError: null,
+        discoveryAttemptId: attemptId,
+        updatedAt: this.now(),
+      });
+      return {
+        endpoint: row.endpoint,
+        bearerTokenEncrypted: row.bearerTokenEncrypted,
+        attemptId,
+      };
     });
   }
 
   /** Persist results only if the same owner still has this connection enabled. */
-  async saveDiscovery(id: string, discovery: McpDiscoveryResult): Promise<boolean> {
+  async saveDiscovery(
+    id: string,
+    attemptId: string,
+    discovery: McpDiscoveryResult,
+  ): Promise<boolean> {
     const ref = this.store.doc('mcpConnections', id);
     return this.store.db.runTransaction(async (tx) => {
       await this.ownerInTransaction(tx);
@@ -282,7 +297,8 @@ export class FirestoreMcpConnectionMutationRepository {
         documentKey(row.id) !== snapshot.id ||
         row.agentId !== this.configuredAgentId ||
         !row.enabled ||
-        row.status !== 'checking'
+        row.status !== 'checking' ||
+        snapshot.get('discoveryAttemptId') !== attemptId
       )
         return false;
       tx.update(ref, {
@@ -293,6 +309,7 @@ export class FirestoreMcpConnectionMutationRepository {
         tools: discovery.tools,
         lastCheckedAt: this.now(),
         lastError: discovery.error,
+        discoveryAttemptId: null,
         updatedAt: this.now(),
       });
       return true;

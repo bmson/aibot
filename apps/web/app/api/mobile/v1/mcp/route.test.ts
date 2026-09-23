@@ -248,7 +248,7 @@ describe.skipIf(!localEmulator)(
       });
       await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
       await expect(
-        repository.saveDiscovery(id, {
+        repository.saveDiscovery(id, 'stale-attempt', {
           status: 'ready',
           serverName: 'late result',
           serverVersion: null,
@@ -259,6 +259,34 @@ describe.skipIf(!localEmulator)(
       ).rejects.toThrow('Privacy erasure is in progress');
       await store.doc('privacyErasureJobs', agentId).delete();
       expect((await store.doc('mcpConnections', id).get()).get('status')).toBe('checking');
+      await store.doc('mcpConnections', id).delete();
+    });
+
+    it('allows only the newest concurrent refresh to commit discovery metadata', async () => {
+      const id = randomUUID();
+      await store.doc('mcpConnections', id).set(connection(id, 'racing-discovery'));
+      const repository = new FirestoreMcpConnectionMutationRepository(store, agentId);
+      const first = await repository.beginDiscovery(id);
+      const second = await repository.beginDiscovery(id);
+      expect(first?.attemptId).not.toBe(second?.attemptId);
+      const discovery = {
+        status: 'ready' as const,
+        serverName: 'winner',
+        serverVersion: null,
+        instructions: null,
+        tools: [{ name: 'current' }],
+        error: null,
+      };
+      await expect(
+        repository.saveDiscovery(id, first?.attemptId ?? '', {
+          ...discovery,
+          serverName: 'stale response',
+        }),
+      ).resolves.toBe(false);
+      await expect(repository.saveDiscovery(id, second?.attemptId ?? '', discovery)).resolves.toBe(
+        true,
+      );
+      expect((await store.doc('mcpConnections', id).get()).get('serverName')).toBe('winner');
       await store.doc('mcpConnections', id).delete();
     });
 
