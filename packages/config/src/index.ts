@@ -70,6 +70,11 @@ const ConfigSchema = z.object({
   DATABASE_URL: z.string().default('postgres://assistant:assistant@localhost:5432/assistant'),
   /** PostgreSQL remains the default; Firestore is an explicit agent-only preview profile. */
   PERSISTENCE_DRIVER: z.enum(['postgres', 'firestore']).default('postgres'),
+  /** Named customer database; local emulator fixtures may use (default). */
+  FIRESTORE_DATABASE_ID: z
+    .string()
+    .regex(/^\(default\)$|^[a-z][a-z0-9-]{2,61}[a-z0-9]$/)
+    .default('(default)'),
   FIRESTORE_AGENT_ID: z.string().default(''),
   /** JSON embedding provenance: provider, model, dimensions, and revision. */
   FIRESTORE_EMBEDDING_SPACE: z.string().default(''),
@@ -357,6 +362,8 @@ export function validateAgentPersistenceConfig(
   if (config.PERSISTENCE_DRIVER !== 'firestore') return [];
   const problems: string[] = [];
   if (!config.GCP_PROJECT.trim()) problems.push('GCP_PROJECT is required in Firestore agent mode');
+  if (env.NODE_ENV === 'production' && !env.FIRESTORE_DATABASE_ID?.trim())
+    problems.push('FIRESTORE_DATABASE_ID must be explicit in production Firestore mode');
   if (!Object.hasOwn(env, 'ASSISTANT_WORKSPACE_ID') || !env.ASSISTANT_WORKSPACE_ID?.trim())
     problems.push('ASSISTANT_WORKSPACE_ID must be explicit in Firestore agent mode');
   if (!z.uuid().safeParse(config.FIRESTORE_AGENT_ID).success)

@@ -60,13 +60,13 @@ function seedInput(installationId: string) {
   };
 }
 
-function manifest(installationId: string) {
+function manifest(installationId: string, databaseId = '(default)') {
   return createInstallationManifest({
     identity: {
       installationId,
       projectId: 'demo-assistant-test',
       region: 'us-central1',
-      databaseId: '(default)',
+      databaseId,
       release: {
         commitSha: '0123456789abcdef0123456789abcdef01234567',
         archiveDigest: `sha256:${'a'.repeat(64)}`,
@@ -133,11 +133,15 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
   'consumer install runtime seed orchestration',
   () => {
     const stores: ReturnType<typeof createInstallationStore>[] = [];
-    function setup() {
+    function setup(databaseId = '(default)') {
       const installationId = `seed-${randomUUID().slice(0, 8)}`;
-      const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+      const store = createInstallationStore({
+        projectId: 'demo-assistant-test',
+        installationId,
+        databaseId,
+      });
       stores.push(store);
-      const input = manifest(installationId);
+      const input = manifest(installationId, databaseId);
       const options: ConsumerInstallOptions & { seedInput: unknown } = {
         manifest: input,
         archivePath: 'unused',
@@ -188,6 +192,27 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect((await store.doc('coordination', 'runtime-seed').get()).get('status')).toBe(
         'complete',
       );
+    });
+
+    it('seeds the named database selected by the installation manifest', async () => {
+      const { store, options, input } = setup('assistant-production');
+      const stub = installer(input);
+      const result = await provisionConsumerInstallationWithSeed(
+        dependencies,
+        options,
+        stub.provision,
+      );
+      expect(result.seed?.status).toBe('seeded');
+      expect((await store.doc('agents', agentId).get()).exists).toBe(true);
+      const wrongDatabase = createInstallationStore({
+        projectId: 'demo-assistant-test',
+        installationId: input.identity.installationId,
+      });
+      try {
+        expect((await wrongDatabase.doc('agents', agentId).get()).exists).toBe(false);
+      } finally {
+        await wrongDatabase.db.terminate();
+      }
     });
 
     it('seeds before optional runtime deployment, then retries without rewriting records', async () => {

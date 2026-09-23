@@ -57,7 +57,7 @@ With these variables alone, this remains a foundation-only apply. The installer 
 
 ## Optional minimal Firestore runtime
 
-`runtime.tf` is a separate, direct Terraform opt-in for a customer who has already built and verified `web` and `agent` images in this installation's Artifact Registry repository. Both inputs are **immutable image digests**, for example:
+`runtime.tf` is a separate, direct Terraform opt-in for a customer who has already built and verified `web` and `agent` images in this installation's Artifact Registry repository. The runtime sets `FIRESTORE_DATABASE_ID` on both services to the exact `firestore_database_id` selected for the installation; a named database is never redirected to `(default)`. Both image inputs are **immutable image digests**, for example:
 
 ```hcl
 web_image_digest   = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

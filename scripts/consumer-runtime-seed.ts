@@ -366,7 +366,7 @@ export async function applyConsumerRuntimeSeed(
   };
 }
 
-const usage = `Usage: pnpm consumer:seed-runtime --input PLAN.json [--apply --project PROJECT --installation ID]
+const usage = `Usage: pnpm consumer:seed-runtime --input PLAN.json [--apply --project PROJECT --installation ID --database DATABASE]
 
 Dry-run validates the exact customer plan without Google auth and prints no owner email or prices.
 --apply is create-only: it refuses pre-existing foreign data and resumes only its own seed marker.
@@ -380,6 +380,7 @@ export async function runConsumerRuntimeSeedCli(argv: string[] = process.argv.sl
       apply: { type: 'boolean' },
       project: { type: 'string' },
       installation: { type: 'string' },
+      database: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
     strict: true,
@@ -405,9 +406,12 @@ export async function runConsumerRuntimeSeedCli(argv: string[] = process.argv.sl
   if (!values.apply) return { dryRun: true, ...summary };
   if (values.project !== plan.input.projectId || values.installation !== plan.input.installationId)
     throw new Error('--project and --installation must explicitly match the input plan');
+  if (!values.database || !/^\(default\)$|^[a-z][a-z0-9-]{2,61}[a-z0-9]$/.test(values.database))
+    throw new Error('--database must explicitly select a valid Firestore database ID');
   const store = createInstallationStore({
     projectId: plan.input.projectId,
     installationId: plan.input.installationId,
+    databaseId: values.database,
   });
   try {
     return { ...summary, ...(await applyConsumerRuntimeSeed(store, plan)) };

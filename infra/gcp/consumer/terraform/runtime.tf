@@ -11,6 +11,7 @@ locals {
   runtime_common_env = {
     ASSISTANT_MODULES         = "minimal"
     ASSISTANT_WORKSPACE_ID    = var.installation_id
+    FIRESTORE_DATABASE_ID     = var.firestore_database_id
     FIRESTORE_AGENT_ID        = var.firestore_agent_id
     FIRESTORE_EMBEDDING_SPACE = jsonencode(var.firestore_embedding_space)
     GCP_PROJECT               = var.project_id

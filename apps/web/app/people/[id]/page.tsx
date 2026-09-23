@@ -130,6 +130,7 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
     const store = createInstallationStore({
       projectId: config.GCP_PROJECT,
       installationId: config.ASSISTANT_WORKSPACE_ID,
+      databaseId: config.FIRESTORE_DATABASE_ID,
     });
     try {
       const contact = await getFirestorePersonDetail(store, config.FIRESTORE_AGENT_ID, id);

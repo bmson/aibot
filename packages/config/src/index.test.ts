@@ -51,6 +51,8 @@ describe('config', () => {
     expect(() => loadConfig({ AUTH_DEV_BYPASS: 'yes' })).toThrow();
     resetConfigForTest();
     expect(() => loadConfig({ AUTH_LOCALHOST_BYPASS: 'yes' })).toThrow();
+    resetConfigForTest();
+    expect(() => loadConfig({ FIRESTORE_DATABASE_ID: 'Invalid_Name' })).toThrow();
   });
 
   it('requires an explicit, minimal Firestore agent identity and embedding space', () => {
@@ -72,6 +74,7 @@ describe('config', () => {
       GCP_PROJECT: 'demo-assistant-test',
       ASSISTANT_WORKSPACE_ID: 'customer-installation',
       FIRESTORE_AGENT_ID: '5f492da4-b38d-413e-ad4b-ded06f3a0d19',
+      FIRESTORE_DATABASE_ID: 'assistant-production',
       FIRESTORE_EMBEDDING_SPACE:
         '{"provider":"openai","model":"text-embedding-3-small","dimensions":1536,"revision":"1"}',
       ASSISTANT_MODULES: 'minimal',
@@ -79,6 +82,13 @@ describe('config', () => {
     };
     resetConfigForTest();
     expect(validateAgentPersistenceConfig(loadConfig(env), env)).toEqual([]);
+    expect(
+      validateAgentPersistenceConfig(loadConfig(env), {
+        ...env,
+        NODE_ENV: 'production',
+        FIRESTORE_DATABASE_ID: undefined,
+      }),
+    ).toContain('FIRESTORE_DATABASE_ID must be explicit in production Firestore mode');
     expect(
       validateAgentPersistenceConfig(
         { ...loadConfig(env), QUEUE_DRIVER: 'cloudtasks', CANARY_ENABLED: true },

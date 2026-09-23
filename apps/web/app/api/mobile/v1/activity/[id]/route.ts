@@ -43,6 +43,7 @@ export async function POST(
       const store = createInstallationStore({
         projectId: config.GCP_PROJECT,
         installationId: config.ASSISTANT_WORKSPACE_ID,
+        databaseId: config.FIRESTORE_DATABASE_ID,
       });
       try {
         const repository = new FirestoreTaskActivityCommandRepository(store);

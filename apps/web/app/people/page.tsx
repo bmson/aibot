@@ -174,6 +174,7 @@ export default async function PeoplePage({
     const store = createInstallationStore({
       projectId: config.GCP_PROJECT,
       installationId: config.ASSISTANT_WORKSPACE_ID,
+      databaseId: config.FIRESTORE_DATABASE_ID,
     });
     try {
       const contacts = await getFirestorePeopleDirectory(store, config.FIRESTORE_AGENT_ID);
