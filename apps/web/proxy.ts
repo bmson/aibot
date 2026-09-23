@@ -13,6 +13,8 @@ export function proxy(request: NextRequest) {
     /^\/api\/mobile\/v1\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const activityIdPath =
     /^\/api\/mobile\/v1\/activity\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const skillIdPath =
+    /^\/api\/mobile\/v1\/skills\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const chatMessagePath =
     /^\/api\/mobile\/v1\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (
@@ -43,6 +45,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/bootstrap' && request.method === 'GET') ||
     (path === '/api/mobile/v1/activity' && request.method === 'GET') ||
     (activityIdPath.test(path) && request.method === 'POST') ||
+    (skillIdPath.test(path) && ['POST', 'DELETE'].includes(request.method)) ||
     (path === '/api/mobile/v1/workspace' && request.method === 'GET') ||
     (path === '/api/mobile/v1/costs' && request.method === 'PATCH') ||
     (path === '/api/mobile/v1/memory/profile' && request.method === 'GET') ||
