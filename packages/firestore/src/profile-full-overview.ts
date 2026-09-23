@@ -92,6 +92,41 @@ async function hydrateMemories(
   return hydrated;
 }
 
+const PROFILE_MEMORY_FIELDS = [
+  'agentId',
+  'category',
+  'expiresAt',
+  'quarantined',
+  'ownerConfirmed',
+  'lastConsolidatedAt',
+  'subjectContactId',
+  'createdAt',
+  'kind',
+  'domain',
+  'confidence',
+  'importance',
+  'pinned',
+  'originTrust',
+  'sourceTaskId',
+  'validFrom',
+  'validUntil',
+] as const;
+
+function profileMemoryUnchanged(
+  scanned: Records['memories'],
+  hydrated: Records['memories'],
+): boolean {
+  return PROFILE_MEMORY_FIELDS.every((field) => {
+    const before = scanned[field];
+    const after = hydrated[field];
+    if (before instanceof Date || after instanceof Date)
+      return (
+        before instanceof Date && after instanceof Date && before.getTime() === after.getTime()
+      );
+    return before === after;
+  });
+}
+
 async function configuredAgent(store: InstallationStore, pinnedAgentId?: string): Promise<string> {
   const agents = pinnedAgentId ? null : await store.collection('agents').limit(2).get();
   if (agents && (agents.size !== 1 || !agents.docs[0]))
@@ -227,7 +262,8 @@ export class FirestoreProfileOverviewRepository implements ProfileOverviewReposi
     ]);
     const ownerFacts = ownerFactMetadata.map((row) => {
       const hydrated = hydratedMemories.get(row.id);
-      if (!hydrated) throw new Error('Profile owner memory hydration is incomplete');
+      if (!hydrated || !profileMemoryUnchanged(row, hydrated))
+        throw new Error('Profile memory changed during read');
       return hydrated;
     });
 
@@ -293,7 +329,8 @@ export class FirestoreProfileOverviewRepository implements ProfileOverviewReposi
       ownerFacts: ownerFacts.map(memoryFact),
       quarantined: selectedQuarantined.map((row) => {
         const hydrated = hydratedMemories.get(row.id);
-        if (!hydrated) throw new Error('Profile review memory hydration is incomplete');
+        if (!hydrated || !profileMemoryUnchanged(row, hydrated))
+          throw new Error('Profile memory changed during read');
         return memoryFact(hydrated);
       }),
       card: rawCard

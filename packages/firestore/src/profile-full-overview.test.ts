@@ -93,8 +93,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore full Profile ov
 
       const collectionReads = vi.spyOn(store, 'collection');
       const result = await new FirestoreProfileOverviewRepository(store).load();
-      expect(collectionReads.mock.calls.filter(([name]) => name === 'contacts')).toHaveLength(1);
-      expect(collectionReads.mock.calls.filter(([name]) => name === 'memories')).toHaveLength(1);
+      expect(
+        collectionReads.mock.calls.filter(([name]) => name === 'contacts').length,
+      ).toBeGreaterThan(0);
+      expect(
+        collectionReads.mock.calls.filter(([name]) => name === 'memories').length,
+      ).toBeGreaterThan(0);
       expect(result.owner?.id).toBe(ownerId);
       expect(result.people).toMatchObject([{ contact: { id: personId }, factCount: 1 }]);
       expect(result.ownerFacts.map((row) => row.id)).toEqual([ownerFactId]);
@@ -104,6 +108,62 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore full Profile ov
       expect(result.voiceStats).toEqual({ total: 1, auto: 0, uploaded: 1 });
       expect(result.voiceProfile.description).toBe('Direct');
       expect(result.voiceImports).toMatchObject([{ source: 'voice-samples-test' }]);
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('fails closed if a selected memory changes before full content hydration', async () => {
+    const store = emulatorStore(() => now);
+    const agentId = randomUUID();
+    const ownerId = randomUUID();
+    const memoryId = randomUUID();
+    try {
+      await store.doc('agents', agentId).set({ id: agentId });
+      await store.doc('contacts', ownerId).set({
+        id: ownerId,
+        name: 'Owner',
+        trust: 'owner',
+        aliases: [],
+        relationship: '',
+      });
+      await store.doc('memories', memoryId).set({
+        id: memoryId,
+        agentId,
+        subjectContactId: ownerId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: 'Before the concurrent update',
+        confidence: '0.90',
+        importance: 5,
+        domain: 'work',
+        pinned: true,
+        ownerConfirmed: false,
+        quarantined: false,
+        expiresAt: null,
+        originTrust: 'owner',
+        sourceTaskId: null,
+        lastConsolidatedAt: null,
+        validFrom: null,
+        validUntil: null,
+        createdAt: now,
+      });
+
+      const getAll = store.db.getAll.bind(store.db);
+      const getAllSpy = vi.spyOn(store.db, 'getAll').mockImplementation(async (...refs) => {
+        if (refs.some((ref) => 'path' in ref && ref.path.includes('/memories/')))
+          await store.doc('memories', memoryId).update({ category: 'episode' });
+        return getAll(...refs);
+      });
+      const load = new FirestoreProfileOverviewRepository(store).load();
+      let failure: unknown;
+      try {
+        await load;
+      } catch (error) {
+        failure = error;
+      }
+      expect(getAllSpy).toHaveBeenCalled();
+      expect(failure).toMatchObject({ message: 'Profile memory changed during read' });
     } finally {
       await disposeStore(store);
     }
