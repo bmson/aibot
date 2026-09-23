@@ -6,16 +6,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ owner: vi.fn() }));
+const mcpDiscovery = vi.hoisted(() => ({ inspect: vi.fn() }));
 vi.mock('@/auth', () => ({ requireOwner: auth.owner }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@assistant/tools/mcp', () => ({
-  inspectMcpConnection: vi.fn(async () => ({
-    status: 'ready',
-    serverName: 'Settings test MCP',
-    version: '1.0',
-    instructions: undefined,
-    tools: [{ name: 'search' }],
-  })),
+  inspectMcpConnection: mcpDiscovery.inspect,
 }));
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
@@ -55,6 +50,12 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     vi.stubEnv('LOCATION_PING_SECRET', '');
     resetConfigForTest();
     auth.owner.mockResolvedValue({ user: { email: 'owner@example.test' } });
+    mcpDiscovery.inspect.mockResolvedValue({
+      status: 'ready',
+      serverName: 'Settings test MCP',
+      serverVersion: '1.0',
+      tools: [{ name: 'search' }],
+    });
     page = await import('./page.js');
     actions = await import('./actions.js');
 

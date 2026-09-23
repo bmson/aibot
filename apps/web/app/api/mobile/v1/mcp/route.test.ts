@@ -5,11 +5,11 @@ import {
   FirestoreMcpConnectionMutationRepository,
   FirestoreMcpConnectionReadRepository,
 } from '@assistant/firestore';
-import { inspectMcpConnection } from '@assistant/tools/mcp';
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ allowed: vi.fn() }));
+const discovery = vi.hoisted(() => ({ inspect: vi.fn() }));
 vi.mock('@/mobile-auth', () => ({
   isMobileAuthed: auth.allowed,
   mobileJson: (value: unknown, init?: ResponseInit) =>
@@ -17,13 +17,7 @@ vi.mock('@/mobile-auth', () => ({
   mobileUnauthorized: () => Response.json({ error: 'unauthorized' }, { status: 401 }),
 }));
 vi.mock('@assistant/tools/mcp', () => ({
-  inspectMcpConnection: vi.fn(async () => ({
-    status: 'ready',
-    serverName: 'Mock MCP',
-    version: '1.2',
-    instructions: 'Mock instructions',
-    tools: [{ name: 'lookup', description: 'Find records', inputSchema: { type: 'object' } }],
-  })),
+  inspectMcpConnection: discovery.inspect,
 }));
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
@@ -83,6 +77,13 @@ describe.skipIf(!localEmulator)(
       vi.stubEnv('LOCATION_PING_SECRET', '');
       resetConfigForTest();
       auth.allowed.mockResolvedValue(true);
+      discovery.inspect.mockResolvedValue({
+        status: 'ready',
+        serverName: 'Mock MCP',
+        serverVersion: '1.2',
+        instructions: 'Mock instructions',
+        tools: [{ name: 'lookup', description: 'Find records', inputSchema: { type: 'object' } }],
+      });
       route = await import('./route.js');
       itemRoute = await import('./[id]/route.js');
       const alphaId = randomUUID();
@@ -262,7 +263,7 @@ describe.skipIf(!localEmulator)(
     });
 
     it('returns HTTP success with the discovery error when an MCP endpoint rejects inspection', async () => {
-      vi.mocked(inspectMcpConnection).mockResolvedValueOnce({
+      discovery.inspect.mockResolvedValueOnce({
         status: 'error',
         tools: [],
         error: 'Endpoint did not speak MCP.',
