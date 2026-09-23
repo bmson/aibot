@@ -1,5 +1,21 @@
 mock_provider "google" {}
 
+override_resource {
+  target          = google_service_account.web
+  override_during = plan
+  values = {
+    email = "assistant-test-web@consumer-test-project.iam.gserviceaccount.com"
+  }
+}
+
+override_resource {
+  target          = google_cloud_run_v2_service.agent
+  override_during = plan
+  values = {
+    uri = "https://assistant-test-agent-abc.us-west1.a.run.app"
+  }
+}
+
 variables {
   project_id              = "consumer-test-project"
   region                  = "us-west1"
@@ -35,6 +51,7 @@ run "foundation_without_images_has_no_runtime_resources" {
       length(google_cloud_run_v2_service.agent) == 0 &&
       length(google_service_account.web) == 0 &&
       length(google_secret_manager_secret_iam_member.web_auth) == 0 &&
+      length(google_cloud_run_v2_service_iam_member.agent_web_invoker) == 0 &&
       length(google_cloud_run_v2_service_iam_member.web_public) == 0
     )
     error_message = "Supplying no digests must preserve the foundation-only resource set."
@@ -63,10 +80,13 @@ run "digest_pinned_private_runtime_uses_minimal_firestore_profile" {
     condition = (
       google_cloud_run_v2_service.web["current"].invoker_iam_disabled == false &&
       length(google_cloud_run_v2_service_iam_member.web_public) == 0 &&
-      google_cloud_run_v2_service.agent["current"].ingress == "INGRESS_TRAFFIC_INTERNAL_ONLY" &&
-      google_cloud_run_v2_service.agent["current"].invoker_iam_disabled == false
+      google_cloud_run_v2_service.agent["current"].ingress == "INGRESS_TRAFFIC_ALL" &&
+      google_cloud_run_v2_service.agent["current"].invoker_iam_disabled == false &&
+      google_cloud_run_v2_service_iam_member.agent_web_invoker["current"].role == "roles/run.invoker" &&
+      google_cloud_run_v2_service_iam_member.agent_web_invoker["current"].member == "serviceAccount:assistant-test-web@consumer-test-project.iam.gserviceaccount.com" &&
+      google_cloud_run_v2_service_iam_member.agent_web_invoker["current"].name == google_cloud_run_v2_service.agent["current"].name
     )
-    error_message = "Web and agent must remain private without a separate public-invoker opt-in."
+    error_message = "Agent invocation must be IAM-private and limited to the dedicated web identity."
   }
   assert {
     condition = (
@@ -81,9 +101,10 @@ run "digest_pinned_private_runtime_uses_minimal_firestore_profile" {
       one([for env in google_cloud_run_v2_service.agent["current"].template[0].containers[0].env : env.value if env.name == "PERSISTENCE_DRIVER"]) == "firestore" &&
       one([for env in google_cloud_run_v2_service.agent["current"].template[0].containers[0].env : env.value if env.name == "ASSISTANT_MODULES"]) == "minimal" &&
       one([for env in google_cloud_run_v2_service.agent["current"].template[0].containers[0].env : env.value if env.name == "QUEUE_DRIVER"]) == "local" &&
-      one([for env in google_cloud_run_v2_service.web["current"].template[0].containers[0].env : env.value if env.name == "AUTH_DEV_BYPASS"]) == "false"
+      one([for env in google_cloud_run_v2_service.web["current"].template[0].containers[0].env : env.value if env.name == "AUTH_DEV_BYPASS"]) == "false" &&
+      one([for env in google_cloud_run_v2_service.web["current"].template[0].containers[0].env : env.value if env.name == "AGENT_URL"]) == "https://assistant-test-agent-abc.us-west1.a.run.app"
     )
-    error_message = "Runtime must use the explicit minimal Firestore profile without auth bypass."
+    error_message = "Runtime must use the explicit minimal Firestore profile and agent URI without auth bypass."
   }
   assert {
     condition = (
@@ -152,8 +173,10 @@ run "public_invocation_requires_separate_opt_in" {
     condition = (
       google_cloud_run_v2_service_iam_member.web_public["current"].member == "allUsers" &&
       google_cloud_run_v2_service_iam_member.web_public["current"].name == google_cloud_run_v2_service.web["current"].name &&
-      google_cloud_run_v2_service.agent["current"].ingress == "INGRESS_TRAFFIC_INTERNAL_ONLY"
+      google_cloud_run_v2_service.agent["current"].ingress == "INGRESS_TRAFFIC_ALL" &&
+      google_cloud_run_v2_service.agent["current"].invoker_iam_disabled == false &&
+      google_cloud_run_v2_service_iam_member.agent_web_invoker["current"].member != "allUsers"
     )
-    error_message = "Only web invocation may become public after explicit opt-in."
+    error_message = "Only web invocation may become public after explicit opt-in; agent IAM remains private."
   }
 }

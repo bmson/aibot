@@ -17,6 +17,7 @@
     "@assistant/db": "workspace:*",
     "@assistant/firestore": "workspace:*",
     "@assistant/modules": "workspace:*",
+    "@assistant/persistence": "workspace:*",
     "@assistant/tools": "workspace:*",
     "ai": "^7.0.93",
     "dompurify": "^3.4.14",
