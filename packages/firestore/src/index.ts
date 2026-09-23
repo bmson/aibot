@@ -57,3 +57,4 @@ export { FirestoreToolExecutionRepository } from './tool-execution.js';
 export { FirestoreWatchRepository } from './watches.js';
 export { FirestoreWorkspaceAnomalyRepository } from './workspace-anomalies.js';
 export { FirestoreWorkspaceCapabilityRepository } from './workspace-capabilities.js';
+export { FirestoreWorkspaceImprovementRepository } from './workspace-improvements.js';
