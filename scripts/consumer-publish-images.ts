@@ -2,8 +2,8 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants, createReadStream } from 'node:fs';
-import { access, mkdir, mkdtemp, open, readdir, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, mkdir, mkdtemp, open, readdir, readFile, rm, symlink } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -29,6 +29,20 @@ export type CommandRunner = (
   args: readonly string[],
   options: { cwd: string; capture?: boolean; env?: Readonly<Record<string, string>> },
 ) => Promise<string>;
+
+async function exposeUserBuildxPlugin(userDockerConfig: string, isolatedDockerConfig: string) {
+  const plugin = path.join(userDockerConfig, 'cli-plugins', 'docker-buildx');
+  try {
+    await access(plugin, constants.X_OK);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw new Error('Docker Buildx plugin in the user Docker config is not executable');
+  }
+  const pluginDirectory = path.join(isolatedDockerConfig, 'cli-plugins');
+  await mkdir(pluginDirectory, { mode: 0o700 });
+  // Link only the executable plugin. Never copy or load the user's Docker config or credentials.
+  await symlink(plugin, path.join(pluginDirectory, 'docker-buildx'));
+}
 
 /** Child output is never echoed: build/auth diagnostics can contain sensitive data. */
 export const systemCommand: CommandRunner = (command, args, options) =>
@@ -78,10 +92,12 @@ async function configureCustomerDockerAuth(
   scratch: string,
   runner: CommandRunner,
   cwd: string,
+  userDockerConfig: string,
 ): Promise<Readonly<Record<string, string>>> {
   const host = `${options.region}-docker.pkg.dev`;
   const dockerConfig = path.join(scratch, 'docker-config');
   await mkdir(dockerConfig, { mode: 0o700 });
+  await exposeUserBuildxPlugin(userDockerConfig, dockerConfig);
   const env = { DOCKER_CONFIG: dockerConfig };
   try {
     await runner('gcloud', ['auth', 'configure-docker', host, '--quiet'], { cwd, env });
@@ -284,7 +300,7 @@ async function writeNewManifest(outputPath: string, value: unknown): Promise<voi
 /** Dry-run validates the exact Git archive and needs neither Docker nor Google auth. */
 export async function publishConsumerImages(
   options: PublishOptions,
-  dependencies: { repoRoot?: string; runner?: CommandRunner } = {},
+  dependencies: { repoRoot?: string; runner?: CommandRunner; userDockerConfig?: string } = {},
 ) {
   validateOptions(options);
   const repoRoot = dependencies.repoRoot ?? defaultRepoRoot;
@@ -332,7 +348,15 @@ export async function publishConsumerImages(
     };
     if (options.dryRun) return { dryRun: true as const, ...plan };
     await verifyRepository(options, runner, repoRoot);
-    const dockerEnv = await configureCustomerDockerAuth(options, scratch, runner, repoRoot);
+    const userDockerConfig =
+      dependencies.userDockerConfig ?? process.env.DOCKER_CONFIG ?? path.join(homedir(), '.docker');
+    const dockerEnv = await configureCustomerDockerAuth(
+      options,
+      scratch,
+      runner,
+      repoRoot,
+      path.resolve(userDockerConfig),
+    );
     const web = await publishOne('web', options, context, scratch, runner, dockerEnv);
     const agent = await publishOne('agent', options, context, scratch, runner, dockerEnv);
     const manifest = {
