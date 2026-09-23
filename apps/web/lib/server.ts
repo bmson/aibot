@@ -93,6 +93,7 @@ import {
   createInstallationStore,
   FirestoreApplicationChatPersistence,
   FirestoreShellStatusRepository,
+  FirestoreSkillMutationRepository,
 } from '@assistant/firestore';
 import { embeddingModelId, validateEmbedding } from '@assistant/persistence';
 import { inspectMcpConnection } from '@assistant/tools/mcp';
@@ -378,16 +379,85 @@ function createFirestoreChatApplication() {
   );
   const chatReads = { chat, generatedCards: persistence.generatedCards };
   const settings = createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID);
+  const skillMutations = new FirestoreSkillMutationRepository(store, embeddingSpace);
+  const skillEmbeddingText = (input: {
+    name: string;
+    preconditions: string;
+    steps: string;
+    gotchas: string;
+  }) =>
+    [
+      input.name,
+      input.preconditions && `When: ${input.preconditions}`,
+      input.steps && `Steps: ${input.steps}`,
+      input.gotchas && `Gotchas: ${input.gotchas}`,
+    ]
+      .filter(Boolean)
+      .join('\n')
+      .slice(0, 4000);
+  const embedSkillText = async (text: string): Promise<number[]> => {
+    const [vector] = await router.embed([text], {
+      expectedModelId: embeddingModelId(embeddingSpace),
+    });
+    const result = vector ?? [];
+    validateEmbedding(embeddingSpace, result);
+    return result;
+  };
+  const embedSkill = async (input: {
+    name: string;
+    preconditions: string;
+    steps: string;
+    gotchas: string;
+  }) => {
+    return embedSkillText(skillEmbeddingText(input));
+  };
   return {
-    embedSkillText: async (text: string): Promise<number[]> => {
-      const [vector] = await router.embed([text], {
-        expectedModelId: embeddingModelId(embeddingSpace),
-      });
-      const result = vector ?? [];
-      validateEmbedding(embeddingSpace, result);
-      return result;
-    },
+    embedSkillText,
     getWorkspaceSettings: () => getSettingsOverview(settings),
+    addSkill: async (input: {
+      name: string;
+      preconditions: string;
+      steps: string;
+      gotchas: string;
+    }) => {
+      const normalized = {
+        name: input.name.trim().slice(0, 200),
+        preconditions: input.preconditions.trim(),
+        steps: input.steps.trim(),
+        gotchas: input.gotchas.trim(),
+      };
+      if (!normalized.name) return { error: 'Give the skill a name.' };
+      if (!normalized.steps) return { error: 'Describe the steps.' };
+      try {
+        const embedding = await embedSkill(normalized);
+        await skillMutations.saveOwner(config.FIRESTORE_AGENT_ID, normalized, embedding);
+        return {};
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : 'Skill could not be saved.' };
+      }
+    },
+    editSkill: async (
+      id: string,
+      input: { name: string; preconditions: string; steps: string; gotchas: string },
+    ) => {
+      const normalized = {
+        name: input.name.trim().slice(0, 200),
+        preconditions: input.preconditions.trim(),
+        steps: input.steps.trim(),
+        gotchas: input.gotchas.trim(),
+      };
+      if (!normalized.name || !normalized.steps) return { error: 'Name and steps are required.' };
+      try {
+        const embedding = await embedSkill(normalized);
+        await skillMutations.editOwner(config.FIRESTORE_AGENT_ID, id, normalized, embedding);
+        return {};
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : 'Skill could not be saved.' };
+      }
+    },
+    deleteSkill: (id: string) => skillMutations.delete(config.FIRESTORE_AGENT_ID, id),
+    setSkillDeprecated: (id: string, deprecated: boolean) =>
+      skillMutations.setDeprecated(config.FIRESTORE_AGENT_ID, id, deprecated),
     getGeneratedCards: () => persistence.generatedCards,
     getAgentIdentity: async () => {
       const agent = await chat.resolveAgent();

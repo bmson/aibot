@@ -1,7 +1,7 @@
 import { loadConfig } from '@assistant/config';
 import { type NextRequest, NextResponse } from 'next/server';
 
-/** Firestore preview exposes only supported read surfaces, chat, polling, and card images. */
+/** Firestore preview exposes migrated read surfaces and the supported owner mutations. */
 export function proxy(request: NextRequest) {
   if (loadConfig().PERSISTENCE_DRIVER !== 'firestore') return NextResponse.next();
   const path = request.nextUrl.pathname;
@@ -38,7 +38,7 @@ export function proxy(request: NextRequest) {
     (path === '/profile/about' && request.method === 'GET') ||
     (path === '/settings' && request.method === 'GET') ||
     (path === '/import' && request.method === 'GET') ||
-    (path === '/skills' && request.method === 'GET') ||
+    (path === '/skills' && ['GET', 'POST'].includes(request.method)) ||
     (chatPage && (request.method === 'GET' || request.method === 'POST')) ||
     (['/icon.svg', '/apple-icon.png', '/favicon.ico', '/manifest.webmanifest'].includes(path) &&
       request.method === 'GET') ||

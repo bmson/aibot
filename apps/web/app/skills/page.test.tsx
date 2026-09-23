@@ -66,17 +66,17 @@ describe.skipIf(!localEmulator)('Firestore owner Skills page with PostgreSQL off
     resetConfigForTest();
   });
 
-  it('allows only GET and renders the owner library without write controls', async () => {
+  it('allows the owner page and exposes Firestore skill editing controls', async () => {
     const { proxy } = await import('../../proxy.js');
     expect(proxy(new NextRequest('http://localhost/skills')).status).toBe(200);
-    expect(proxy(new NextRequest('http://localhost/skills', { method: 'POST' })).status).toBe(503);
+    expect(proxy(new NextRequest('http://localhost/skills', { method: 'POST' })).status).toBe(200);
     const html = renderToStaticMarkup(await page.default());
     expect(auth.owner).toHaveBeenCalled();
     expect(html).toContain('Private owner skill');
     expect(html).not.toContain('Foreign skill');
-    expect(html).not.toContain('Add skill');
-    expect(html).not.toContain('Confirm delete');
-    expect(html).not.toContain('<form');
+    expect(html).toContain('Add skill');
+    expect(html).toContain('Edit');
+    expect(html).toContain('Delete');
   });
 
   it('checks owner authentication before exposing skills', async () => {
