@@ -335,7 +335,16 @@ export const configKeyNames = Object.keys(ConfigSchema.shape) as readonly (keyof
 let cached: Config | undefined;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  cached ??= ConfigSchema.parse(env);
+  if (!cached) {
+    const parsed = ConfigSchema.parse(env);
+    if (
+      parsed.PERSISTENCE_DRIVER === 'firestore' &&
+      env.NODE_ENV === 'production' &&
+      !env.FIRESTORE_DATABASE_ID?.trim()
+    )
+      throw new Error('FIRESTORE_DATABASE_ID must be explicit in production Firestore mode');
+    cached = parsed;
+  }
   return cached;
 }
 

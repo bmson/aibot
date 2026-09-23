@@ -53,6 +53,10 @@ describe('config', () => {
     expect(() => loadConfig({ AUTH_LOCALHOST_BYPASS: 'yes' })).toThrow();
     resetConfigForTest();
     expect(() => loadConfig({ FIRESTORE_DATABASE_ID: 'Invalid_Name' })).toThrow();
+    resetConfigForTest();
+    expect(() => loadConfig({ PERSISTENCE_DRIVER: 'firestore', NODE_ENV: 'production' })).toThrow(
+      'FIRESTORE_DATABASE_ID must be explicit',
+    );
   });
 
   it('requires an explicit, minimal Firestore agent identity and embedding space', () => {
