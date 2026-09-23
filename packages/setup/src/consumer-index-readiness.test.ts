@@ -89,6 +89,7 @@ describe('consumer Firestore index readiness', () => {
     expect(result.exemptionsCreated).toBe(spec.fieldOverrides.length);
     expect(commands).toHaveLength(spec.indexes.length + spec.fieldOverrides.length);
     expect(commands.every((args) => args.includes('--database=assistant-production'))).toBe(true);
+    expect(commands.every((args) => args.includes('--async'))).toBe(true);
     expect(commands.some((args) => args.includes('--disable-indexes'))).toBe(true);
     expect(
       commands.some((args) => args.some((arg) => arg.includes('vector-config={dimension='))),
