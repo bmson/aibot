@@ -68,7 +68,8 @@ function ownerFactOrder(left: Records['memories'], right: Records['memories']): 
   return (
     Number(right.pinned) - Number(left.pinned) ||
     right.importance - left.importance ||
-    Number(right.confidence) - Number(left.confidence)
+    Number(right.confidence) - Number(left.confidence) ||
+    left.id.localeCompare(right.id)
   );
 }
 
@@ -186,7 +187,6 @@ export class FirestoreProfileOverviewRepository implements ProfileOverviewReposi
     let awaitingReview = 0;
     let ownerConfirmed = 0;
     let lastOrganizedAt: Date | null = null;
-    let ownerFactCount = 0;
     const ownerFactMetadata: Records['memories'][] = [];
     const quarantined: Array<{ row: Records['memories']; order: number }> = [];
     let memoryOrder = 0;
@@ -248,13 +248,11 @@ export class FirestoreProfileOverviewRepository implements ProfileOverviewReposi
         }
         if (owner && row.subjectContactId === owner.id) {
           ownerFactMetadata.push(row);
-          ownerFactCount += 1;
-          if (ownerFactCount > PROFILE_FACT_LIMIT)
-            throw new Error('Profile owner fact count exceeds the view limit');
+          ownerFactMetadata.sort(ownerFactOrder);
+          if (ownerFactMetadata.length > PROFILE_FACT_LIMIT) ownerFactMetadata.pop();
         }
       },
     );
-    ownerFactMetadata.sort(ownerFactOrder);
     const selectedQuarantined = quarantined.map(({ row }) => row);
     const selectedMemoryMetadata = [...ownerFactMetadata, ...selectedQuarantined];
     const hydratedMemories = await hydrateMemories(this.store, agentId, [

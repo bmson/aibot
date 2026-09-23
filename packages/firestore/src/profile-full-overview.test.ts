@@ -198,7 +198,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore full Profile ov
     }
   });
 
-  it('fails explicitly when the owner fact view limit would hide facts', async () => {
+  it('returns the highest-priority owner facts when the full count exceeds the view limit', async () => {
     const store = emulatorStore(() => now);
     const agentId = randomUUID();
     const ownerId = randomUUID();
@@ -212,8 +212,10 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore full Profile ov
         relationship: '',
       });
       const batch = store.db.batch();
+      const ids: string[] = [];
       for (let index = 0; index < 251; index++) {
         const id = randomUUID();
+        ids.push(id);
         batch.set(store.doc('memories', id), {
           id,
           agentId,
@@ -222,15 +224,26 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore full Profile ov
           quarantined: false,
           expiresAt: null,
           createdAt: now,
-          pinned: false,
-          importance: 3,
+          pinned: index === 250,
+          importance: index === 0 ? 0 : 3,
           confidence: '0.70',
+          content: `Fact ${index}`,
+          kind: 'fact',
+          domain: 'personal',
+          ownerConfirmed: false,
+          lastConsolidatedAt: null,
+          originTrust: 'owner',
+          sourceTaskId: null,
+          validFrom: null,
+          validUntil: null,
         });
       }
       await batch.commit();
-      await expect(new FirestoreProfileOverviewRepository(store).load()).rejects.toThrow(
-        'owner fact count exceeds the view limit',
-      );
+      const profile = await new FirestoreProfileOverviewRepository(store).load();
+      expect(profile.ownerFacts).toHaveLength(250);
+      expect(profile.ownerFacts[0]?.id).toBe(ids[250]);
+      expect(profile.ownerFacts.map((fact) => fact.id)).not.toContain(ids[0]);
+      expect(profile.memoryHealth).toMatchObject({ totalUsable: 251 });
     } finally {
       await disposeStore(store);
     }
