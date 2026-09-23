@@ -17,6 +17,7 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
   const agentId = randomUUID();
   const foreignAgentId = randomUUID();
   const policyId = randomUUID();
+  const pausedPolicyId = randomUUID();
   const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
   let page: typeof import('./page.js');
   let actions: typeof import('./actions.js');
@@ -58,13 +59,22 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
       createdAt: now,
       updatedAt: now,
     });
-    await new FirestoreScheduleRepository(store).ensure({
+    const schedules = new FirestoreScheduleRepository(store);
+    await schedules.ensure({
       agentId,
       name: 'daily-job',
       cron: '0 9 * * *',
       taskTemplate: {},
       nextRunAt: new Date(now.getTime() + 86_400_000),
     });
+    const pausedSchedule = await schedules.ensure({
+      agentId,
+      name: 'weekly-job',
+      cron: '0 9 * * 1',
+      taskTemplate: {},
+      nextRunAt: new Date(now.getTime() + 7 * 86_400_000),
+    });
+    await store.doc('schedules', pausedSchedule.id).update({ enabled: false });
     await store.doc('notificationPrefs', agentId).set({
       agentId,
       quietStartMin: 22 * 60,
@@ -82,6 +92,19 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
       enabled: true,
       createdVia: 'owner',
       match: { recipient: 'trusted@example.test' },
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await store.doc('approvalPolicies', pausedPolicyId).set({
+      id: pausedPolicyId,
+      agentId,
+      toolName: 'calendar.create_event',
+      templateKey: 'calendar.create_event',
+      effect: 'ask',
+      enabled: false,
+      createdVia: 'owner',
+      match: {},
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -115,8 +138,10 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     expect(html).toContain('Save changes');
     expect(html).toContain('Quiet from');
     expect(html).toContain('Quiet until');
-    expect(html).not.toContain('Pause');
-    expect(html).not.toContain('Delete');
+    expect(html).toContain('Pause');
+    expect(html).toContain('Resume');
+    expect(html).toContain('Use');
+    expect(html).toContain('Delete');
     expect(html).not.toContain('/costs');
     expect(html).not.toContain('MCP connections');
   });
