@@ -21,6 +21,7 @@
     "./maps": "./src/maps.ts",
     "./operations": "./src/operations.ts",
     "./people": "./src/people.ts",
+    "./people-graph-projection": "./src/people-graph-projection.ts",
     "./people-presentation": "./src/people-presentation.ts",
     "./people-view": "./src/people-view.ts",
     "./profile": "./src/profile.ts",
