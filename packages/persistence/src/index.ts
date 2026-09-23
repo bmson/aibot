@@ -33,6 +33,7 @@ export * from './records.js';
 export * from './reminders.js';
 export * from './schedules.js';
 export * from './settings.js';
+export * from './shell-status.js';
 export * from './skill-context.js';
 export * from './task-creation.js';
 export * from './task-lifecycle.js';

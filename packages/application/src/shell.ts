@@ -1,7 +1,12 @@
 import { getAgent, getOrCreatePrimaryConversation } from '@assistant/core/chat';
 import { getMemoryHealth } from '@assistant/core/memory/health';
 import type { Db } from '@assistant/db';
-import type { ApplicationChatPersistence } from '@assistant/persistence';
+import {
+  type ApplicationChatPersistence,
+  isShellStatusRepository,
+  type ShellStatusProjection,
+  type ShellStatusRepository,
+} from '@assistant/persistence';
 import { getDashboardPresence } from './dashboard.js';
 
 export async function getAssistantIdentity(db: Db) {
@@ -42,10 +47,19 @@ export async function getPrimaryConversationId(
   return (await getOrCreatePrimaryConversation(source as Db, agent.id)).id;
 }
 
-export async function getShellStatus(db: Db, agentId: string) {
+export function getShellStatus(db: Db, agentId: string): Promise<ShellStatusProjection>;
+export function getShellStatus(
+  repository: ShellStatusRepository,
+  agentId: string,
+): Promise<ShellStatusProjection>;
+export async function getShellStatus(
+  source: Db | ShellStatusRepository,
+  agentId: string,
+): Promise<ShellStatusProjection> {
+  if (isShellStatusRepository(source)) return source.load(agentId);
   const [dashboard, memoryHealth] = await Promise.all([
-    getDashboardPresence(db, agentId),
-    getMemoryHealth(db, agentId),
+    getDashboardPresence(source as Db, agentId),
+    getMemoryHealth(source as Db, agentId),
   ]);
   return { dashboard, memoryHealth };
 }
