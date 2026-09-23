@@ -59,6 +59,7 @@ export { createFirestoreSettingsPersistence } from './settings-persistence.js';
 export { FirestoreShellPresenceRepository } from './shell-presence.js';
 export { FirestoreShellStatusRepository } from './shell-status.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
+export { FirestoreSkillMutationRepository } from './skill-mutations.js';
 export { createInstallationStore, InstallationStore } from './store.js';
 export { FirestoreTaskActivityRepository } from './task-activity.js';
 export { FirestoreTaskActivityCommandRepository } from './task-activity-commands.js';

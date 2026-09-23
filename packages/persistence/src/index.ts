@@ -38,6 +38,7 @@ export * from './shell-presence.js';
 export * from './shell-status.js';
 export * from './skill-context.js';
 export * from './skill-library.js';
+export * from './skill-mutations.js';
 export * from './task-activity.js';
 export * from './task-activity-commands.js';
 export * from './task-creation.js';

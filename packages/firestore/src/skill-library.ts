@@ -18,7 +18,7 @@ const FIELDS = [
   'updatedAt',
 ] as const;
 
-function skillFromDocument(
+export function skillFromDocument(
   value: unknown,
   documentId: string,
   agentId: string,

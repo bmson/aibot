@@ -1,3 +1,4 @@
+import { loadConfig } from '@assistant/config';
 import { getApplication } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -20,6 +21,11 @@ function skillInput(
 
 export async function POST(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
+    return mobileJson(
+      { error: 'Skill creation is unavailable in Firestore mode.' },
+      { status: 503 },
+    );
   const input = skillInput(await request.json().catch(() => null));
   if ('error' in input) return mobileJson({ error: input.error }, { status: 400 });
   const result = await getApplication().addSkill(input);

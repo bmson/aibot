@@ -26,6 +26,7 @@
     "./profile": "./src/profile.ts",
     "./relationship-presentation": "./src/relationship-presentation.ts",
     "./settings": "./src/settings.ts",
+    "./workspace-skills": "./src/workspace-skills.ts",
     "./shell": "./src/shell.ts",
     "./suggestions": "./src/suggestions.ts",
     "./tasks": "./src/tasks.ts"

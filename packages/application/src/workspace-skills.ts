@@ -1,4 +1,4 @@
-import type { SkillLibraryRepository } from '@assistant/persistence';
+import type { SkillLibraryRepository, SkillMutationRepository } from '@assistant/persistence';
 
 /** Matches the learned-skill item returned by the mobile workspace API. */
 export type MobileWorkspaceSkill = {
@@ -33,4 +33,21 @@ export async function listMobileWorkspaceSkills(
     failureCount: skill.failureCount,
     updatedAt: skill.updatedAt.toISOString(),
   }));
+}
+
+export function setMobileSkillDeprecated(
+  repository: SkillMutationRepository,
+  agentId: string,
+  skillId: string,
+  deprecated: boolean,
+): Promise<void> {
+  return repository.setDeprecated(agentId, skillId, deprecated);
+}
+
+export function deleteMobileSkill(
+  repository: SkillMutationRepository,
+  agentId: string,
+  skillId: string,
+): Promise<void> {
+  return repository.delete(agentId, skillId);
 }
