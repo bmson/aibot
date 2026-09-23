@@ -58,6 +58,19 @@ export function proactiveConfigNotes(config: Config = loadConfig()): string[] {
   if (isModuleEnabled(config, 'google') && config.GMAIL_SYNC_ENABLED === 'false') {
     notes.push('GMAIL_SYNC_ENABLED is off: no mail is being read at all.');
   }
+  // The schema leaves recall off and deploy.sh turns it on when .env is
+  // silent, so a local install and a deployed one differ with no note
+  // anywhere. Name the effective value rather than let the difference hide.
+  if (!config.CHAT_RECALL_ENABLED) {
+    notes.push(
+      'CHAT_RECALL_ENABLED is off: conversations that have scrolled out of the chat window are ' +
+        'not recalled. It defaults off locally; deploy.sh turns it on unless .env sets it.',
+    );
+  } else if (!config.GRAPH_RAG_ENABLED) {
+    notes.push(
+      'GRAPH_RAG_ENABLED is off: recall searches past conversations only, not the knowledge graph.',
+    );
+  }
   if (!isModuleEnabled(config, 'push') && !isModuleEnabled(config, 'sms')) {
     notes.push(
       'Neither the push nor the sms module is installed, so proactive notices only appear when ' +

@@ -5,7 +5,12 @@ import { proactiveConfigNotes } from './diagnostics.js';
 describe('proactiveConfigNotes', () => {
   afterEach(() => resetConfigForTest());
 
-  const base = { ASSISTANT_MODULES: 'google,push', EMAIL_INGEST_MODE: 'forwarded' };
+  const base = {
+    ASSISTANT_MODULES: 'google,push',
+    EMAIL_INGEST_MODE: 'forwarded',
+    CHAT_RECALL_ENABLED: 'true',
+    GRAPH_RAG_ENABLED: 'true',
+  };
 
   it('is silent on an installation that can actually be proactive', () => {
     expect(proactiveConfigNotes(loadConfig(base))).toEqual([]);
@@ -33,6 +38,24 @@ describe('proactiveConfigNotes', () => {
   it('flags mail sync being switched off', () => {
     const notes = proactiveConfigNotes(loadConfig({ ...base, GMAIL_SYNC_ENABLED: 'false' }));
     expect(notes.join(' ')).toContain('GMAIL_SYNC_ENABLED');
+  });
+
+  it('names recall being off, and where the two defaults differ', () => {
+    const notes = proactiveConfigNotes(loadConfig({ ...base, CHAT_RECALL_ENABLED: 'false' }));
+    expect(notes.join(' ')).toContain('CHAT_RECALL_ENABLED is off');
+    expect(notes.join(' ')).toMatch(/deploy\.sh turns it on/);
+  });
+
+  it('names graph recall being off when recall itself is on', () => {
+    const notes = proactiveConfigNotes(loadConfig({ ...base, GRAPH_RAG_ENABLED: 'false' }));
+    expect(notes.join(' ')).toContain('GRAPH_RAG_ENABLED is off');
+  });
+
+  it('does not add a graph note on top of recall being off', () => {
+    const notes = proactiveConfigNotes(
+      loadConfig({ ...base, CHAT_RECALL_ENABLED: 'false', GRAPH_RAG_ENABLED: 'false' }),
+    );
+    expect(notes.join(' ')).not.toContain('GRAPH_RAG_ENABLED');
   });
 
   it('warns when nothing can reach the phone at all', () => {
