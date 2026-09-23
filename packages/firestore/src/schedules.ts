@@ -66,15 +66,18 @@ export class FirestoreScheduleRepository implements ScheduleRepository {
     const id = randomUUID();
     const key = scheduleNameKey(input.agentId, input.name);
     const keyRef = this.store.doc('scheduleNames', key);
+    // This query is only for migrating schedules created before the name key
+    // existed. Keep it outside the contended transaction: the key document is
+    // the uniqueness fence for all new writes, and a legacy candidate is read
+    // again inside the transaction before it can be adopted.
+    const legacyMatches = decodeSchedules(
+      await scheduleQuery(this.store, input.agentId, input.name).get(),
+    );
+    if (legacyMatches.length > 1) throw ambiguousName();
+    const legacy = legacyMatches[0];
 
     return this.store.db.runTransaction(async (tx) => {
-      // Read both the uniqueness fence and legacy rows before any write. The
-      // query repairs rows written before scheduleNames existed and detects
-      // duplicate legacy data instead of silently choosing one row.
       const keySnapshot = await tx.get(keyRef);
-      const matches = await tx.get(scheduleQuery(this.store, input.agentId, input.name));
-      const rows = decodeSchedules(matches);
-      if (rows.length > 1) throw ambiguousName();
       const keyScheduleId = keySnapshot.exists ? String(keySnapshot.get('scheduleId') ?? '') : '';
       if (
         keySnapshot.exists &&
@@ -84,20 +87,26 @@ export class FirestoreScheduleRepository implements ScheduleRepository {
         throw new Error('Schedule name key does not match its name');
       }
 
-      if (rows[0]) {
-        const row = rows[0];
-        if (keyScheduleId && keyScheduleId !== row.id)
-          throw new Error('Schedule name key points to another schedule');
-        // Backfill the stable key for a legacy row in the same transaction.
-        if (!keySnapshot.exists || !keyScheduleId) {
-          tx.set(keyRef, {
-            agentId: input.agentId,
-            name: input.name,
-            scheduleId: row.id,
-            createdAt: this.store.now(),
-          });
+      if (legacy && keyScheduleId && keyScheduleId !== legacy.id)
+        throw new Error('Schedule name key points to another schedule');
+      const existingId = keyScheduleId || legacy?.id;
+      if (existingId) {
+        const existing = await tx.get(this.store.doc('schedules', existingId));
+        if (existing.exists) {
+          const row = decodeSchedule(existing.data());
+          if (row.id !== existingId || row.agentId !== input.agentId || row.name !== input.name)
+            throw new Error('Schedule name key points to another schedule');
+          // Backfill the stable key for a legacy row in the same transaction.
+          if (!keySnapshot.exists || !keyScheduleId) {
+            tx.set(keyRef, {
+              agentId: input.agentId,
+              name: input.name,
+              scheduleId: row.id,
+              createdAt: this.store.now(),
+            });
+          }
+          return row;
         }
-        return row;
       }
 
       const now = this.store.now();
