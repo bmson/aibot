@@ -1,5 +1,6 @@
+import { OAuth2Client } from 'google-auth-library';
 import { describe, expect, it } from 'vitest';
-import { decodeRecord, encodeRecord } from './store.js';
+import { createInstallationStore, decodeRecord, encodeRecord } from './store.js';
 
 describe('Firestore record codec', () => {
   it('preserves integers beyond JavaScript Number precision without native int64 decoding', () => {
@@ -38,5 +39,33 @@ describe('Firestore record codec', () => {
   it('continues to decode existing untagged records', () => {
     const existing = { values: ['a', 'b'], nestedMap: { enabled: true } };
     expect(decodeRecord(existing)).toEqual(existing);
+  });
+});
+
+describe('Firestore auth client forwarding', () => {
+  it('routes explicit authClient through Firestore 9.2 REST fallback into google-gax', async () => {
+    const authClient = new OAuth2Client();
+    const store = createInstallationStore({
+      projectId: 'demo-assistant-test',
+      installationId: 'auth-forwarding',
+      databaseId: 'assistant-rehearsal',
+      authClient,
+    });
+    try {
+      const pool = (
+        store.db as unknown as {
+          _clientPool: {
+            acquire(requestTag: string, requiresGrpc: boolean): object;
+            release(requestTag: string, client: object): Promise<void>;
+          };
+        }
+      )._clientPool;
+      const client = pool.acquire('auth-forwarding-test', false);
+      const gax = (client as unknown as { _gaxGrpc: { auth: unknown } })._gaxGrpc;
+      expect(gax.auth).toBe(authClient);
+      await pool.release('auth-forwarding-test', client);
+    } finally {
+      await store.db.terminate();
+    }
   });
 });

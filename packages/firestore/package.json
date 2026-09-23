@@ -15,7 +15,8 @@
   },
   "dependencies": {
     "@assistant/persistence": "workspace:*",
-    "@google-cloud/firestore": "^9.2.0"
+    "@google-cloud/firestore": "^9.2.0",
+    "google-auth-library": "^10.9.1"
   },
   "devDependencies": {
     "tsx": "^4.23.13"
