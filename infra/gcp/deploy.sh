@@ -38,8 +38,11 @@ WEB_DOMAIN="${WEB_DOMAIN:-$(envval WEB_DOMAIN)}"
 
 ASSISTANT_NAME="$(envval ASSISTANT_NAME)"
 ASSISTANT_NAME="${ASSISTANT_NAME:-Assistant}"
+# No default: the assistant's own mailbox is its identity. A placeholder here
+# once reached production and stayed for weeks — the system prompt, outgoing
+# From line and self-mail detection all used it, and the Gmail canary failed
+# daily against the real account. The check below now actually fires.
 ASSISTANT_EMAIL="$(envval ASSISTANT_EMAIL)"
-ASSISTANT_EMAIL="${ASSISTANT_EMAIL:-assistant@example.com}"
 ASSISTANT_WORKSPACE_ID="$(envval ASSISTANT_WORKSPACE_ID)"
 ASSISTANT_WORKSPACE_ID="${ASSISTANT_WORKSPACE_ID:-assistant}"
 ASSISTANT_TIMEZONE="$(envval ASSISTANT_TIMEZONE)"
@@ -98,6 +101,12 @@ MAPKIT_PRIVATE_KEY="$(envval MAPKIT_PRIVATE_KEY)"
 [ -n "$PROD_DATABASE_URL" ] || { echo "PROD_DATABASE_URL missing from .env"; exit 1; }
 [ -n "$OPENROUTER_API_KEY" ] || { echo "OPENROUTER_API_KEY missing from .env"; exit 1; }
 [ -n "$ASSISTANT_EMAIL" ] || { echo "ASSISTANT_EMAIL missing from .env"; exit 1; }
+case "$ASSISTANT_EMAIL" in
+  *@example.com|*@example.org)
+    echo "ASSISTANT_EMAIL is still the placeholder ($ASSISTANT_EMAIL); set it to the assistant's own Google account in .env"
+    exit 1
+    ;;
+esac
 [ -n "$OWNER_EMAIL" ] || { echo "OWNER_EMAIL missing from .env"; exit 1; }
 
 # Stable generated secrets (persisted in .env on first run)
