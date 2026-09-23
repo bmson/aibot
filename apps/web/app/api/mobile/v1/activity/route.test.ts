@@ -1,0 +1,221 @@
+import { randomUUID } from 'node:crypto';
+import { listActivityWithRepository } from '@assistant/application/tasks';
+import { resetConfigForTest } from '@assistant/config';
+import { createInstallationStore, FirestoreTaskActivityRepository } from '@assistant/firestore';
+import { NextRequest } from 'next/server';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+const auth = vi.hoisted(() => ({ allowed: vi.fn() }));
+vi.mock('@/mobile-auth', () => ({
+  isMobileAuthed: auth.allowed,
+  mobileJson: (value: unknown, init?: ResponseInit) => Response.json(value, init),
+  mobileUnauthorized: () => Response.json({ error: 'unauthorized' }, { status: 401 }),
+}));
+
+const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
+const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
+
+describe.skipIf(!localEmulator)('Firestore mobile Activity GET with PostgreSQL offline', () => {
+  const installationId = `mobile-activity-${randomUUID()}`;
+  const agentId = randomUUID();
+  const foreignAgentId = randomUUID();
+  const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+  let route: typeof import('./route.js');
+
+  const task = (id: string, patch: Record<string, unknown> = {}) => ({
+    id,
+    agentId,
+    type: 'root',
+    status: 'running',
+    title: id,
+    progress: 'Working',
+    trust: 'owner',
+    spentUsd: '1.25',
+    budgetUsdLimit: '5.00',
+    updatedAt: new Date('2026-09-22T12:00:00Z'),
+    archivedAt: null,
+    autonomyGrant: null,
+    trigger: { payload: {} },
+    ...patch,
+  });
+
+  beforeAll(async () => {
+    vi.stubEnv('PERSISTENCE_DRIVER', 'firestore');
+    vi.stubEnv('DATABASE_URL', 'postgres://offline:offline@127.0.0.1:1/offline_test');
+    vi.stubEnv('GCP_PROJECT', 'demo-assistant-test');
+    vi.stubEnv('ASSISTANT_WORKSPACE_ID', installationId);
+    vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
+    vi.stubEnv(
+      'FIRESTORE_EMBEDDING_SPACE',
+      '{"provider":"vertex","model":"fixture","dimensions":768,"revision":"1"}',
+    );
+    vi.stubEnv('LLM_PROVIDER', 'vertex');
+    vi.stubEnv('ASSISTANT_MODULES', 'minimal');
+    vi.stubEnv('QUEUE_DRIVER', 'local');
+    vi.stubEnv('CANARY_ENABLED', 'false');
+    vi.stubEnv('LOCATION_PING_SECRET', '');
+    resetConfigForTest();
+    auth.allowed.mockResolvedValue(true);
+    route = await import('./route.js');
+    const now = new Date();
+    await Promise.all([
+      store.doc('agents', agentId).set({ id: agentId }),
+      store.doc('tasks', 'approval').set(
+        task('approval', {
+          status: 'waiting_approval',
+          updatedAt: new Date('2026-09-22T15:00:00Z'),
+        }),
+      ),
+      store.doc('tasks', 'stuck').set(
+        task('stuck', {
+          status: 'waiting_approval',
+          updatedAt: new Date('2026-09-22T14:00:00Z'),
+        }),
+      ),
+      store.doc('tasks', 'running').set(
+        task('running', {
+          autonomyGrant: {
+            grantedAt: now.toISOString(),
+            grantedVia: 'composer',
+            expiresAt: new Date(now.getTime() + 3600_000).toISOString(),
+          },
+        }),
+      ),
+      store
+        .doc('tasks', 'archived')
+        .set(task('archived', { status: 'done', archivedAt: new Date('2026-09-20T12:00:00Z') })),
+      store.doc('tasks', 'archived-canary').set(
+        task('archived-canary', {
+          status: 'done',
+          archivedAt: new Date('2026-09-20T12:00:00Z'),
+          trigger: { payload: { canary: true } },
+        }),
+      ),
+      store
+        .doc('tasks', 'current-canary')
+        .set(task('current-canary', { trigger: { payload: { canary: 'true' } } })),
+      store.doc('tasks', 'foreign').set(task('foreign', { agentId: foreignAgentId })),
+      store
+        .doc('approvals', 'pending')
+        .set({ id: 'pending', taskId: 'approval', status: 'pending' }),
+    ]);
+  });
+
+  afterAll(async () => {
+    await store.db.recursiveDelete(store.root);
+    await store.db.terminate();
+    vi.unstubAllEnvs();
+    resetConfigForTest();
+  });
+
+  const get = (query = '') =>
+    route.GET(new Request(`http://localhost/api/mobile/v1/activity${query}`));
+
+  it('allows only GET and returns the owner list with SQL ordering and flags', async () => {
+    const { proxy } = await import('../../../../../proxy.js');
+    expect(proxy(new NextRequest('http://localhost/api/mobile/v1/activity')).status).toBe(200);
+    expect(
+      proxy(new NextRequest('http://localhost/api/mobile/v1/activity', { method: 'POST' })).status,
+    ).toBe(503);
+    expect(proxy(new NextRequest('http://localhost/api/mobile/v1/activity/123')).status).toBe(503);
+    const response = await get();
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.archivedCount).toBe(2);
+    expect(body.items.map((item: { id: string }) => item.id)).toEqual([
+      'approval',
+      'stuck',
+      'running',
+    ]);
+    expect(body.items[0]).toMatchObject({ hasPendingApproval: true, stuckWaiting: false });
+    expect(body.items[1]).toMatchObject({ hasPendingApproval: false, stuckWaiting: true });
+    expect(body.items[2]).toMatchObject({ hasActiveAutonomy: true });
+  });
+
+  it('keeps archived and application filter semantics', async () => {
+    const archived = await (await get('?archived=true')).json();
+    expect(archived.items.map((item: { id: string }) => item.id)).toEqual(['archived']);
+    expect(archived.archivedCount).toBe(2);
+    const working = await listActivityWithRepository(
+      new FirestoreTaskActivityRepository(store),
+      agentId,
+      { archived: false, filter: 'working', limit: 2 },
+    );
+    expect(working.items.map((item) => item.id)).toEqual(['running']);
+  });
+
+  it('requires auth and refuses Firestore writes', async () => {
+    auth.allowed.mockResolvedValueOnce(false);
+    expect((await get()).status).toBe(401);
+    const post = await route.POST(
+      new Request('http://localhost/api/mobile/v1/activity', { method: 'POST' }),
+    );
+    expect(post.status).toBe(503);
+  });
+
+  it('fails closed during erasure and when the configured agent is missing', async () => {
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+    try {
+      await expect(get()).rejects.toThrow('Privacy erasure is in progress');
+    } finally {
+      await store.doc('privacyErasureJobs', agentId).delete();
+    }
+    vi.stubEnv('FIRESTORE_AGENT_ID', foreignAgentId);
+    resetConfigForTest();
+    try {
+      await expect(get()).rejects.toThrow('one matching configured agent');
+    } finally {
+      vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
+      resetConfigForTest();
+    }
+  });
+
+  it('fails closed when another agent appears in the installation', async () => {
+    await store.doc('agents', foreignAgentId).set({ id: foreignAgentId });
+    try {
+      await expect(get()).rejects.toThrow('one matching configured agent');
+    } finally {
+      await store.doc('agents', foreignAgentId).delete();
+    }
+  });
+
+  it('rejects a read when erasure completes before the final fence check', async () => {
+    const originalDoc = store.doc.bind(store);
+    let fenceReads = 0;
+    const spy = vi.spyOn(store, 'doc').mockImplementation((collection, id) => {
+      const ref = originalDoc(collection, id);
+      if (collection === 'privacyErasureJobs' && id === agentId) {
+        const get = ref.get.bind(ref);
+        vi.spyOn(ref, 'get').mockImplementation(async () => {
+          fenceReads += 1;
+          if (fenceReads === 2)
+            await originalDoc('privacyErasureJobs', agentId).set({ agentId, status: 'complete' });
+          return get();
+        });
+      }
+      return ref;
+    });
+    try {
+      await expect(
+        listActivityWithRepository(new FirestoreTaskActivityRepository(store), agentId, {
+          archived: false,
+          filter: 'all',
+          limit: 50,
+        }),
+      ).rejects.toThrow('Privacy erasure changed during read');
+      expect(fenceReads).toBe(2);
+    } finally {
+      spy.mockRestore();
+      await originalDoc('privacyErasureJobs', agentId).delete();
+    }
+  });
+
+  it('fails closed on malformed owner task data', async () => {
+    await store.doc('tasks', 'malformed').set(task('malformed', { updatedAt: 'not-a-date' }));
+    try {
+      await expect(get()).rejects.toThrow('Invalid owner activity task');
+    } finally {
+      await store.doc('tasks', 'malformed').delete();
+    }
+  });
+});

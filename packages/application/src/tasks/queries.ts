@@ -5,6 +5,7 @@ import {
   RequestChecklistSchema,
 } from '@assistant/core/workflow/request-checklist-schema';
 import { approvals, type Db, files, messages, modelCalls, tasks, toolCalls } from '@assistant/db';
+import type { ActivityTaskRecord, TaskActivityRepository } from '@assistant/persistence';
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 
@@ -38,6 +39,40 @@ export interface ActivityItem {
 export interface ActivityList {
   items: ActivityItem[];
   archivedCount: number;
+}
+
+function activityItem(
+  row: Omit<ActivityTaskRecord, 'agentId' | 'trigger'>,
+  pendingApprovalTaskIds: Set<string>,
+): ActivityItem {
+  const { autonomyGrant, ...task } = row;
+  const hasPendingApproval = pendingApprovalTaskIds.has(task.id);
+  return {
+    ...task,
+    hasPendingApproval,
+    hasActiveAutonomy: activeAutonomyGrant({ ...task, autonomyGrant }, Date.now()) !== null,
+    stuckWaiting: task.status === 'waiting_approval' && !hasPendingApproval,
+  };
+}
+
+/** Portable owner Activity projection for a bounded persistence read. */
+export async function listActivityWithRepository(
+  repository: TaskActivityRepository,
+  agentId: string,
+  input: { archived: boolean; filter: ActivityFilter; limit?: number },
+): Promise<ActivityList> {
+  const { tasks, archivedCount, pendingApprovalTaskIds } = await repository.list(agentId, {
+    archived: input.archived,
+    statuses: statusesForFilter(input.filter),
+    limit: input.limit ?? 50,
+  });
+  const pending = new Set(pendingApprovalTaskIds);
+  return {
+    items: tasks.map(({ agentId: _agentId, trigger: _trigger, ...task }) =>
+      activityItem(task, pending),
+    ),
+    archivedCount,
+  };
 }
 
 /** Load the Activity list without exposing task or approval tables to the UI. */
@@ -92,12 +127,7 @@ export async function listActivity(
   const pendingApprovalTaskIds = new Set(pendingIds.map((row) => row.taskId));
 
   return {
-    items: rows.map(({ autonomyGrant, ...task }) => ({
-      ...task,
-      hasPendingApproval: pendingApprovalTaskIds.has(task.id),
-      hasActiveAutonomy: activeAutonomyGrant({ ...task, autonomyGrant }, Date.now()) !== null,
-      stuckWaiting: task.status === 'waiting_approval' && !pendingApprovalTaskIds.has(task.id),
-    })),
+    items: rows.map((task) => activityItem(task, pendingApprovalTaskIds)),
     archivedCount: Number(archivedCountRows[0]?.value ?? 0),
   };
 }
