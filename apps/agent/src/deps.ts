@@ -60,6 +60,7 @@ import {
 // The installation's composition file, at the repository root. Importing it
 // here is what bakes the chosen modules into the built image.
 import composition from '../../../assistant.config.js';
+import { firestoreMaintenanceReady as checkFirestoreMaintenanceReady } from './firestore-maintenance-ready.js';
 
 /**
  * Process-level dependency graph. Apps compose concrete adapters here while
@@ -88,6 +89,11 @@ export async function firestoreOwnerReady(deps: AgentDeps): Promise<boolean> {
   if (!deps.firestoreStore) return false;
   const owner = await deps.firestoreStore.doc('agents', deps.config.FIRESTORE_AGENT_ID).get();
   return owner.exists && owner.get('id') === deps.config.FIRESTORE_AGENT_ID;
+}
+
+/** Maintenance stays fenced while an imported workspace awaits explicit activation. */
+export async function firestoreMaintenanceReady(deps: AgentDeps): Promise<boolean> {
+  return checkFirestoreMaintenanceReady(deps.firestoreStore, deps.config.FIRESTORE_AGENT_ID);
 }
 
 /**
