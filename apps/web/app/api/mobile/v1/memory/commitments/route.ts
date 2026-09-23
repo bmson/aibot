@@ -1,4 +1,6 @@
-import { getApplication } from '@/lib/server';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { getFirestoreCommitmentOverview } from '@assistant/firestore';
+import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -14,7 +16,17 @@ const SNOOZE_MS = 24 * 3600 * 1000;
  */
 export async function GET(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
-  const commitments = await getApplication().listCommitments();
+  const config = loadConfig();
+  const commitments = await (async () => {
+    if (config.PERSISTENCE_DRIVER !== 'firestore') return getApplication().listCommitments();
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    return getFirestoreCommitmentOverview(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+      new Date(),
+    );
+  })();
   return mobileJson({
     commitments: commitments.map((row) => ({
       ...row,
@@ -26,6 +38,11 @@ export async function GET(request: Request): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
+    return mobileJson(
+      { error: 'Commitment updates are unavailable in Firestore mode.' },
+      { status: 503 },
+    );
   const body = (await request.json().catch(() => null)) as {
     action?: unknown;
     id?: unknown;
