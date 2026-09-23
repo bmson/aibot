@@ -2,8 +2,11 @@ import {
   archiveInactiveGoalRecords,
   createGoalWithWork,
   type GoalInput,
+  listGoalsDashboardWithRepository,
 } from '@assistant/application/goals';
-import { getApplication, getDb } from '@/lib/server';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { FirestoreGoalReadRepository } from '@assistant/firestore';
+import { getApplication, getDb, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -45,6 +48,18 @@ function goalInput(body: unknown): GoalInput | { error: string } {
 export async function GET(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const archived = new URL(request.url).searchParams.get('archived') === 'true';
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
+    const repository = new FirestoreGoalReadRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    );
+    return mobileJson(
+      await listGoalsDashboardWithRepository(repository, config.FIRESTORE_AGENT_ID, archived),
+    );
+  }
   return mobileJson(await getApplication().listGoals(archived));
 }
 

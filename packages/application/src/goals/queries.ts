@@ -5,6 +5,7 @@ import {
   goalScheduleName,
 } from '@assistant/core/workflow/schedules';
 import { conversations, type Db, goals, schedules, tasks } from '@assistant/db';
+import type { GoalReadRepository } from '@assistant/persistence';
 import { and, asc, count, desc, eq, isNotNull, isNull, notInArray } from 'drizzle-orm';
 
 export const goalStatuses = ['active', 'paused', 'done', 'abandoned'] as const;
@@ -42,6 +43,79 @@ export interface GoalDashboardItem {
 export interface GoalsDashboard {
   items: GoalDashboardItem[];
   archivedCount: number;
+}
+
+/** Project the shared portable goal read seam into the mobile dashboard shape. */
+export async function listGoalsDashboardWithRepository(
+  repository: GoalReadRepository,
+  agentId: string,
+  archived: boolean,
+  now = new Date(),
+): Promise<GoalsDashboard> {
+  const {
+    goals: allGoals,
+    conversations: chatRows,
+    tasks,
+    schedules,
+  } = await repository.list(agentId);
+  const archivedCount = allGoals.filter((goal) => goal.archivedAt != null).length;
+  const rows = allGoals
+    .filter((goal) => (archived ? goal.archivedAt != null : goal.archivedAt == null))
+    .sort((a, b) => a.priority - b.priority || b.updatedAt.getTime() - a.updatedAt.getTime());
+  const chatByGoalId = new Map<string, string>();
+  for (const chat of chatRows.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())) {
+    const goalId = goalIdFromMetadata(chat.metadata);
+    if (goalId && !chatByGoalId.has(goalId)) chatByGoalId.set(goalId, chat.id);
+  }
+  const activeGoalIds = new Set(
+    tasks.flatMap((task) =>
+      task.goalId && !['done', 'failed', 'cancelled'].includes(task.status) ? [task.goalId] : [],
+    ),
+  );
+  const stalledGoalIds = new Set(
+    tasks.flatMap((task) =>
+      task.goalId && task.status === 'needs_attention' ? [task.goalId] : [],
+    ),
+  );
+  const lastSessionByGoalId = new Map<string, { id: string; status: string; updatedAt: Date }>();
+  for (const task of [...tasks].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())) {
+    if (task.goalId && !lastSessionByGoalId.has(task.goalId))
+      lastSessionByGoalId.set(task.goalId, {
+        id: task.id,
+        status: task.status,
+        updatedAt: task.updatedAt,
+      });
+  }
+  return {
+    items: rows.map((goal) => {
+      const automation = schedules.find((schedule) => schedule.name === goalScheduleName(goal.id));
+      return {
+        goal,
+        conversationId: chatByGoalId.get(goal.id),
+        workActive: activeGoalIds.has(goal.id),
+        ...(automation
+          ? { automation: { enabled: automation.enabled, nextRunAt: automation.nextRunAt } }
+          : {}),
+        cadenceLabel: goalAutomationCadence(goal, now).label,
+        blockedQuestion: goal.nextAction.startsWith(GOAL_BLOCKED_PREFIX)
+          ? goal.nextAction.slice(GOAL_BLOCKED_PREFIX.length).trim()
+          : '',
+        stalled: stalledGoalIds.has(goal.id),
+        lastSession: lastSessionByGoalId.get(goal.id),
+      };
+    }),
+    archivedCount,
+  };
+}
+
+export async function getGoalRecord(db: Db, goalId: string) {
+  const agent = await getAgent(db);
+  const [goal] = await db
+    .select()
+    .from(goals)
+    .where(and(eq(goals.id, goalId), eq(goals.agentId, agent.id)))
+    .limit(1);
+  return goal ?? null;
 }
 
 function goalIdFromMetadata(metadata: unknown): string | undefined {

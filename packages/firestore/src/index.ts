@@ -10,6 +10,7 @@ export { FirestoreExecutionContextRepository } from './execution-context.js';
 export { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 export { FirestoreExecutionJobRepository } from './execution-jobs.js';
 export { FirestoreGeneratedCardRepository } from './generated-cards.js';
+export { FirestoreGoalReadRepository } from './goals.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { FirestoreImportOverviewRepository } from './import-overview.js';

@@ -12,6 +12,7 @@ export * from './execution-context.js';
 export * from './execution-evidence.js';
 export * from './execution-jobs.js';
 export * from './generated-cards.js';
+export * from './goals.js';
 export * from './graph-recall.js';
 export * from './history-recall.js';
 export * from './import-overview.js';
