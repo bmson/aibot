@@ -1,5 +1,10 @@
-import { createHash } from 'node:crypto';
-import type { DocumentCatalogRepository, Records } from '@assistant/persistence';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  type DocumentCatalogRepository,
+  newTaskRecord,
+  type Records,
+} from '@assistant/persistence';
+import { createWakeIntent } from './outbox.js';
 import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
@@ -86,9 +91,9 @@ function validFile(
 }
 
 /**
- * Atomic Firestore record boundary for document ingest. It persists only the
- * source file inventory and unprocessed document record; callers remain
- * responsible for blob rollback and processor/task scheduling.
+ * Atomic Firestore record boundary for document ingest. The file inventory,
+ * document row, dedup claim, processing task, and durable wake intent commit
+ * together. Callers remain responsible for rolling back staged blob bytes.
  */
 export class FirestoreDocumentCatalogRepository implements DocumentCatalogRepository {
   readonly kind = 'document-catalog-repository' as const;
@@ -98,12 +103,20 @@ export class FirestoreDocumentCatalogRepository implements DocumentCatalogReposi
     readonly configuredAgentId: string,
   ) {}
 
-  async createDocumentCatalog(input: {
-    file: FileRow;
+  async createDocumentCatalog(input: { file: FileRow; document: DocumentRow }): Promise<{
     document: DocumentRow;
-  }): Promise<{ document: DocumentRow; duplicate: boolean }> {
+    duplicate: boolean;
+    task: { id: string; queueGeneration: number } | null;
+  }> {
     assertInput(input.file, input.document, this.configuredAgentId);
     const { agentId } = input.document;
+    const job =
+      input.document.extractor === 'text' || input.document.extractor === 'pdf'
+        ? 'documents.extract'
+        : input.document.extractor === 'pending_processor'
+          ? 'documents.process'
+          : null;
+    const taskId = job ? randomUUID() : null;
     const claimId = dedupClaimId(agentId, input.document.sha256);
     const claimRef = this.store.doc('documentDedupKeys', claimId);
     const fileRef = this.store.doc('files', input.file.id);
@@ -151,7 +164,7 @@ export class FirestoreDocumentCatalogRepository implements DocumentCatalogReposi
         const existingFileSnapshot = await tx.get(this.store.doc('files', existing.fileId));
         if (!existingFileSnapshot.exists) throw new Error('Duplicate document file is missing');
         validFile(existingFileSnapshot, agentId, input.document.sha256);
-        return { document: existing, duplicate: true };
+        return { document: existing, duplicate: true, task: null };
       }
 
       // Older imported catalogs predate claim documents. A single-field hash
@@ -176,7 +189,7 @@ export class FirestoreDocumentCatalogRepository implements DocumentCatalogReposi
           documentId: existing.id,
         };
         tx.create(claimRef, encodeRecord(key));
-        return { document: existing, duplicate: true };
+        return { document: existing, duplicate: true, task: null };
       }
 
       if (candidateFile?.exists || candidateDocument?.exists)
@@ -191,7 +204,35 @@ export class FirestoreDocumentCatalogRepository implements DocumentCatalogReposi
       tx.create(fileRef, encodeRecord(input.file));
       tx.create(documentRef, encodeRecord(input.document));
       tx.create(claimRef, encodeRecord(key));
-      return { document: input.document, duplicate: false };
+      let task: Records['tasks'] | null = null;
+      if (job && taskId) {
+        const now = this.store.now();
+        task = newTaskRecord(
+          {
+            agentId,
+            type: 'adhoc',
+            trust: 'assistant',
+            trigger: {
+              source: 'internal',
+              payload: { job, documentId: input.document.id },
+            },
+            budgetUsdLimit: job === 'documents.process' ? '0.05' : '0.50',
+          },
+          taskId,
+          now,
+        );
+        tx.create(this.store.doc('tasks', task.id), encodeRecord(task));
+        createWakeIntent(tx, this.store, {
+          taskId: task.id,
+          generation: task.queueGeneration,
+          availableAt: task.runAfter ?? now,
+        });
+      }
+      return {
+        document: input.document,
+        duplicate: false,
+        task: task ? { id: task.id, queueGeneration: task.queueGeneration } : null,
+      };
     });
   }
 }
