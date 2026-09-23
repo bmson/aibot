@@ -30,3 +30,5 @@ A separate real Firestore managed export/import smoke passed inventory and check
 The manual [Cloud Run source snapshot workflow](firestore-production-export.md) can capture a fresh read-only PostgreSQL v3 bundle directly into the installation's private workspace bucket without disclosing the database URL to GitHub Actions. An unfenced snapshot remains a rehearsal until the final source write freeze and parity gates above pass.
 
 The matching [Cloud Run import workflow](firestore-production-import.md) pins a private snapshot by object generation and SHA-256, previews all target writes, imports only into an empty installation, and verifies document checksums and collection counts. These are manual rehearsal capabilities; runtime activation and database retirement still require every acceptance gate above.
+
+The [PostgreSQL source write-fence procedure](firestore-source-write-fence.md) records the current gap: this repository has no write-freeze switch or provider-side session control. A final export remains a rehearsal until a provider-level fence and drained-session evidence are available.
