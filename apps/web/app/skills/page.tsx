@@ -57,13 +57,9 @@ export default async function SkillsPage() {
       <PageHeader
         back={{ href: '/chat', label: 'Chat' }}
         title="Skills"
-        intro={
-          config.PERSISTENCE_DRIVER === 'firestore'
-            ? "Procedures the assistant has learned from experience. They're read as advice before the assistant plans — never run automatically — and every action they suggest still follows the normal approval rules."
-            : "Procedures the assistant has learned from experience, plus any you add yourself. They're read as advice before the assistant plans — never run automatically — and every action they suggest still follows the normal approval rules."
-        }
+        intro="Procedures the assistant has learned from experience, plus any you add yourself. They're read as advice before the assistant plans — never run automatically — and every action they suggest still follows the normal approval rules."
       />
-      <SkillsPanel skills={skills} readOnly={config.PERSISTENCE_DRIVER === 'firestore'} />
+      <SkillsPanel skills={skills} />
     </PageShell>
   );
 }
