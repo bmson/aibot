@@ -56,6 +56,7 @@ const archiveFiles = [
   'infra/gcp/consumer/terraform/.terraform.lock.hcl',
   'infra/gcp/consumer/terraform/firestore-indexes.tf',
   'infra/gcp/firestore/firestore.indexes.json',
+  'infra/gcp/consumer/terraform/runtime.tf',
 ] as const;
 
 async function foundationArchive(
@@ -200,6 +201,207 @@ function fakeRunner(
 }
 
 describe('consumer installation', () => {
+  const runtimeConfig = {
+    firestoreAgentId: '11111111-1111-4111-8111-111111111111',
+    firestoreEmbeddingSpace: {
+      provider: 'vertex',
+      model: 'text-embedding-005',
+      dimensions: 768,
+      revision: 'seed-v1',
+    },
+    ownerEmail: 'owner@example.com',
+    webAuthUrl: 'https://assistant.example.com',
+    authSecretVersion: 1,
+    googleClientIdVersion: 2,
+    googleClientSecretVersion: 3,
+  };
+  const runtimeImages = (() => {
+    const root = 'us-central1-docker.pkg.dev/customer-project/consumer-install';
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const web = `sha256:${'a'.repeat(64)}`;
+    const agent = `sha256:${'b'.repeat(64)}`;
+    return {
+      schemaVersion: 1,
+      sourceSha: sha,
+      sourceArchiveDigest: `sha256:${'c'.repeat(64)}`,
+      projectId: 'customer-project',
+      region: 'us-central1',
+      repositoryId: 'consumer-install',
+      tags: { web: `${root}/web:${sha}`, agent: `${root}/agent:${sha}` },
+      images: {
+        web: { digest: web, reference: `${root}/web@${web}`, tag: `${root}/web:${sha}` },
+        agent: { digest: agent, reference: `${root}/agent@${agent}`, tag: `${root}/agent:${sha}` },
+      },
+      terraform: { web_image_digest: web, agent_image_digest: agent },
+    };
+  })();
+
+  it('deploys a verified private runtime and checkpoints only after both revisions are ready', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-runtime-'));
+    const archive = join(dir, 'release.tar.gz');
+    const state = join(dir, 'state.json');
+    await foundationArchive(archive);
+    const source = manifest(await sha256File(archive));
+    const logs: string[] = [];
+    const runner = fakeRunner(logs);
+    const baseRun = runner.run.bind(runner);
+    runner.run = async (command, args) => {
+      if (command === 'gcloud' && args[0] === 'secrets')
+        return { ok: true, stdout: JSON.stringify({ state: 'ENABLED' }), stderr: '' };
+      if (command === 'gcloud' && args[0] === 'run') {
+        const name = args[3]?.endsWith('-web') ? 'web' : 'agent';
+        if (name === 'agent')
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              metadata: { name: 'consumer-install-agent' },
+              spec: {
+                template: {
+                  spec: { containers: [{ image: runtimeImages.images.agent.reference }] },
+                },
+              },
+              status: {
+                conditions: [{ type: 'Ready', status: 'True' }],
+                latestCreatedRevisionName: 'rev-2',
+                latestReadyRevisionName: 'rev-2',
+              },
+            }),
+            stderr: '',
+          };
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            name: `consumer-install-${name}`,
+            template: { containers: [{ image: runtimeImages.images[name].reference }] },
+            conditions: [{ type: 'Ready', state: 'CONDITION_SUCCEEDED' }],
+            latestCreatedRevision: 'rev-1',
+            latestReadyRevision: 'rev-1',
+          }),
+          stderr: '',
+        };
+      }
+      if (command === 'terraform' && args.includes('output')) {
+        const result = await baseRun(command, args);
+        return {
+          ...result,
+          stdout: JSON.stringify({
+            ...JSON.parse(result.stdout),
+            cloud_run_web_service_name: { value: 'consumer-install-web' },
+            cloud_run_agent_service_name: { value: 'consumer-install-agent' },
+          }),
+        };
+      }
+      return baseRun(command, args);
+    };
+    const options = {
+      manifest: source,
+      archivePath: archive,
+      statePath: state,
+      terraformDir: 'infra/gcp/consumer/terraform',
+      stateBucket: 'customer-project-consumer-install-state',
+      apply: true,
+      now: () => '2026-09-12T12:00:10.000Z',
+    };
+    const foundation = await provisionConsumerInstallation({ runner }, options);
+    expect(foundation.manifest.stage.current).toBe('provisioned');
+    const runtime = { images: runtimeImages, config: runtimeConfig };
+    const result = await provisionConsumerInstallation({ runner }, { ...options, runtime });
+    expect(result.manifest.stage.current).toBe('initialized');
+    expect(result.runtimeReady).toBe(false);
+    expect(result.pending).toEqual(['ready']);
+    expect(
+      logs.filter((entry) => entry.includes('terraform') && entry.includes('apply')).length,
+    ).toBe(2);
+    expect(logs.some((entry) => entry.includes('web_image_digest=sha256:'))).toBe(true);
+    expect(JSON.parse(await readFile(state, 'utf8')).stage.current).toBe('initialized');
+    const resumed = await provisionConsumerInstallation({ runner }, { ...options, runtime });
+    expect(resumed.manifest.stage.current).toBe('initialized');
+    expect(
+      logs.filter((entry) => entry.includes('terraform') && entry.includes('apply')).length,
+    ).toBe(2);
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          ...options,
+          runtime: {
+            images: runtimeImages,
+            config: { ...runtimeConfig, ownerEmail: 'other@example.com' },
+          },
+        },
+      ),
+    ).rejects.toThrow('differs from the initialized checkpoint');
+  });
+
+  it('rejects image manifests for another customer before cloud access', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-runtime-'));
+    const archive = join(dir, 'release.tar.gz');
+    await foundationArchive(archive);
+    const log: string[] = [];
+    await expect(
+      provisionConsumerInstallation(
+        { runner: fakeRunner(log) },
+        {
+          manifest: manifest(await sha256File(archive)),
+          archivePath: archive,
+          statePath: join(dir, 'state.json'),
+          terraformDir: 'infra/gcp/consumer/terraform',
+          stateBucket: 'customer-project-consumer-install-state',
+          apply: true,
+          runtime: {
+            images: { ...runtimeImages, projectId: 'other-project' },
+            config: runtimeConfig,
+          },
+        },
+      ),
+    ).rejects.toThrow('does not match this installation');
+    expect(log).toEqual([]);
+  });
+
+  it('does not checkpoint a runtime whose Cloud Run revision is still starting', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-runtime-'));
+    const archive = join(dir, 'release.tar.gz');
+    const state = join(dir, 'state.json');
+    await foundationArchive(archive);
+    const source = manifest(await sha256File(archive));
+    const runner = fakeRunner([]);
+    const baseRun = runner.run.bind(runner);
+    runner.run = async (command, args) => {
+      if (command === 'gcloud' && args[0] === 'secrets')
+        return { ok: true, stdout: '{"state":"ENABLED"}', stderr: '' };
+      if (command === 'gcloud' && args[0] === 'run')
+        return { ok: true, stdout: '{"name":"consumer-install-web","conditions":[]}', stderr: '' };
+      if (command === 'terraform' && args.includes('output')) {
+        const result = await baseRun(command, args);
+        return {
+          ...result,
+          stdout: JSON.stringify({
+            ...JSON.parse(result.stdout),
+            cloud_run_web_service_name: { value: 'consumer-install-web' },
+            cloud_run_agent_service_name: { value: 'consumer-install-agent' },
+          }),
+        };
+      }
+      return baseRun(command, args);
+    };
+    const options = {
+      manifest: source,
+      archivePath: archive,
+      statePath: state,
+      terraformDir: 'infra/gcp/consumer/terraform',
+      stateBucket: 'customer-project-consumer-install-state',
+      apply: true,
+      now: () => '2026-09-12T12:00:10.000Z',
+    };
+    await provisionConsumerInstallation({ runner }, options);
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        { ...options, runtime: { images: runtimeImages, config: runtimeConfig } },
+      ),
+    ).rejects.toThrow('not serving the expected ready digest');
+    expect(JSON.parse(await readFile(state, 'utf8')).stage.current).toBe('provisioned');
+  });
   it('dry-run verifies the archive and absence without provisioning', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-'));
     const archive = join(dir, 'release.tar.gz');

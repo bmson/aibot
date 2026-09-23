@@ -7,10 +7,11 @@ import {
   validateInstallationManifest,
 } from '@assistant/setup/installation';
 
-const usage = `Usage: pnpm consumer:install --manifest PATH --archive PATH --state PATH --state-bucket NAME --terraform-dir PATH [--apply]
+const usage = `Usage: pnpm consumer:install --manifest PATH --archive PATH --state PATH --state-bucket NAME --terraform-dir PATH [--images PATH --runtime-config PATH] [--apply]
 
 Without --apply this verifies the release archive, customer project, and selected Firestore database absence.
 With --apply it bootstraps customer-owned state, runs Terraform, and records resumable foundation stages.
+Supply both --images and --runtime-config to opt in to digest-pinned Cloud Run deployment after the foundation.
 `;
 
 async function json(path: string): Promise<unknown> {
@@ -28,6 +29,8 @@ async function main(): Promise<void> {
       apply: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
       manifest: { type: 'string' },
+      images: { type: 'string' },
+      'runtime-config': { type: 'string' },
       state: { type: 'string' },
       'state-bucket': { type: 'string' },
       'terraform-dir': { type: 'string' },
@@ -47,6 +50,8 @@ async function main(): Promise<void> {
   ] as const;
   const missing = required.find(([, value]) => !value)?.[0];
   if (missing) throw new Error(`missing ${missing}\n\n${usage.trim()}`);
+  if (Boolean(values.images) !== Boolean(values['runtime-config']))
+    throw new Error('--images and --runtime-config must be supplied together');
   const options: ConsumerInstallOptions = {
     manifest: validateInstallationManifest(await json(values.manifest as string)),
     archivePath: values.archive as string,
@@ -54,6 +59,10 @@ async function main(): Promise<void> {
     stateBucket: values['state-bucket'] as string,
     terraformDir: values['terraform-dir'] as string,
     apply: values.apply === true,
+    runtime:
+      values.images && values['runtime-config']
+        ? { images: await json(values.images), config: await json(values['runtime-config']) }
+        : undefined,
   };
   const result = await provisionConsumerInstallation({ runner: systemRunner }, options);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

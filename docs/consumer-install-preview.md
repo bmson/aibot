@@ -60,7 +60,7 @@ The preview derives optional workers, API intent, scheduler declarations, and mo
 
 ## Authenticated foundation provisioning
 
-The new `consumer:install` command builds the customer-owned infrastructure foundation. It does **not** deploy the application or finish owner onboarding. It always reports `runtimeReady: false`.
+`consumer:install` builds the customer-owned infrastructure foundation. Supplying both `--images` and `--runtime-config` also opts in to the minimal Cloud Run web and agent profile after the foundation is provisioned. It still reports `runtimeReady: false`: a ready Cloud Run revision does not prove owner sign-in, a model response, or complete onboarding.
 
 Before a later runtime stage starts containers, `pnpm firestore:runtime-data-preflight` can read the selected installation's configured owner agent, budget policy, and eight model roles/catalog entries. It requires explicit `GCP_PROJECT`, `ASSISTANT_WORKSPACE_ID`, `FIRESTORE_AGENT_ID`, `FIRESTORE_EMBEDDING_SPACE`, and `LLM_PROVIDER` environment values. The JSON result identifies missing or inconsistent records without printing owner content; a non-ready result exits nonzero. This is a read-only data check, not an authenticated model call, IAM test, or readiness claim.
 
@@ -85,4 +85,25 @@ pnpm consumer:install --manifest install-manifest.json \
 
 The preview performs read-only cloud checks and reports missing APIs. Add `--apply` to enable required APIs, create the private state bucket, upload the release receipt, and apply the foundation, including Firestore indexes and single-field exemptions. The installer verifies `firestore-indexes.tf` and its shared JSON specification against the selected archive and trusted checkout, then copies both into the isolated Terraform workspace at their original relative paths. Resources and Terraform state stay in the selected customer's project. It refuses adoption of an existing selected Firestore database and requires a matching receipt, project number, region, and enforced access protection before reusing a bootstrap bucket. The backend bucket and receipt are recorded in the installation inventory.
 
-Repeat the identical command to resume from persisted stages. Terraform state is remote and the last local completed stage is updated atomically. If creation of the state bucket succeeds but upload of its ownership receipt fails, the next run stops for manual ownership verification; it must not automatically adopt that unverified bucket. Failed Terraform work directories are retained for recovery. After Terraform apply, the installer reads the selected Firestore database's composite indexes and explicit field exemptions through the authenticated `gcloud` CLI. It compares their definitions with the verified archive manifest and requires every composite index to be `READY` before recording `provisioned`. Missing, building, extra, or foreign-scoped configurations leave a new install at `bootstrapped` for an explicit retry; the verification makes no cloud changes. A resumed `provisioned` install is rechecked and fails closed if its indexes have drifted, without another Terraform apply. It does not advance the runtime to `initialized` or `ready`. An archive from before index packaging fails the trusted-file check and requires an explicit recovery decision.
+Repeat the identical command to resume from persisted stages. Terraform state is remote and the last local completed stage is updated atomically. If creation of the state bucket succeeds but upload of its ownership receipt fails, the next run stops for manual ownership verification; it must not automatically adopt that unverified bucket. Failed Terraform work directories are retained for recovery. After Terraform apply, the installer reads the selected Firestore database's composite indexes and explicit field exemptions through the authenticated `gcloud` CLI. It compares their definitions with the verified archive manifest and requires every composite index to be `READY` before recording `provisioned`. Missing, building, extra, or foreign-scoped configurations leave a new install at `bootstrapped` for an explicit retry; the verification makes no cloud changes. A resumed `provisioned` install is rechecked and fails closed if its indexes have drifted, without another foundation Terraform apply. An archive from before index packaging fails the trusted-file check and requires an explicit recovery decision.
+
+For the optional runtime, first publish images with `pnpm consumer:publish-images` as described in [customer image publishing](consumer-image-publish.md). Its JSON manifest must match the installation's source SHA, project, region, and repository. Create three enabled, numbered Secret Manager versions and configure the owner Google OAuth client for the intended HTTPS origin. Then supply a JSON runtime config containing only these fields:
+
+```json
+{
+  "firestoreAgentId": "11111111-1111-4111-8111-111111111111",
+  "firestoreEmbeddingSpace": {
+    "provider": "vertex",
+    "model": "text-embedding-005",
+    "dimensions": 768,
+    "revision": "customer-seed-v1"
+  },
+  "ownerEmail": "owner@example.com",
+  "webAuthUrl": "https://assistant.example.com",
+  "authSecretVersion": 1,
+  "googleClientIdVersion": 1,
+  "googleClientSecretVersion": 1
+}
+```
+
+Run the foundation command with `--images ./customer-image-digests.json --runtime-config ./runtime-config.json --apply`. The installer verifies the two immutable image references exist in the customer repository and that each secret version is enabled. It copies the archive's `runtime.tf` only after checking that its bytes match the trusted checkout, then applies the profile with the same customer state backend. It checks both Cloud Run services have a ready revision using the expected digest before recording `initialized`. Failed checks leave `provisioned` for a retry with the same inputs. An initialized checkpoint records an input fingerprint and refuses a changed image or runtime config on resume. No secret value is read, passed to Terraform, written to state, or printed. The runtime remains private by default; owner OAuth, public access, and a real authenticated conversation require separate verification before a `ready` claim.
