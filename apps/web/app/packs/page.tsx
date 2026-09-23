@@ -1,3 +1,4 @@
+import { loadConfig } from '@assistant/config';
 import { PageHeader, PageShell } from '@/lib/ui';
 import { changePack, loadPacks } from './actions';
 import { PacksPanel } from './packs-panel';
@@ -14,7 +15,12 @@ export default async function PacksPage() {
         title="Situation packs"
         intro="Keep the plan, the people you’re waiting on, and the reasons behind your choices together."
       />
-      <PacksPanel initial={initial} change={changePack} reload={loadPacks} />
+      <PacksPanel
+        initial={initial}
+        change={changePack}
+        reload={loadPacks}
+        readOnly={loadConfig().PERSISTENCE_DRIVER === 'firestore'}
+      />
     </PageShell>
   );
 }

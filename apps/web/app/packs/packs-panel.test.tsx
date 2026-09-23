@@ -72,4 +72,27 @@ describe('situation packs presentation', () => {
     expect(html).toContain('aria-label="New pack title"');
     expect(html).toContain('type="submit"');
   });
+  it('shows pack details without mutation controls in Firestore read-only mode', () => {
+    const initial = { packs: [pack], sources: [] };
+    const html = renderToStaticMarkup(
+      <PacksPanel
+        initial={initial}
+        change={async () => ({ ok: false, error: 'unavailable' })}
+        reload={async () => initial}
+        readOnly
+      />,
+    );
+    expect(html).toContain('Confirm the ride');
+    expect(html).toContain('Too late before the match');
+    expect(html).toContain('Changes are temporarily unavailable');
+    for (const control of [
+      'Create pack',
+      'Review / change',
+      'Add linked item',
+      'Record a decision',
+      'Archive pack',
+    ]) {
+      expect(html).not.toContain(control);
+    }
+  });
 });

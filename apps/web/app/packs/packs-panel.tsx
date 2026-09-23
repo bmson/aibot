@@ -25,10 +25,12 @@ export function PacksPanel({
   initial,
   change,
   reload,
+  readOnly = false,
 }: {
   initial: Overview;
   change: (input: PackCommand) => Promise<SituationResult>;
   reload: () => Promise<Overview>;
+  readOnly?: boolean;
 }) {
   const [overview, setOverview] = useState(initial);
   const [selected, setSelected] = useState(initial.packs[0]?.id ?? '');
@@ -47,6 +49,7 @@ export function PacksPanel({
   }, [preview, notice]);
   const pack = overview.packs.find((pack) => pack.id === selected);
   async function run(command: PackCommand) {
+    if (readOnly) return false;
     if (running.current) return false;
     running.current = true;
     setBusy(true);
@@ -81,31 +84,38 @@ export function PacksPanel({
   }
   return (
     <div className="mt-6 space-y-5">
-      <form
-        className="flex flex-wrap gap-2"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          const form = event.currentTarget;
-          const title = String(new FormData(form).get('title') ?? '');
-          creationKey.current ??= crypto.randomUUID();
-          if (await run({ action: 'create', title, creationKey: creationKey.current })) {
-            form.reset();
-            creationKey.current = undefined;
-          }
-        }}
-      >
-        <input
-          className={`${inputClass} min-w-0 grow`}
-          name="title"
-          aria-label="New pack title"
-          placeholder="A weekend, a job search, a project…"
-          maxLength={160}
-          required
-        />
-        <button type="submit" className={btnSm.primary} disabled={busy}>
-          Create pack
-        </button>
-      </form>
+      {readOnly && (
+        <p className="text-sm text-muted">
+          Situation packs are available to review. Changes are temporarily unavailable.
+        </p>
+      )}
+      {!readOnly && (
+        <form
+          className="flex flex-wrap gap-2"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const title = String(new FormData(form).get('title') ?? '');
+            creationKey.current ??= crypto.randomUUID();
+            if (await run({ action: 'create', title, creationKey: creationKey.current })) {
+              form.reset();
+              creationKey.current = undefined;
+            }
+          }}
+        >
+          <input
+            className={`${inputClass} min-w-0 grow`}
+            name="title"
+            aria-label="New pack title"
+            placeholder="A weekend, a job search, a project…"
+            maxLength={160}
+            required
+          />
+          <button type="submit" className={btnSm.primary} disabled={busy}>
+            Create pack
+          </button>
+        </form>
+      )}
       <p
         ref={statusElement}
         role={error ? 'alert' : 'status'}
@@ -207,66 +217,70 @@ export function PacksPanel({
                             {changed.after?.state ?? 'unavailable'}. Review before relying on it.
                           </p>
                         )}
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            disabled={busy}
-                            className={btnSm.outline}
-                            onClick={() => {
-                              setEditing(item.id);
-                              setPreview(undefined);
-                            }}
-                          >
-                            Review / change
-                          </button>
-                          {item.needsReview && !changed && (
+                        {!readOnly && (
+                          <div className="mt-3 flex flex-wrap gap-2">
                             <button
                               type="button"
                               disabled={busy}
                               className={btnSm.outline}
-                              onClick={() =>
-                                void run({
-                                  action: 'reviewed',
-                                  packId: pack.id,
-                                  version: pack.version,
-                                  itemId: item.id,
-                                })
-                              }
+                              onClick={() => {
+                                setEditing(item.id);
+                                setPreview(undefined);
+                              }}
                             >
-                              Mark reviewed
+                              Review / change
                             </button>
-                          )}
-                        </div>
+                            {item.needsReview && !changed && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                className={btnSm.outline}
+                                onClick={() =>
+                                  void run({
+                                    action: 'reviewed',
+                                    packId: pack.id,
+                                    version: pack.version,
+                                    itemId: item.id,
+                                  })
+                                }
+                              >
+                                Mark reviewed
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
               </div>
             </section>
           ))}
-          <section className={section}>
-            <button
-              type="button"
-              disabled={busy}
-              className={btnSm.outline}
-              onClick={() => {
-                setEditing('new');
-                setPreview(undefined);
-              }}
-            >
-              Add linked item
-            </button>
-            {editing && (
-              <ItemEditor
-                key={`${pack.id}:${editing}`}
-                pack={pack}
-                item={pack.data.items.find((item) => item.id === editing)}
-                sources={overview.sources}
-                busy={busy}
-                run={run}
-                close={() => setEditing(undefined)}
-              />
-            )}
-          </section>
+          {!readOnly && (
+            <section className={section}>
+              <button
+                type="button"
+                disabled={busy}
+                className={btnSm.outline}
+                onClick={() => {
+                  setEditing('new');
+                  setPreview(undefined);
+                }}
+              >
+                Add linked item
+              </button>
+              {editing && (
+                <ItemEditor
+                  key={`${pack.id}:${editing}`}
+                  pack={pack}
+                  item={pack.data.items.find((item) => item.id === editing)}
+                  sources={overview.sources}
+                  busy={busy}
+                  run={run}
+                  close={() => setEditing(undefined)}
+                />
+              )}
+            </section>
+          )}
           {preview && (
             <section
               ref={previewElement}
@@ -347,65 +361,67 @@ export function PacksPanel({
                 </p>
               </div>
             ))}
-            <details>
-              <summary className="cursor-pointer text-sm text-accent">Record a decision</summary>
-              <form
-                className="mt-3 grid gap-3"
-                onSubmit={async (event) => {
-                  event.preventDefault();
-                  const form = event.currentTarget;
-                  const fields = new FormData(form);
-                  if (
-                    await run({
-                      action: 'decision',
-                      packId: pack.id,
-                      version: pack.version,
-                      decision: {
-                        id: crypto.randomUUID(),
-                        option: String(fields.get('option')),
-                        reason: String(fields.get('reason')),
-                        outcome: fields.get('outcome') as 'chosen' | 'rejected',
-                        scope: fields.has('preference') ? 'preference' : 'situation',
-                        confirmed: true,
-                      },
-                    })
-                  )
-                    form.reset();
-                }}
-              >
-                <input
-                  name="option"
-                  aria-label="Option"
-                  className={inputClass}
-                  placeholder="Which option?"
-                  maxLength={160}
-                  required
-                />
-                <textarea
-                  name="reason"
-                  aria-label="Reason"
-                  className={textareaClass}
-                  placeholder="Why did you choose or reject it?"
-                  maxLength={2000}
-                  required
-                />
-                <select name="outcome" aria-label="Decision" className={selectClass}>
-                  <option value="chosen">Chosen</option>
-                  <option value="rejected">Rejected</option>
-                </select>
-                <label className="flex gap-2 text-sm text-muted">
-                  <input type="checkbox" name="preference" />
-                  Remember this as a lasting preference, beyond this situation
-                </label>
-                <button
-                  type="submit"
-                  disabled={busy}
-                  className={`${btnSm.outline} justify-self-start`}
+            {!readOnly && (
+              <details>
+                <summary className="cursor-pointer text-sm text-accent">Record a decision</summary>
+                <form
+                  className="mt-3 grid gap-3"
+                  onSubmit={async (event) => {
+                    event.preventDefault();
+                    const form = event.currentTarget;
+                    const fields = new FormData(form);
+                    if (
+                      await run({
+                        action: 'decision',
+                        packId: pack.id,
+                        version: pack.version,
+                        decision: {
+                          id: crypto.randomUUID(),
+                          option: String(fields.get('option')),
+                          reason: String(fields.get('reason')),
+                          outcome: fields.get('outcome') as 'chosen' | 'rejected',
+                          scope: fields.has('preference') ? 'preference' : 'situation',
+                          confirmed: true,
+                        },
+                      })
+                    )
+                      form.reset();
+                  }}
                 >
-                  Save decision
-                </button>
-              </form>
-            </details>
+                  <input
+                    name="option"
+                    aria-label="Option"
+                    className={inputClass}
+                    placeholder="Which option?"
+                    maxLength={160}
+                    required
+                  />
+                  <textarea
+                    name="reason"
+                    aria-label="Reason"
+                    className={textareaClass}
+                    placeholder="Why did you choose or reject it?"
+                    maxLength={2000}
+                    required
+                  />
+                  <select name="outcome" aria-label="Decision" className={selectClass}>
+                    <option value="chosen">Chosen</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
+                  <label className="flex gap-2 text-sm text-muted">
+                    <input type="checkbox" name="preference" />
+                    Remember this as a lasting preference, beyond this situation
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={busy}
+                    className={`${btnSm.outline} justify-self-start`}
+                  >
+                    Save decision
+                  </button>
+                </form>
+              </details>
+            )}
           </section>
           <footer className={`${section} flex flex-wrap items-center justify-between gap-3`}>
             <Link
@@ -414,16 +430,18 @@ export function PacksPanel({
             >
               Discuss next steps
             </Link>
-            <button
-              type="button"
-              className={btnSm.outline}
-              disabled={busy}
-              onClick={() =>
-                void run({ action: 'archive', packId: pack.id, version: pack.version })
-              }
-            >
-              Archive pack
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                className={btnSm.outline}
+                disabled={busy}
+                onClick={() =>
+                  void run({ action: 'archive', packId: pack.id, version: pack.version })
+                }
+              >
+                Archive pack
+              </button>
+            )}
           </footer>
         </article>
       )}
