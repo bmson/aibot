@@ -107,7 +107,7 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
     resetConfigForTest();
     auth.mobile.mockResolvedValue(true);
     routerFixture.embed.mockImplementation(async (texts: string[]) =>
-      texts.map(() => Array.from({ length: 768 }, (_, index) => (index === 0 ? 1 : 0))),
+      texts.map(() => Array.from({ length: 1536 }, (_, index) => (index === 0 ? 1 : 0))),
     );
     await Promise.all([
       store.doc('agents', agentId).set({ id: agentId }),
@@ -259,7 +259,7 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
     }
   });
 
-  it('allows only exact GET routes through the Firestore proxy', () => {
+  it('allows exact knowledge browse/create proxy routes and blocks unsupported paths', () => {
     const status = (path: string, method = 'GET') =>
       proxy(new NextRequest(`http://localhost${path}`, { method })).status;
     expect(status('/api/mobile/v1/knowledge')).toBe(200);
@@ -273,14 +273,14 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
   it('atomically stores an owner-authored source, graph relation, and normalized entities', async () => {
     const repo = new FirestoreOwnerKnowledgeGraphFactRepository(
       store,
-      { provider: 'vertex', model: 'example-embedding', dimensions: 768, revision: 'fixture-v1' },
+      { provider: 'vertex', model: 'example-embedding', dimensions: 1536, revision: 'fixture-v1' },
       agentId,
     );
     const prepared = {
       agentId,
       content: 'Anna parent of Baldvin. Owner note: family',
       contentHash: `owner-fact-${randomUUID()}`,
-      embedding: Array.from({ length: 768 }, (_, index) => (index === 0 ? 1 : 0)),
+      embedding: Array.from({ length: 1536 }, (_, index) => (index === 0 ? 1 : 0)),
       predicate: 'parent_of',
       subjectContactId: null,
       subject: {
@@ -319,7 +319,7 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
       embeddingSpace: embeddingSpaceKey({
         provider: 'vertex',
         model: 'example-embedding',
-        dimensions: 768,
+        dimensions: 1536,
         revision: 'fixture-v1',
       }),
     });
@@ -369,14 +369,14 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
   it('blocks tombstoned hashes and active privacy erasure inside the write transaction', async () => {
     const repo = new FirestoreOwnerKnowledgeGraphFactRepository(
       store,
-      { provider: 'vertex', model: 'example-embedding', dimensions: 768, revision: 'fixture-v1' },
+      { provider: 'vertex', model: 'example-embedding', dimensions: 1536, revision: 'fixture-v1' },
       agentId,
     );
     const base = {
       agentId,
       content: 'Anna parent of Baldvin. Owner note: family',
       contentHash: `owner-fact-${randomUUID()}`,
-      embedding: Array.from({ length: 768 }, (_, index) => (index === 0 ? 1 : 0)),
+      embedding: Array.from({ length: 1536 }, (_, index) => (index === 0 ? 1 : 0)),
       predicate: 'parent_of',
       subjectContactId: null,
       subject: {
