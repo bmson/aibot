@@ -232,6 +232,42 @@ export const QUESTION_CASES: QuestionCase[] = [
     },
   },
   {
+    id: 'calendar-and-weather',
+    // Phase 4: a private read and a live lookup in one question.
+    records: [],
+    request: "What's on my calendar tomorrow and what's the weather?",
+    calendar: 'next-meeting',
+    weather: 'current',
+    script: [
+      { toolCalls: [{ toolName: 'weather.lookup', input: { place: 'San Francisco' } }] },
+      {
+        text: 'Tomorrow you have Design review at Oracle Park. In San Francisco it is 18°C and cloudy.',
+      },
+    ],
+    expect: {
+      matches: ['Design review', '18°C', 'cloudy'],
+      tools: ['calendar.list_events', 'weather.lookup'],
+    },
+  },
+  {
+    id: 'calendar-and-failed-weather',
+    records: [],
+    request: "What's on my calendar tomorrow and what's the weather?",
+    calendar: 'next-meeting',
+    weather: 'failed',
+    script: [
+      { toolCalls: [{ toolName: 'weather.lookup', input: { place: 'San Francisco' } }] },
+      { text: 'Tomorrow you have Design review. It will be 22°C and sunny.' },
+    ],
+    expect: {
+      matches: ['Design review', "couldn't retrieve current weather"],
+      excludes: ['22°C', 'sunny'],
+      tools: ['calendar.list_events'],
+      failedTools: ['weather.lookup'],
+      statuses: ['needs_attention'],
+    },
+  },
+  {
     id: 'score-card-request',
     records: [750],
     request: 'Create a card for the Giants game',

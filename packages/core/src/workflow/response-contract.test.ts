@@ -1497,6 +1497,35 @@ describe('groundReadDraft', () => {
     expect(result.reasons.join(' ')).toMatch(/Zuni Cafe/);
   });
 
+  it('licenses the live half of a mixed answer only from what the lookup returned', () => {
+    const draft = [
+      'One thing today:',
+      '- **11:15–13:00** — Stagecoach Greens with Eva & Jordan',
+      '',
+      'The Giants beat the Dodgers 5-2 at Oracle Park; tonight’s first pitch is 7:05 PM.',
+    ].join('\n');
+    const live = JSON.stringify({
+      games: [
+        {
+          line: 'Los Angeles Dodgers at San Francisco Giants: 2-5, Final',
+          venue: 'Oracle Park',
+          startsAt: '2026-08-24T02:05:00Z',
+        },
+      ],
+    });
+    // Without the lookup's own text, "Dodgers" and 7:05 PM read as inventions.
+    expect(groundReadDraft(draft, dayRequest, dayEvidence([event({})])).grounded).toBe(false);
+    expect(groundReadDraft(draft, dayRequest, dayEvidence([event({})]), '', live)).toEqual({
+      grounded: true,
+      reasons: [],
+    });
+    // The calendar half is still held to the calendar.
+    const invented = `${draft}\n- **19:00–21:00** — Dinner at Zuni Cafe`;
+    const checked = groundReadDraft(invented, dayRequest, dayEvidence([event({})]), '', live);
+    expect(checked.grounded).toBe(false);
+    expect(checked.reasons.join(' ')).toMatch(/Zuni Cafe/);
+  });
+
   it('rejects a time the ledger never carried', () => {
     const result = groundReadDraft(
       'One thing today:\n- **11:45–13:00** — Stagecoach Greens with Eva & Jordan',

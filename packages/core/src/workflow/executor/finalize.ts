@@ -41,6 +41,7 @@ import { isGoalWorkEvidence } from '../goal-evidence.js';
 import {
   detectLiveLookups,
   type LookupContext,
+  liveLookupCorpus,
   liveLookupFailures,
   ungroundedLiveFigure,
 } from '../live-lookup.js';
@@ -59,7 +60,11 @@ import { PLANNER_VERSION } from '../planner.js';
 import { detectPersonalReadRequest, type PersonalReadRequest } from '../read-intent.js';
 import { requestChecklistSummary } from '../request-checklist.js';
 import { responseCardsForFinal } from '../response-cards.js';
-import { type ActionEvidence, enforceResponseContract } from '../response-contract.js';
+import {
+  type ActionEvidence,
+  enforceResponseContract,
+  verifiedReadResponse,
+} from '../response-contract.js';
 import { refreshRequestChecklist } from './checklist.js';
 import { isUnattendedGoalSession, KNOWN_SENDER_REPLY_KIND } from './context-helpers.js';
 import {
@@ -446,10 +451,17 @@ export async function stageModelFinalResponse(
     });
   }
   if (liveFailure) {
+    // Beside a calendar or mail read, a failed or unsupported lookup is one
+    // part of the answer: the read half comes straight from its ledger, and
+    // the gap is named under it rather than replacing the whole reply.
+    const mixedRead = readContext?.readRequest;
+    const text = mixedRead
+      ? `${verifiedReadResponse(mixedRead, evidence)}\n\n${liveFailure}`
+      : liveFailure;
     return stageFinalResponse(deps, task, state, window, {
       ...pending,
-      text: liveFailure,
-      progress: liveFailure,
+      text,
+      progress: text.slice(0, 200),
       terminalStatus: 'needs_attention',
       outcome: 'needs_attention',
       contractNotice: true,
@@ -484,6 +496,7 @@ export async function stageModelFinalResponse(
     urlCorpus: sourceCorpus,
     readRequest: readContext ? readContext.readRequest : detectPersonalReadRequest(window),
     groundingCorpus: readContext?.groundingCorpus,
+    liveCorpus: liveLookups.length > 0 ? liveLookupCorpus(rows) : undefined,
   };
   // Hold the original draft to the deterministic contract before asking a
   // model to reflect on it. Contract-owned fallbacks (unsupported claims,
