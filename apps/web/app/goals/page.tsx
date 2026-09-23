@@ -1,14 +1,18 @@
 import {
   type GoalDashboardItem,
   type GoalSnapshot,
+  type GoalsDashboard,
   listGoalsDashboard,
+  listGoalsDashboardWithRepository,
 } from '@assistant/application/goals';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { FirestoreGoalReadRepository } from '@assistant/firestore';
 import Link from 'next/link';
 import { GoalCard, type GoalView } from '@/app/goals/goal-card';
 import { GoalCreateForm } from '@/app/goals/goal-create-form';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getDb, getFirestoreInstallationStore } from '@/lib/server';
 import { btn, EmptyState, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
 import { ActionMenu, SubmitButton } from '@/lib/ui-client';
 import { statusLabel } from '@/lib/views';
@@ -121,10 +125,22 @@ export default async function GoalsPage({
   await requireOwner();
   const { view } = await searchParams;
   const archived = view === 'archived';
-  const db = getDb();
   const now = new Date();
-
-  const { items, archivedCount } = await listGoalsDashboard(db, archived, now);
+  const config = loadConfig();
+  let dashboard: GoalsDashboard;
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    dashboard = await listGoalsDashboardWithRepository(
+      new FirestoreGoalReadRepository(getFirestoreInstallationStore(), config.FIRESTORE_AGENT_ID),
+      config.FIRESTORE_AGENT_ID,
+      archived,
+      now,
+    );
+  } else {
+    dashboard = await listGoalsDashboard(getDb(), archived, now);
+  }
+  const { items, archivedCount } = dashboard;
   const rows = items.map((item) => item.goal);
   const automationByGoalId = new Map<string, { enabled: boolean; nextRunAt: Date | null }>();
   for (const item of items) {
