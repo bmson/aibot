@@ -284,9 +284,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         {/* No navigation chrome in the shell — the destinations ride down to the
             chat composer's "/" palette, and every other surface carries a back
             link. `main` is the whole app column. */}
-        {/* Activity status lives in the notch, tucked away until a message moves
-            or the shell's presence says work is happening. */}
-        <NotchCompanion presence={dashboard.presence} />
+        {/* Firestore has no portable app-wide shell projection yet. Its idle
+            baseline stays invisible; chat can still publish real local work. */}
+        <NotchCompanion
+          presence={dashboard.presence}
+          pollShellStatus={config.PERSISTENCE_DRIVER !== 'firestore'}
+        />
         <NavCommandsProvider destinations={destinations} signedIn={!!session?.user}>
           <main className="app-main page-gutter relative z-10 min-w-0 flex-1 py-5 lg:py-7">
             {children}
