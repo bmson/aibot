@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resetConfigForTest } from '@assistant/config';
 import { createInstallationStore } from '@assistant/firestore';
+import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const host = process.env.FIRESTORE_EMULATOR_HOST ?? '';
@@ -138,6 +139,19 @@ describe.skipIf(!emulator)('web task Activity in Firestore mode with PostgreSQL 
       actions: [{ id: 'activity-tool', completed: true }],
     });
     expect(await activity.getTaskActivityDetail(foreignTaskId)).toBeNull();
+  });
+
+  it('allows only the Activity pages and Server Action methods through the Firestore proxy', async () => {
+    const { proxy } = await import('../proxy.js');
+    const status = (path: string, method = 'GET') =>
+      proxy(new NextRequest(`http://localhost${path}`, { method })).status;
+    expect(status('/tasks')).toBe(200);
+    expect(status('/tasks', 'POST')).toBe(200);
+    expect(status(`/tasks/${taskId}`)).toBe(200);
+    expect(status(`/tasks/${taskId}`, 'POST')).toBe(200);
+    expect(status(`/tasks/${taskId}`, 'DELETE')).toBe(503);
+    expect(status('/tasks/not-a-uuid')).toBe(503);
+    expect(status(`/tasks/${taskId}/nested`)).toBe(503);
   });
 
   it('archives, lists, restores, and bulk-archives through the owner activity commands', async () => {
