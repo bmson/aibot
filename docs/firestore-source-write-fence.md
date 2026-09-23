@@ -12,6 +12,8 @@ This is a per-process guard, not an authoritative database fence. It does not af
 
 The production database URL is held in Secret Manager as `database-url` and is injected into both `assistant-web` and `assistant-agent`. The migration and workspace-export Cloud Run Jobs also receive that URL. The export job makes its own transaction read-only, but that limits only that export transaction. The agent accepts direct webhooks and internal work, and Cloud Tasks, Cloud Scheduler, and the Gmail Pub/Sub push subscription can all deliver more work. Local operator scripts and any other database clients are outside those Cloud Run controls.
 
+The live PostgreSQL provider has been identified as Neon from read-only secret URL classification. Neon distinguishes the primary read-write compute from read-only replica computes ([Neon endpoint documentation](https://neon.com/docs/manage/endpoints/)); selecting a read-only endpoint for export does not by itself fence writes to the primary. The exact Neon provider-side write fence, privileged session-drain proof, and consistent read-only export path still require a separately verified procedure before cutover. This application gate is not sufficient to mark that requirement complete, and this change does not access or modify the live endpoint.
+
 ## Required database-provider capability
 
 Before scheduling the final export, the database owner must identify the provider and database role used by `database-url`, then demonstrate a provider-side fence with all of these properties:
