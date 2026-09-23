@@ -117,9 +117,25 @@ jobs:
   firestore:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: assistant
+          POSTGRES_PASSWORD: assistant
+          POSTGRES_DB: assistant
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U assistant"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     env:
       FIRESTORE_EMULATOR_HOST: 127.0.0.1:8789
       GCLOUD_PROJECT: demo-assistant-test
+      DATABASE_URL: postgres://assistant:assistant@localhost:5432/assistant_test
+      TEST_DATABASE_URL: postgres://assistant:assistant@localhost:5432/assistant_test
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
@@ -136,6 +152,7 @@ jobs:
           version: '576.0.0'
           install_components: cloud-firestore-emulator
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @assistant/db test:prepare
       # No cloud authentication, project creation, or billable API calls.
       - name: Verify Firestore transactions and vector retrieval
         shell: bash
