@@ -15,6 +15,7 @@ export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { FirestoreImportOverviewRepository } from './import-overview.js';
 export { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
+export { FirestoreMcpConnectionReadRepository } from './mcp-connections.js';
 export { embeddingSpaceKey, FirestoreMemoryRepository } from './memory.js';
 export { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 export { FirestoreMemoryToolRepository } from './memory-tools.js';
