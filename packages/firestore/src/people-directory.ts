@@ -6,11 +6,36 @@ import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const PAGE_SIZE = 400;
 const MAX_ROWS = 100_000;
+type MemoryDirectoryRow = Pick<
+  Records['memories'],
+  | 'id'
+  | 'agentId'
+  | 'subjectContactId'
+  | 'category'
+  | 'quarantined'
+  | 'expiresAt'
+  | 'createdAt'
+  | 'validFrom'
+  | 'contentHash'
+>;
+
+const MEMORY_DIRECTORY_FIELDS = [
+  'id',
+  'agentId',
+  'subjectContactId',
+  'category',
+  'quarantined',
+  'expiresAt',
+  'createdAt',
+  'validFrom',
+  'contentHash',
+];
 
 async function byAgent<T extends { id: string; agentId: string }>(
   store: InstallationStore,
   collection: string,
   agentId: string,
+  fields?: string[],
 ): Promise<T[]> {
   const rows: T[] = [];
   let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
@@ -18,8 +43,9 @@ async function byAgent<T extends { id: string; agentId: string }>(
     let query: Query = store
       .collection(collection)
       .where('agentId', '==', agentId)
-      .orderBy(FieldPath.documentId())
-      .limit(PAGE_SIZE);
+      .orderBy(FieldPath.documentId());
+    if (fields) query = query.select(...fields);
+    query = query.limit(PAGE_SIZE);
     if (cursor) query = query.startAfter(cursor);
     const page = await query.get();
     for (const doc of page.docs) {
@@ -49,7 +75,7 @@ const nullableString = (value: unknown): value is string | null =>
   value === null || typeof value === 'string';
 
 function validateProjectionRows(
-  memories: Records['memories'][],
+  memories: MemoryDirectoryRow[],
   occasions: Records['occasions'][],
   entities: Records['knowledgeGraphEntities'][],
   relations: Records['knowledgeGraphRelations'][],
@@ -63,10 +89,7 @@ function validateProjectionRows(
         !nullableDate(row.expiresAt) ||
         !date(row.createdAt) ||
         !nullableDate(row.validFrom) ||
-        typeof row.contentHash !== 'string' ||
-        (row.embedding !== null &&
-          (!Array.isArray(row.embedding) ||
-            row.embedding.some((value) => typeof value !== 'number' || !Number.isFinite(value)))),
+        typeof row.contentHash !== 'string',
     ) ||
     occasions.some(
       (row) =>
@@ -176,7 +199,9 @@ export async function getFirestoreMobilePeopleDirectory(
   const contacts = (await getFirestorePeopleDirectory(store, configuredAgentId)).slice(0, 500);
   const contactIds = new Set(contacts.map((contact) => contact.id));
   const [memories, occasions, entities, relations] = await Promise.all([
-    byAgent<Records['memories']>(store, 'memories', configuredAgentId),
+    // The full embedding vector is only needed for a small set of location
+    // relation sources. Avoid transferring it with every directory fact.
+    byAgent<MemoryDirectoryRow>(store, 'memories', configuredAgentId, MEMORY_DIRECTORY_FIELDS),
     byAgent<Records['occasions']>(store, 'occasions', configuredAgentId),
     byAgent<Records['knowledgeGraphEntities']>(store, 'knowledgeGraphEntities', configuredAgentId),
     byAgent<Records['knowledgeGraphRelations']>(
@@ -186,7 +211,7 @@ export async function getFirestoreMobilePeopleDirectory(
     ),
   ]);
   validateProjectionRows(memories, occasions, entities, relations);
-  const active = (memory: Records['memories']) =>
+  const active = (memory: MemoryDirectoryRow) =>
     memory.quarantined === false &&
     (memory.expiresAt === null || (memory.expiresAt instanceof Date && memory.expiresAt > now));
   const factCounts = new Map<string, number>();
@@ -226,14 +251,21 @@ export async function getFirestoreMobilePeopleDirectory(
       contactIds.has(entityById.get(relation.subjectEntityId)?.contactId ?? ''),
   );
   const sourceIds = [
-    ...new Set(activeLocationRelations.map((relation) => relation.sourceMemoryId)),
+    ...new Set(
+      activeLocationRelations
+        .map((relation) => relation.sourceMemoryId)
+        .filter((id) => memoryById.has(id)),
+    ),
   ];
   const sourceIdByDocument = new Map(sourceIds.map((id) => [documentKey(id), id]));
   const sources = new Map<string, Records['knowledgeGraphSources']>();
+  const locationMemories = new Map<string, Records['memories']>();
   for (let offset = 0; offset < sourceIds.length; offset += 200) {
-    const docs = await store.db.getAll(
-      ...sourceIds.slice(offset, offset + 200).map((id) => store.doc('knowledgeGraphSources', id)),
-    );
+    const ids = sourceIds.slice(offset, offset + 200);
+    const [docs, memoryDocs] = await Promise.all([
+      store.db.getAll(...ids.map((id) => store.doc('knowledgeGraphSources', id))),
+      store.db.getAll(...ids.map((id) => store.doc('memories', id))),
+    ]);
     for (const doc of docs) {
       if (!doc.exists) continue;
       const source = decodeRecord<Records['knowledgeGraphSources']>(doc.data());
@@ -247,12 +279,26 @@ export async function getFirestoreMobilePeopleDirectory(
         throw new Error('People directory has a malformed graph source');
       sources.set(source.memoryId, source);
     }
+    for (const doc of memoryDocs) {
+      if (!doc.exists) continue;
+      const memory = decodeRecord<Records['memories']>(doc.data());
+      if (
+        memory.id !== sourceIdByDocument.get(doc.id) ||
+        memory.agentId !== configuredAgentId ||
+        (memory.embedding !== null &&
+          (!Array.isArray(memory.embedding) ||
+            memory.embedding.some((value) => typeof value !== 'number' || !Number.isFinite(value))))
+      )
+        throw new Error('People directory has a malformed location memory');
+      if (memory.contentHash === memoryById.get(memory.id)?.contentHash)
+        locationMemories.set(memory.id, memory);
+    }
   }
   const locations = new Map<string, string>();
   for (const relation of activeLocationRelations.sort((a, b) => a.id.localeCompare(b.id))) {
     const subject = entityById.get(relation.subjectEntityId);
     const object = entityById.get(relation.objectEntityId);
-    const memory = memoryById.get(relation.sourceMemoryId);
+    const memory = locationMemories.get(relation.sourceMemoryId);
     const source = sources.get(relation.sourceMemoryId);
     if (
       !subject?.contactId ||
