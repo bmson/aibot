@@ -1,32 +1,10 @@
 import { approveAndRememberApproval, decideApproval } from '@assistant/application/approvals';
-import { loadConfig } from '@assistant/config';
-import {
-  assertPrivacyErasureFenceUnchanged,
-  FirestoreApprovalRepository,
-  readPrivacyErasureFence,
-} from '@assistant/firestore';
-import { getDb, getFirestoreInstallationStore } from '@/lib/server';
+import { withApprovalDecisionStore } from '@/lib/approval-store';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-async function withApprovalDecisionStore<T>(
-  run: (store: Parameters<typeof decideApproval>[0]) => Promise<T>,
-): Promise<T> {
-  const config = loadConfig();
-  if (config.PERSISTENCE_DRIVER !== 'firestore') return run(getDb());
-  const installationStore = getFirestoreInstallationStore();
-  const fence = await readPrivacyErasureFence(installationStore, config.FIRESTORE_AGENT_ID);
-  const decisionStore = {
-    agentId: config.FIRESTORE_AGENT_ID,
-    approvals: new FirestoreApprovalRepository(installationStore),
-  };
-  const result = await run(decisionStore);
-  await assertPrivacyErasureFenceUnchanged(installationStore, config.FIRESTORE_AGENT_ID, fence);
-  return result;
-}
 
 export async function POST(
   request: Request,

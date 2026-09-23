@@ -3,8 +3,9 @@ import { ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { AutoRefresh } from '@/app/auto-refresh';
 import { requireOwner } from '@/auth';
+import { getApprovalStore } from '@/lib/approval-store';
 import { formatDateTime, relativeTime } from '@/lib/format';
-import { getAgentTimezone, getDb } from '@/lib/server';
+import { getAgentTimezone } from '@/lib/server';
 import { EmptyState, MetaLine, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
 import { StatusChip, taskTypeLabel, toPendingApprovalView } from '@/lib/views';
 import { ApprovalCard } from './approval-card';
@@ -15,11 +16,10 @@ export const dynamic = 'force-dynamic';
 
 export default async function ApprovalsPage() {
   await requireOwner();
-  const db = getDb();
   const now = new Date();
   const [tz, { pending, resolved }] = await Promise.all([
     getAgentTimezone(),
-    listApprovalInbox(db),
+    listApprovalInbox(getApprovalStore()),
   ]);
 
   return (
