@@ -10,6 +10,24 @@ import {
 import { approvalNoticeEmail, executorDeps } from './executor-deps.js';
 
 describe('Firestore memory embedding provenance', () => {
+  it('accepts vendor-qualified OpenRouter model IDs', async () => {
+    const role = vi.fn().mockResolvedValue({ primaryModel: 'openai/text-embedding-3-small' });
+    const embed = vi.fn().mockResolvedValue([[1, 0, 0]]);
+    const pinned = pinnedMemoryEmbed(
+      {
+        provider: 'openrouter',
+        model: 'openai/text-embedding-3-small',
+        dimensions: 1536,
+        revision: '1',
+      },
+      { role },
+      embed,
+    );
+
+    await expect(pinned(['private fact'])).resolves.toEqual([[1, 0, 0]]);
+    expect(embed).toHaveBeenCalledOnce();
+  });
+
   it('refuses a changed embedding role before requesting a vector', async () => {
     const role = vi.fn().mockResolvedValue({ primaryModel: 'openai/text-embedding-3-small' });
     const embed = vi.fn().mockResolvedValue([[1, 0, 0]]);

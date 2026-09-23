@@ -81,11 +81,16 @@ function parseGcsUri(uri: string): { bucket: string; object: string } {
 
 async function listObjects(uri: string): Promise<VerifiedGcsObject[]> {
   const { bucket, object } = parseGcsUri(uri);
-  const token = await (authClient ?? admin.auth).getAccessToken();
-  if (!token) throw new Error('Application Default Credentials did not provide an access token');
   const result: VerifiedGcsObject[] = [];
   let pageToken: string | undefined;
   do {
+    // OAuth2Client returns { token }, whereas GoogleAuth returns the token string.
+    // Refresh for every page so a long managed export cannot leave pagination
+    // using an expired credential.
+    const token = authClient
+      ? (await authClient.getAccessToken()).token
+      : await admin.auth.getAccessToken();
+    if (!token) throw new Error('Google authentication did not provide an access token');
     const query = new URLSearchParams({
       prefix: `${object}/`,
       fields: 'nextPageToken,items(bucket,name,generation,size,crc32c)',

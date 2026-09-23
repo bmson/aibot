@@ -94,7 +94,7 @@ import {
   FirestoreApplicationChatPersistence,
   FirestoreShellStatusRepository,
 } from '@assistant/firestore';
-import { validateEmbedding } from '@assistant/persistence';
+import { embeddingModelId, validateEmbedding } from '@assistant/persistence';
 import { inspectMcpConnection } from '@assistant/tools/mcp';
 import {
   GcsWorkspaceStore,
@@ -381,7 +381,7 @@ function createFirestoreChatApplication() {
   return {
     embedSkillText: async (text: string): Promise<number[]> => {
       const [vector] = await router.embed([text], {
-        expectedModelId: `${embeddingSpace.provider}/${embeddingSpace.model}`,
+        expectedModelId: embeddingModelId(embeddingSpace),
       });
       const result = vector ?? [];
       validateEmbedding(embeddingSpace, result);

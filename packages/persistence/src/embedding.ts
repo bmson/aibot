@@ -5,6 +5,11 @@ export interface EmbeddingSpace {
   revision: string;
 }
 
+/** OpenRouter model IDs already include their vendor namespace. */
+export function embeddingModelId(space: EmbeddingSpace): string {
+  return space.provider === 'openrouter' ? space.model : `${space.provider}/${space.model}`;
+}
+
 export function validateEmbedding(space: EmbeddingSpace, vector: number[]): void {
   if (
     !space.provider ||

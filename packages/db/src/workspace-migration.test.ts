@@ -106,6 +106,10 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
       },
     });
     expect(Object.keys(complete.manifest.tables)).toHaveLength(66);
+    const exportedModel = complete.records.find((record) => record.table === 'models');
+    expect(exportedModel?.data).toHaveProperty('promptCostPerMTok');
+    expect(exportedModel?.data).toHaveProperty('completionCostPerMTok');
+    expect(exportedModel?.data).not.toHaveProperty('promptCostPerMtok');
     expect(complete.manifest.coverage).toEqual({
       complete: true,
       supportedTables: expect.arrayContaining(['agents', 'messages', 'knowledge_graph_relations']),
