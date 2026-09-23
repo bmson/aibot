@@ -29,6 +29,8 @@ export interface ConsumerInstallOptions {
   stateBucket: string;
   apply: boolean;
   runtime?: { images: unknown; config: unknown };
+  /** Exact Google OAuth redirect URI confirmed in the customer's Web client. */
+  ownerAccessCallback?: string;
   now?: () => string;
 }
 
@@ -40,6 +42,7 @@ export interface ConsumerInstallResult {
   pending: readonly InstallationStage[];
   note: string;
   disabledApis?: readonly string[];
+  ownerAccess?: { webUrl: string; authOrigin: string; callback: string; publicInvoker: boolean };
 }
 
 export interface ConsumerInstallDependencies {
@@ -721,6 +724,111 @@ async function verifyRuntimeServices(
   }
 }
 
+async function inspectOwnerAccess(
+  runner: CommandRunner,
+  manifest: InstallationManifest,
+  input: RuntimeInput,
+  expectedPublic: boolean,
+): Promise<NonNullable<ConsumerInstallResult['ownerAccess']>> {
+  const { projectId, region, installationId } = manifest.identity;
+  const serviceFor = async (name: 'web' | 'agent') =>
+    jsonOutput(
+      await runRuntimeCheck(
+        runner,
+        [
+          'run',
+          'services',
+          'describe',
+          `${installationId}-${name}`,
+          `--project=${projectId}`,
+          `--region=${region}`,
+          '--format=json',
+        ],
+        `${name} service lookup`,
+      ),
+      `${name} service`,
+    ) as Record<string, unknown>;
+  const [web, agent] = await Promise.all([serviceFor('web'), serviceFor('agent')]);
+  const iamDisabled = (service: Record<string, unknown>) =>
+    service.invokerIamDisabled === true ||
+    (service.metadata as { annotations?: Record<string, unknown> } | undefined)?.annotations?.[
+      'run.googleapis.com/invoker-iam-disabled'
+    ] === 'true';
+  const url = web.uri ?? (web.status as { url?: unknown } | undefined)?.url;
+  const container =
+    (
+      web.template as
+        | { containers?: Array<{ env?: Array<{ name?: string; value?: string }> }> }
+        | undefined
+    )?.containers?.[0] ??
+    (
+      web.spec as
+        | {
+            template?: {
+              spec?: {
+                containers?: Array<{ env?: Array<{ name?: string; value?: string }> }>;
+              };
+            };
+          }
+        | undefined
+    )?.template?.spec?.containers?.[0];
+  const env = new Map(container?.env?.map(({ name, value }) => [name, value]) ?? []);
+  if (
+    typeof url !== 'string' ||
+    !/^https:\/\/[A-Za-z0-9.-]+(?::443)?$/.test(url) ||
+    iamDisabled(web) ||
+    iamDisabled(agent) ||
+    env.get('OWNER_EMAIL') !== input.config.ownerEmail ||
+    env.get('AUTH_URL') !== input.config.webAuthUrl ||
+    env.get('AUTH_DEV_BYPASS') !== 'false' ||
+    env.get('AUTH_LOCALHOST_BYPASS') !== 'false'
+  )
+    throw new Error(
+      'Web service URL, owner auth, or Cloud Run IAM configuration differs from the runtime checkpoint',
+    );
+  const policyFor = async (name: 'web' | 'agent') => {
+    const value = jsonOutput(
+      await runRuntimeCheck(
+        runner,
+        [
+          'run',
+          'services',
+          'get-iam-policy',
+          `${installationId}-${name}`,
+          `--project=${projectId}`,
+          `--region=${region}`,
+          '--format=json',
+        ],
+        `${name} IAM policy lookup`,
+      ),
+      `${name} IAM policy`,
+    ) as { bindings?: Array<{ role?: string; members?: string[] }> };
+    if (value.bindings !== undefined && !Array.isArray(value.bindings))
+      throw new Error(`${name} IAM policy is malformed`);
+    const invokers =
+      value.bindings?.filter((binding) => binding.role === 'roles/run.invoker') ?? [];
+    return {
+      allUsers: invokers.some((binding) => binding.members?.includes('allUsers')),
+      broad: invokers.some((binding) =>
+        binding.members?.some(
+          (member) => member === 'allUsers' || member === 'allAuthenticatedUsers',
+        ),
+      ),
+    };
+  };
+  const [webPolicy, agentPolicy] = await Promise.all([policyFor('web'), policyFor('agent')]);
+  if (agentPolicy.broad)
+    throw new Error('Agent service has a public invoker binding; refusing owner access');
+  if (expectedPublic && !webPolicy.allUsers)
+    throw new Error('Web public invoker binding was not verified');
+  return {
+    webUrl: url,
+    authOrigin: input.config.webAuthUrl,
+    callback: `${input.config.webAuthUrl}/api/auth/callback/google`,
+    publicInvoker: webPolicy.allUsers,
+  };
+}
+
 /** Provision the customer-owned foundation in resumable, verified stages. */
 export async function provisionConsumerInstallation(
   dependencies: ConsumerInstallDependencies,
@@ -729,6 +837,13 @@ export async function provisionConsumerInstallation(
   const input = validateInstallationManifest(options.manifest);
   if (input.status !== 'active') throw new Error('Cannot provision an invalidated installation');
   const runtime = options.runtime ? validateRuntimeInput(options.runtime, input) : null;
+  if (options.ownerAccessCallback && !runtime)
+    throw new Error('Owner access requires the matching runtime images and config');
+  if (
+    options.ownerAccessCallback &&
+    options.ownerAccessCallback !== `${runtime?.config.webAuthUrl}/api/auth/callback/google`
+  )
+    throw new Error('Confirmed OAuth callback must exactly match the configured AUTH_URL callback');
   const now = options.now ?? (() => new Date().toISOString());
   const terraformRunner = dependencies.terraform ?? dependencies.runner;
   await verifyTerraformDirectory(options.terraformDir);
@@ -769,6 +884,8 @@ export async function provisionConsumerInstallation(
     )
   )
     throw new Error('Runtime config differs from the initialized checkpoint');
+  if (options.ownerAccessCallback && current.stage.current !== 'initialized')
+    throw new Error('Deploy and verify the private runtime before enabling owner access');
   if (current.stage.current === 'previewed' || current.stage.current === 'authorized') {
     const missingApis = await verifyProjectAndDatabase(dependencies.runner, current, options.apply);
     if (!options.apply) {
@@ -795,6 +912,12 @@ export async function provisionConsumerInstallation(
   if (!options.apply) {
     if (current.stage.current === 'provisioned')
       await verifyConsumerIndexReadiness(dependencies.runner, current.identity, trustedIndexSpec);
+    let ownerAccess: ConsumerInstallResult['ownerAccess'];
+    if (runtime && current.stage.current === 'initialized' && options.ownerAccessCallback) {
+      await verifyRuntimePrerequisites(dependencies.runner, current, runtime);
+      await verifyRuntimeServices(dependencies.runner, current, runtime);
+      ownerAccess = await inspectOwnerAccess(dependencies.runner, current, runtime, false);
+    }
     return {
       manifest: current,
       applied: false,
@@ -803,7 +926,10 @@ export async function provisionConsumerInstallation(
       pending: cloudStages.filter(
         (stage) => !current.stage.completed.includes(stage as InstallationStage),
       ),
-      note: 'Validated archive and project for the persisted foundation stage. No resources were changed.',
+      ownerAccess,
+      note: ownerAccess
+        ? 'Verified private runtime, enabled auth secret versions, web URL, owner auth environment, and service IAM. No resources were changed. Confirm the Google OAuth Web client and HTTPS routing before --apply.'
+        : 'Validated archive and project for the persisted foundation stage. No resources were changed.',
     };
   }
 
@@ -955,14 +1081,91 @@ export async function provisionConsumerInstallation(
   } else if (runtime && current.stage.current === 'initialized') {
     await verifyRuntimeServices(dependencies.runner, current, runtime);
   }
+  let ownerAccess: ConsumerInstallResult['ownerAccess'];
+  if (runtime && options.ownerAccessCallback && current.stage.current === 'initialized') {
+    await verifyRuntimePrerequisites(dependencies.runner, current, runtime);
+    const before = await inspectOwnerAccess(dependencies.runner, current, runtime, false);
+    if (before.publicInvoker) ownerAccess = before;
+    else {
+      const workspace = await prepareTerraformWorkspace(verifiedFoundation, true);
+      const initialized = await terraformRunner.run('terraform', [
+        `-chdir=${workspace.terraformDir}`,
+        'init',
+        '-input=false',
+        '-lockfile=readonly',
+        '-backend-config',
+        `bucket=${options.stateBucket}`,
+        '-backend-config',
+        `prefix=assistant/${current.identity.installationId}`,
+      ]);
+      if (!initialized.ok)
+        throw new Error('Owner-access Terraform init failed; retry the same inputs');
+      const planPath = join(workspace.root, 'owner-access.tfplan');
+      const planned = await terraformRunner.run('terraform', [
+        `-chdir=${workspace.terraformDir}`,
+        'plan',
+        '-input=false',
+        '-target=google_cloud_run_v2_service_iam_member.web_public',
+        `-out=${planPath}`,
+        ...terraformVars(current, options.stateBucket),
+        ...runtimeVars(runtime),
+        '-var',
+        'allow_public_web_invoker=true',
+      ]);
+      if (!planned.ok) throw new Error('Owner-access Terraform plan failed; retry the same inputs');
+      const shown = await terraformRunner.run('terraform', [
+        `-chdir=${workspace.terraformDir}`,
+        'show',
+        '-json',
+        planPath,
+      ]);
+      if (!shown.ok) throw new Error('Owner-access Terraform plan inspection failed');
+      const plan = jsonOutput(shown, 'Owner-access Terraform plan') as {
+        resource_changes?: Array<{
+          address?: unknown;
+          change?: { actions?: unknown; after?: Record<string, unknown> };
+        }>;
+      };
+      const changes = plan.resource_changes;
+      const binding = changes?.find(
+        (change) =>
+          change.address === 'google_cloud_run_v2_service_iam_member.web_public["current"]',
+      );
+      if (
+        !Array.isArray(changes) ||
+        !binding ||
+        changes.some(
+          (change) => change !== binding && JSON.stringify(change.change?.actions) !== '["no-op"]',
+        ) ||
+        JSON.stringify(binding.change?.actions) !== '["create"]' ||
+        binding.change?.after?.member !== 'allUsers' ||
+        binding.change?.after?.role !== 'roles/run.invoker' ||
+        binding.change?.after?.name !== `${current.identity.installationId}-web`
+      )
+        throw new Error('Owner-access Terraform plan includes unexpected changes');
+      const applied = await terraformRunner.run('terraform', [
+        `-chdir=${workspace.terraformDir}`,
+        'apply',
+        '-input=false',
+        '-auto-approve',
+        planPath,
+      ]);
+      if (!applied.ok)
+        throw new Error('Owner-access Terraform apply failed; retry the same inputs');
+      ownerAccess = await inspectOwnerAccess(dependencies.runner, current, runtime, true);
+      await rm(workspace.root, { recursive: true, force: true });
+    }
+  }
   return {
     manifest: current,
     applied: true,
     runtimeReady: false,
     completed: current.stage.completed,
     pending: current.stage.current === 'initialized' ? ['ready'] : ['initialized', 'ready'],
-    note:
-      current.stage.current === 'initialized'
+    ownerAccess,
+    note: ownerAccess
+      ? 'Web invocation is public for the operator-confirmed OAuth callback. Verify the customer OAuth client, owner sign-in, and an authenticated model response before claiming runtime readiness.'
+      : current.stage.current === 'initialized'
         ? 'Customer-owned Cloud Run services and revisions verified. Owner sign-in, model response, and end-to-end readiness remain gated.'
         : 'Customer-owned foundation and READY indexes verified. Runtime services, owner authentication, and end-to-end readiness remain gated.',
   };
