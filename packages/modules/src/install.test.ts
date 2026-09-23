@@ -5,6 +5,7 @@ import { ToolRegistry } from '@assistant/tools/registry';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ModuleMeta } from './contract.js';
 import { documentsModule } from './documents/module.js';
+import { calendarModule } from './google/calendar-module.js';
 import { googleModule } from './google/module.js';
 import { installModules } from './install.js';
 import { defineModule, type ModulePlatformContext } from './platform.js';
@@ -91,6 +92,34 @@ describe('installModules', () => {
     expect(installed.channelUnavailable('email_triage')).toBeNull();
     expect(installed.channelUnavailable('sms_turn')).toBeNull();
   });
+
+  it.each([
+    { modules: 'google,calendar', order: [calendarModule, googleModule] },
+    { modules: 'all', order: [googleModule, calendarModule] },
+  ])(
+    'does not double-register Calendar tools when ASSISTANT_MODULES=$modules',
+    ({ modules, order }) => {
+      const context = contextFor(
+        loadConfig({
+          ASSISTANT_MODULES: modules,
+          GOOGLE_OAUTH_CLIENT_ID: 'test-client',
+          GOOGLE_OAUTH_CLIENT_SECRET: 'test-secret',
+          BOT_GOOGLE_REFRESH_TOKEN: 'test-refresh-token',
+        }),
+      );
+      const warning = console.warn;
+      console.warn = () => {};
+      try {
+        expect(() => installModules(order, context)).not.toThrow();
+      } finally {
+        console.warn = warning;
+      }
+
+      expect(context.registry.get('calendar.availability')).toBeDefined();
+      expect(context.registry.get('calendar.list_events')).toBeDefined();
+      expect(context.registry.get('calendar.create_event')).toBeDefined();
+    },
+  );
 
   it('reports a deterministic task kind orphaned when its owning module is absent', () => {
     const disabled = contextFor(loadConfig({ ASSISTANT_MODULES: 'reminders' }));
