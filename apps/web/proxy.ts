@@ -38,8 +38,8 @@ export function proxy(request: NextRequest) {
     (path === '/costs' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/profile/voice' && request.method === 'GET') ||
     (path === '/profile/about' && request.method === 'GET') ||
-    // Settings Server Actions recheck owner auth; in Firestore mode only the
-    // assistant identity action has a Firestore persistence path.
+    // Settings Server Actions recheck owner auth; Firestore supports the
+    // assistant identity and notification preference updates.
     (path === '/settings' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/import' && request.method === 'GET') ||
     (path === '/skills' && ['GET', 'POST'].includes(request.method)) ||

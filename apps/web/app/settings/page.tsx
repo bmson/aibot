@@ -253,30 +253,13 @@ export default async function SettingsPage() {
           }
         />
         <Card className="mt-3">
-          {readOnly ? (
-            <dl className="grid gap-4 text-sm sm:grid-cols-3">
-              <div>
-                <dt className="text-muted">Quiet from</dt>
-                <dd>{notificationPrefs.quietStart || 'Any time'}</dd>
-              </div>
-              <div>
-                <dt className="text-muted">Quiet until</dt>
-                <dd>{notificationPrefs.quietEnd || 'Any time'}</dd>
-              </div>
-              <div>
-                <dt className="text-muted">Daily ping limit</dt>
-                <dd>{notificationPrefs.ambientDailyCap || 'No limit'}</dd>
-              </div>
-            </dl>
-          ) : (
-            <NotificationForm
-              initial={{
-                quietStart: notificationPrefs.quietStart,
-                quietEnd: notificationPrefs.quietEnd,
-                ambientDailyCap: notificationPrefs.ambientDailyCap,
-              }}
-            />
-          )}
+          <NotificationForm
+            initial={{
+              quietStart: notificationPrefs.quietStart,
+              quietEnd: notificationPrefs.quietEnd,
+              ambientDailyCap: notificationPrefs.ambientDailyCap,
+            }}
+          />
         </Card>
       </section>
 

@@ -95,7 +95,7 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     resetConfigForTest();
   });
 
-  it('admits the owner settings action and renders the identity editor only', async () => {
+  it('admits owner settings actions and renders only portable Firestore settings editors', async () => {
     const { proxy } = await import('../../proxy.js');
     expect(proxy(new NextRequest('http://localhost/settings')).status).toBe(200);
     expect(proxy(new NextRequest('http://localhost/settings', { method: 'POST' })).status).toBe(
@@ -113,13 +113,71 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     expect(html).toContain('Locale');
     expect(html).toContain('Email signature');
     expect(html).toContain('Save changes');
+    expect(html).toContain('Quiet from');
+    expect(html).toContain('Quiet until');
     expect(html).not.toContain('Pause');
     expect(html).not.toContain('Delete');
     expect(html).not.toContain('/costs');
     expect(html).not.toContain('MCP connections');
   });
 
+  it('updates notification preferences through the validated Firestore settings facade', async () => {
+    const result = await actions.updateNotificationSettings({
+      quietStart: '21:30',
+      quietEnd: '06:15',
+      ambientDailyCap: '5',
+    });
+    expect(result).toEqual({});
+    const prefs = await store.doc('notificationPrefs', agentId).get();
+    expect(prefs.get('quietStartMin')).toBe(21 * 60 + 30);
+    expect(prefs.get('quietEndMin')).toBe(6 * 60 + 15);
+    expect(prefs.get('ambientDailyCap')).toBe(5);
+    expect((await store.doc('agents', agentId).get()).get('signature')).toBe('Regards, assistant');
+  });
+
+  it('rejects invalid notification preferences without changing Firestore settings', async () => {
+    const before = await store.doc('notificationPrefs', agentId).get();
+    const result = await actions.updateNotificationSettings({
+      quietStart: '25:00',
+      quietEnd: '06:15',
+      ambientDailyCap: '101',
+    });
+    expect(result.error).toBeTruthy();
+    const after = await store.doc('notificationPrefs', agentId).get();
+    expect(after.get('quietStartMin')).toBe(before.get('quietStartMin'));
+    expect(after.get('quietEndMin')).toBe(before.get('quietEndMin'));
+    expect(after.get('ambientDailyCap')).toBe(before.get('ambientDailyCap'));
+  });
+
+  it('requires owner authentication and an inactive erasure fence for notification updates', async () => {
+    const before = await store.doc('notificationPrefs', agentId).get();
+    auth.owner.mockRejectedValueOnce(new Error('owner authentication required'));
+    await expect(
+      actions.updateNotificationSettings({
+        quietStart: '20:00',
+        quietEnd: '07:00',
+        ambientDailyCap: '4',
+      }),
+    ).rejects.toThrow('owner authentication required');
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+    try {
+      await expect(
+        actions.updateNotificationSettings({
+          quietStart: '20:00',
+          quietEnd: '07:00',
+          ambientDailyCap: '4',
+        }),
+      ).rejects.toThrow('Privacy erasure is in progress');
+      expect((await store.doc('notificationPrefs', agentId).get()).get('ambientDailyCap')).toBe(
+        before.get('ambientDailyCap'),
+      );
+    } finally {
+      await store.doc('privacyErasureJobs', agentId).delete();
+    }
+  });
+
   it('updates only the configured owner identity through the validated Firestore facade', async () => {
+    const prefsBefore = await store.doc('notificationPrefs', agentId).get();
     const result = await actions.updateAgentSettings({
       timezone: 'America/Los_Angeles',
       locale: 'en-GB',
@@ -131,7 +189,9 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     expect(owner.get('locale')).toBe('en-GB');
     expect(owner.get('signature')).toBe('Best, assistant');
     expect(owner.get('credentialRefs')).toEqual({});
-    expect((await store.doc('notificationPrefs', agentId).get()).get('ambientDailyCap')).toBe(3);
+    expect((await store.doc('notificationPrefs', agentId).get()).get('ambientDailyCap')).toBe(
+      prefsBefore.get('ambientDailyCap'),
+    );
   });
 
   it('rejects invalid identity values without changing the Firestore owner', async () => {
