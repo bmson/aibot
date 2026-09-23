@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { MigrationBundle } from '@assistant/persistence';
+import { type MigrationBundle, validateMigrationBundle } from '@assistant/persistence';
 import { exportWorkspaceSnapshot, type WorkspaceSnapshotOptions } from './workspace-migration.js';
 
 type SnapshotExporter = (options: WorkspaceSnapshotOptions) => Promise<MigrationBundle>;
@@ -67,6 +67,7 @@ export async function runWorkspaceExportJob(
   env: WorkspaceExportJobEnvironment,
   fetcher: typeof fetch = fetch,
   exporter: SnapshotExporter = exportWorkspaceSnapshot,
+  validator: typeof validateMigrationBundle = validateMigrationBundle,
 ) {
   const config = configuration(env);
   const bundle = await exporter({
@@ -80,6 +81,7 @@ export async function runWorkspaceExportJob(
     bundle.manifest.coverage.omittedTables.length !== 0
   )
     throw new Error('Workspace snapshot does not cover every source table');
+  validator(bundle, { sourceAgentId: config.agentId, target: config.target });
   const bytes = Buffer.from(JSON.stringify(bundle));
   const sha256 = createHash('sha256').update(bytes).digest('hex');
 

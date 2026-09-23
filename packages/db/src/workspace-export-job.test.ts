@@ -43,7 +43,16 @@ describe('Cloud Run workspace export job', () => {
           });
     }) as unknown as typeof fetch;
 
-    const result = await runWorkspaceExportJob(env, fetcher, exporter);
+    const validator = vi.fn();
+    const result = await runWorkspaceExportJob(env, fetcher, exporter, validator);
+    expect(validator).toHaveBeenCalledWith(bundle, {
+      sourceAgentId: env.MIGRATION_SOURCE_AGENT_ID,
+      target: {
+        projectId: 'customer-project',
+        databaseId: '(default)',
+        installationId: 'personal_assistant',
+      },
+    });
     expect(exporter).toHaveBeenCalledWith({
       databaseUrl: env.DATABASE_URL,
       agentId: env.MIGRATION_SOURCE_AGENT_ID,
@@ -99,7 +108,7 @@ describe('Cloud Run workspace export job', () => {
       .mockResolvedValueOnce(
         new Response('private storage diagnostics', { status: 412 }),
       ) as typeof fetch;
-    await expect(runWorkspaceExportJob(env, fetcher, async () => bundle)).rejects.toThrow(
+    await expect(runWorkspaceExportJob(env, fetcher, async () => bundle, vi.fn())).rejects.toThrow(
       'Workspace snapshot upload failed (412)',
     );
   });
@@ -113,9 +122,9 @@ describe('Cloud Run workspace export job', () => {
         coverage: { complete: false, omittedTables: ['new_source_table'] },
       },
     } as MigrationBundle;
-    await expect(runWorkspaceExportJob(env, fetcher, async () => incomplete)).rejects.toThrow(
-      'does not cover every source table',
-    );
+    await expect(
+      runWorkspaceExportJob(env, fetcher, async () => incomplete, vi.fn()),
+    ).rejects.toThrow('does not cover every source table');
     expect(fetcher).not.toHaveBeenCalled();
   });
 
@@ -131,8 +140,19 @@ describe('Cloud Run workspace export job', () => {
           generation: '123456789',
         }),
       ) as typeof fetch;
-    await expect(runWorkspaceExportJob(env, fetcher, async () => bundle)).rejects.toThrow(
+    await expect(runWorkspaceExportJob(env, fetcher, async () => bundle, vi.fn())).rejects.toThrow(
       'mismatched object metadata',
     );
+  });
+
+  it('rejects a bundle that fails canonical checksum and vector validation before upload', async () => {
+    const fetcher = vi.fn() as unknown as typeof fetch;
+    const validator = vi.fn(() => {
+      throw new Error('Invalid migration bundle');
+    });
+    await expect(
+      runWorkspaceExportJob(env, fetcher, async () => bundle, validator),
+    ).rejects.toThrow('Invalid migration bundle');
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });
