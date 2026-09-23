@@ -10,6 +10,8 @@ export interface QuestionCase {
   sports?: 'live';
   /** Stub `maps.directions` with a drive to Oracle Park. */
   maps?: 'route';
+  /** Stub `calendar.list_events` with one upcoming event, with or without a location. */
+  calendar?: 'next-meeting' | 'no-location';
   mailbox?: 'hotel' | 'empty';
   memory?: boolean;
   plan?: 'reply' | 'workflow';
@@ -195,6 +197,38 @@ export const QUESTION_CASES: QuestionCase[] = [
       tools: ['sports.scores', 'maps.directions'],
       scoreboard: true,
       route: true,
+    },
+  },
+  {
+    id: 'trip-to-next-meeting',
+    // Phase 4: the destination comes from the calendar, then the route.
+    records: [],
+    request: 'When should I leave for my next meeting?',
+    calendar: 'next-meeting',
+    maps: 'route',
+    script: [
+      {
+        text: 'Design review is at Oracle Park, about 9 minutes by car via King St, so leave a few minutes before it starts.',
+      },
+    ],
+    expect: {
+      matches: ['Design review', 'Oracle Park', '9 min', 'King St'],
+      tools: ['calendar.list_events', 'maps.directions'],
+      route: true,
+    },
+  },
+  {
+    id: 'trip-to-meeting-without-location',
+    records: [],
+    request: 'How long will it take me to get to my next meeting?',
+    calendar: 'no-location',
+    maps: 'route',
+    script: [{ text: 'It should take about 20 minutes.' }],
+    expect: {
+      matches: ['Design review', 'no location'],
+      excludes: ['20 minutes'],
+      tools: ['calendar.list_events'],
+      statuses: ['needs_attention'],
     },
   },
   {

@@ -8,6 +8,7 @@ import {
   liveLookupFailures,
   nextLiveLookup,
   nextLiveLookups,
+  tripEvent,
   ungroundedLiveFigure,
 } from './live-lookup.js';
 
@@ -461,6 +462,19 @@ describe('liveLookupDirective', () => {
     expect(liveLookupDirective([], context)).toBe('');
   });
 
+  it('tells the model a calendar trip already chose its event', () => {
+    const trip = {
+      kind: 'directions',
+      request: 'How long to get to my 3pm?',
+      destination: 'calendar',
+    } as const;
+    expect(liveLookupDirective([trip], context)).toContain(
+      'never route to or suggest a different event',
+    );
+    expect(liveLookupDirective([sports, trip], context)).toContain('chose that event');
+    expect(liveLookupDirective([sports, directions], context)).not.toContain('chose that event');
+  });
+
   it('names every part, the one being fetched, and the ones that failed', () => {
     const text = liveLookupDirective([sports, directions], {
       ...context,
@@ -473,5 +487,139 @@ describe('liveLookupDirective', () => {
     expect(text).toContain('Look up this part now: the drive time to Oracle Park?');
     expect(text).toMatch(/sports lookup for "What's the Giants score\?" failed/);
     expect(text).toContain('never invent measurements, scores');
+  });
+});
+
+describe('a trip to an event on the calendar', () => {
+  const context = { now: new Date('2026-09-23T17:00:00Z'), timeZone: 'America/Los_Angeles' };
+  const trip = (request: string) =>
+    ({ kind: 'directions', request, destination: 'calendar' }) as const;
+  const calendar = (events: Array<Record<string, unknown>>) => ({
+    toolName: 'calendar.list_events',
+    status: 'succeeded' as const,
+    result: { events },
+  });
+  // 10:00 local is 17:00Z; 15:00 local is 22:00Z.
+  const dentist = {
+    summary: 'Dentist — Dr. Park',
+    start: '2026-09-23T15:00:00-07:00',
+    location: '450 Sutter St, San Francisco',
+  };
+  const standup = { summary: 'Team standup', start: '2026-09-23T11:30:00-07:00', location: '' };
+  const lunch = {
+    summary: 'Lunch with Sam',
+    start: '2026-09-23T12:30:00-07:00',
+    location: 'Tartine Manufactory',
+  };
+  const allDay = { summary: 'Offsite', start: '2026-09-23', location: 'Napa' };
+
+  it.each([
+    'How long to get to my 3pm?',
+    'Directions to my 3pm',
+    'When should I leave for my next meeting?',
+    'How long will it take me to drive to my dentist appointment tomorrow?',
+  ])('reads %s as a trip to a calendar event', (content) => {
+    expect(detectLiveLookup([{ role: 'user', content }])).toEqual({
+      kind: 'directions',
+      request: content,
+      destination: 'calendar',
+    });
+  });
+
+  it.each(['Directions to Oracle Park', 'How long to drive to my 3 favorite bakeries?'])(
+    'leaves %s as an ordinary trip',
+    (content) => {
+      expect(detectLiveLookup([{ role: 'user', content }])?.destination).toBeUndefined();
+    },
+  );
+
+  it('reads the calendar first, then routes to the event, arriving by its start', () => {
+    const lookup = trip('How long to get to my 3pm?');
+    expect(nextLiveLookup(lookup, [], context)).toEqual({
+      toolName: 'calendar.list_events',
+      input: {
+        timeMin: '2026-09-23T17:00:00.000Z',
+        timeMax: '2026-09-25T05:00:00.000Z',
+        maxResults: 50,
+      },
+    });
+    const read = calendar([standup, lunch, dentist]);
+    expect(nextLiveLookup(lookup, [read], context)).toEqual({
+      toolName: 'maps.directions',
+      input: { destination: '450 Sutter St, San Francisco', arriveBy: '2026-09-23T22:00:00.000Z' },
+    });
+    const route = {
+      toolName: 'maps.directions',
+      status: 'succeeded' as const,
+      result: { durationSeconds: 1200 },
+    };
+    expect(nextLiveLookup(lookup, [read, route], context)).toBeUndefined();
+    expect(liveLookupFailure(lookup, [read, route], context)).toBeUndefined();
+  });
+
+  it('picks the event the request names', () => {
+    const read = [calendar([allDay, standup, lunch, dentist])];
+    const pick = (request: string) => tripEvent(trip(request), read, context);
+    expect(pick('How long will it take to drive to my dentist appointment?').event?.summary).toBe(
+      dentist.summary,
+    );
+    expect(pick('When should I leave for my lunch?').event?.summary).toBe(lunch.summary);
+    expect(pick('Directions to my 12:30pm').event?.summary).toBe(lunch.summary);
+    expect(pick('When should I leave for my next meeting?').problem).toMatch(
+      /"Team standup" at 11:30\sAM has no location/,
+    );
+  });
+
+  it('never routes to a different event than the one asked about', () => {
+    const read = [calendar([lunch])];
+    expect(tripEvent(trip('When should I leave for my flight?'), read, context).problem).toMatch(
+      /couldn't find your flight on your calendar/,
+    );
+    expect(tripEvent(trip('How long to get to my 3pm?'), read, context).problem).toMatch(
+      /couldn't find your 3pm/,
+    );
+    expect(nextLiveLookup(trip('How long to get to my 3pm?'), read, context)).toBeUndefined();
+    expect(liveLookupFailure(trip('How long to get to my 3pm?'), read, context)).toMatch(
+      /couldn't find your 3pm/,
+    );
+  });
+
+  it('ignores events that already started or are beyond the window', () => {
+    const past = { ...dentist, start: '2026-09-23T08:00:00-07:00' };
+    const far = { ...dentist, start: '2026-09-26T15:00:00-07:00' };
+    expect(
+      tripEvent(
+        trip('How long to get to my dentist appointment?'),
+        [calendar([past, far])],
+        context,
+      ).problem,
+    ).toMatch(/couldn't find/);
+  });
+
+  it('says so when the calendar could not be read', () => {
+    const failed = { toolName: 'calendar.list_events', status: 'failed' as const, result: null };
+    expect(liveLookupFailure(trip('How long to get to my 3pm?'), [failed], context)).toMatch(
+      /couldn't read your calendar/,
+    );
+  });
+
+  it("chains inside a compound question without taking the other part's evidence", () => {
+    const lookups = detectLiveLookups([
+      { role: 'user', content: "What's the Giants score and how long to get to my 3pm?" },
+    ]);
+    expect(lookups.map((lookup) => [lookup.kind, lookup.destination])).toEqual([
+      ['sports', undefined],
+      ['directions', 'calendar'],
+    ]);
+    const scores = {
+      toolName: 'sports.scores',
+      status: 'succeeded' as const,
+      result: { games: [{ line: 'Dodgers at Giants: 2-5, Final' }] },
+    };
+    expect(nextLiveLookups(lookups, [scores], context)?.toolName).toBe('calendar.list_events');
+    expect(nextLiveLookups(lookups, [scores, calendar([dentist])], context)?.input).toEqual({
+      destination: '450 Sutter St, San Francisco',
+      arriveBy: '2026-09-23T22:00:00.000Z',
+    });
   });
 });

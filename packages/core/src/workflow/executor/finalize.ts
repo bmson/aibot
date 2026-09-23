@@ -38,7 +38,12 @@ import { remainingBirthdaySaves, requestedBirthdaySaves } from '../birthday-impo
 import { CARD_NOT_BUILT, requestedCardIntent } from '../card-intent.js';
 import { responseCardSteps } from '../card-steps.js';
 import { isGoalWorkEvidence } from '../goal-evidence.js';
-import { detectLiveLookups, liveLookupFailures, ungroundedLiveFigure } from '../live-lookup.js';
+import {
+  detectLiveLookups,
+  type LookupContext,
+  liveLookupFailures,
+  ungroundedLiveFigure,
+} from '../live-lookup.js';
 import {
   checkpointTask,
   completeTask,
@@ -361,7 +366,12 @@ export async function stageModelFinalResponse(
    * request with neither, and the grounding check would then have no window to
    * measure a stated time against.
    */
-  readContext?: { readRequest?: PersonalReadRequest | null; groundingCorpus?: string },
+  readContext?: {
+    readRequest?: PersonalReadRequest | null;
+    groundingCorpus?: string;
+    /** The owner's clock, which resolves "my 3pm" to one calendar event. */
+    lookupContext?: LookupContext;
+  },
 ): Promise<ExecuteResult> {
   // Companion cue tags come out for EVERY channel before the contract or any
   // delivery sees the text. The prompt gates the vocabulary to dashboard chat,
@@ -407,7 +417,7 @@ export async function stageModelFinalResponse(
   // through over a successful fetch that said otherwise. A compound request
   // may lose some parts — the draft then reports those gaps itself — but an
   // answer with nothing retrieved, or a figure no source stated, still stops.
-  const liveFailures = liveLookupFailures(liveLookups, rows);
+  const liveFailures = liveLookupFailures(liveLookups, rows, readContext?.lookupContext);
   const answered = liveLookups.filter(
     (lookup) => !liveFailures.some((entry) => entry.lookup === lookup),
   );
@@ -512,8 +522,13 @@ export async function stageModelFinalResponse(
   }
   // Cards are a view of the same ledger that the response contract used; prose
   // is deliberately not parsed here, so a fluent answer cannot invent a card.
+  // A trip to "my 3pm" read a day and a half of calendar to find one event.
+  // That read is the trip's first step, not an agenda the owner asked to see.
+  const tripOwnsCalendar = liveLookups.some((lookup) => lookup.destination === 'calendar');
   const specializedCards = responseCardsForFinal({
-    evidence,
+    evidence: tripOwnsCalendar
+      ? evidence.filter((row) => row.toolName !== 'calendar.list_events')
+      : evidence,
     readRequest: contractOptions.readRequest,
     ambient: readContext?.groundingCorpus,
     requestText: latestUserText(window),

@@ -6,7 +6,19 @@ import {
 } from './read-intent.js';
 import type { ActionEvidence } from './response-contract.js';
 
-export type LiveLookup = { kind: 'weather' | 'web' | 'sports' | 'directions'; request: string };
+export type LiveLookup = {
+  kind: 'weather' | 'web' | 'sports' | 'directions';
+  request: string;
+  /**
+   * A trip whose destination is an event on the owner's calendar ("my 3pm",
+   * "my dentist appointment"): the runtime reads the calendar first and
+   * routes to the event's own location, arriving by its start.
+   */
+  destination?: 'calendar';
+};
+
+/** The owner's clock, for lookups that resolve "my 3pm" or "my next meeting". */
+export type LookupContext = { now: Date; timeZone: string };
 
 const QUESTION = /^(?:how|what|who|when|where|will|is|are|any|do|does|should|can|could)\b/i;
 const WEATHER = /\b(?:weather|forecast|temperature|rain|raining|snow|snowing)\b/i;
@@ -36,9 +48,17 @@ const SPORTS_IMPERATIVE = /\b(?:show|give|get|check|track|follow|create|make|bui
 const DIRECTIONS =
   /\b(?:directions?\s+(?:to|from)\b|route\s+to|how\s+(?:long|many\s+minutes)\b[^.?!]{0,30}\bto\s+(?:get|drive|walk|bike|cycle)\s+(?:to|there|home|back)|how\s+far\s+(?:is|away\s+is)\s+(?!it\b|along\b)|when\s+(?:should|do)\s+i\s+(?:leave|head\s+out)\s+(?:for|to)|(?:drive|driving|travel|walk|walking|commute)\s+time\s+(?:to|from))/i;
 
-/** A trip whose destination is on the owner's calendar ("my 3pm", "my next meeting"). */
+/**
+ * A trip whose destination is on the owner's calendar: "my 3pm", "my next
+ * meeting", "my dentist appointment". A bare number is not a time ("my 3
+ * kids"), so a clock time needs am/pm or minutes.
+ */
 const MY_EVENT =
-  /\bmy\s+(?:next\s+)?(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|meeting|appointment|event|flight|reservation|call)\b/i;
+  /\bmy\s+(?:next\s+)?(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{1,2}:\d{2}|(?:[a-z'-]+\s+){0,2}(?:meeting|appointment|event|flight|reservation|call|dinner|lunch|interview|class|practice))\b/i;
+/** Event words that name a kind of thing, so the event must say it too. */
+const SPECIFIC_EVENT = /\b(?:flight|dinner|lunch|interview|class|practice)\b/i;
+/** How far ahead "my 3pm" or "my next meeting" can reasonably be. */
+const TRIP_WINDOW_MS = 36 * 60 * 60 * 1000;
 
 /** "What's the Giants score?", "any Premier League results?", "make a live score card". */
 function isSportsRequest(request: string, asks: boolean): boolean {
@@ -62,8 +82,12 @@ export function detectLiveLookup(
   const asks = QUESTION.test(request) || request.includes('?') || SEARCH.test(request);
   if (WEATHER.test(request) && asks) return { kind: 'weather', request };
   // Before the personal-read router, which reads "drive time" as Google
-  // Drive. A trip to "my 3pm" still needs the calendar first, so it stays there.
-  if (DIRECTIONS.test(request) && !MY_EVENT.test(request)) return { kind: 'directions', request };
+  // Drive. A trip to "my 3pm" reads the calendar as the first step of the trip
+  // rather than as a lookup of its own, so the route is part of the answer.
+  if (DIRECTIONS.test(request))
+    return MY_EVENT.test(request)
+      ? { kind: 'directions', request, destination: 'calendar' }
+      : { kind: 'directions', request };
   if (detectPersonalReadRequest(history)) return undefined;
   if (/\binvestigate\b[\s\S]*\b(?:team|club|company|match)\b/i.test(request))
     return { kind: 'web', request };
@@ -180,12 +204,143 @@ function sportsAnswered(row: ActionEvidence): boolean {
   return (result.games?.length ?? 0) > 0 || (result.candidates?.length ?? 0) > 0;
 }
 
+type TripEvent = { summary: string; start: string; location: string };
+
+function calendarEvents(rows: ActionEvidence[]): TripEvent[] {
+  return rows
+    .filter((row) => row.toolName === 'calendar.list_events' && successfulLookup(row))
+    .flatMap((row) => {
+      const events = (row.result as { events?: unknown[] }).events;
+      return Array.isArray(events) ? events : [];
+    })
+    .flatMap((value) => {
+      const event = value as Record<string, unknown> | null;
+      const start = typeof event?.start === 'string' ? event.start : '';
+      // An all-day entry has no time to arrive by.
+      if (!start.includes('T')) return [];
+      return [
+        {
+          summary: typeof event?.summary === 'string' ? event.summary.trim() : '',
+          start,
+          location: typeof event?.location === 'string' ? event.location.trim() : '',
+        },
+      ];
+    });
+}
+
+function localClock(iso: string, timeZone: string): { hour: number; minute: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: 'numeric',
+    hourCycle: 'h23',
+    timeZone,
+  }).formatToParts(new Date(iso));
+  const read = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? NaN);
+  return { hour: read('hour') % 24, minute: read('minute') };
+}
+
+function describeEvent(event: TripEvent, timeZone: string): string {
+  const time = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone,
+  }).format(new Date(event.start));
+  return `${event.summary ? `"${event.summary}"` : 'The event'} at ${time}`;
+}
+
+const DEFAULT_CONTEXT: LookupContext = { now: new Date(0), timeZone: 'UTC' };
+
+/**
+ * Which calendar event "my 3pm" or "my dentist appointment" means.
+ *
+ * A named time must match the event's local start; named words ("dentist")
+ * must appear in its title; a specific kind ("my flight") must too. Only a
+ * generic "my next meeting" falls through to the next event. A match with no
+ * location is reported, not skipped: routing to the event after it would
+ * answer a question the owner did not ask.
+ */
+export function tripEvent(
+  lookup: LiveLookup,
+  evidence: ActionEvidence[],
+  context: LookupContext = DEFAULT_CONTEXT,
+): { event: TripEvent; problem?: undefined } | { event?: undefined; problem: string } {
+  const now = context.now.getTime();
+  const upcoming = calendarEvents(evidence.filter((row) => row.fromCurrentTask !== false))
+    .filter((event) => {
+      const start = Date.parse(event.start);
+      return Number.isFinite(start) && start >= now && start - now <= TRIP_WINDOW_MS;
+    })
+    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const reference = MY_EVENT.exec(lookup.request)?.[0] ?? '';
+  const clock = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(
+    reference.replace(/^my\s+(?:next\s+)?/i, ''),
+  );
+  let matches = upcoming;
+  if (clock && (clock[3] || clock[2])) {
+    const meridiem = clock[3]?.toLowerCase();
+    const hour24 = meridiem
+      ? (Number(clock[1]) % 12) + (meridiem === 'pm' ? 12 : 0)
+      : Number(clock[1]);
+    const minute = Number(clock[2] ?? 0);
+    matches = upcoming.filter((event) => {
+      const local = localClock(event.start, context.timeZone);
+      return local.hour === hour24 && local.minute === minute;
+    });
+  } else {
+    const words = reference
+      .replace(/^my\s+(?:next\s+)?/i, '')
+      .split(/\s+/)
+      .filter(Boolean);
+    const noun = words.at(-1) ?? '';
+    const named = [...words.slice(0, -1), ...(SPECIFIC_EVENT.test(noun) ? [noun] : [])];
+    if (named.length > 0)
+      matches = upcoming.filter((event) =>
+        named.some((word) => event.summary.toLowerCase().includes(word.toLowerCase())),
+      );
+  }
+  const event = matches[0];
+  if (!event)
+    return {
+      problem: `I couldn't find ${reference.replace(/^my\b/i, 'your') || 'that event'} on your calendar in the next day and a half, so I haven't worked out a route.`,
+    };
+  if (!event.location)
+    return {
+      problem: `${describeEvent(event, context.timeZone)} has no location on your calendar, so I can't route to it. Add the address to the event, or tell me where it is.`,
+    };
+  return { event };
+}
+
+function nextTripStep(
+  lookup: LiveLookup,
+  rows: ActionEvidence[],
+  context: LookupContext = DEFAULT_CONTEXT,
+): { toolName: string; input?: Record<string, unknown> } | undefined {
+  if (!rows.some((row) => row.toolName === 'calendar.list_events'))
+    return {
+      toolName: 'calendar.list_events',
+      input: {
+        timeMin: context.now.toISOString(),
+        timeMax: new Date(context.now.getTime() + TRIP_WINDOW_MS).toISOString(),
+        maxResults: 50,
+      },
+    };
+  if (rows.some((row) => row.toolName === 'maps.directions')) return undefined;
+  const { event } = tripEvent(lookup, rows, context);
+  if (!event) return undefined;
+  return {
+    toolName: 'maps.directions',
+    input: { destination: event.location, arriveBy: new Date(event.start).toISOString() },
+  };
+}
+
 /** Search snippets are discovery, not a complete live-score or research read. */
 export function nextLiveLookup(
   lookup: LiveLookup,
   evidence: ActionEvidence[],
+  context?: LookupContext,
 ): { toolName: string; input?: Record<string, unknown> } | undefined {
   const rows = evidence.filter((row) => row.fromCurrentTask !== false);
+  if (lookup.destination === 'calendar') return nextTripStep(lookup, rows, context);
   if (lookup.kind === 'weather') {
     if (!rows.some((row) => row.toolName === 'weather.lookup'))
       return { toolName: 'weather.lookup' };
@@ -240,7 +395,10 @@ export function attributeLookupEvidence(
   const webChain = () => [...take('web.search'), ...take('web.fetch')];
   return lookups.map((lookup) => {
     if (lookup.kind === 'weather') return take('weather.lookup');
-    if (lookup.kind === 'directions') return take('maps.directions');
+    if (lookup.kind === 'directions')
+      return lookup.destination === 'calendar'
+        ? [...take('calendar.list_events'), ...take('maps.directions')]
+        : take('maps.directions');
     if (lookup.kind === 'web') return webChain();
     const scores = take('sports.scores');
     return scores.length === 0 || scores.some(sportsAnswered) ? scores : [...scores, ...webChain()];
@@ -251,15 +409,16 @@ export function attributeLookupEvidence(
 export function nextLiveLookups(
   lookups: readonly LiveLookup[],
   evidence: ActionEvidence[],
+  context?: LookupContext,
 ): { toolName: string; input?: Record<string, unknown>; lookup: LiveLookup } | undefined {
   const [first] = lookups;
   if (lookups.length === 1 && first) {
-    const next = nextLiveLookup(first, evidence);
+    const next = nextLiveLookup(first, evidence, context);
     return next && { ...next, lookup: first };
   }
   const shares = attributeLookupEvidence(lookups, evidence);
   for (const [index, lookup] of lookups.entries()) {
-    const next = nextLiveLookup(lookup, shares[index] ?? []);
+    const next = nextLiveLookup(lookup, shares[index] ?? [], context);
     if (next) return { ...next, lookup };
   }
   return undefined;
@@ -269,10 +428,11 @@ export function nextLiveLookups(
 export function liveLookupFailures(
   lookups: readonly LiveLookup[],
   evidence: ActionEvidence[],
+  context?: LookupContext,
 ): Array<{ lookup: LiveLookup; failure: string }> {
   const shares = lookups.length === 1 ? [evidence] : attributeLookupEvidence(lookups, evidence);
   return lookups.flatMap((lookup, index) => {
-    const failure = liveLookupFailure(lookup, shares[index] ?? []);
+    const failure = liveLookupFailure(lookup, shares[index] ?? [], context);
     return failure ? [{ lookup, failure }] : [];
   });
 }
@@ -295,21 +455,25 @@ export function liveLookupDirective(
   const [first] = lookups;
   if (!first) return '';
   const rules = `Use a successful lookup from this task. Earlier assistant answers and recalled conversations are not current evidence. If a provider fails, report the gap; never invent measurements, scores, office holders, opening hours, player traits, or verified job openings. Search snippets locate sources; read the source before concluding. Resolve relative dates using the owner's request time ${context.requestAt.toISOString()} and timezone ${context.timeZone}.`;
+  const trip = lookups.some((lookup) => lookup.destination === 'calendar')
+    ? "\nThe trip destination is an event on the owner's calendar. The runtime read the calendar, chose that event, and routed to its own location arriving by its start. Name the event, the travel time, and when to leave; never route to or suggest a different event."
+    : '';
   if (lookups.length === 1)
-    return `This request needs fresh ${first.kind} evidence: ${first.request}\n${rules}`;
+    return `This request needs fresh ${first.kind} evidence: ${first.request}\n${rules}${trip}`;
   const parts = lookups.map((lookup, index) => `${index + 1}. ${lookup.kind}: ${lookup.request}`);
   const now = context.next ? [`Look up this part now: ${context.next.request}`] : [];
   const failed = (context.failures ?? []).map(
     ({ lookup }) =>
       `The ${lookup.kind} lookup for "${lookup.request}" failed. Say so for that part instead of answering it, and answer the other parts.`,
   );
-  return [
+  const lines = [
     `This request has ${lookups.length} parts that each need fresh evidence. Answer every part, in the order asked:`,
     ...parts,
     ...now,
     ...failed,
     rules,
-  ].join('\n');
+  ];
+  return `${lines.join('\n')}${trip}`;
 }
 
 /**
@@ -420,7 +584,17 @@ export function ungroundedLiveFigure(
 export function liveLookupFailure(
   lookup: LiveLookup,
   evidence: ActionEvidence[],
+  context?: LookupContext,
 ): string | undefined {
+  if (lookup.destination === 'calendar') {
+    const rows = evidence.filter((row) => row.fromCurrentTask !== false);
+    if (rows.some((row) => row.toolName === 'maps.directions' && successfulLookup(row)))
+      return undefined;
+    if (!rows.some((row) => row.toolName === 'calendar.list_events' && successfulLookup(row)))
+      return "I couldn't read your calendar, so I can't tell where that event is or how long it takes to get there. The lookup needs to be retried.";
+    const chosen = tripEvent(lookup, rows, context);
+    if (chosen.problem) return chosen.problem;
+  }
   if (
     lookup.kind === 'sports' &&
     evidence.some((row) => row.fromCurrentTask !== false && sportsAnswered(row))
