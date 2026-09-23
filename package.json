@@ -58,6 +58,7 @@
     "workspace:export": "tsx scripts/workspace-migration-export.ts",
     "workspace:import": "tsx scripts/workspace-migration-import.ts",
     "consumer:install": "tsx scripts/consumer-install.ts",
+    "consumer:seed-runtime": "tsx scripts/consumer-runtime-seed.ts",
     "consumer:publish-images": "tsx scripts/consumer-publish-images.ts"
   },
   "devDependencies": {
