@@ -16,6 +16,7 @@ export { embeddingSpaceKey, FirestoreMemoryRepository } from './memory.js';
 export { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 export { FirestoreMemoryToolRepository } from './memory-tools.js';
 export { FirestoreMessageRepository } from './messages.js';
+export { getFirestoreMobileCosts } from './mobile-costs.js';
 export { FirestoreModelRoutingRepository } from './model-routing.js';
 export {
   createWakeIntent,
