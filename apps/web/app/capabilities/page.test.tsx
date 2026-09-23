@@ -56,7 +56,7 @@ describe.skipIf(!localEmulator)('Firestore capabilities page with PostgreSQL off
       new NextRequest(`http://localhost${path}`, { method });
     expect(proxy(request('/capabilities')).status).toBe(200);
     expect(proxy(request('/capabilities', 'POST')).status).toBe(503);
-    expect(proxy(request('/api/mobile/v1/workspace')).status).toBe(503);
+    expect(proxy(request('/api/mobile/v1/workspace', 'POST')).status).toBe(503);
   });
 
   it('renders live agent readiness without reaching PostgreSQL', async () => {
