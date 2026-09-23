@@ -25,3 +25,4 @@ export * from './settings.js';
 export * from './shell.js';
 export * from './tasks.js';
 export * from './workspace.js';
+export * from './workspace-anomalies.js';
