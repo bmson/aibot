@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  attributeLookupEvidence,
   detectLiveLookup,
+  detectLiveLookups,
+  liveLookupDirective,
   liveLookupFailure,
+  liveLookupFailures,
   nextLiveLookup,
+  nextLiveLookups,
   ungroundedLiveFigure,
 } from './live-lookup.js';
 
@@ -233,6 +238,13 @@ describe('ungroundedLiveFigure', () => {
     expect(ungroundedLiveFigure(webLookup, 'Giants 5-4.', evidence)).toBeUndefined();
   });
 
+  it('reads a range followed by a degree sign as a temperature, not a scoreline', () => {
+    const evidence = fetched('Final: Giants 5, Dodgers 2.');
+    expect(
+      ungroundedLiveFigure(webLookup, 'Giants won 5-2, and it will be 15-20°C.', evidence),
+    ).toBeUndefined();
+  });
+
   it('ignores ranges and dates that are not scorelines', () => {
     // These are the false positives that would make the rule unusable: a
     // computed range and a date are not claims about a retrieved figure.
@@ -282,5 +294,184 @@ describe('ungroundedLiveFigure', () => {
       } as never,
     ];
     expect(ungroundedLiveFigure(webLookup, 'Giants 7-3.', evidence)).toBeUndefined();
+  });
+});
+
+describe('several live lookups in one request', () => {
+  const ask = (content: string) => detectLiveLookups([{ role: 'user', content }]);
+  const kinds = (content: string) => ask(content).map((lookup) => lookup.kind);
+
+  it.each([
+    ["What's the Giants score and the drive time to Oracle Park?", ['sports', 'directions']],
+    [
+      "What's the weather in Reykjavik tomorrow? Also, who won the Arsenal match?",
+      ['weather', 'sports'],
+    ],
+    ['How long to drive to SFO, and what is the weather there tonight?', ['directions', 'weather']],
+    ["What's the Giants score and the weather in San Francisco", ['sports', 'weather']],
+  ])('finds every lookup in %s, in the order asked', (content, expected) => {
+    expect(kinds(content)).toEqual(expected);
+  });
+
+  it('keeps each lookup scoped to its own clause', () => {
+    expect(ask("What's the Giants score and the drive time to Oracle Park?")).toEqual([
+      { kind: 'sports', request: "What's the Giants score?" },
+      { kind: 'directions', request: 'the drive time to Oracle Park?' },
+    ]);
+  });
+
+  it.each([
+    "What's the Giants score?",
+    'What is the Giants and Dodgers score?',
+    'How is the weather today and should I bring a jacket?',
+  ])('leaves a single-lookup request as the single lookup: %s', (content) => {
+    const single = detectLiveLookup([{ role: 'user', content }]);
+    expect(ask(content)).toEqual(single ? [single] : []);
+  });
+
+  it('does not read context in a second sentence as a second lookup', () => {
+    const history = [
+      { role: 'user', content: 'How is the weather going to be by work tomorrow?' },
+      { role: 'assistant', content: 'Which address should I check the weather for?' },
+      {
+        role: 'user',
+        content:
+          'How is the weather going to be by work tomorrow? I work at 181 Fremont Street, San Francisco.',
+      },
+    ];
+    expect(detectLiveLookups(history)).toEqual([detectLiveLookup(history)]);
+  });
+
+  it.each([
+    "Don't look up the score and the weather",
+    'Tell me a joke and then a story',
+    "What's on my calendar tomorrow and do I have any emails from Sam?",
+  ])('finds no live lookups in %s', (content) => {
+    expect(ask(content)).toEqual([]);
+  });
+
+  it('does not treat a long list as questions to answer live', () => {
+    expect(
+      kinds('Weather in Paris? Weather in Rome? Weather in Oslo? Weather in Bern? Weather in Riga?')
+        .length,
+    ).toBeLessThanOrEqual(1);
+  });
+
+  const sports = { kind: 'sports', request: "What's the Giants score?" } as const;
+  const directions = { kind: 'directions', request: 'the drive time to Oracle Park?' } as const;
+  const scores = {
+    toolName: 'sports.scores',
+    status: 'succeeded' as const,
+    result: { games: [{ line: 'Dodgers at Giants: 2-5, Final' }] },
+  };
+  const route = {
+    toolName: 'maps.directions',
+    status: 'succeeded' as const,
+    result: { durationSeconds: 900, distanceMeters: 5200 },
+  };
+
+  it('runs each lookup in order until all are answered', () => {
+    expect(nextLiveLookups([sports, directions], [])).toEqual({
+      toolName: 'sports.scores',
+      lookup: sports,
+    });
+    expect(nextLiveLookups([sports, directions], [scores])).toEqual({
+      toolName: 'maps.directions',
+      lookup: directions,
+    });
+    expect(nextLiveLookups([sports, directions], [scores, route])).toBeUndefined();
+    expect(liveLookupFailures([sports, directions], [scores, route])).toEqual([]);
+  });
+
+  it('asks twice for two lookups of the same kind', () => {
+    const paris = { kind: 'weather', request: 'weather in Paris?' } as const;
+    const rome = { kind: 'weather', request: 'weather in Rome?' } as const;
+    const reading = {
+      toolName: 'weather.lookup',
+      status: 'succeeded' as const,
+      result: { tempC: 21 },
+    };
+    expect(nextLiveLookups([paris, rome], [reading])).toEqual({
+      toolName: 'weather.lookup',
+      lookup: rome,
+    });
+    expect(nextLiveLookups([paris, rome], [reading, reading])).toBeUndefined();
+  });
+
+  it("sends an unanswered sports lookup to the web without stealing the next lookup's evidence", () => {
+    const empty = { ...scores, result: { games: [], error: 'No team matched' } };
+    expect(nextLiveLookups([sports, directions], [empty])).toEqual({
+      toolName: 'web.search',
+      input: { query: sports.request, count: 5 },
+      lookup: sports,
+    });
+    const search = {
+      toolName: 'web.search',
+      status: 'succeeded' as const,
+      result: { results: [{ url: 'https://example.com/giants' }] },
+    };
+    const read = {
+      toolName: 'web.fetch',
+      status: 'succeeded' as const,
+      result: { text: 'Giants 5, Dodgers 2' },
+    };
+    expect(attributeLookupEvidence([sports, directions], [empty, search, read, route])).toEqual([
+      [empty, search, read],
+      [route],
+    ]);
+    expect(nextLiveLookups([sports, directions], [empty, search, read, route])).toBeUndefined();
+  });
+
+  it('reports only the part whose lookup failed', () => {
+    const noRoute = { ...route, result: { error: 'No route found' } };
+    const failures = liveLookupFailures([sports, directions], [scores, noRoute]);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.lookup).toBe(directions);
+    expect(failures[0]?.failure).toMatch(/couldn't get a route/);
+  });
+
+  it('ignores evidence from an earlier task when attributing', () => {
+    const stale = { ...scores, fromCurrentTask: false };
+    expect(nextLiveLookups([sports, directions], [stale])).toEqual({
+      toolName: 'sports.scores',
+      lookup: sports,
+    });
+  });
+
+  it('keeps a single lookup on the original path', () => {
+    const uncovered = { ...scores, result: { games: [], error: 'No team matched' } };
+    expect(nextLiveLookups([sports], [uncovered])).toEqual({
+      ...nextLiveLookup(sports, [uncovered]),
+      lookup: sports,
+    });
+    expect(liveLookupFailures([sports], [scores])).toEqual([]);
+    expect(liveLookupFailure(sports, [scores])).toBeUndefined();
+  });
+});
+
+describe('liveLookupDirective', () => {
+  const context = { requestAt: new Date('2026-09-22T19:00:00Z'), timeZone: 'America/Los_Angeles' };
+  const sports = { kind: 'sports', request: "What's the Giants score?" } as const;
+  const directions = { kind: 'directions', request: 'the drive time to Oracle Park?' } as const;
+
+  it('keeps the single-lookup wording unchanged', () => {
+    expect(liveLookupDirective([sports], context)).toBe(
+      `This request needs fresh sports evidence: What's the Giants score?\nUse a successful lookup from this task. Earlier assistant answers and recalled conversations are not current evidence. If a provider fails, report the gap; never invent measurements, scores, office holders, opening hours, player traits, or verified job openings. Search snippets locate sources; read the source before concluding. Resolve relative dates using the owner's request time 2026-09-22T19:00:00.000Z and timezone America/Los_Angeles.`,
+    );
+    expect(liveLookupDirective([], context)).toBe('');
+  });
+
+  it('names every part, the one being fetched, and the ones that failed', () => {
+    const text = liveLookupDirective([sports, directions], {
+      ...context,
+      next: directions,
+      failures: [{ lookup: sports, failure: 'no scores' }],
+    });
+    expect(text).toContain('This request has 2 parts');
+    expect(text).toContain("1. sports: What's the Giants score?");
+    expect(text).toContain('2. directions: the drive time to Oracle Park?');
+    expect(text).toContain('Look up this part now: the drive time to Oracle Park?');
+    expect(text).toMatch(/sports lookup for "What's the Giants score\?" failed/);
+    expect(text).toContain('never invent measurements, scores');
   });
 });

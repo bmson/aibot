@@ -27,7 +27,13 @@ import {
   isGoalWorkEvidence,
   needsGoalProgressUpdate,
 } from '../goal-evidence.js';
-import { detectLiveLookup, liveLookupFailure, nextLiveLookup } from '../live-lookup.js';
+import {
+  detectLiveLookups,
+  type LiveLookup,
+  liveLookupDirective,
+  liveLookupFailures,
+  nextLiveLookups,
+} from '../live-lookup.js';
 import {
   checkpointTask,
   markTaskNeedsAttention,
@@ -225,7 +231,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   const ownerText = latestUserText(rc.window) ?? '';
   const directOwner = task.trust === 'owner' && !isForwardedIngest(task) && !state.untrustedContext;
   const memoryWrite = directOwner && isMemoryWriteRequest(ownerText);
-  const detectedLookup = directOwner ? detectLiveLookup(rc.window) : undefined;
+  const detectedLookups = directOwner ? detectLiveLookups(rc.window) : [];
   // A registry without the scores tool (a trimmed install or trust tier) takes
   // a sports question down the general search-then-fetch path instead of
   // failing on a tool that is not there.
@@ -233,12 +239,14 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // which can say it has no route source rather than fail on a missing tool.
   const available = (name: string) =>
     dispatcher.toolDefs(task.trust as Trust).some((tool) => tool.name === name);
-  const liveLookup =
-    detectedLookup?.kind === 'sports' && !available('sports.scores')
-      ? { ...detectedLookup, kind: 'web' as const }
-      : detectedLookup?.kind === 'directions' && !available('maps.directions')
-        ? undefined
-        : detectedLookup;
+  const liveLookups = detectedLookups.flatMap((lookup): LiveLookup[] =>
+    lookup.kind === 'sports' && !available('sports.scores')
+      ? [{ ...lookup, kind: 'web' }]
+      : lookup.kind === 'directions' && !available('maps.directions')
+        ? []
+        : [lookup],
+  );
+  const liveLookup = liveLookups.length > 0;
   const birthdaySaves = directOwner ? requestedBirthdaySaves(rc.window) : [];
   const situationRequest =
     task.trust === 'owner' && !isForwardedIngest(task) && isSituationRequest(ownerText);
@@ -485,17 +493,23 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         : [];
     const forcedLiveLookup =
       liveLookup && !readRequest
-        ? nextLiveLookup(
-            liveLookup,
+        ? nextLiveLookups(
+            liveLookups,
             readToolEvidence.map((row) => ({ ...row, result: row.result })),
           )
         : undefined;
-    const failedLiveLookup =
+    const liveFailures =
       liveLookup && !readRequest && !forcedLiveLookup
-        ? liveLookupFailure(
-            liveLookup,
+        ? liveLookupFailures(
+            liveLookups,
             readToolEvidence.map((row) => ({ ...row, result: row.result })),
           )
+        : [];
+    // A compound request answers the parts it can: only when every lookup came
+    // back empty is there nothing left for a model turn to report honestly.
+    const failedLiveLookup =
+      liveFailures.length > 0 && liveFailures.length === liveLookups.length
+        ? [...new Set(liveFailures.map((entry) => entry.failure))].join(' ')
         : undefined;
     if (failedLiveLookup) {
       // The bounded lookup exhausted its available evidence. Report that gap
@@ -589,9 +603,12 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         : '',
       readRequest ? readLookupDirective(readRequest) : '',
       readAnswerTurn && readRequest ? readAnswerDirective(readRequest) : '',
-      liveLookup
-        ? `This request needs fresh ${liveLookup.kind} evidence: ${liveLookup.request}\nUse a successful lookup from this task. Earlier assistant answers and recalled conversations are not current evidence. If a provider fails, report the gap; never invent measurements, scores, office holders, opening hours, player traits, or verified job openings. Search snippets locate sources; read the source before concluding. Resolve relative dates using the owner's request time ${task.createdAt.toISOString()} and timezone ${agent.timezone}.`
-        : '',
+      liveLookupDirective(liveLookups, {
+        next: forcedLiveLookup?.lookup,
+        failures: liveFailures,
+        requestAt: task.createdAt,
+        timeZone: agent.timezone,
+      }),
       plan?.action === 'schedule' ? SCHEDULE_DIRECTIVE : '',
       requestChecklistDirective(state.requestChecklist),
       state.checklistRecoveryAttempts > 0

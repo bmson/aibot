@@ -1272,3 +1272,55 @@ describe('routeResponseCards', () => {
     expect(routeResponseCards([row({ ...route, mapsUrl: 'https://evil.example/' })])).toEqual([]);
   });
 });
+
+describe('cards for a request with several live lookups', () => {
+  const weather = {
+    toolName: 'weather.lookup',
+    status: 'succeeded',
+    result: {
+      place: 'San Francisco',
+      current: { tempC: 18, description: 'fog', lowC: 13, highC: 19, precipProbabilityMax: 5 },
+    },
+  };
+  const scores = {
+    toolName: 'sports.scores',
+    status: 'succeeded',
+    result: {
+      timeZone: 'America/Los_Angeles',
+      fetchedAt: '2026-09-22T19:00:00Z',
+      games: [
+        {
+          id: '1',
+          league: 'mlb',
+          leagueLabel: 'MLB',
+          state: 'post',
+          statusText: 'Final',
+          startsAt: '2026-09-22T01:45Z',
+          home: { id: '26', name: 'San Francisco Giants', shortName: 'Giants', score: '5' },
+          away: { id: '19', name: 'Los Angeles Dodgers', shortName: 'Dodgers', score: '2' },
+          line: 'Los Angeles Dodgers at San Francisco Giants: 2-5, Final',
+        },
+      ],
+    },
+  };
+  const kinds = (cards: Array<{ kind: string }>) => cards.map((card) => card.kind);
+
+  it('orders the cards the way the owner asked and keeps the reply beside them', () => {
+    const cards = responseCardsForFinal({
+      evidence: [weather, scores] as never,
+      lookupOrder: ['sports', 'weather'],
+    });
+    expect(kinds(cards)).toEqual(['scoreboard', 'weather']);
+    expect(cards.every((card) => card.accompaniesProse === true)).toBe(true);
+  });
+
+  it('leaves a single lookup exactly as it was', () => {
+    const [card] = responseCardsForFinal({
+      evidence: [weather] as never,
+      lookupOrder: ['weather'],
+    });
+    expect(card?.kind).toBe('weather');
+    expect(card).not.toHaveProperty('accompaniesProse');
+    expect(responseCardsForFinal({ evidence: [weather] as never })).toEqual([card]);
+  });
+});

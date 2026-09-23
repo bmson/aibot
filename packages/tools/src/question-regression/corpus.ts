@@ -177,6 +177,27 @@ export const QUESTION_CASES: QuestionCase[] = [
     },
   },
   {
+    id: 'score-and-drive-time',
+    // Phase 4: two live lookups in one question, answered in the order asked.
+    records: [],
+    request: "What's the Giants score and the drive time to Oracle Park?",
+    sports: 'live',
+    maps: 'route',
+    script: [
+      { toolCalls: [{ toolName: 'sports.scores', input: { team: 'Giants' } }] },
+      { toolCalls: [{ toolName: 'maps.directions', input: { destination: 'Oracle Park' } }] },
+      {
+        text: 'The Giants lead the Twins 5-2 in the top of the 7th. Oracle Park is about 9 minutes by car via King St.',
+      },
+    ],
+    expect: {
+      matches: ['Giants', '5', '2', 'Twins', '9 min', 'King St'],
+      tools: ['sports.scores', 'maps.directions'],
+      scoreboard: true,
+      route: true,
+    },
+  },
+  {
     id: 'score-card-request',
     records: [750],
     request: 'Create a card for the Giants game',

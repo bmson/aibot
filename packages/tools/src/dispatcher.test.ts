@@ -1279,6 +1279,57 @@ describe('ToolDispatcher (integration)', () => {
     expect((await dispatcher.dispatch({ ...input, args: { url } })).kind).toBe('awaiting_approval');
   });
 
+  it('lets the sports part of a compound question read its own search result', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    // Read as one request this is a trip question; its sports half is what
+    // fell back to search, and that half must keep its source read.
+    const task = await makeTask('owner');
+    task.type = 'chat_turn';
+    task.trigger = {
+      source: 'chat',
+      payload: { text: "What's the Valur score and the drive time to Laugardalsvöllur?" },
+    };
+    await db
+      .update(tasks)
+      .set({ type: task.type, trigger: task.trigger })
+      .where(eq(tasks.id, task.id));
+    const url = 'https://example.com/valur';
+    await db.insert(toolCalls).values({
+      taskId: task.id,
+      toolName: 'web.search',
+      args: { query: 'Valur score' },
+      risk: 'autonomous',
+      status: 'succeeded',
+      result: { results: [{ url }] },
+      step: 1,
+    });
+    const registry = new ToolRegistry().register(
+      makeTool('web.fetch', { inputSchema: z.object({ url: z.string() }) }),
+      { networkEgress: true },
+    );
+    const dispatcher = new ToolDispatcher(db, registry);
+    const input = {
+      task,
+      step: 2,
+      toolName: 'web.fetch',
+      ctx: { ...ctxFor(task), tainted: true },
+      provenance,
+    };
+    expect((await dispatcher.dispatch({ ...input, args: { url } })).kind).toBe('executed');
+    expect(
+      (await dispatcher.dispatch({ ...input, args: { url: 'https://other.example.com/' } })).kind,
+    ).toBe('awaiting_approval');
+    // A trip question alone never earns a public source read.
+    task.trigger = {
+      source: 'chat',
+      payload: { text: "What's the drive time to Laugardalsvöllur?" },
+    };
+    await db.update(tasks).set({ trigger: task.trigger }).where(eq(tasks.id, task.id));
+    expect((await dispatcher.dispatch({ ...input, step: 3, args: { url } })).kind).toBe(
+      'awaiting_approval',
+    );
+  });
+
   it('a zero-attendee calendar event stays autonomous under taint; attendees park it', async (ctx) => {
     if (!dbUp) return ctx.skip();
     // Writing to the owner's own calendar with no attendees sends no invitation
