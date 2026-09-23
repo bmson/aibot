@@ -20,6 +20,8 @@ export * from './model-routing.js';
 export * from './money.js';
 export * from './owner-card-compilation.js';
 export * from './owner-context.js';
+export * from './privacy-export.js';
+export * from './profile-library.js';
 export * from './profile-memory-maintenance.js';
 export * from './profile-memory-management.js';
 export * from './recall-metrics.js';
