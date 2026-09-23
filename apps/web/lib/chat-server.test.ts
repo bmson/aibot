@@ -190,7 +190,11 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
 
     const ChatIndexPage = (await import('../app/chat/page.js')).default;
     const index = await ChatIndexPage({ searchParams: Promise.resolve({}) });
-    expect(index.props).toMatchObject({ conversationId: primaryId, isPrimary: true });
+    expect(index.props).toMatchObject({
+      conversationId: primaryId,
+      isPrimary: true,
+      firestorePreview: true,
+    });
 
     const ChatListPage = (await import('../app/chat/all/page.js')).default;
     const history = await ChatListPage({ searchParams: Promise.resolve({}) });

@@ -61,6 +61,7 @@ import {
 import { standaloneResponseCards } from './suggestion-context';
 
 interface ChatMessageRowProps {
+  legacyActionsAvailable: boolean;
   message: UIMessage;
   /** Who spoke last. A change of speaker opens a new run, which gets more air. */
   previousRole: UIMessage['role'] | undefined;
@@ -81,6 +82,7 @@ interface ChatMessageRowProps {
 }
 
 const ChatMessageRow = memo(function ChatMessageRow({
+  legacyActionsAvailable,
   message,
   previousRole,
   precedingUserText,
@@ -203,7 +205,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           actions={
             noticeKind === 'turn-failed' ? (
               <>
-                {failedReason === 'budget' ? (
+                {legacyActionsAvailable && failedReason === 'budget' ? (
                   <Link
                     href="/costs"
                     className={`inline-flex h-8 items-center rounded-full border border-accent/30 px-3.5 text-xs font-medium text-accent motion-safe:transition-colors hover:bg-accent/10 ${focusRing}`}
@@ -230,7 +232,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           text={fullText}
           sources={recallSources}
           messageId={message.id}
-          onFeedback={recordRecallFeedbackAction}
+          onFeedback={legacyActionsAvailable ? recordRecallFeedbackAction : undefined}
         />
       ) : hasText ? (
         <div className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
@@ -248,7 +250,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               <RecallNote
                 sources={recallSources}
                 messageId={message.id}
-                onFeedback={recordRecallFeedbackAction}
+                onFeedback={legacyActionsAvailable ? recordRecallFeedbackAction : undefined}
               />
               <div className="flex min-w-0 flex-col gap-2">
                 {renderedTextParts.map((part, index) => (
@@ -306,18 +308,43 @@ const ChatMessageRow = memo(function ChatMessageRow({
           )}
         </div>
       ) : null}
-      {approvalParts.length > 0 ? <ApprovalGroup parts={approvalParts} /> : null}
-      {approvalSummary ? <ApprovalSummaryCard summary={approvalSummary} /> : null}
-      {budgetParts.map((part) => (
-        <InlineBudgetRequest key={part.taskId} part={part} />
-      ))}
-      <SuggestionCard parts={suggestionParts} timeZone={agentTimezone} />
+      {legacyActionsAvailable ? (
+        <>
+          {approvalParts.length > 0 ? <ApprovalGroup parts={approvalParts} /> : null}
+          {budgetParts.map((part) => (
+            <InlineBudgetRequest key={part.taskId} part={part} />
+          ))}
+          <SuggestionCard parts={suggestionParts} timeZone={agentTimezone} />
+        </>
+      ) : approvalParts.length > 0 || budgetParts.length > 0 || suggestionParts.length > 0 ? (
+        <div role="note" className="paper rounded-xl border border-edge p-3 text-sm text-muted">
+          <p>Decision controls are unavailable in this chat right now.</p>
+          {approvalParts.map((part) => (
+            <p key={part.approvalId}>
+              {part.summary} · {part.status ?? 'pending'}
+            </p>
+          ))}
+          {budgetParts.map((part) => (
+            <p key={part.taskId}>
+              Raise task budget to ${part.proposedBudgetUsd.toFixed(2)} · {part.status ?? 'pending'}
+            </p>
+          ))}
+          {suggestionParts.map((part) => (
+            <p key={part.suggestionId}>
+              {part.summary} · {part.status ?? 'pending'}
+            </p>
+          ))}
+        </div>
+      ) : null}
+      {approvalSummary ? (
+        <ApprovalSummaryCard summary={approvalSummary} showReviewLink={legacyActionsAvailable} />
+      ) : null}
       {renderCards ? (
         <ResponseCards
           cards={cards}
           timeZone={agentTimezone}
           onSend={onSend}
-          onRefresh={refreshSavedCardInline}
+          onRefresh={legacyActionsAvailable ? refreshSavedCardInline : undefined}
         />
       ) : null}
       {offCourse ? (
@@ -344,6 +371,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 });
 
 export interface ChatLogProps {
+  legacyActionsAvailable?: boolean;
   log: UIMessage[];
   busy: boolean;
   /** Drives the caret on the newest reply while its text is still arriving. */
@@ -362,6 +390,7 @@ export interface ChatLogProps {
  * words — does not even walk the list.
  */
 export const ChatLog = memo(function ChatLog({
+  legacyActionsAvailable = true,
   log,
   busy,
   streaming,
@@ -383,6 +412,7 @@ export const ChatLog = memo(function ChatLog({
         if (message.role === 'user') lastUserText = messageText(message);
         return (
           <ChatMessageRow
+            legacyActionsAvailable={legacyActionsAvailable}
             key={message.id}
             message={message}
             previousRole={index > 0 ? log[index - 1]?.role : undefined}
