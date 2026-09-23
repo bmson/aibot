@@ -18,7 +18,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/health' && request.method === 'GET') ||
     (path === '/' && request.method === 'GET') ||
     (path === '/profile/memories' && request.method === 'GET') ||
-    (path === '/profile/data' && request.method === 'GET') ||
+    (path === '/profile/data' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/profile-export' && request.method === 'GET') ||
     (path === '/capabilities' && request.method === 'GET') ||
     (path === '/costs' && request.method === 'GET') ||
