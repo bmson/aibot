@@ -10,6 +10,7 @@ import {
   contacts,
   createPostgresProfileLibraryRepository,
   createPostgresProfilePeopleReadRepository,
+  createPostgresProfileVoiceOverviewRepository,
   type Db,
   findDuplicateContactSuggestions,
   importSources,
@@ -21,6 +22,9 @@ import {
 import {
   isProfilePeopleReadRepository,
   type ProfilePeopleReadRepository,
+  isProfileVoiceOverviewRepository,
+  type ProfileVoiceOverview,
+  type ProfileVoiceOverviewRepository,
 } from '@assistant/persistence';
 import { and, count, desc, eq, gt, inArray, isNull, like, ne, or, sql } from 'drizzle-orm';
 import { getRecallFeedbackSummary, type RecallFeedbackSummary } from '../recall-feedback.js';
@@ -369,45 +373,15 @@ export async function getOwnerFactsView(
 }
 
 /** Everything `/profile/voice` renders. */
-export interface VoiceOverview {
-  voiceStats: VoiceSampleStats;
-  voiceProfile: ProfileOverview['voiceProfile'];
-  voiceImports: ProfileOverview['voiceImports'];
-}
+export type VoiceOverview = ProfileVoiceOverview;
 
-export async function getVoiceOverview(db: Db): Promise<VoiceOverview> {
-  const [voiceStats, voiceImports, [voice]] = await Promise.all([
-    voiceSampleStats(db),
-    db
-      .select()
-      .from(importSources)
-      .where(like(importSources.source, 'voice-samples%'))
-      .orderBy(desc(importSources.updatedAt))
-      .limit(VOICE_IMPORT_LIMIT),
-    db.select().from(voiceProfile).where(eq(voiceProfile.id, 1)).limit(1),
-  ]);
-  return {
-    voiceStats,
-    voiceProfile: {
-      description: voice?.description ?? '',
-      dos: Array.isArray(voice?.dos)
-        ? voice.dos.filter((d): d is string => typeof d === 'string')
-        : [],
-      donts: Array.isArray(voice?.donts)
-        ? voice.donts.filter((d): d is string => typeof d === 'string')
-        : [],
-      signature: voice?.signature ?? '',
-    },
-    voiceImports: voiceImports.map((row) => ({
-      source: row.source,
-      status: row.status,
-      itemsTotal: row.itemsTotal,
-      itemsProcessed: row.itemsProcessed,
-      memoriesSaved: row.memoriesSaved,
-      taskId: row.taskId,
-      error: row.error,
-    })),
-  };
+export async function getVoiceOverview(
+  source: Db | ProfileVoiceOverviewRepository,
+): Promise<VoiceOverview> {
+  const repository = isProfileVoiceOverviewRepository(source)
+    ? source
+    : createPostgresProfileVoiceOverviewRepository(source);
+  return repository.load();
 }
 
 export interface MemoryLibrary {

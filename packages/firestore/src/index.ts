@@ -32,6 +32,7 @@ export { createFirestoreProfileMemoryCommandPersistence } from './profile-memory
 export { FirestoreProfileMemoryMaintenance } from './profile-memory-maintenance.js';
 export { FirestoreProfileMemoryManagementRepository } from './profile-memory-management.js';
 export { FirestoreProfilePeopleReadRepository } from './profile-people-read.js';
+export { FirestoreProfileVoiceOverviewRepository } from './profile-overview.js';
 export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 export { FirestoreReminderRepository } from './reminders.js';
 export { FirestoreScheduleRepository } from './schedules.js';

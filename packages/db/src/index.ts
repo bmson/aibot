@@ -29,6 +29,7 @@ export { createPostgresProfileLibraryRepository } from './profile-library-reposi
 export { createPostgresProfileMemoryMaintenance } from './profile-memory-maintenance-repository.js';
 export { createPostgresProfileMemoryManagementRepository } from './profile-memory-management-repository.js';
 export { createPostgresProfilePeopleReadRepository } from './profile-people-read-repository.js';
+export { createPostgresProfileVoiceOverviewRepository } from './profile-overview-repository.js';
 export { createPostgresRecallMetricsRepository } from './recall-metrics-repository.js';
 export { createPostgresReminderRepository } from './reminder-repository.js';
 export { createPostgresScheduleRepository } from './schedule-repository.js';
