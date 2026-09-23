@@ -29,7 +29,10 @@ function pick<T extends object, K extends keyof T>(row: T, keys: readonly K[]): 
 export class FirestorePrivacyExportRepository implements PrivacyExportRepository {
   readonly kind = 'privacy-export-repository' as const;
 
-  constructor(readonly store: InstallationStore) {}
+  constructor(
+    readonly store: InstallationStore,
+    readonly configuredAgentId?: string,
+  ) {}
 
   async exportOwnerData(): Promise<LongTermMemoryExportData> {
     const agentPage = await this.store
@@ -43,7 +46,8 @@ export class FirestorePrivacyExportRepository implements PrivacyExportRepository
       agentPage.size !== 1 ||
       !agent ||
       typeof agent.id !== 'string' ||
-      documentKey(agent.id) !== agentDoc?.id
+      documentKey(agent.id) !== agentDoc?.id ||
+      (this.configuredAgentId !== undefined && agent.id !== this.configuredAgentId)
     )
       throw new Error('Privacy export requires exactly one configured agent');
     const agentId = agent.id;
