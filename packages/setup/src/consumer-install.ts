@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { access, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import {
   advanceInstallationStage,
@@ -228,19 +228,17 @@ async function verifyTerraformDirectory(terraformDir: string): Promise<void> {
   if (resolve(terraformDir) !== expected) {
     throw new Error(`Terraform directory must be the verified consumer foundation: ${expected}`);
   }
-  await Promise.all(
-    ['main.tf', 'variables.tf', 'outputs.tf', 'versions.tf'].map((file) =>
-      access(resolve(terraformDir, file)),
-    ),
-  );
+  await Promise.all(verifiedFoundationFiles.map((file) => access(resolve(process.cwd(), file))));
 }
 
-const foundationFiles = [
-  'main.tf',
-  'variables.tf',
-  'outputs.tf',
-  'versions.tf',
-  '.terraform.lock.hcl',
+const verifiedFoundationFiles = [
+  'infra/gcp/consumer/terraform/main.tf',
+  'infra/gcp/consumer/terraform/variables.tf',
+  'infra/gcp/consumer/terraform/outputs.tf',
+  'infra/gcp/consumer/terraform/versions.tf',
+  'infra/gcp/consumer/terraform/.terraform.lock.hcl',
+  'infra/gcp/consumer/terraform/firestore-indexes.tf',
+  'infra/gcp/firestore/firestore.indexes.json',
 ] as const;
 
 function tarString(header: Buffer, start: number, length: number): string {
@@ -260,7 +258,6 @@ function tarOctal(header: Buffer, start: number, length: number): number {
 
 async function verifyTrustedFoundationArchive(
   archivePath: string,
-  terraformDir: string,
   expectedDigest: string,
 ): Promise<Map<string, Buffer>> {
   const archiveStat = await stat(archivePath);
@@ -316,25 +313,28 @@ async function verifyTrustedFoundationArchive(
     if (regular) entries.set(path, Buffer.from(tar.subarray(dataStart, dataEnd)));
     offset = dataStart + Math.ceil(size / 512) * 512;
   }
-  for (const file of foundationFiles) {
-    const archiveEntry = entries.get(`infra/gcp/consumer/terraform/${file}`);
-    if (!archiveEntry)
-      throw new Error(`Installation archive is missing infra/gcp/consumer/terraform/${file}`);
-    const trusted = await readFile(resolve(terraformDir, file));
+  for (const file of verifiedFoundationFiles) {
+    const archiveEntry = entries.get(file);
+    if (!archiveEntry) throw new Error(`Installation archive is missing ${file}`);
+    const trusted = await readFile(resolve(process.cwd(), file));
     if (!archiveEntry.equals(trusted))
       throw new Error(`Installation archive foundation mismatch for ${file}`);
   }
   return entries;
 }
 
-async function prepareTerraformWorkspace(verified: Map<string, Buffer>): Promise<string> {
-  const isolated = await mkdtemp(join(tmpdir(), 'assistant-consumer-terraform-'));
-  for (const file of foundationFiles) {
-    const content = verified.get(`infra/gcp/consumer/terraform/${file}`);
+async function prepareTerraformWorkspace(
+  verified: Map<string, Buffer>,
+): Promise<{ root: string; terraformDir: string }> {
+  const root = await mkdtemp(join(tmpdir(), 'assistant-consumer-terraform-'));
+  for (const file of verifiedFoundationFiles) {
+    const content = verified.get(file);
     if (!content) throw new Error(`Verified Terraform file is missing ${file}`);
-    await writeFile(join(isolated, file), content, { mode: 0o600 });
+    const destination = join(root, file);
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, content, { mode: 0o600 });
   }
-  return isolated;
+  return { root, terraformDir: join(root, 'infra/gcp/consumer/terraform') };
 }
 
 function validateTerraformOutputs(
@@ -449,7 +449,6 @@ export async function provisionConsumerInstallation(
   // files in the checkout (or a second read) from entering the apply.
   const verifiedFoundation = await verifyTrustedFoundationArchive(
     options.archivePath,
-    options.terraformDir,
     input.identity.release.archiveDigest,
   );
   const expectedStateBucket = `${input.identity.projectId}-${input.identity.installationId}-state`;
@@ -549,10 +548,12 @@ export async function provisionConsumerInstallation(
     await persistInstallationProgress(options.statePath, current, previous);
   }
   if (current.stage.current === 'bootstrapped') {
-    const executableTerraformDir = await prepareTerraformWorkspace(verifiedFoundation);
-    const terraformOptions = { ...options, terraformDir: executableTerraformDir };
+    const workspace = await prepareTerraformWorkspace(verifiedFoundation);
+    const terraformOptions = { ...options, terraformDir: workspace.terraformDir };
     await terraform(terraformRunner, terraformOptions, [
       'init',
+      '-input=false',
+      '-lockfile=readonly',
       '-backend-config',
       `bucket=${options.stateBucket}`,
       '-backend-config',
@@ -565,7 +566,7 @@ export async function provisionConsumerInstallation(
     ]);
     const output = await terraform(terraformRunner, terraformOptions, ['output', '-json']);
     const outputValues = validateTerraformOutputs(jsonOutput(output, 'Terraform output'), current);
-    await rm(executableTerraformDir, { recursive: true, force: true });
+    await rm(workspace.root, { recursive: true, force: true });
     const previous = current;
     current = validateInstallationManifest({
       ...advanceInstallationStage(previous, 'provisioned', now()),
@@ -579,6 +580,6 @@ export async function provisionConsumerInstallation(
     runtimeReady: false,
     completed: current.stage.completed,
     pending: ['initialized', 'ready'],
-    note: 'Customer-owned foundation provisioned. Indexes, runtime services, owner authentication, and readiness verification remain gated.',
+    note: 'Customer-owned foundation and index resources provisioned. Runtime services, owner authentication, and index readiness verification remain gated.',
   };
 }
