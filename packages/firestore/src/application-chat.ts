@@ -96,6 +96,68 @@ export class FirestoreApplicationChatPersistence implements ApplicationChatPersi
     );
   }
 
+  async getOrCreatePrimaryConversation(agentId: string) {
+    return this.store.db.runTransaction(async (tx) => {
+      const primarySnapshot = await tx.get(
+        this.store
+          .collection('conversations')
+          .where('agentId', '==', agentId)
+          .where('isPrimary', '==', true)
+          .limit(1),
+      );
+      const primary = primarySnapshot.docs[0];
+      if (primary && isOwnedChat(primary.data(), agentId)) {
+        const conversation = decodeConversation(primary);
+        if (conversation.archivedAt) {
+          const now = this.store.now();
+          tx.update(primary.ref, { archivedAt: null, archived: false, updatedAt: now });
+          return { ...conversation, archivedAt: null, updatedAt: now };
+        }
+        return conversation;
+      }
+
+      const candidates = await tx.get(
+        this.store
+          .collection('conversations')
+          .where('agentId', '==', agentId)
+          .where('channel', '==', 'chat')
+          .where('archived', '==', false)
+          .orderBy('updatedAt', 'desc')
+          .orderBy('id', 'desc'),
+      );
+      const recent = candidates.docs.find(
+        (document) =>
+          isOwnedChat(document.data(), agentId) &&
+          !(document.get('metadata') as Record<string, unknown> | undefined)?.goalId,
+      );
+      if (recent) {
+        const conversation = decodeConversation(recent);
+        const now = this.store.now();
+        tx.update(recent.ref, { isPrimary: true, updatedAt: now });
+        return { ...conversation, isPrimary: true, updatedAt: now };
+      }
+
+      const id = randomUUID();
+      const now = this.store.now();
+      const created: ApplicationChatConversation = {
+        id,
+        agentId,
+        channel: 'chat',
+        title: '',
+        trust: 'owner',
+        modelOverride: null,
+        isPrimary: true,
+        metadata: {},
+        archivedAt: null,
+        lastReadAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      tx.create(this.store.doc('conversations', id), encodeRecord({ ...created, archived: false }));
+      return created;
+    });
+  }
+
   async createConversation(agentId: string) {
     const id = randomUUID();
     const now = this.store.now();

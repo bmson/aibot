@@ -98,6 +98,7 @@ export type ApplicationChatArchiveResult = 'archived' | 'active' | 'primary';
 export interface ApplicationChatPersistence {
   readonly kind: 'application-chat-persistence';
   resolveAgent(): Promise<ApplicationChatAgent>;
+  getOrCreatePrimaryConversation(agentId: string): Promise<ApplicationChatConversation>;
   createConversation(agentId: string): Promise<ApplicationChatConversation>;
   getConversation(
     agentId: string,

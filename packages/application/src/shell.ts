@@ -1,6 +1,7 @@
 import { getAgent, getOrCreatePrimaryConversation } from '@assistant/core/chat';
 import { getMemoryHealth } from '@assistant/core/memory/health';
 import type { Db } from '@assistant/db';
+import type { ApplicationChatPersistence } from '@assistant/persistence';
 import { getDashboardPresence } from './dashboard.js';
 
 export async function getAssistantIdentity(db: Db) {
@@ -28,9 +29,17 @@ export async function getAssistantLocale(db: Db): Promise<string> {
   }
 }
 
-export async function getPrimaryConversationId(db: Db): Promise<string> {
-  const agent = await getAgent(db);
-  return (await getOrCreatePrimaryConversation(db, agent.id)).id;
+export function getPrimaryConversationId(db: Db): Promise<string>;
+export function getPrimaryConversationId(chat: ApplicationChatPersistence): Promise<string>;
+export async function getPrimaryConversationId(
+  source: Db | ApplicationChatPersistence,
+): Promise<string> {
+  if ('kind' in source && source.kind === 'application-chat-persistence') {
+    const agent = await source.resolveAgent();
+    return (await source.getOrCreatePrimaryConversation(agent.id)).id;
+  }
+  const agent = await getAgent(source as Db);
+  return (await getOrCreatePrimaryConversation(source as Db, agent.id)).id;
 }
 
 export async function getShellStatus(db: Db, agentId: string) {

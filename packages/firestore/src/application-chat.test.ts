@@ -61,6 +61,15 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect((await repository.listMessages(agentId, conversation.id))?.messages).toHaveLength(1);
     });
 
+    it('returns the same live primary conversation on repeated bootstrap reads', async () => {
+      const first = await repository.getOrCreatePrimaryConversation(agentId);
+      const second = await repository.getOrCreatePrimaryConversation(agentId);
+
+      expect(first.isPrimary).toBe(true);
+      expect(first.archivedAt).toBeNull();
+      expect(second.id).toBe(first.id);
+    });
+
     it('uses bounded keyset pages for conversation and message lists', async () => {
       const first = await repository.createConversation(agentId);
       const second = await repository.createConversation(agentId);

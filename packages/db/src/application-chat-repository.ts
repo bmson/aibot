@@ -85,6 +85,54 @@ export function createPostgresApplicationChatPersistence(db: Db): ApplicationCha
       return agent;
     },
 
+    async getOrCreatePrimaryConversation(agentId) {
+      return db.transaction(async (tx) => {
+        const [existing] = await tx
+          .select()
+          .from(conversations)
+          .where(and(eq(conversations.agentId, agentId), eq(conversations.isPrimary, true)))
+          .limit(1);
+        if (existing) {
+          if (!existing.archivedAt) return existing;
+          const [restored] = await tx
+            .update(conversations)
+            .set({ archivedAt: null, updatedAt: sql`now()` })
+            .where(eq(conversations.id, existing.id))
+            .returning();
+          return restored ?? existing;
+        }
+
+        const [recent] = await tx
+          .select()
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.agentId, agentId),
+              eq(conversations.channel, 'chat'),
+              isNull(conversations.archivedAt),
+              sql`${conversations.metadata}->>'goalId' IS NULL`,
+            ),
+          )
+          .orderBy(desc(conversations.updatedAt))
+          .limit(1);
+        if (recent) {
+          const [promoted] = await tx
+            .update(conversations)
+            .set({ isPrimary: true, updatedAt: sql`now()` })
+            .where(eq(conversations.id, recent.id))
+            .returning();
+          if (promoted) return promoted;
+        }
+
+        const [created] = await tx
+          .insert(conversations)
+          .values({ agentId, channel: 'chat', trust: 'owner', isPrimary: true })
+          .returning();
+        if (!created) throw new Error('failed to create primary conversation');
+        return created;
+      });
+    },
+
     async createConversation(agentId) {
       const [created] = await db
         .insert(conversations)

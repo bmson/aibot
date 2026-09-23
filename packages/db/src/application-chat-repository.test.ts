@@ -56,6 +56,18 @@ describe('PostgreSQL application chat persistence', () => {
     expect((await repository.listMessages(agent.id, conversation.id))?.messages).toHaveLength(1);
   });
 
+  it('resolves the same live primary conversation on repeated bootstrap reads', async () => {
+    const repository = createPostgresApplicationChatPersistence(db);
+    const agent = await repository.resolveAgent();
+    const first = await repository.getOrCreatePrimaryConversation(agent.id);
+    const second = await repository.getOrCreatePrimaryConversation(agent.id);
+    conversationIds.push(first.id);
+
+    expect(first.isPrimary).toBe(true);
+    expect(first.archivedAt).toBeNull();
+    expect(second.id).toBe(first.id);
+  });
+
   it('uses a chronological keyset cursor and never leaks another owner’s chat', async () => {
     const repository = createPostgresApplicationChatPersistence(db);
     const agent = await repository.resolveAgent();
