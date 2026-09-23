@@ -63,13 +63,32 @@ function options(sha: string, outputPath?: string): PublishOptions {
 
 function fakePublisher(
   sha: string,
-  behavior?: { wrongSha?: boolean; badDigest?: boolean; mutableRepository?: boolean },
+  behavior?: {
+    wrongSha?: boolean;
+    badDigest?: boolean;
+    mutableRepository?: boolean;
+    authFailure?: boolean;
+    authNoConfig?: boolean;
+  },
 ) {
-  const calls: Array<{ command: string; args: readonly string[] }> = [];
+  const calls: Array<{ command: string; args: readonly string[]; dockerConfig?: string }> = [];
   let sawLocalEnv = false;
   const runner: CommandRunner = async (command, args, config) => {
-    calls.push({ command, args });
+    calls.push({ command, args, dockerConfig: config.env?.DOCKER_CONFIG });
     if (command === 'git' || command === 'tar') return systemCommand(command, args, config);
+    if (command === 'gcloud' && args[0] === 'auth') {
+      if (behavior?.authFailure) throw new Error('sensitive gcloud diagnostic');
+      if (behavior?.authNoConfig) return '';
+      const dockerConfig = config.env?.DOCKER_CONFIG;
+      if (!dockerConfig) throw new Error('missing isolated Docker config');
+      await writeFile(
+        path.join(dockerConfig, 'config.json'),
+        JSON.stringify({
+          credHelpers: { 'us-west1-docker.pkg.dev': 'gcloud' },
+        }),
+      );
+      return '';
+    }
     if (command === 'gcloud')
       return JSON.stringify({
         name: 'projects/customer-project/locations/us-west1/repositories/assistant-runtime',
@@ -204,10 +223,26 @@ describe('customer-owned image publisher', () => {
     expect(fake.calls.find((call) => call.command === 'gcloud')?.args).toContain(
       'customer-project',
     );
+    const configured = fake.calls.find(
+      (call) => call.command === 'gcloud' && call.args[0] === 'auth',
+    );
+    expect(configured?.args).toEqual([
+      'auth',
+      'configure-docker',
+      'us-west1-docker.pkg.dev',
+      '--quiet',
+    ]);
+    expect(configured?.dockerConfig).toBeTruthy();
     const builds = fake.calls.filter(
       (call) => call.command === 'docker' && call.args[0] === 'buildx',
     );
     expect(builds).toHaveLength(2);
+    expect(
+      fake.calls
+        .filter((call) => call.command === 'docker')
+        .every((call) => call.dockerConfig === configured?.dockerConfig),
+    ).toBe(true);
+    await expect(stat(configured?.dockerConfig ?? '')).rejects.toMatchObject({ code: 'ENOENT' });
     for (const build of builds) {
       expect(build.args).toContain(`GIT_SHA=${sha}`);
       expect(build.args).toContain('--push');
@@ -220,6 +255,28 @@ describe('customer-owned image publisher', () => {
     expect(
       fake.calls.filter((call) => call.command === 'docker' && call.args[0] === 'pull'),
     ).toHaveLength(2);
+  });
+
+  it('fails before pushing when isolated Docker authentication cannot be configured', async () => {
+    const { root, sha } = await fixture();
+    const outputPath = path.join(root, 'published.json');
+    const fake = fakePublisher(sha, { authFailure: true });
+    await expect(
+      publishConsumerImages(options(sha, outputPath), { repoRoot: root, runner: fake.runner }),
+    ).rejects.toThrow('Could not configure Docker authentication for us-west1-docker.pkg.dev');
+    expect(fake.calls.some((call) => call.command === 'docker')).toBe(false);
+    await expect(stat(outputPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails before pushing when gcloud does not write the scoped helper', async () => {
+    const { root, sha } = await fixture();
+    const outputPath = path.join(root, 'published.json');
+    const fake = fakePublisher(sha, { authNoConfig: true });
+    await expect(
+      publishConsumerImages(options(sha, outputPath), { repoRoot: root, runner: fake.runner }),
+    ).rejects.toThrow('Docker authentication for us-west1-docker.pkg.dev was not configured');
+    expect(fake.calls.some((call) => call.command === 'docker')).toBe(false);
+    await expect(stat(outputPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('rejects an unverified remote BUILD_SHA without writing a digest manifest', async () => {
