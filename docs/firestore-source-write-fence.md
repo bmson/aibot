@@ -38,9 +38,9 @@ For every Cloud Run service and job, record whether its current template referen
 
 ```sh
 gcloud run services describe SERVICE --project "$GCP_PROJECT" --region "$GCP_REGION" \
-  --format='yaml(metadata.name,spec.template.spec.containers[0].env[].name,spec.template.spec.containers[0].env[].valueSource.secretKeyRef)'
+  --format='yaml(metadata.name,spec.template.spec.containers[0].env[].name,spec.template.spec.containers[0].env[].valueFrom.secretKeyRef)'
 gcloud run jobs describe JOB --project "$GCP_PROJECT" --region "$GCP_REGION" \
-  --format='yaml(metadata.name,spec.template.template.spec.containers[0].env[].name,spec.template.template.spec.containers[0].env[].valueSource.secretKeyRef)'
+  --format='yaml(metadata.name,spec.template.template.spec.containers[0].env[].name,spec.template.template.spec.containers[0].env[].valueFrom.secretKeyRef)'
 ```
 
 Do not paste any rendered environment values or secret payloads into the evidence report.
