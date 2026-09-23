@@ -121,6 +121,14 @@ export function proxy(request: NextRequest) {
       path,
     ) &&
       request.method === 'DELETE') ||
+    (/^\/api\/mobile\/v1\/settings\/policies\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      ['POST', 'DELETE'].includes(request.method)) ||
+    (/^\/api\/mobile\/v1\/settings\/schedules\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      request.method === 'POST') ||
     (path === '/api/mobile/v1/chats' && request.method === 'POST') ||
     (chatIdPath.test(path) && ['GET', 'POST'].includes(request.method)) ||
     (chatMessagePath.test(path) && request.method === 'POST')
