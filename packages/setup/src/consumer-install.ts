@@ -3,7 +3,11 @@ import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { verifyConsumerIndexReadiness } from './consumer-index-readiness.js';
+import {
+  type ConsumerIndexWaitOptions,
+  verifyConsumerIndexReadiness,
+  waitForConsumerIndexReadiness,
+} from './consumer-index-readiness.js';
 import {
   advanceInstallationStage,
   type InstallationManifest,
@@ -48,6 +52,7 @@ export interface ConsumerInstallResult {
 export interface ConsumerInstallDependencies {
   runner: CommandRunner;
   terraform?: CommandRunner;
+  indexReadinessWait?: ConsumerIndexWaitOptions;
   /** Injectable IAM API transport for tests; defaults to the Node fetch implementation. */
   fetcher?: typeof fetch;
 }
@@ -1153,7 +1158,12 @@ export async function provisionConsumerInstallation(
     ]);
     const output = await terraform(terraformRunner, terraformOptions, ['output', '-json']);
     const outputValues = validateTerraformOutputs(jsonOutput(output, 'Terraform output'), current);
-    await verifyConsumerIndexReadiness(dependencies.runner, current.identity, trustedIndexSpec);
+    await waitForConsumerIndexReadiness(
+      dependencies.runner,
+      current.identity,
+      trustedIndexSpec,
+      dependencies.indexReadinessWait,
+    );
     await rm(workspace.root, { recursive: true, force: true });
     const previous = current;
     current = validateInstallationManifest({

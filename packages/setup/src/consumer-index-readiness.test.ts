@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   provisionTargetFirestoreIndexes,
   verifyConsumerIndexReadiness,
+  waitForConsumerIndexReadiness,
 } from './consumer-index-readiness.js';
 import type { InstallationIdentity } from './installation-manifest.js';
 import type { CommandRunner } from './runner.js';
@@ -243,5 +244,49 @@ describe('consumer Firestore index readiness', () => {
     await expect(
       verifyConsumerIndexReadiness(fakeLists({}, liveOverrides(), []), identity, specBytes),
     ).rejects.toThrow('malformed');
+  });
+
+  it('waits for a matching CREATING index and then accepts READY', async () => {
+    let reads = 0;
+    const delays: number[] = [];
+    const runner = fakeLists(liveIndexes(), liveOverrides(), []);
+    const original = runner.run.bind(runner);
+    runner.run = async (command, args) => {
+      if (args[2] === 'composite') {
+        reads++;
+        const indexes = liveIndexes().map((index, number) =>
+          reads === 1 && number === 0 ? { ...index, state: 'CREATING' } : index,
+        );
+        return { ok: true, stdout: JSON.stringify(indexes), stderr: '' };
+      }
+      return original(command, args);
+    };
+    await waitForConsumerIndexReadiness(runner, identity, specBytes, {
+      timeoutMs: 1000,
+      intervalMs: 25,
+      sleep: async (delay) => {
+        delays.push(delay);
+      },
+    });
+    expect(reads).toBe(2);
+    expect(delays).toEqual([25]);
+  });
+
+  it('does not wait on a foreign index even when another index is CREATING', async () => {
+    const indexes = liveIndexes().map((index, number) =>
+      number === 0
+        ? { ...index, state: 'CREATING' }
+        : number === 1
+          ? { ...index, name: index.name.replace('customer-project', 'foreign-project') }
+          : index,
+    );
+    const sleep = async () => {
+      throw new Error('unexpected wait');
+    };
+    await expect(
+      waitForConsumerIndexReadiness(fakeLists(indexes, liveOverrides(), []), identity, specBytes, {
+        sleep,
+      }),
+    ).rejects.toThrow('Foreign Firestore index');
   });
 });
