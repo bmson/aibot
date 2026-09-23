@@ -18,6 +18,7 @@ const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
 describe.skipIf(!localEmulator)(
   'Firestore mobile Activity archive/restore with PostgreSQL offline',
   () => {
+    const databaseId = `mobile-activity-${randomUUID()}`;
     const installationId = `mobile-activity-actions-${randomUUID()}`;
     const agentId = randomUUID();
     const foreignAgentId = randomUUID();
@@ -27,7 +28,11 @@ describe.skipIf(!localEmulator)(
     const autonomyId = randomUUID();
     const foreignId = randomUUID();
     const initial = new Date('2026-09-20T12:00:00Z');
-    const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+    const store = createInstallationStore({
+      projectId: 'demo-assistant-test',
+      installationId,
+      databaseId,
+    });
     let route: typeof import('./route.js');
 
     beforeAll(async () => {
@@ -35,6 +40,7 @@ describe.skipIf(!localEmulator)(
       vi.stubEnv('DATABASE_URL', 'postgres://offline:offline@127.0.0.1:1/offline_test');
       vi.stubEnv('GCP_PROJECT', 'demo-assistant-test');
       vi.stubEnv('ASSISTANT_WORKSPACE_ID', installationId);
+      vi.stubEnv('FIRESTORE_DATABASE_ID', databaseId);
       vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
       vi.stubEnv(
         'FIRESTORE_EMBEDDING_SPACE',
