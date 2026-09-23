@@ -57,6 +57,10 @@ resource "google_firestore_field" "unindexed_payload" {
   collection = each.value.collectionGroup
   field      = each.value.fieldPath
 
+  # Exemption updates can take longer than the short-lived installer OAuth token.
+  # The installer independently verifies the live field config before provisioning.
+  skip_wait = true
+
   index_config {}
 
   lifecycle {
