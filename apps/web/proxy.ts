@@ -60,6 +60,10 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/people' && request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/commitments' && request.method === 'GET') ||
     (path === '/api/mobile/v1/settings' && request.method === 'PATCH') ||
+    (/^\/api\/mobile\/v1\/settings\/reminders\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      request.method === 'DELETE') ||
     (path === '/api/mobile/v1/chats' && request.method === 'POST') ||
     (chatIdPath.test(path) && ['GET', 'POST'].includes(request.method)) ||
     (chatMessagePath.test(path) && request.method === 'POST')
