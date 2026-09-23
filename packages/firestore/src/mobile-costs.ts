@@ -1,6 +1,7 @@
 import { addMicros, microsToUsd, usdToMicros } from '@assistant/persistence';
 import type { Query, QueryDocumentSnapshot } from '@google-cloud/firestore';
 import { FirestoreCostRepository } from './costs.js';
+import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
 import { FirestoreSettingsRepository } from './settings.js';
 import { decodeRecord, type InstallationStore } from './store.js';
 
@@ -52,6 +53,9 @@ function ranked<K extends string>(values: Map<K, { micros: number; count: number
 
 /** Owner-scoped presentation read for the mobile workspace cost section. */
 export async function getFirestoreMobileCosts(store: InstallationStore) {
+  const owner = await new FirestoreSettingsRepository(store).getOwner();
+  if (!owner) throw new Error('Cost dashboard owner is missing');
+  const fence = await readPrivacyErasureFence(store, owner.id);
   const since = monthStart(store.now());
   const bySource = new Map<string, { micros: number; count: number }>();
   const byModel = new Map<string, { micros: number; count: number }>();
@@ -89,9 +93,8 @@ export async function getFirestoreMobileCosts(store: InstallationStore) {
   const taskIds = [...byTask.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 10);
-  const [owner, taskDefault, heldSnapshot, recentSnapshot, parkedSnapshot, ...taskSnapshots] =
+  const [taskDefault, heldSnapshot, recentSnapshot, parkedSnapshot, ...taskSnapshots] =
     await Promise.all([
-      new FirestoreSettingsRepository(store).getOwner(),
       store.doc('budgets', 'task_default').get(),
       store
         .collection('costReservations')
@@ -130,11 +133,10 @@ export async function getFirestoreMobileCosts(store: InstallationStore) {
       usd: row.usd,
     };
   });
-  if (!owner) throw new Error('Cost dashboard owner is missing');
   const defaultBudget = taskDefault.exists
     ? decodeRecord<{ limitUsd: string }>(taskDefault.data())
     : null;
-  return {
+  const result = {
     timezone: owner.timezone,
     totals,
     bySource: ranked(bySource).map(({ key, ...value }) => ({ source: key, ...value })),
@@ -145,4 +147,6 @@ export async function getFirestoreMobileCosts(store: InstallationStore) {
     parkedTasks: parkedSnapshot.data().count,
     taskDefaultLimit: defaultBudget?.limitUsd ?? null,
   };
+  await assertPrivacyErasureFenceUnchanged(store, owner.id, fence);
+  return result;
 }

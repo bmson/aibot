@@ -92,4 +92,9 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore mobile cost das
     expect(dashboard.parkedTasks).toBe(1);
     expect(dashboard.taskDefaultLimit).toBe('0.50');
   }, 30_000);
+
+  it('refuses a dashboard read while owner privacy erasure is active', async () => {
+    await store.doc('privacyErasureJobs', 'owner').set({ agentId: 'owner', status: 'active' });
+    await expect(getFirestoreMobileCosts(store)).rejects.toThrow('Privacy erasure is in progress');
+  });
 });
