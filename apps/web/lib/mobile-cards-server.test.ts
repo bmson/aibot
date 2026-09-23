@@ -72,7 +72,8 @@ describe.skipIf(!localEmulator)('Firestore mobile saved cards with PostgreSQL of
     expect(status('/api/mobile/v1/cards')).toBe(200);
     expect(status('/api/mobile/v1/cards', 'POST')).toBe(503);
     expect(status(`/api/mobile/v1/cards/${randomUUID()}`, 'POST')).toBe(503);
-    expect(status('/api/mobile/v1/workspace')).toBe(503);
+    expect(status('/api/mobile/v1/workspace')).toBe(200);
+    expect(status('/api/mobile/v1/workspace', 'POST')).toBe(503);
     expect(status('/api/card-image')).toBe(200);
   });
 

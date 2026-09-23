@@ -108,7 +108,20 @@ const globalCache = globalThis as unknown as {
   __assistantRouter?: ModelRouter;
   __assistantWorkspace?: WorkspaceStore;
   __assistantApplication?: ReturnType<typeof createApplication>;
+  __assistantFirestoreStore?: ReturnType<typeof createInstallationStore>;
 };
+
+/** Reuse one Firestore client across requests in a web process. */
+export function getFirestoreInstallationStore() {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER !== 'firestore')
+    throw new Error('Firestore installation store requires Firestore persistence');
+  globalCache.__assistantFirestoreStore ??= createInstallationStore({
+    projectId: config.GCP_PROJECT,
+    installationId: config.ASSISTANT_WORKSPACE_ID,
+  });
+  return globalCache.__assistantFirestoreStore;
+}
 
 export function getDb(): Db {
   if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
@@ -346,10 +359,7 @@ function createFirestoreChatApplication() {
   const config = loadConfig();
   const problems = validateAgentPersistenceConfig(config);
   if (problems.length) throw new Error(problems.join('; '));
-  const store = createInstallationStore({
-    projectId: config.GCP_PROJECT,
-    installationId: config.ASSISTANT_WORKSPACE_ID,
-  });
+  const store = getFirestoreInstallationStore();
   const persistence = createFirestoreExecutionPersistence(
     store,
     config.FIRESTORE_AGENT_ID,

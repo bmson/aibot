@@ -19,6 +19,7 @@ export function proxy(request: NextRequest) {
     (path === '/' && request.method === 'GET') ||
     (path === '/profile/memories' && request.method === 'GET') ||
     (path === '/capabilities' && request.method === 'GET') ||
+    (path === '/settings' && request.method === 'GET') ||
     (chatPage && (request.method === 'GET' || request.method === 'POST')) ||
     (['/icon.svg', '/apple-icon.png', '/favicon.ico', '/manifest.webmanifest'].includes(path) &&
       request.method === 'GET') ||
@@ -27,6 +28,7 @@ export function proxy(request: NextRequest) {
       request.method === 'GET') ||
     (path === '/api/shell/status' && request.method === 'GET') ||
     (path === '/api/mobile/v1/bootstrap' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/workspace' && request.method === 'GET') ||
     (path === '/api/card-image' && request.method === 'GET') ||
     (path === '/api/mobile/v1/cards' && request.method === 'GET') ||
     (path === '/api/mobile/v1/chats' && request.method === 'POST') ||

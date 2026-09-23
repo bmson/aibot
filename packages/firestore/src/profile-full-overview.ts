@@ -7,17 +7,23 @@ import type { InstallationStore } from './store.js';
 const PROFILE_CONTACT_LIMIT = 500;
 const PROFILE_FACT_LIMIT = 250;
 
-/** Complete mobile Profile read for an installation with one configured agent. */
+/** Complete mobile Profile read for the configured installation owner. */
 export class FirestoreProfileOverviewRepository implements ProfileOverviewRepository {
   readonly kind = 'profile-overview-repository' as const;
 
-  constructor(readonly store: InstallationStore) {}
+  constructor(
+    readonly store: InstallationStore,
+    readonly configuredAgentId?: string,
+  ) {}
 
   async load() {
     // Keep the source fence open across the voice read so an erasure between
     // those two complete reads cannot return a mixed pre/post-erasure profile.
-    const source = await loadProfileHubSource(this.store);
-    const voice = await new FirestoreProfileVoiceOverviewRepository(this.store).load();
+    const source = await loadProfileHubSource(this.store, this.configuredAgentId);
+    const voice = await new FirestoreProfileVoiceOverviewRepository(
+      this.store,
+      this.configuredAgentId,
+    ).load();
     const hub = profileMemoryHubFromSource(source);
     if (source.contacts.length > PROFILE_CONTACT_LIMIT)
       throw new Error('Profile contact count exceeds the view limit');

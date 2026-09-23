@@ -123,10 +123,14 @@ describe.skipIf(!localEmulator)(
       expect(overview.goalAutomationCount).toBe(1);
     }, 30_000);
 
-    it('fails closed for a malformed configured owner and keeps the full workspace route closed', async () => {
+    it('fails closed for a malformed configured owner and keeps workspace writes closed', async () => {
       const { getWorkspaceSettings } = await import('./server.js');
       const { proxy } = await import('../proxy.js');
-      expect(proxy(new NextRequest('http://localhost/api/mobile/v1/workspace')).status).toBe(503);
+      expect(proxy(new NextRequest('http://localhost/api/mobile/v1/workspace')).status).toBe(200);
+      expect(
+        proxy(new NextRequest('http://localhost/api/mobile/v1/workspace', { method: 'POST' }))
+          .status,
+      ).toBe(503);
       await store.doc('agents', agentId).update({ id: foreignId });
       await expect(getWorkspaceSettings()).rejects.toThrow('Configured agent record is malformed');
       await store.doc('agents', agentId).update({ id: agentId, locale: 42 });
