@@ -26,6 +26,8 @@ describe.skipIf(!localEmulator)(
     const runningId = randomUUID();
     const attentionId = randomUUID();
     const autonomyId = randomUUID();
+    const retryId = randomUUID();
+    const cancelId = randomUUID();
     const foreignId = randomUUID();
     const initial = new Date('2026-09-20T12:00:00Z');
     const store = createInstallationStore({
@@ -89,6 +91,20 @@ describe.skipIf(!localEmulator)(
         store.doc('tasks', autonomyId).set({
           ...taskFixture({ id: autonomyId, agentId, conversationId: randomUUID(), reminderId: '' }),
           autonomyGrant: { scope: 'task', grantedAt: initial.toISOString() },
+        }),
+        store.doc('tasks', retryId).set({
+          ...taskFixture({ id: retryId, agentId, conversationId: randomUUID(), reminderId: '' }),
+          status: 'needs_attention',
+          queueGeneration: 2,
+          attempt: 4,
+          state: { checkpoint: 'continue here', pendingFinal: { text: 'already delivered' } },
+        }),
+        store.doc('tasks', cancelId).set({
+          ...taskFixture({ id: cancelId, agentId, conversationId: randomUUID(), reminderId: '' }),
+          status: 'running',
+          lockedUntil: new Date(initial.getTime() + 60_000),
+          leaseToken: randomUUID(),
+          attempt: 3,
         }),
       ]);
     });
@@ -163,10 +179,12 @@ describe.skipIf(!localEmulator)(
     });
 
     it('requires auth and denies every other Firestore Activity mutation', async () => {
-      auth.allowed.mockResolvedValueOnce(false);
+      auth.allowed.mockResolvedValue(false);
       expect((await post(doneId, 'archive')).status).toBe(401);
-      for (const action of ['retry', 'cancel', 'archive-old'])
-        expect((await post(doneId, action)).status).toBe(503);
+      expect((await post(retryId, 'retry')).status).toBe(401);
+      expect((await post(cancelId, 'cancel')).status).toBe(401);
+      auth.allowed.mockResolvedValue(true);
+      expect((await post(doneId, 'archive-old')).status).toBe(503);
       expect((await store.doc('tasks', doneId).get()).get('archivedAt')).toBeNull();
     });
 
@@ -200,6 +218,39 @@ describe.skipIf(!localEmulator)(
       expect(intents.docs[0]?.get('generation')).toBe(5);
     });
 
+    it('retries an owner task once with an atomic, generation-scoped wake intent', async () => {
+      const [first, duplicate] = await Promise.all([
+        post(retryId, 'retry'),
+        post(retryId, 'retry'),
+      ]);
+      expect(first.status).toBe(200);
+      expect(duplicate.status).toBe(200);
+      const task = await store.doc('tasks', retryId).get();
+      expect(task.get('status')).toBe('pending');
+      expect(task.get('queueGeneration')).toBe(3);
+      expect(task.get('attempt')).toBe(0);
+      expect(task.get('state')).toEqual({ checkpoint: 'continue here' });
+      expect(task.get('runAfter')).toBeNull();
+      expect(task.get('lockedUntil')).toBeNull();
+      expect(task.get('leaseToken')).toBeNull();
+      const intents = await store.collection('outbox').get();
+      expect(intents.size).toBe(1);
+      expect(intents.docs[0]?.get('taskId')).toBe(retryId);
+      expect(intents.docs[0]?.get('generation')).toBe(3);
+    });
+
+    it('cancels an active owner task and fences its worker lease idempotently', async () => {
+      expect((await post(cancelId, 'cancel')).status).toBe(200);
+      const cancelled = await store.doc('tasks', cancelId).get();
+      expect(cancelled.get('status')).toBe('cancelled');
+      expect(cancelled.get('leaseToken')).toBeNull();
+      expect(cancelled.get('lockedUntil')).toBeNull();
+      expect(cancelled.get('runAfter')).toBeNull();
+      expect((await post(cancelId, 'cancel')).status).toBe(200);
+      expect((await store.doc('tasks', cancelId).get()).get('status')).toBe('cancelled');
+      expect((await post(foreignId, 'cancel')).status).toBe(409);
+    });
+
     it('validates budget input and fences both owner controls during privacy erasure', async () => {
       expect((await post(attentionId, 'raise-budget', { budgetUsdLimit: '1' })).status).toBe(400);
       for (const budgetUsdLimit of [0, 0.25, 10_001])
@@ -225,6 +276,8 @@ describe.skipIf(!localEmulator)(
         expect((await post(secondAttentionId, 'raise-budget', { budgetUsdLimit: 1 })).status).toBe(
           409,
         );
+        expect((await post(retryId, 'retry')).status).toBe(409);
+        expect((await post(cancelId, 'cancel')).status).toBe(409);
       } finally {
         await store.doc('privacyErasureJobs', agentId).delete();
       }
@@ -234,6 +287,8 @@ describe.skipIf(!localEmulator)(
       expect((await store.doc('tasks', secondAttentionId).get()).get('status')).toBe(
         'needs_attention',
       );
+      expect((await store.doc('tasks', retryId).get()).get('status')).toBe('needs_attention');
+      expect((await store.doc('tasks', cancelId).get()).get('status')).toBe('running');
     });
 
     it('fails closed for active erasure or ambiguous configured ownership', async () => {

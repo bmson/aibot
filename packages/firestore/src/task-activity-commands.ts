@@ -15,6 +15,13 @@ import {
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const TERMINAL = new Set(['done', 'failed', 'cancelled']);
+const WAKEABLE = new Set([
+  'waiting_approval',
+  'waiting_event',
+  'sleeping',
+  'waiting_budget',
+  'needs_attention',
+]);
 const PAGE_SIZE = 250;
 const MAX_OWNER_TASKS = 25_000;
 const MAX_ARCHIVE_OLD_WRITES = 400;
@@ -59,6 +66,55 @@ export class FirestoreTaskActivityCommandRepository implements TaskActivityComma
 
   restore(agentId: string, taskId: string): Promise<void> {
     return this.change(agentId, taskId, 'restore');
+  }
+
+  /** Requeue a parked owner task and publish its generation in the same transaction. */
+  retry(agentId: string, taskId: string): Promise<void> {
+    return this.changeOwnerTask(agentId, taskId, (task, ref, tx) => {
+      if (typeof task.status !== 'string') throw new Error('Invalid activity task');
+      // This makes client retries idempotent: after the first successful wake,
+      // pending is no longer wakeable and cannot increment the generation twice.
+      if (!WAKEABLE.has(task.status)) return;
+      if (!Number.isSafeInteger(task.queueGeneration) || Number(task.queueGeneration) < 0)
+        throw new Error('Invalid activity task');
+
+      const generation = Number(task.queueGeneration) + 1;
+      const now = this.store.now();
+      const state =
+        task.state && typeof task.state === 'object' && !Array.isArray(task.state)
+          ? { ...(task.state as Record<string, unknown>) }
+          : task.state;
+      if (task.status === 'needs_attention' && state && typeof state === 'object')
+        delete (state as Record<string, unknown>).pendingFinal;
+      tx.update(ref, {
+        status: 'pending',
+        ...(state === undefined ? {} : { state }),
+        runAfter: null,
+        lockedUntil: null,
+        leaseToken: null,
+        queueGeneration: generation,
+        attempt: 0,
+        attentionNotifiedAt: null,
+        updatedAt: now,
+      });
+      createWakeIntent(tx, this.store, { taskId, generation, availableAt: now });
+    });
+  }
+
+  /** Cancel an owned non-terminal task; clearing its lease fences any live worker. */
+  cancel(agentId: string, taskId: string): Promise<void> {
+    return this.changeOwnerTask(agentId, taskId, (task, ref, tx) => {
+      if (typeof task.status !== 'string') throw new Error('Invalid activity task');
+      if (TERMINAL.has(task.status)) return;
+      tx.update(ref, {
+        status: 'cancelled',
+        lockedUntil: null,
+        leaseToken: null,
+        runAfter: null,
+        attempt: 0,
+        updatedAt: this.store.now(),
+      });
+    });
   }
 
   revokeAutonomy(agentId: string, taskId: string): Promise<void> {

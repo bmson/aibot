@@ -74,6 +74,22 @@ export function restoreActivityWithRepository(
   return repository.restore(agentId, taskId);
 }
 
+export function retryActivityWithRepository(
+  repository: TaskActivityCommandRepository,
+  agentId: string,
+  taskId: string,
+): Promise<void> {
+  return repository.retry(agentId, taskId);
+}
+
+export function cancelActivityWithRepository(
+  repository: TaskActivityCommandRepository,
+  agentId: string,
+  taskId: string,
+): Promise<void> {
+  return repository.cancel(agentId, taskId);
+}
+
 export function revokeTaskAutonomyWithRepository(
   repository: TaskActivityCommandRepository,
   agentId: string,
