@@ -39,3 +39,4 @@ export * from './task-creation.js';
 export * from './task-lifecycle.js';
 export * from './watches.js';
 export * from './workspace-anomalies.js';
+export * from './workspace-capabilities.js';
