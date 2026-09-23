@@ -44,6 +44,19 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore approval comman
     expect((await store.doc('tasks', 'task').get()).get('status')).toBe('cancelled');
     expect((await store.collection('outbox').get()).size).toBe(0);
   });
+  it('does not resolve or wake an approval while privacy erasure is active', async () => {
+    await store.doc('privacyErasureJobs', 'agent').set({
+      agentId: 'agent',
+      generation: 'erase-generation',
+      status: 'active',
+    });
+    await expect(
+      approvals.resolve({ approvalId: 'approval', decision: 'approved', via: 'web' }),
+    ).rejects.toThrow('Privacy erasure is in progress');
+    expect((await store.doc('approvals', 'approval').get()).get('status')).toBe('pending');
+    expect((await store.doc('tasks', 'task').get()).get('queueGeneration')).toBe(0);
+    expect((await store.collection('outbox').get()).size).toBe(0);
+  });
   it('persists edited args and an owner/tool-scoped policy together, rejecting mismatches atomically', async () => {
     const input = {
       approvalId: 'approval',

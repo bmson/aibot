@@ -6,6 +6,8 @@ export interface ResolveApprovalInput {
   shortCode?: string;
   decision: 'approved' | 'denied';
   via: 'web' | 'sms';
+  /** When provided, resolve only if the linked task belongs to this owner. */
+  expectedAgentId?: string;
   /** Edit-then-approve: these args are used at execution instead of the original payload. */
   editedPayload?: Record<string, unknown>;
   /**

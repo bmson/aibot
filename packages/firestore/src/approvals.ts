@@ -573,6 +573,17 @@ export class FirestoreApprovalRepository implements ApprovalRepository {
       if (!task?.exists || !tool?.exists || tool.get('taskId') !== approval.taskId) {
         throw new Error('Approval references missing or mismatched task/tool records');
       }
+      const agentId = task.get('agentId');
+      if (typeof agentId !== 'string' || !agentId)
+        throw new Error('Approval task owner is missing');
+      if (input.expectedAgentId && agentId !== input.expectedAgentId)
+        return { ok: false, reason: 'no pending approval matched (already resolved or expired?)' };
+      const erasure = await tx.get(this.store.doc('privacyErasureJobs', agentId));
+      if (
+        erasure.exists &&
+        (erasure.get('agentId') !== agentId || erasure.get('status') !== 'complete')
+      )
+        throw new Error('Privacy erasure is in progress');
       const now = this.store.now();
       const requestedPolicy = input.via === 'web' ? input.policy : undefined;
       if (
