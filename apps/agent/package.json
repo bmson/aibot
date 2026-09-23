@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.mjs --external:unpdf --sourcemap --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.mjs --external:unpdf --external:@google-cloud/firestore --sourcemap --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.mjs",
     "typecheck": "tsc --noEmit"
@@ -14,6 +14,7 @@
     "@assistant/core": "workspace:*",
     "@assistant/db": "workspace:*",
     "@assistant/firestore": "workspace:*",
+    "@google-cloud/firestore": "^9.0.1",
     "@assistant/modules": "workspace:*",
     "@assistant/tools": "workspace:*",
     "@hono/node-server": "^2.1.1",

@@ -12,8 +12,9 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore shell status', 
 
   beforeEach(async () => {
     store = emulatorStore(() => now);
-    repository = new FirestoreShellStatusRepository(store);
+    repository = new FirestoreShellStatusRepository(store, 'owner');
     await store.doc('agents', 'owner').set({ id: 'owner' });
+    await store.doc('agents', 'other').set({ id: 'other' });
 
     const task = (id: string, agentId: string, status: string) => ({
       ...taskFixture({ id, agentId, conversationId: `conversation-${id}`, reminderId: '' }),
@@ -63,6 +64,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore shell status', 
       store.doc('memories', expiredId),
       memory(expiredId, { quarantined: true, expiresAt: new Date(now.getTime() - 1) }),
     );
+    const foreignMemoryId = randomUUID();
+    batch.set(
+      store.doc('memories', foreignMemoryId),
+      memory(foreignMemoryId, { agentId: 'other', quarantined: false }),
+    );
     const approval = (id: string, taskId: string, expiresAt: Date, status = 'pending') =>
       batch.set(store.doc('approvals', id), { id, taskId, expiresAt, status });
     approval('current-owner', ownRunning.id, new Date(now.getTime() + 60_000));
@@ -101,5 +107,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore shell status', 
 
   it('rejects reads for an agent other than the configured owner', async () => {
     await expect(repository.load('other')).rejects.toThrow('outside the configured installation');
+  });
+
+  it('ignores unconfigured agents without requiring their stale records to be deleted', async () => {
+    await expect(repository.load('owner')).resolves.toMatchObject({
+      dashboard: { pendingApprovals: 1, needsAttention: 1 },
+      memoryHealth: { totalUsable: 2, awaitingReview: 1 },
+    });
   });
 });

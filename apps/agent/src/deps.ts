@@ -37,9 +37,13 @@ import {
   type SmsChannelDeps,
   smsModule,
 } from '@assistant/modules';
-import type { ExecutionPersistence } from '@assistant/persistence';
+import type {
+  EmbeddingSpace,
+  ExecutionPersistence,
+  ModelRoutingRepository,
+} from '@assistant/persistence';
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
-import { registerBuiltinTools } from '@assistant/tools/builtin';
+import { registerBuiltinTools, registerPortableMemoryTools } from '@assistant/tools/builtin';
 import { ToolDispatcher } from '@assistant/tools/dispatcher';
 import { registerMcpTools } from '@assistant/tools/mcp';
 import { ToolRegistry } from '@assistant/tools/registry';
@@ -261,6 +265,22 @@ function unavailableSqlDb(): Db {
   });
 }
 
+/** Reject a model-role change before it can mix incompatible memory vectors. */
+export function pinnedMemoryEmbed(
+  space: EmbeddingSpace,
+  routing: Pick<ModelRoutingRepository, 'role'>,
+  embed: (texts: string[]) => Promise<number[][]>,
+): (texts: string[]) => Promise<number[][]> {
+  return async (texts) => {
+    const selected = await routing.role('embed');
+    const expected = `${space.provider}/${space.model}`;
+    if (selected?.primaryModel !== expected) {
+      throw new Error(`Firestore memory embedding role must use ${expected}`);
+    }
+    return embed(texts);
+  };
+}
+
 function buildFirestoreDeps(config: Config): AgentDeps {
   const problems = validateAgentPersistenceConfig(config);
   if (problems.length) throw new Error(problems.join('; '));
@@ -268,10 +288,11 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     projectId: config.GCP_PROJECT,
     installationId: config.ASSISTANT_WORKSPACE_ID,
   });
+  const embeddingSpace = parseFirestoreEmbeddingSpace(config.FIRESTORE_EMBEDDING_SPACE);
   const persistence = createFirestoreExecutionPersistence(
     store,
     config.FIRESTORE_AGENT_ID,
-    parseFirestoreEmbeddingSpace(config.FIRESTORE_EMBEDDING_SPACE),
+    embeddingSpace,
   );
   const db = unavailableSqlDb();
   const router = new ModelRouter(
@@ -286,9 +307,23 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     config.FILES_DRIVER === 'gcs'
       ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, workspacePrefix)
       : new LocalWorkspaceStore(workspaceRoot);
-  // No legacy built-ins or provider modules are safe in this preview profile.
-  // The core executor still receives its Firestore persistence ports.
-  const registry = new ToolRegistry();
+  // Memory save and recall use portable repositories. Other built-ins still
+  // depend on SQL and remain unavailable in this preview profile.
+  const registry = registerPortableMemoryTools(new ToolRegistry(), {
+    memory: persistence.memory,
+    embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
+      router.embed(texts),
+    ),
+    supersede: (input) =>
+      supersedeContradictedFacts(
+        {
+          memory: persistence.memorySupersede,
+          router,
+          onRetired: () => compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
+        },
+        input,
+      ),
+  });
   const modules = installModules(composition.modules, {
     config,
     db,

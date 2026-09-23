@@ -219,6 +219,29 @@ jobs:
       - run: pnpm build
       - run: pnpm db:migrate
       - run: pnpm seed
+      - name: Smoke the bundled agent process
+        env:
+          ASSISTANT_MODULES: minimal
+          PERSISTENCE_DRIVER: postgres
+          OPENROUTER_API_KEY: ci-smoke-only
+          PORT: '8787'
+        run: |
+          node apps/agent/dist/index.mjs > "$RUNNER_TEMP/assistant-agent.log" 2>&1 &
+          assistant_agent_pid=$!
+          trap 'kill "$assistant_agent_pid" 2>/dev/null || true' EXIT
+          assistant_agent_ready=false
+          for assistant_attempt in {1..30}; do
+            if curl --fail --silent --output /dev/null http://127.0.0.1:8787/ready; then
+              assistant_agent_ready=true
+              break
+            fi
+            if ! kill -0 "$assistant_agent_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if [ "$assistant_agent_ready" != true ]; then
+            cat "$RUNNER_TEMP/assistant-agent.log"
+            exit 1
+          fi
       # Smoke the production build that ships, not a dev-server recompile of
       # it. The standalone server pins NODE_ENV=production, so the dev bypass
       # would (correctly) throw; the loopback bypass is the production-shaped

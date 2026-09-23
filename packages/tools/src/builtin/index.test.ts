@@ -4,12 +4,24 @@ import { inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ToolRegistry } from '../registry.js';
 import type { ToolContext } from '../types.js';
-import { registerBuiltinTools } from './index.js';
+import { registerBuiltinTools, registerPortableMemoryTools } from './index.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
 
 describe('builtin trust capabilities', () => {
+  it('installs only portable memory tools for the Firestore profile', () => {
+    const registry = registerPortableMemoryTools(new ToolRegistry(), {
+      embed: async () => [],
+    });
+    expect(registry.all().map(({ tool }) => tool.name)).toEqual(['memory.save', 'memory.recall']);
+    expect(registry.toolsForTask('owner').map((tool) => tool.name)).toEqual([
+      'memory.save',
+      'memory.recall',
+    ]);
+    expect(registry.toolsForTask('unknown')).toEqual([]);
+  });
+
   it.each([
     { saved: true, quarantined: false, category: 'knowledge', expected: 1 },
     { saved: false, quarantined: false, category: 'knowledge', expected: 0 },
