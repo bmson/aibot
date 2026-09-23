@@ -4,10 +4,23 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   CANARY_CHECK_NAMES,
+  mailboxMismatch,
   recordCanaryBrowserResult,
   runBoundedCanaryCheck,
   runCanaryOperationSet,
 } from './canaries.js';
+
+describe('gmail canary mailbox check', () => {
+  it('names both addresses when the connected account is not the configured one', () => {
+    expect(mailboxMismatch('bot@bmson.com', 'assistant@example.com')).toBe(
+      'Google OAuth account bot@bmson.com does not match the configured agent mailbox assistant@example.com',
+    );
+  });
+
+  it('ignores case and surrounding space', () => {
+    expect(mailboxMismatch('Bot@Bmson.com ', 'bot@bmson.com')).toBeUndefined();
+  });
+});
 
 describe('canary orchestration', () => {
   it('bounds a check and propagates cancellation to the operation', async () => {

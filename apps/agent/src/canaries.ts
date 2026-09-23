@@ -214,15 +214,26 @@ async function cleanupGmailMarker(
   }
 }
 
+/**
+ * Why the connected Google account is not the assistant's mailbox, if it is not.
+ *
+ * Both addresses go in the message. Without them the alert said only that
+ * they differed, which fired daily for weeks while the fix — the configured
+ * address was still the install placeholder — sat one lookup away.
+ */
+export function mailboxMismatch(connected: string, configured: string): string | undefined {
+  if (connected.trim().toLowerCase() === configured.trim().toLowerCase()) return undefined;
+  return `Google OAuth account ${connected} does not match the configured agent mailbox ${configured}`;
+}
+
 async function gmailCanary(deps: AgentDeps, runId: string, signal: AbortSignal): Promise<string> {
   if (!googleClientOf(deps).configured()) throw new Error('Google OAuth is not configured');
   const agent = await getAgent(deps.db);
   const profile = await googleClientOf(deps).api<{ emailAddress: string }>(`${GMAIL}/profile`, {
     signal,
   });
-  if (profile.emailAddress.toLowerCase() !== agent.email.toLowerCase()) {
-    throw new Error('Google OAuth account does not match the configured agent mailbox');
-  }
+  const mismatch = mailboxMismatch(profile.emailAddress, agent.email);
+  if (mismatch) throw new Error(mismatch);
 
   const marker = `[assistant-canary:${runId}]`;
   const knownIds: string[] = [];
