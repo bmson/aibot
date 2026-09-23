@@ -98,7 +98,7 @@ describe.skipIf(!localEmulator)('Firestore mobile memory library with PostgreSQL
     expect(status('/api/mobile/v1/memory/library')).toBe(200);
     expect(status('/api/mobile/v1/memory/library', 'POST')).toBe(503);
     expect(status('/api/mobile/v1/memory/library/owner-fact')).toBe(503);
-    expect(status('/api/mobile/v1/memory/export')).toBe(503);
+    expect(status('/api/mobile/v1/memory/export')).toBe(200);
   });
 
   it('keeps the mobile row/filter schema and excludes another agent without SQL', async () => {
