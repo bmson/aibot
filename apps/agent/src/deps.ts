@@ -21,6 +21,7 @@ import { createDb, createPostgresExecutionPersistence, type Db } from '@assistan
 import {
   createFirestoreExecutionPersistence,
   createInstallationStore,
+  FirestoreOwnerNoticeRepository,
   FirestoreReminderRepository,
   FirestoreScheduleRepository,
   type FirestoreTaskRepository,
@@ -212,6 +213,36 @@ function dashboardOwnerNotifier(deps: AgentDeps): OwnerNotifier {
   };
 }
 
+/** Firestore's dashboard sink keeps notices durable without opening SQL. */
+function firestoreDashboardOwnerNotifier(deps: AgentDeps): OwnerNotifier {
+  if (!deps.firestoreStore)
+    throw new Error('Firestore owner notices require an installation store');
+  const notices = new FirestoreOwnerNoticeRepository(
+    deps.firestoreStore,
+    deps.config.FIRESTORE_AGENT_ID,
+  );
+  return {
+    notifyOwner: async ({ text, taskId, conversationId }) => {
+      await notices.post({ text, taskId, sourceConversationId: conversationId });
+    },
+    notifyApprovals: async (pending) => {
+      if (pending.length === 0) return;
+      const primaryId = await notices.primaryConversationId();
+      const toMirror = pending.filter((approval) =>
+        shouldMirrorIntoPrimary(approval.conversationId, primaryId),
+      );
+      if (toMirror.length === 0) return;
+      const summary = approvalSummaryNotice(toMirror);
+      await notices.post({
+        text: summary.text,
+        taskId: toMirror[0]?.taskId,
+        sourceConversationId: toMirror[0]?.conversationId,
+        extraParts: summary.extraParts,
+      });
+    },
+  };
+}
+
 /**
  * The nudge-policy gate on the out-of-band legs (SMS/push). Ambient notices
  * consult quiet hours and the daily cap here — one choke point every module
@@ -258,7 +289,7 @@ export function agentServices(deps: AgentDeps): ModuleServices {
     workspace: deps.workspace,
     ownerNotifier:
       deps.config.PERSISTENCE_DRIVER === 'firestore'
-        ? noopOwnerNotifier
+        ? firestoreDashboardOwnerNotifier(deps)
         : composeOwnerNotifiers([dashboardOwnerNotifier(deps), deps.outOfBandNotifier]),
     emailObservers: deps.modules.emailObservers,
     persistence: deps.persistence ?? createPostgresExecutionPersistence(deps.db),
