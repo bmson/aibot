@@ -7,6 +7,7 @@ import {
   importWorkspaceBundle,
 } from '@assistant/firestore/workspace-migration';
 import { type MigrationBundle, validateMigrationBundle } from '@assistant/persistence';
+import { createGcloudAuthClient } from './gcloud-auth.js';
 
 const { values } = parseArgs({
   options: {
@@ -15,6 +16,7 @@ const { values } = parseArgs({
     verify: { type: 'boolean' },
     activate: { type: 'boolean' },
     'allow-cloud': { type: 'boolean' },
+    'gcloud-auth': { type: 'boolean' },
     in: { type: 'string' },
     'agent-id': { type: 'string' },
     'project-id': { type: 'string' },
@@ -30,7 +32,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    'Preview, import, verify, or explicitly activate a bundle. Activation requires a complete v3 pinned snapshot and source write-fence evidence.',
+    'Preview, import, verify, or explicitly activate a bundle. Cloud writes use ADC by default; --gcloud-auth uses the active gcloud identity.',
   );
   process.exit(0);
 }
@@ -94,7 +96,8 @@ if (!process.env.FIRESTORE_EMULATOR_HOST && !values['allow-cloud'])
   throw new Error(
     'Refusing Firestore writes without FIRESTORE_EMULATOR_HOST or explicit --allow-cloud',
   );
-const store = createInstallationStore(target);
+const authClient = values['gcloud-auth'] ? await createGcloudAuthClient() : undefined;
+const store = createInstallationStore({ ...target, ...(authClient ? { authClient } : {}) });
 try {
   let activationSnapshotBytes = snapshotBytes;
   if (values.activate && !process.env.FIRESTORE_EMULATOR_HOST) {

@@ -444,7 +444,6 @@ describe.skipIf(!enabled)('Firestore workspace migration import', () => {
         bundleChecksum: source.manifest.bundleChecksum,
       });
       expect((await store.doc('coordination', 'migration').get()).get('status')).toBe('active');
-      expect(await leases.claim(task.id)).not.toBeNull();
       await expect(activation()).resolves.toMatchObject({
         activated: true,
         alreadyActivated: true,
@@ -457,6 +456,8 @@ describe.skipIf(!enabled)('Firestore workspace migration import', () => {
           snapshotBytes: bytes,
         }),
       ).rejects.toThrow('conflicting cutover evidence');
+      expect(await leases.claim(task.id)).not.toBeNull();
+      await expect(activation()).rejects.toThrow('checksum mismatch');
     } finally {
       await disposeStore(store);
     }

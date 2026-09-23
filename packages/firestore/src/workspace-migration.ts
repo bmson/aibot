@@ -759,45 +759,6 @@ export async function activateWorkspaceBundle(
     target: input.target,
   });
 
-  const marker = store.doc('coordination', 'migration');
-  const activation = {
-    sourceWriteFenceId: evidence.sourceWriteFenceId,
-    sourceWritesDrainedAt: drainedAt,
-    snapshotUri: evidence.snapshotUri,
-    snapshotGeneration: evidence.snapshotGeneration,
-    snapshotSha256,
-  };
-  const completedActivation = await store.db.runTransaction(async (tx) => {
-    const current = await tx.get(marker);
-    if (!current.exists || current.get('status') !== 'active') return null;
-    if (
-      current.get('bundleChecksum') !== bundle.manifest.bundleChecksum ||
-      current.get('sourceAgentId') !== input.sourceAgentId ||
-      JSON.stringify(current.get('target')) !== JSON.stringify(input.target)
-    )
-      throw new Error('Migration marker belongs to a different bundle or identity');
-    const prior = current.get('activation') as Record<string, unknown> | undefined;
-    const priorDrainedAt = prior?.sourceWritesDrainedAt;
-    const sameEvidence =
-      prior?.sourceWriteFenceId === activation.sourceWriteFenceId &&
-      (priorDrainedAt instanceof Timestamp
-        ? priorDrainedAt.toDate().toISOString()
-        : priorDrainedAt instanceof Date
-          ? priorDrainedAt.toISOString()
-          : null) === drainedAt.toISOString() &&
-      prior?.snapshotUri === activation.snapshotUri &&
-      prior?.snapshotGeneration === activation.snapshotGeneration &&
-      prior?.snapshotSha256 === activation.snapshotSha256;
-    if (!sameEvidence)
-      throw new Error('Migration was already activated with conflicting cutover evidence');
-    return {
-      activated: true as const,
-      alreadyActivated: true,
-      bundleChecksum: bundle.manifest.bundleChecksum,
-    };
-  });
-  if (completedActivation) return completedActivation;
-
   // This rereads and checks every imported record and collection count. Tasks
   // and schedules remain gated until the transaction below changes the marker.
   await importWorkspaceBundle(store, bundle, {
@@ -806,6 +767,14 @@ export async function activateWorkspaceBundle(
     mode: 'verify',
   });
 
+  const marker = store.doc('coordination', 'migration');
+  const activation = {
+    sourceWriteFenceId: evidence.sourceWriteFenceId,
+    sourceWritesDrainedAt: drainedAt,
+    snapshotUri: evidence.snapshotUri,
+    snapshotGeneration: evidence.snapshotGeneration,
+    snapshotSha256,
+  };
   return store.db.runTransaction(async (tx) => {
     const current = await tx.get(marker);
     if (!current.exists) throw new Error('Migration marker disappeared before activation');
