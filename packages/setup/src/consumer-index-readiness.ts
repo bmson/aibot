@@ -85,6 +85,18 @@ function canonicalIndex(
       fieldPath: '__name__',
       order: last?.order === 'DESCENDING' ? 'DESCENDING' : 'ASCENDING',
     });
+  } else {
+    // Firestore lists the implicit document-name field immediately before the
+    // terminal vector field. The manifest describes the same index without that
+    // implicit field, so canonicalize it to the end used by trusted definitions.
+    const vectorPosition = fields.findIndex((field) => field.vectorConfig !== undefined);
+    if (
+      vectorPosition === fields.length - 1 &&
+      fields[vectorPosition - 1]?.fieldPath === '__name__'
+    ) {
+      const [documentName] = fields.splice(vectorPosition - 1, 1);
+      if (documentName) fields.push(documentName);
+    }
   }
   return { collectionGroup, queryScope, fields };
 }

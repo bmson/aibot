@@ -22,7 +22,11 @@ const spec = JSON.parse(specBytes.toString('utf8')) as {
   indexes: Array<{
     collectionGroup: string;
     queryScope: string;
-    fields: Array<{ fieldPath: string; order?: string }>;
+    fields: Array<{
+      fieldPath: string;
+      order?: string;
+      vectorConfig?: { dimension: number; flat: Record<string, never> };
+    }>;
   }>;
   fieldOverrides: Array<{ collectionGroup: string; fieldPath: string }>;
 };
@@ -30,18 +34,22 @@ const prefix = `projects/${identity.projectId}/databases/${identity.databaseId}/
 
 function liveIndexes(databaseId = identity.databaseId) {
   const databasePrefix = `projects/${identity.projectId}/databases/${databaseId}/collectionGroups/`;
-  return spec.indexes.map((index, number) => ({
-    name: `${databasePrefix}${index.collectionGroup}/indexes/${number + 1}`,
-    queryScope: index.queryScope,
-    fields: [
-      ...index.fields,
-      {
-        fieldPath: '__name__',
-        order: index.fields.at(-1)?.order === 'DESCENDING' ? 'DESCENDING' : 'ASCENDING',
-      },
-    ],
-    state: 'READY',
-  }));
+  return spec.indexes.map((index, number) => {
+    const fields = [...index.fields];
+    const documentName = {
+      fieldPath: '__name__',
+      order: index.fields.at(-1)?.order === 'DESCENDING' ? 'DESCENDING' : 'ASCENDING',
+    };
+    const vectorPosition = fields.findIndex((field) => field.vectorConfig !== undefined);
+    if (vectorPosition === fields.length - 1) fields.splice(vectorPosition, 0, documentName);
+    else fields.push(documentName);
+    return {
+      name: `${databasePrefix}${index.collectionGroup}/indexes/${number + 1}`,
+      queryScope: index.queryScope,
+      fields,
+      state: 'READY',
+    };
+  });
 }
 
 function liveOverrides(databaseId = identity.databaseId) {
@@ -111,6 +119,32 @@ describe('consumer Firestore index readiness', () => {
       ),
     ).resolves.toEqual({ indexesCreated: 0, exemptionsCreated: 0 });
     expect(calls).toHaveLength(2);
+  });
+
+  it('verifies and recognizes existing vector indexes with the Google list field order', async () => {
+    const actualIndexes = liveIndexes('assistant-production');
+    const vectorIndexes = actualIndexes.filter((index) =>
+      index.fields.some((field) => field.vectorConfig !== undefined),
+    );
+    expect(vectorIndexes).toHaveLength(
+      spec.indexes.filter((index) => index.fields.some((field) => field.vectorConfig)).length,
+    );
+    expect(
+      vectorIndexes.every((index) => {
+        const vectorPosition = index.fields.findIndex((field) => field.vectorConfig);
+        return index.fields[vectorPosition - 1]?.fieldPath === '__name__';
+      }),
+    ).toBe(true);
+
+    const calls: string[] = [];
+    const runner = fakeLists(actualIndexes, liveOverrides('assistant-production'), calls);
+    const target = { ...identity, databaseId: 'assistant-production' };
+    await expect(verifyConsumerIndexReadiness(runner, target, specBytes)).resolves.toBeUndefined();
+    await expect(provisionTargetFirestoreIndexes(runner, target, specBytes)).resolves.toEqual({
+      indexesCreated: 0,
+      exemptionsCreated: 0,
+    });
+    expect(calls).toHaveLength(4);
   });
 
   it('declares the exact person experience scan index in the shared manifest', () => {
