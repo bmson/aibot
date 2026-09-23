@@ -23,6 +23,7 @@ describe('config', () => {
     expect(config.AUTH_LOCALHOST_BYPASS).toBe(false);
     expect(config.MOBILE_API_TOKEN).toBe('');
     expect(config.CANARY_ENABLED).toBe(false);
+    expect(config.VERTEX_MODEL_PROBE_ENABLED).toBe(false);
     expect(config.CANARY_MAX_COST_USD).toBe(0.03);
     expect(config.GRAPH_RAG_ENABLED).toBe(false);
     expect(config.GRAPH_SYNC_BATCH_LIMIT).toBe(25);
@@ -115,6 +116,16 @@ describe('config', () => {
     );
     resetConfigForTest();
     expect(() => loadConfig({ CANARY_MAX_COST_USD: '1' })).toThrow();
+  });
+
+  it('requires Vertex when the private model probe is enabled in Firestore mode', () => {
+    const config = loadConfig({
+      PERSISTENCE_DRIVER: 'firestore',
+      VERTEX_MODEL_PROBE_ENABLED: 'true',
+    });
+    expect(validateAgentPersistenceConfig(config, {})).toContain(
+      'VERTEX_MODEL_PROBE_ENABLED requires LLM_PROVIDER=vertex',
+    );
   });
 
   it('passes prod validation for a local config', () => {

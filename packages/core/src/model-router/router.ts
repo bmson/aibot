@@ -90,6 +90,23 @@ export interface CallOptions {
   temperature?: number;
   maxOutputTokens?: number;
   abortSignal?: AbortSignal;
+  /** Reject before reservation/provider work if the estimated call cost exceeds this caller cap. */
+  maxEstimatedCostUsd?: number;
+}
+
+/** Keep optional per-call cost ceilings inside the reservation path. */
+export function assertEstimatedCostWithinLimit(
+  estimatedUsd: number,
+  maxEstimatedCostUsd: number | undefined,
+): void {
+  if (
+    maxEstimatedCostUsd !== undefined &&
+    (!Number.isFinite(maxEstimatedCostUsd) ||
+      maxEstimatedCostUsd <= 0 ||
+      estimatedUsd > maxEstimatedCostUsd)
+  ) {
+    throw new Error('estimated model call cost exceeds caller limit');
+  }
 }
 
 /** The small tool-choice surface the workflow needs from the AI SDK. */
@@ -716,6 +733,7 @@ export class ModelRouter {
         1_000_000) *
         ESTIMATE_SAFETY_FACTOR,
     );
+    assertEstimatedCostWithinLimit(estimatedUsd, opts.maxEstimatedCostUsd);
     const reservation = await reserveCost(this.persistence.costs, {
       source: 'model',
       estimatedUsd,
