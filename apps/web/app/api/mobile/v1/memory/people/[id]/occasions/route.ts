@@ -1,5 +1,7 @@
 import { addPersonOccasion } from '@assistant/application/profile';
-import { getDb } from '@/lib/server';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { FirestoreProfileOccasionCommandRepository } from '@assistant/firestore';
+import { getDb, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -18,7 +20,7 @@ export async function POST(
     return mobileJson({ error: 'invalid occasion body' }, { status: 400 });
   }
   const text = (key: string) => (typeof body[key] === 'string' ? body[key] : '');
-  const result = await addPersonOccasion(getDb(), id, {
+  const input = {
     kind: text('kind'),
     label: text('label'),
     month: text('month'),
@@ -26,8 +28,34 @@ export async function POST(
     year: text('year'),
     leadDays: text('leadDays'),
     notes: text('notes'),
-  });
+  };
+  const config = loadConfig();
+  let result: { error?: string };
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    result = await addPersonOccasion(
+      new FirestoreProfileOccasionCommandRepository(
+        getFirestoreInstallationStore(),
+        config.FIRESTORE_AGENT_ID,
+      ),
+      id,
+      input,
+    );
+  } else {
+    result = await addPersonOccasion(getDb(), id, input);
+  }
   return result.error
-    ? mobileJson({ error: result.error }, { status: 400 })
+    ? mobileJson(
+        { error: result.error },
+        {
+          status:
+            result.error === 'Person not found.'
+              ? 404
+              : result.error.includes('Privacy')
+                ? 409
+                : 400,
+        },
+      )
     : mobileJson({ ok: true }, { status: 201 });
 }
