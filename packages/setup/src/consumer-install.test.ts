@@ -134,6 +134,17 @@ function fakeRunner(
           stderr: '',
         };
       }
+      if (command === 'gcloud' && args[0] === 'billing') {
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            projectId: 'customer-project',
+            billingEnabled: true,
+            billingAccountName: 'billingAccounts/ABCDEF-123456-ABCDEF',
+          }),
+          stderr: '',
+        };
+      }
       if (command === 'gcloud' && args[0] === 'services') {
         return { ok: true, stdout: JSON.stringify(requiredServiceRows), stderr: '' };
       }
@@ -201,6 +212,87 @@ function fakeRunner(
 }
 
 describe('consumer installation', () => {
+  it.each([
+    {
+      name: 'disabled billing',
+      billing: {
+        ok: true,
+        stdout: JSON.stringify({ projectId: 'customer-project', billingEnabled: false }),
+        stderr: '',
+      },
+      message: 'needs an active billing account',
+    },
+    {
+      name: 'unverifiable billing',
+      billing: { ok: false, stdout: '', stderr: 'private billing account details' },
+      message: 'Cannot verify billing',
+    },
+  ])('stops before any cloud mutation for $name', async ({ billing, message }) => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-billing-'));
+    const archive = join(dir, 'release.tar.gz');
+    const state = join(dir, 'state.json');
+    await foundationArchive(archive);
+    const log: string[] = [];
+    const runner = fakeRunner(log);
+    const baseRun = runner.run.bind(runner);
+    runner.run = (command, args) =>
+      command === 'gcloud' && args[0] === 'billing'
+        ? Promise.resolve(billing)
+        : baseRun(command, args);
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          manifest: manifest(await sha256File(archive)),
+          archivePath: archive,
+          statePath: state,
+          terraformDir: 'infra/gcp/consumer/terraform',
+          stateBucket: 'customer-project-consumer-install-state',
+          apply: true,
+        },
+      ),
+    ).rejects.toThrow(message);
+    expect(
+      log.some(
+        (entry) =>
+          entry.includes('services enable') ||
+          entry.includes('storage buckets create') ||
+          entry.includes('terraform'),
+      ),
+    ).toBe(false);
+    await expect(readFile(state)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rechecks billing before resuming a provisioned foundation', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-billing-'));
+    const archive = join(dir, 'release.tar.gz');
+    const state = join(dir, 'state.json');
+    await foundationArchive(archive);
+    const source = manifest(await sha256File(archive));
+    const options = {
+      manifest: source,
+      archivePath: archive,
+      statePath: state,
+      terraformDir: 'infra/gcp/consumer/terraform',
+      stateBucket: 'customer-project-consumer-install-state',
+      apply: true,
+      now: () => '2026-09-12T12:00:10.000Z',
+    };
+    await provisionConsumerInstallation({ runner: fakeRunner([]) }, options);
+    const log: string[] = [];
+    const runner = fakeRunner(log);
+    const baseRun = runner.run.bind(runner);
+    runner.run = (command, args) =>
+      command === 'gcloud' && args[0] === 'billing'
+        ? Promise.resolve({ ok: true, stdout: '{"billingEnabled":false}', stderr: '' })
+        : baseRun(command, args);
+    await expect(provisionConsumerInstallation({ runner }, options)).rejects.toThrow(
+      'needs an active billing account',
+    );
+    expect(log.some((entry) => entry.startsWith('terraform'))).toBe(false);
+    expect(JSON.parse(await readFile(state, 'utf8')).stage.current).toBe('provisioned');
+  });
+
   const runtimeConfig = {
     firestoreAgentId: '11111111-1111-4111-8111-111111111111',
     firestoreEmbeddingSpace: {

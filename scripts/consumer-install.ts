@@ -21,7 +21,7 @@ import {
 
 const usage = `Usage: pnpm consumer:install --manifest PATH --archive PATH --state PATH --state-bucket NAME --terraform-dir PATH [--seed-plan PATH] [--images PATH --runtime-config PATH] [--owner-access-callback HTTPS_URL] [--apply]
 
-Without --apply this verifies the release archive, customer project, and selected Firestore database absence.
+Without --apply this verifies the release archive, customer project billing, and selected Firestore database absence.
 With --apply it bootstraps customer-owned state, runs Terraform, and records resumable foundation stages.
 Supply both --images and --runtime-config to opt in to digest-pinned Cloud Run deployment after the foundation.
 Supply --seed-plan with an explicit customer runtime seed plan to create required data before Cloud Run.
