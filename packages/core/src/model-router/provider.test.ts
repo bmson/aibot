@@ -180,6 +180,12 @@ describe('injected model providers', () => {
       vertex: { thinkingConfig: { thinkingBudget: 0 } },
     });
     expect(vertex.optionsFor({ reasoning: 'unsupported' })).toBeUndefined();
+    expect(
+      vertex.optionsFor({ reasoning: 'enabled', modelId: 'vertex/gemini-3.1-flash-lite' }),
+    ).toEqual({ vertex: { thinkingConfig: { thinkingLevel: 'high' } } });
+    expect(
+      vertex.optionsFor({ reasoning: 'disabled', modelId: 'vertex/gemini-3.1-flash-lite' }),
+    ).toEqual({ vertex: { thinkingConfig: { thinkingLevel: 'minimal' } } });
     expect(vertex.embeddingOptions()).toEqual({ vertex: { outputDimensionality: 1_536 } });
     expect(() => vertex.assertModelId('vertex:gemini-3.8-flash')).not.toThrow();
     expect(() => vertex.assertModelId('vertex:text-embedding-005')).not.toThrow();

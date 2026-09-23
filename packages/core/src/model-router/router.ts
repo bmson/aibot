@@ -698,7 +698,7 @@ export class ModelRouter {
     return {
       maxOutputTokens:
         reasoning === 'enabled' ? visibleLimit + REASONING_HEADROOM_TOKENS : visibleLimit,
-      providerOptions: this.provider.optionsFor({ reasoning }),
+      providerOptions: this.provider.optionsFor({ reasoning, modelId: route.modelId }),
     };
   }
 

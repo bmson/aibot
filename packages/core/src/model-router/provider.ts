@@ -40,7 +40,7 @@ export interface ModelProvider {
   textEmbeddingModel(modelId: string): EmbeddingModel;
   /** Only true when this model is verified to allow reasoning to be disabled. */
   canDisableReasoning?(modelId: string): boolean;
-  optionsFor(input: { reasoning: ReasoningMode }): ProviderOptions | undefined;
+  optionsFor(input: { reasoning: ReasoningMode; modelId?: string }): ProviderOptions | undefined;
   /** Provider options applied to the embedding request. */
   embeddingOptions(): ProviderOptions | undefined;
   /** Provider-specific cache hints for the message boundary, if supported. */
@@ -273,8 +273,16 @@ export function createVertexModelProvider(options: VertexModelProviderOptions): 
       const model = provider.embeddingModel(id);
       return id === 'gemini-embedding-001' ? singleInputVertexEmbeddingModel(model) : model;
     },
-    optionsFor({ reasoning }) {
+    optionsFor({ reasoning, modelId }) {
       if (reasoning === 'unsupported') return undefined;
+      if (modelId && vertexModelId(modelId) === 'gemini-3.1-flash-lite') {
+        // Gemini 3.1 uses levels. The legacy thinkingBudget field returns 400.
+        return {
+          vertex: {
+            thinkingConfig: { thinkingLevel: reasoning === 'enabled' ? 'high' : 'minimal' },
+          },
+        };
+      }
       return reasoning === 'enabled'
         ? { vertex: { thinkingConfig: { thinkingBudget: 4_096 } } }
         : { vertex: { thinkingConfig: { thinkingBudget: 0 } } };
