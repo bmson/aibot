@@ -311,7 +311,15 @@ async function assertDynamicIslandLayering(page: Page) {
 async function navigate(page: Page, url: string) {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      if (response) return response;
+      // Playwright returns null for a same-document navigation. Hydration can
+      // replace a route while this crawl is moving to the next one, so verify
+      // the landed URL and issue a real GET before accepting that result.
+      if (new URL(page.url()).pathname === new URL(url).pathname)
+        return page.request.get(url, { timeout: 30_000 });
+      if (attempt > 0)
+        throw new Error(`Navigation to ${url} returned no response and landed at ${page.url()}`);
     } catch (error) {
       const aborted = error instanceof Error && error.message.includes('ERR_ABORTED');
       if (!aborted || attempt > 0) throw error;
