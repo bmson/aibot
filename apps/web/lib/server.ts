@@ -28,6 +28,7 @@ import {
   getAssistantIdentity,
   getAssistantTimezone,
   getChatConversationView,
+  getDocument,
   getDocumentsOverview,
   getImportOverview,
   getMcpConnection,
@@ -348,6 +349,7 @@ function createApplication(options: { profileMemory?: ProfileMemoryCommandPersis
     setPolicyEnabled: (id: string, enabled: boolean) => setApprovalPolicyEnabled(db, id, enabled),
     deletePolicy: (id: string) => deleteApprovalPolicy(db, id),
     getDocuments: () => getDocumentsOverview(db),
+    getDocument: (id: string) => getDocument(db, id),
     deleteDocument: (id: string) => deleteDocument(db, workspace, id),
     uploadDocument: (input: { name: string; title?: string; mime?: string; bytes: Buffer }) =>
       uploadDocument(db, workspace, input),

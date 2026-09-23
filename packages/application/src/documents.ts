@@ -6,8 +6,8 @@ import {
   purgeDocument,
   startDocumentIngest,
 } from '@assistant/core/memory/document-catalog';
-import { type Db, files } from '@assistant/db';
-import { and, eq } from 'drizzle-orm';
+import { type Db, documentChunks, documents, files } from '@assistant/db';
+import { and, asc, eq } from 'drizzle-orm';
 import { safeWorkspacePath, type WorkspacePort } from './workspace.js';
 
 const SAFE_DOWNLOAD_PREFIXES = ['code/', 'browser/attachments/', 'documents/'];
@@ -24,6 +24,48 @@ export async function getDocumentsOverview(db: Db) {
     getOrCreatePrimaryConversation(db, agent.id),
   ]);
   return { documents, stats, primaryConversationId: primary.id };
+}
+
+export async function getDocument(db: Db, documentId: string) {
+  const agent = await getAgent(db);
+  const [row] = await db
+    .select({
+      id: documents.id,
+      title: documents.title,
+      mime: documents.mime,
+      source: documents.source,
+      trust: documents.trust,
+      status: documents.status,
+      extractor: documents.extractor,
+      chunkCount: documents.chunkCount,
+      charCount: documents.charCount,
+      bytes: files.bytes,
+      error: documents.error,
+      createdAt: documents.createdAt,
+      fileId: documents.fileId,
+    })
+    .from(documents)
+    .innerJoin(files, eq(files.id, documents.fileId))
+    .where(
+      and(
+        eq(documents.agentId, agent.id),
+        eq(documents.id, documentId),
+        eq(files.agentId, agent.id),
+      ),
+    )
+    .limit(1);
+  if (!row) return null;
+  const chunks = await db
+    .select({
+      chunkIndex: documentChunks.chunkIndex,
+      text: documentChunks.text,
+      charCount: documentChunks.charCount,
+    })
+    .from(documentChunks)
+    .where(and(eq(documentChunks.agentId, agent.id), eq(documentChunks.documentId, documentId)))
+    .orderBy(asc(documentChunks.chunkIndex));
+  const { fileId: _fileId, ...document } = { ...row, bytes: row.bytes ?? 0 };
+  return { document, chunks };
 }
 
 export async function deleteDocument(
