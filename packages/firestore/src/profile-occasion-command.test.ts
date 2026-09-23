@@ -13,7 +13,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore profile occasio
     const repository = new FirestoreProfileOccasionCommandRepository(store, agentId);
     const input = {
       contactId,
-      kind: 'birthday',
+      kind: 'birthday' as const,
       label: 'Birthday',
       month: 4,
       day: 12,
@@ -68,7 +68,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore profile occasio
       id: importedId,
       agentId,
       contactId,
-      kind: 'birthday',
+      kind: 'birthday' as const,
       label: 'Imported birthday label',
       month: 4,
       day: 12,
@@ -126,7 +126,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore profile occasio
     const repository = new FirestoreProfileOccasionCommandRepository(store, agentId);
     const input = {
       contactId,
-      kind: 'birthday',
+      kind: 'birthday' as const,
       label: 'Birthday',
       month: 4,
       day: 12,
@@ -153,6 +153,70 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore profile occasio
       });
       await expect(repository.create(input)).rejects.toThrow('Privacy erasure is in progress');
       expect((await store.collection('occasions').get()).empty).toBe(true);
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('updates, reviews, and forgets only matching-owner occasions', async () => {
+    const store = emulatorStore();
+    const agentId = randomUUID();
+    const otherAgentId = randomUUID();
+    const contactId = randomUUID();
+    const foreignOccasionId = randomUUID();
+    await store.doc('agents', agentId).set({ id: agentId });
+    await store.doc('contacts', contactId).set({ id: contactId, name: 'Rae' });
+    const repository = new FirestoreProfileOccasionCommandRepository(store, agentId);
+    const input = {
+      contactId,
+      kind: 'birthday' as const,
+      label: 'Birthday',
+      month: 4,
+      day: 12,
+      year: null,
+      leadDays: 7,
+      notes: '',
+    };
+
+    try {
+      await repository.create(input);
+      const created = (await store.collection('occasions').get()).docs[0];
+      expect(created).toBeDefined();
+      if (!created) throw new Error('Expected the owner occasion to be created');
+      const createdId = created.get('id') as string;
+      await store.doc('occasions', foreignOccasionId).set({
+        ...created.data(),
+        id: foreignOccasionId,
+        agentId: otherAgentId,
+      });
+
+      await repository.update(createdId, {
+        kind: 'birthday',
+        label: 'Celebration day',
+        month: 4,
+        day: 13,
+        year: 1987,
+        leadDays: 14,
+        notes: 'Call beforehand',
+      });
+      expect((await store.doc('occasions', createdId).get()).data()).toMatchObject({
+        agentId,
+        contactId,
+        label: 'Celebration day',
+        month: 4,
+        day: 13,
+        year: 1987,
+        leadDays: 14,
+        notes: 'Call beforehand',
+        ownerConfirmed: true,
+        quarantined: false,
+      });
+      await repository.review(foreignOccasionId, 'approve');
+      await repository.forget(foreignOccasionId);
+      expect((await store.doc('occasions', foreignOccasionId).get()).exists).toBe(true);
+
+      await repository.review(createdId, 'reject');
+      expect((await store.doc('occasions', createdId).get()).exists).toBe(false);
     } finally {
       await disposeStore(store);
     }

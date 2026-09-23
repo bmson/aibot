@@ -28,6 +28,10 @@ import {
 } from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
+import {
+  getFirestoreProfileCommands,
+  recompileFirestoreProfileCard,
+} from '@/lib/firestore-profile-commands';
 import { getApplication, getDb, getFirestoreInstallationStore, getWorkspace } from '@/lib/server';
 
 export type { OrganizeMemoryState, ProminenceLevel } from '@assistant/application/profile';
@@ -123,7 +127,14 @@ export async function updateContactRelationship(
   relationship: string,
 ): Promise<void> {
   await requireOwner();
-  await updatePersonRelationship(getDb(), contactId, relationship);
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const commands = getFirestoreProfileCommands();
+    await updatePersonRelationship(commands.people, contactId, relationship);
+    await recompileFirestoreProfileCard(commands);
+  } else {
+    await updatePersonRelationship(getDb(), contactId, relationship);
+  }
   revalidateProfile();
 }
 
@@ -133,13 +144,23 @@ export async function updateContactIdentityAction(
   aliasesText: string,
 ): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await updatePersonIdentity(getDb(), contactId, name, aliasesText);
+  const config = loadConfig();
+  const commands = config.PERSISTENCE_DRIVER === 'firestore' ? getFirestoreProfileCommands() : null;
+  const result = await updatePersonIdentity(
+    commands?.people ?? getDb(),
+    contactId,
+    name,
+    aliasesText,
+  );
+  if (commands && !result.error) await recompileFirestoreProfileCard(commands);
   revalidateProfile();
   return result;
 }
 
 export async function deleteContactAction(contactId: string): Promise<{ error?: string }> {
   await requireOwner();
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
+    return { error: 'Deleting people is unavailable with Firestore persistence.' };
   const result = await deletePerson(getDb(), contactId);
   revalidateProfile();
   return result;
@@ -187,6 +208,8 @@ export async function mergeContactAction(
   targetId: string,
 ): Promise<{ error?: string }> {
   await requireOwner();
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
+    return { error: 'Merging people is unavailable with Firestore persistence.' };
   const result = await mergePeople(getDb(), sourceId, targetId);
   revalidateProfile();
   return result;
@@ -249,7 +272,10 @@ export async function createPersonAction(input: {
   aliases: string;
 }): Promise<{ error?: string; contactId?: string }> {
   await requireOwner();
-  const result = await createPerson(getDb(), input);
+  const config = loadConfig();
+  const commands = config.PERSISTENCE_DRIVER === 'firestore' ? getFirestoreProfileCommands() : null;
+  const result = await createPerson(commands?.people ?? getDb(), input);
+  if (commands && result.contactId) await recompileFirestoreProfileCard(commands);
   revalidateProfile();
   return result;
 }
@@ -280,14 +306,20 @@ export async function addOccasionAction(
   },
 ): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await addPersonOccasion(getDb(), contactId, input);
+  const config = loadConfig();
+  const repository =
+    config.PERSISTENCE_DRIVER === 'firestore' ? getFirestoreProfileCommands().occasions : getDb();
+  const result = await addPersonOccasion(repository, contactId, input);
   revalidateProfile();
   return result;
 }
 
 export async function forgetOccasionAction(occasionId: string): Promise<void> {
   await requireOwner();
-  await forgetPersonOccasion(getDb(), occasionId);
+  const config = loadConfig();
+  const repository =
+    config.PERSISTENCE_DRIVER === 'firestore' ? getFirestoreProfileCommands().occasions : getDb();
+  await forgetPersonOccasion(repository, occasionId);
   revalidateProfile();
 }
 
@@ -296,7 +328,10 @@ export async function reviewOccasionAction(
   verdict: 'approve' | 'reject',
 ): Promise<void> {
   await requireOwner();
-  await reviewPersonOccasion(getDb(), occasionId, verdict);
+  const config = loadConfig();
+  const repository =
+    config.PERSISTENCE_DRIVER === 'firestore' ? getFirestoreProfileCommands().occasions : getDb();
+  await reviewPersonOccasion(repository, occasionId, verdict);
   revalidateProfile();
 }
 
@@ -305,7 +340,10 @@ export async function updateOccasionAction(
   input: PersonOccasionInput,
 ): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await updatePersonOccasion(getDb(), occasionId, input);
+  const config = loadConfig();
+  const repository =
+    config.PERSISTENCE_DRIVER === 'firestore' ? getFirestoreProfileCommands().occasions : getDb();
+  const result = await updatePersonOccasion(repository, occasionId, input);
   revalidateProfile();
   return result;
 }

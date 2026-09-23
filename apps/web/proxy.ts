@@ -17,6 +17,10 @@ export function proxy(request: NextRequest) {
     /^\/api\/mobile\/v1\/skills\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const personOccasionsPath =
     /^\/api\/mobile\/v1\/memory\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/occasions$/i;
+  const memoryPersonPath =
+    /^\/api\/mobile\/v1\/memory\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const memoryOccasionPath =
+    /^\/api\/mobile\/v1\/memory\/occasions\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const approvalIdPath =
     /^\/api\/mobile\/v1\/approvals\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const chatMessagePath =
@@ -68,6 +72,9 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/costs' && request.method === 'PATCH') ||
     (approvalIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/memory/profile' && ['GET', 'POST'].includes(request.method)) ||
+    (path === '/api/mobile/v1/memory/people' && request.method === 'POST') ||
+    (memoryPersonPath.test(path) && request.method === 'PATCH') ||
+    (memoryOccasionPath.test(path) && ['POST', 'PATCH', 'DELETE'].includes(request.method)) ||
     (personOccasionsPath.test(path) && request.method === 'POST') ||
     (path === '/api/card-image' && request.method === 'GET') ||
     (path === '/api/mobile/v1/cards' && request.method === 'GET') ||

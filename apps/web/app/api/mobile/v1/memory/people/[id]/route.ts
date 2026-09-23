@@ -5,6 +5,11 @@ import {
   updatePersonIdentity,
   updatePersonRelationship,
 } from '@assistant/application/profile';
+import { loadConfig } from '@assistant/config';
+import {
+  getFirestoreProfileCommands,
+  recompileFirestoreProfileCard,
+} from '@/lib/firestore-profile-commands';
 import { getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -34,18 +39,21 @@ export async function PATCH(
   if (!body || Array.isArray(body)) {
     return mobileJson({ error: 'invalid person body' }, { status: 400 });
   }
+  const config = loadConfig();
+  const commands = config.PERSISTENCE_DRIVER === 'firestore' ? getFirestoreProfileCommands() : null;
   const identity = await updatePersonIdentity(
-    getDb(),
+    commands?.people ?? getDb(),
     id,
     typeof body.name === 'string' ? body.name : '',
     typeof body.aliases === 'string' ? body.aliases : '',
   );
   if (identity.error) return mobileJson({ error: identity.error }, { status: 400 });
   await updatePersonRelationship(
-    getDb(),
+    commands?.people ?? getDb(),
     id,
     typeof body.relationship === 'string' ? body.relationship : '',
   );
+  if (commands) await recompileFirestoreProfileCard(commands);
   return mobileJson({ ok: true });
 }
 
@@ -67,6 +75,11 @@ export async function POST(
   ) {
     return mobileJson({ error: 'action must be merge with a valid targetId' }, { status: 400 });
   }
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
+    return mobileJson(
+      { error: 'Merging people is unavailable with Firestore persistence.' },
+      { status: 409 },
+    );
   const merged = await mergePeople(getDb(), id, body.targetId);
   return merged.error
     ? mobileJson({ error: merged.error }, { status: 409 })
@@ -80,6 +93,11 @@ export async function DELETE(
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const { id } = await params;
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid person id' }, { status: 400 });
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
+    return mobileJson(
+      { error: 'Deleting people is unavailable with Firestore persistence.' },
+      { status: 409 },
+    );
   const result = await deletePerson(getDb(), id);
   return result.error
     ? mobileJson({ error: result.error }, { status: 409 })

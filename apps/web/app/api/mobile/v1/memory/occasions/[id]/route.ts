@@ -3,6 +3,8 @@ import {
   reviewPersonOccasion,
   updatePersonOccasion,
 } from '@assistant/application/profile';
+import { loadConfig } from '@assistant/config';
+import { getFirestoreProfileCommands } from '@/lib/firestore-profile-commands';
 import { getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -21,7 +23,11 @@ export async function POST(
   if (body?.verdict !== 'approve' && body?.verdict !== 'reject') {
     return mobileJson({ error: 'verdict must be approve or reject' }, { status: 400 });
   }
-  await reviewPersonOccasion(getDb(), id, body.verdict);
+  const repository =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? getFirestoreProfileCommands().occasions
+      : getDb();
+  await reviewPersonOccasion(repository, id, body.verdict);
   return mobileJson({ ok: true });
 }
 
@@ -32,7 +38,11 @@ export async function DELETE(
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const { id } = await params;
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid occasion id' }, { status: 400 });
-  await forgetPersonOccasion(getDb(), id);
+  const repository =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? getFirestoreProfileCommands().occasions
+      : getDb();
+  await forgetPersonOccasion(repository, id);
   return mobileJson({ ok: true });
 }
 
@@ -47,7 +57,11 @@ export async function PATCH(
   if (!body || typeof body !== 'object' || Array.isArray(body))
     return mobileJson({ error: 'invalid occasion body' }, { status: 400 });
   const text = (key: string) => (typeof body[key] === 'string' ? body[key] : '');
-  const result = await updatePersonOccasion(getDb(), id, {
+  const repository =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? getFirestoreProfileCommands().occasions
+      : getDb();
+  const result = await updatePersonOccasion(repository, id, {
     kind: text('kind'),
     label: text('label'),
     month: text('month'),
