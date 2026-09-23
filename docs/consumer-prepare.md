@@ -12,6 +12,8 @@ pnpm consumer:prepare \
   --owner-name 'Assistant Owner' \
   --owner-email owner@example.com \
   --timezone America/Los_Angeles \
+  --embedding-model gemini-embedding-001 \
+  --embedding-dimension 1536 \
   --archive ./assistant-source.tar.gz \
   --commit-sha FULL_40_CHARACTER_GIT_SHA \
   --archive-sha256 FULL_64_CHARACTER_SHA256
@@ -23,6 +25,6 @@ By default, artifacts go under `.assistant-install/<installation-id>/`. The dire
 
 `consumer-install-command.txt` records the matching read-only `consumer:install` preview command, including the derived customer state-bucket name and the exact archive/manifest/state paths. Run it from the matching Assistant release checkout. Review the preview before adding `--apply` to provision resources.
 
-The seed template includes the owner's name, email, and timezone, so keep the output directory private. It deliberately contains no model catalog, role assignments, embedding model, or budget limits. Google model capabilities, regional availability, and token prices change; verify them against current Vertex sources before completing a seed. The template is intentionally invalid input to `consumer:seed-runtime` until those choices and prices are reviewed. After selecting the embedding model, regenerate the installation manifest with matching `embeddingModel` and `embeddingDimension` using `install:plan` before passing a completed seed to `consumer:install`.
+The seed template includes the owner's name, email, and timezone, so keep the output directory private. The explicitly selected embedding model and current runtime dimension are recorded in both the immutable manifest and seed template. The model name is an operator choice, not a claim that the model is available or priced for the intended Vertex location. Verify its current regional availability, capabilities, and token prices against Vertex sources before completing the model catalog, role assignments, and budget. The template remains intentionally invalid input to `consumer:seed-runtime` until those prices and assignments are reviewed. The current runtime accepts only 1,536-dimensional embeddings.
 
 The output directory is create-only. Choose a new installation ID or a different output directory to prepare another installation; this avoids overwriting existing local identity or state. Preparation is still a local input-generation step, not a finished one-entry installer: customer authorization, absence checks, provisioning, current model review, owner authentication, and runtime readiness remain later stages.

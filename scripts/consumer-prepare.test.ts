@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -29,6 +29,8 @@ async function fixture() {
       archivePath,
       commitSha: '0123456789abcdef0123456789abcdef01234567',
       archiveSha256,
+      embeddingModel: 'gemini-embedding-001',
+      embeddingDimension: 1536,
       outputDir: path.join(root, 'prepared'),
       now: new Date('2026-09-23T12:00:00.000Z'),
       agentId: '11111111-1111-4111-8111-111111111111',
@@ -61,6 +63,7 @@ describe('prepareConsumerInstallation', () => {
         modules: string[];
         modelProvider: string;
         embeddingModel?: string;
+        embeddingDimension?: number;
       };
       resources: unknown[];
       stage: { current: string; completed: string[] };
@@ -69,7 +72,7 @@ describe('prepareConsumerInstallation', () => {
       agent: { id: string; name: string; email: string; timezone: string };
       models: unknown[];
       roles: unknown[];
-      embeddingSpace: { model: string | null };
+      embeddingSpace: { model: string; dimensions: number };
       budget: { dailyLimitMicros: number | null };
       _completionGate: string;
     };
@@ -91,8 +94,9 @@ describe('prepareConsumerInstallation', () => {
       profile: 'firestore',
       modules: [],
       modelProvider: 'google',
+      embeddingModel: input.embeddingModel,
+      embeddingDimension: input.embeddingDimension,
     });
-    expect(manifest.selection.embeddingModel).toBeUndefined();
     expect(manifest.resources).toEqual([]);
     expect(manifest.stage).toMatchObject({ current: 'previewed', completed: ['previewed'] });
     expect(seed.agent).toMatchObject({
@@ -103,7 +107,10 @@ describe('prepareConsumerInstallation', () => {
     });
     expect(seed.models).toEqual([]);
     expect(seed.roles).toEqual([]);
-    expect(seed.embeddingSpace.model).toBeNull();
+    expect(seed.embeddingSpace).toMatchObject({
+      model: input.embeddingModel,
+      dimensions: input.embeddingDimension,
+    });
     expect(seed.budget.dailyLimitMicros).toBeNull();
     expect(seed._completionGate).toContain('not a valid consumer:seed-runtime input');
     expect(result.statePath).toBe(path.join(input.outputDir, 'installation-state.json'));
@@ -126,6 +133,14 @@ describe('prepareConsumerInstallation', () => {
     await expect(stat(input.outputDir)).rejects.toThrow();
   });
 
+  it('rejects embedding dimensions the current runtime cannot use', async () => {
+    const { input } = await fixture();
+    await expect(
+      prepareConsumerInstallation({ ...input, embeddingDimension: 512 }),
+    ).rejects.toThrow('embedding dimension must be 1536 for the current runtime');
+    await expect(stat(input.outputDir)).rejects.toThrow();
+  });
+
   it('refuses to reuse an existing install directory', async () => {
     const { input } = await fixture();
     await prepareConsumerInstallation(input);
@@ -135,14 +150,34 @@ describe('prepareConsumerInstallation', () => {
   it('rejects symlinked archives and invalid time zones', async () => {
     const { input, root } = await fixture();
     const linkedArchive = path.join(root, 'linked.tar.gz');
-    await import('node:fs/promises').then(({ symlink }) =>
-      symlink(input.archivePath, linkedArchive),
-    );
+    await symlink(input.archivePath, linkedArchive);
     await expect(
       prepareConsumerInstallation({ ...input, archivePath: linkedArchive }),
     ).rejects.toThrow('release archive must be a regular local file');
     await expect(
       prepareConsumerInstallation({ ...input, timezone: 'Not/A_Timezone' }),
     ).rejects.toThrow('timezone must be a valid IANA time zone');
+  });
+
+  it('refuses symlinked output parents and preserves an existing symlink target', async () => {
+    const { input, root } = await fixture();
+    const target = path.join(root, 'existing-output');
+    await mkdir(target);
+    const sentinel = path.join(target, 'keep.txt');
+    await writeFile(sentinel, 'keep');
+
+    const linkedTarget = path.join(root, 'output-link');
+    await symlink(target, linkedTarget, 'dir');
+    await expect(
+      prepareConsumerInstallation({ ...input, outputDir: linkedTarget }),
+    ).rejects.toThrow();
+    await expect(readFile(sentinel, 'utf8')).resolves.toBe('keep');
+
+    const linkedParent = path.join(root, 'parent-link');
+    await symlink(root, linkedParent, 'dir');
+    await expect(
+      prepareConsumerInstallation({ ...input, outputDir: path.join(linkedParent, 'new-output') }),
+    ).rejects.toThrow('output parent must be a real directory, not a symbolic link');
+    await expect(readFile(sentinel, 'utf8')).resolves.toBe('keep');
   });
 });

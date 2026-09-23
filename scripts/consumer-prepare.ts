@@ -13,6 +13,7 @@ import { z } from 'zod';
 
 const usage = `Usage: pnpm consumer:prepare --project-id ID --region REGION --installation-id ID \\
   --owner-name NAME --owner-email EMAIL --timezone IANA_ZONE \\
+  --embedding-model MODEL --embedding-dimension 1536 \\
   --archive PATH --commit-sha SHA --archive-sha256 SHA [--output-dir PATH]
 
 Prepares private local manifest and incomplete runtime-seed template files.
@@ -31,6 +32,8 @@ export interface ConsumerPrepareInput {
   archivePath: string;
   commitSha: string;
   archiveSha256: string;
+  embeddingModel: string;
+  embeddingDimension: number;
   outputDir: string;
   now?: Date;
   agentId?: string;
@@ -48,6 +51,9 @@ export interface ConsumerPrepareResult {
   archiveDigest: string;
   seedStatus: 'incomplete-pricing-review-required';
 }
+
+const CURRENT_RUNTIME_EMBEDDING_DIMENSION = 1536;
+const embeddingModelPattern = /^[A-Za-z0-9][A-Za-z0-9._@-]*$/;
 
 async function digestArchive(archivePath: string): Promise<string> {
   const metadata = await lstat(archivePath);
@@ -92,6 +98,12 @@ export async function prepareConsumerInstallation(
   const ownerName = input.ownerName.trim();
   if (!ownerName) throw new Error('owner name cannot be empty');
   const ownerEmail = z.email().parse(input.ownerEmail.trim());
+  if (!embeddingModelPattern.test(input.embeddingModel))
+    throw new Error('embedding model must be a valid explicit Vertex model ID');
+  if (input.embeddingDimension !== CURRENT_RUNTIME_EMBEDDING_DIMENSION)
+    throw new Error(
+      `embedding dimension must be ${CURRENT_RUNTIME_EMBEDDING_DIMENSION} for the current runtime`,
+    );
   const actualDigest = await digestArchive(path.resolve(input.archivePath));
   if (actualDigest !== expectedDigest) throw new Error('release archive SHA-256 does not match');
   const timezone = safeTimezone(input.timezone);
@@ -110,15 +122,29 @@ export async function prepareConsumerInstallation(
       },
       modules: [],
       modelProvider: 'google',
+      embeddingModel: input.embeddingModel,
+      embeddingDimension: input.embeddingDimension,
       resources: [],
       createdAt,
     }),
   );
 
   const outputDir = path.resolve(input.outputDir);
-  await mkdir(path.dirname(outputDir), { recursive: true, mode: 0o700 });
+  const outputParent = path.dirname(outputDir);
+  try {
+    const parentStats = await lstat(outputParent);
+    if (!parentStats.isDirectory() || parentStats.isSymbolicLink())
+      throw new Error('output parent must be a real directory, not a symbolic link');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    await mkdir(outputParent, { mode: 0o700 });
+  }
+  const parentStats = await lstat(outputParent);
+  if (!parentStats.isDirectory() || parentStats.isSymbolicLink())
+    throw new Error('output parent must be a real directory, not a symbolic link');
   await mkdir(outputDir, { recursive: false, mode: 0o700 });
   await chmod(outputDir, 0o700);
+  const ownedOutput = await lstat(outputDir);
   const manifestPath = path.join(outputDir, 'install-manifest.json');
   const seedTemplatePath = path.join(outputDir, 'seed-plan.template.json');
   const statePath = path.join(outputDir, 'installation-state.json');
@@ -145,8 +171,8 @@ export async function prepareConsumerInstallation(
     },
     embeddingSpace: {
       provider: 'vertex',
-      model: null,
-      dimensions: 1536,
+      model: input.embeddingModel,
+      dimensions: input.embeddingDimension,
       revision: 'customer-seed-v1',
     },
     models: [],
@@ -163,8 +189,7 @@ export async function prepareConsumerInstallation(
       [
         'Private, local-only preparation for a fresh Assistant installation.',
         'The seed-plan.template.json is intentionally incomplete and cannot be applied.',
-        'Verify current Google Vertex model availability and prices for the selected model location before filling models, roles, embeddingSpace.model, and budget.',
-        'Then regenerate the manifest with the selected embedding model and dimension using install:plan before passing a completed seed plan to consumer:install.',
+        'The selected embedding model is recorded in both manifest and seed template. Verify its availability, capabilities, and current prices for the chosen Vertex location before completing the model catalog, roles, and budget.',
         'The installation-state.json path is reserved for consumer:install; it is not pre-created or advanced here.',
         'The selected database is create-only. Provisioning must verify absence and must refuse to adopt an existing database.',
         '',
@@ -203,7 +228,19 @@ export async function prepareConsumerInstallation(
     // This output directory was created exclusively by this invocation. Remove
     // partial artifacts so a retry never mistakes them for a complete prepare.
     const { rm } = await import('node:fs/promises');
-    await rm(outputDir, { recursive: true, force: true });
+    try {
+      const current = await lstat(outputDir);
+      if (
+        current.isDirectory() &&
+        !current.isSymbolicLink() &&
+        current.dev === ownedOutput.dev &&
+        current.ino === ownedOutput.ino
+      )
+        await rm(outputDir, { recursive: true, force: true });
+    } catch {
+      // A missing, replaced, or unreadable path is left untouched. In
+      // particular, cleanup never traverses a symlink substituted mid-run.
+    }
     throw error;
   }
 
@@ -231,6 +268,8 @@ export async function runConsumerPrepareCli(argv = process.argv.slice(2)): Promi
       'owner-name': { type: 'string' },
       'owner-email': { type: 'string' },
       timezone: { type: 'string' },
+      'embedding-model': { type: 'string' },
+      'embedding-dimension': { type: 'string' },
       archive: { type: 'string' },
       'commit-sha': { type: 'string' },
       'archive-sha256': { type: 'string' },
@@ -250,6 +289,8 @@ export async function runConsumerPrepareCli(argv = process.argv.slice(2)): Promi
     ['--owner-name', values['owner-name']],
     ['--owner-email', values['owner-email']],
     ['--timezone', values.timezone],
+    ['--embedding-model', values['embedding-model']],
+    ['--embedding-dimension', values['embedding-dimension']],
     ['--archive', values.archive],
     ['--commit-sha', values['commit-sha']],
     ['--archive-sha256', values['archive-sha256']],
@@ -265,6 +306,8 @@ export async function runConsumerPrepareCli(argv = process.argv.slice(2)): Promi
     ownerName: values['owner-name'] as string,
     ownerEmail: values['owner-email'] as string,
     timezone: values.timezone as string,
+    embeddingModel: values['embedding-model'] as string,
+    embeddingDimension: Number(values['embedding-dimension']),
     archivePath: values.archive as string,
     commitSha: values['commit-sha'] as string,
     archiveSha256: values['archive-sha256'] as string,
