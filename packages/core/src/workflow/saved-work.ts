@@ -1,5 +1,5 @@
-import { type Db, type TaskRow, tasks, toolCalls } from '@assistant/db';
-import { and, desc, eq, lt } from 'drizzle-orm';
+import { createPostgresExecutionPersistence, type Db, type TaskRow } from '@assistant/db';
+import type { ExecutionPersistence } from '@assistant/persistence';
 import type { ActionEvidence } from './response-contract.js';
 
 function object(value: unknown): Record<string, unknown> {
@@ -99,38 +99,30 @@ export function saveStatusResponse(evidence: ActionEvidence[], status: string): 
 }
 
 /** Select the preceding owner turn, never an unrelated old successful save. */
-export async function previousSaveStatus(db: Db, task: TaskRow): Promise<string> {
+export async function previousSaveStatus(
+  source: Db | Pick<ExecutionPersistence, 'tasks' | 'executionEvidence'>,
+  task: TaskRow,
+): Promise<string> {
   if (!task.conversationId)
     return 'I cannot identify the earlier request to check its save receipts.';
-  const preceding = await db
-    .select({ id: tasks.id, trigger: tasks.trigger, status: tasks.status })
-    .from(tasks)
-    .where(
-      and(
-        eq(tasks.agentId, task.agentId),
-        eq(tasks.conversationId, task.conversationId),
-        eq(tasks.trust, 'owner'),
-        eq(tasks.type, task.type),
-        lt(tasks.createdAt, task.createdAt),
-      ),
-    )
-    .orderBy(desc(tasks.createdAt))
-    .limit(10);
+  const persistence = 'tasks' in source ? source : createPostgresExecutionPersistence(source);
+  const preceding = await persistence.tasks.precedingOwnerTasks({
+    agentId: task.agentId,
+    conversationId: task.conversationId,
+    taskType: task.type,
+    createdBefore: task.createdAt,
+    limit: 10,
+  });
   const previous = preceding.find((row) => {
     const text = object(object(row.trigger).payload).text;
     return typeof text === 'string' && !isSaveStatusQuestion(text);
   });
   if (!previous)
     return 'I could not identify the earlier request to check its save receipts. Which request do you mean?';
-  const evidence = await db
-    .select({
-      toolName: toolCalls.toolName,
-      status: toolCalls.status,
-      args: toolCalls.args,
-      result: toolCalls.result,
-    })
-    .from(toolCalls)
-    .where(eq(toolCalls.taskId, previous.id));
+  const evidence = await persistence.executionEvidence.taskEvidence({
+    agentId: task.agentId,
+    taskId: previous.id,
+  });
   return saveStatusResponse(evidence, previous.status);
 }
 

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { eq, inArray } from 'drizzle-orm';
 import { expect, it, vi } from 'vitest';
 import { createDb } from './client.js';
-import { agents, tasks } from './schema.js';
+import { agents, conversations, tasks } from './schema.js';
 import { createPostgresTaskRepository } from './task-lifecycle-repository.js';
 
 it('does not reclaim a PostgreSQL lease renewed after the expired-task scan', async () => {
@@ -86,6 +86,59 @@ it('persists plans only for the current owner lease', async () => {
     });
   } finally {
     await db.delete(tasks).where(eq(tasks.id, id));
+    await db.$client.end();
+  }
+});
+
+it('returns only the ten preceding owner tasks for the same conversation and task type', async () => {
+  const url = process.env.DATABASE_URL;
+  if (!url || !new URL(url).pathname.endsWith('_test'))
+    throw new Error('Requires isolated _test database');
+  const db = createDb(url);
+  const ids = Array.from({ length: 12 }, () => randomUUID());
+  const otherId = randomUUID();
+  const conversationId = randomUUID();
+  const otherConversationId = randomUUID();
+  try {
+    const [agent] = await db.select().from(agents).limit(1);
+    if (!agent) throw new Error('Seed the test database');
+    await db.insert(conversations).values([
+      { id: conversationId, agentId: agent.id, channel: 'chat', trust: 'owner' },
+      { id: otherConversationId, agentId: agent.id, channel: 'chat', trust: 'owner' },
+    ]);
+    const createdAt = new Date(Date.now() - 60_000);
+    await db.insert(tasks).values([
+      ...ids.map((id, index) => ({
+        id,
+        agentId: agent.id,
+        conversationId,
+        type: 'chat_turn',
+        trust: 'owner' as const,
+        createdAt: new Date(createdAt.getTime() + index * 1000),
+        trigger: { payload: { text: `turn ${index}` } },
+      })),
+      {
+        id: otherId,
+        agentId: agent.id,
+        conversationId: otherConversationId,
+        type: 'chat_turn',
+        trust: 'owner',
+        createdAt: new Date(createdAt.getTime() + 20_000),
+      },
+    ]);
+    const rows = await createPostgresTaskRepository(db).precedingOwnerTasks({
+      agentId: agent.id,
+      conversationId,
+      taskType: 'chat_turn',
+      createdBefore: new Date(createdAt.getTime() + 12_000),
+      limit: 10,
+    });
+    expect(rows.map((row) => row.id)).toEqual(ids.slice(2).reverse());
+  } finally {
+    await db.delete(tasks).where(inArray(tasks.id, [...ids, otherId]));
+    await db
+      .delete(conversations)
+      .where(inArray(conversations.id, [conversationId, otherConversationId]));
     await db.$client.end();
   }
 });
