@@ -16,13 +16,16 @@ export async function GET(request: Request): Promise<Response> {
   }
   const config = loadConfig();
   if (config.PERSISTENCE_DRIVER === 'firestore') {
-    const problems = validateAgentPersistenceConfig({ ...config, ASSISTANT_MODULES: [] });
+    const problems = validateAgentPersistenceConfig({
+      ...config,
+      ASSISTANT_MODULES: config.ASSISTANT_MODULES.filter((module) => module !== 'documents'),
+    });
     if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
     const result = await new FirestoreDocumentReadRepository(
       getFirestoreInstallationStore(),
       config.FIRESTORE_AGENT_ID,
     ).list(config.FIRESTORE_AGENT_ID);
-    return mobileJson({ ...result, primaryConversationId: null });
+    return mobileJson(result);
   }
   return mobileJson(await getApplication().getDocuments());
 }

@@ -1,5 +1,11 @@
+import { FieldPath } from '@google-cloud/firestore';
 import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
+
+const DOCUMENT_PAGE_SIZE = 200;
+const MAX_DOCUMENTS = 5_000;
+const DOCUMENT_LIST_LIMIT = 200;
+const MAX_DETAIL_CHUNKS = 1_000;
 
 export type FirestoreDocumentView = {
   id: string;
@@ -60,34 +66,44 @@ export class FirestoreDocumentReadRepository {
   async list(agentId: string): Promise<{
     documents: FirestoreDocumentView[];
     stats: { total: number; ready: number; pending: number; chunks: number };
+    primaryConversationId: string | null;
   }> {
     if (!agentId || agentId !== this.configuredAgentId)
       throw new Error('Document read is outside the configured installation');
     await assertConfiguredOwner(this.store, agentId);
     const fence = await readPrivacyErasureFence(this.store, agentId);
-    const [documentSnapshot, fileSnapshot] = await Promise.all([
-      this.store.collection('documents').where('agentId', '==', agentId).get(),
-      this.store.collection('files').where('agentId', '==', agentId).get(),
+    const [allRows, primarySnapshot] = await Promise.all([
+      this.readOwnerDocuments(agentId),
+      this.store
+        .collection('conversations')
+        .where('agentId', '==', agentId)
+        .where('isPrimary', '==', true)
+        .limit(2)
+        .get(),
     ]);
-    const files = new Map<string, FileRow>();
-    for (const doc of fileSnapshot.docs) {
-      const row = owned<FileRow>(doc, agentId);
-      if (row) files.set(row.id, row);
+    if (primarySnapshot.size > 1)
+      throw new Error('Documents found multiple primary conversations for the configured agent');
+    const primaryDoc = primarySnapshot.docs[0];
+    const primaryConversation = primaryDoc
+      ? owned<{ id: string; agentId: string }>(primaryDoc, agentId)
+      : null;
+    let primaryConversationId: string | null = null;
+    if (primaryDoc) {
+      const conversation = decodeRecord<{
+        id: string;
+        agentId: string;
+        channel: string;
+        isPrimary: boolean;
+      }>(primaryDoc.data());
+      if (
+        !primaryConversation ||
+        conversation.channel !== 'chat' ||
+        conversation.isPrimary !== true
+      )
+        throw new Error('Documents found an invalid primary conversation for the configured agent');
+      primaryConversationId = conversation.id;
     }
-    const rows = documentSnapshot.docs.flatMap((doc) => {
-      const row = owned<DocumentRow>(doc, agentId);
-      if (!row) return [];
-      const file = files.get(row.fileId);
-      return [
-        {
-          ...row,
-          bytes: file?.bytes ?? 0,
-          error: typeof row.error === 'string' ? row.error : null,
-        },
-      ];
-    });
-    rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-    const stats = rows.reduce(
+    const stats = allRows.reduce(
       (result, row) => ({
         total: result.total + 1,
         ready: result.ready + (row.status === 'ready' ? 1 : 0),
@@ -96,11 +112,35 @@ export class FirestoreDocumentReadRepository {
       }),
       { total: 0, ready: 0, pending: 0, chunks: 0 },
     );
+    const rows = allRows
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || a.id.localeCompare(b.id))
+      .slice(0, DOCUMENT_LIST_LIMIT);
+    const fileSnapshots = rows.length
+      ? await this.store.db.getAll(...rows.map((row) => this.store.doc('files', row.fileId)))
+      : [];
+    const fileMap = new Map<string, FileRow>();
+    for (const snapshot of fileSnapshots) {
+      if (!snapshot.exists) continue;
+      const file = decodeRecord<FileRow>(snapshot.data());
+      if (file.agentId === agentId && documentKey(file.id) === snapshot.id)
+        fileMap.set(file.id, file);
+    }
+    const listed = rows.map((row) => {
+      const file = fileMap.get(row.fileId);
+      if (!file)
+        throw new Error(`Documents could not verify file ownership for document ${row.id}`);
+      return {
+        ...row,
+        bytes: file.bytes ?? 0,
+        error: typeof row.error === 'string' ? row.error : null,
+      };
+    });
     await assertConfiguredOwner(this.store, agentId);
     await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
     return {
-      documents: rows.slice(0, 200).map(({ agentId: _agentId, fileId: _fileId, ...row }) => row),
+      documents: listed.map(({ agentId: _agentId, fileId: _fileId, ...row }) => row),
       stats,
+      primaryConversationId,
     };
   }
 
@@ -130,21 +170,26 @@ export class FirestoreDocumentReadRepository {
         .collection('documentChunks')
         .where('agentId', '==', agentId)
         .where('documentId', '==', id)
+        .limit(MAX_DETAIL_CHUNKS + 1)
         .get(),
     ]);
+    if (chunkSnapshot.size > MAX_DETAIL_CHUNKS)
+      throw new Error('Document detail exceeds the bounded chunk limit');
     const file = fileSnapshot.exists ? decodeRecord<FileRow>(fileSnapshot.data()) : null;
+    if (!file || file.agentId !== agentId || file.id !== row.fileId)
+      throw new Error(`Documents could not verify file ownership for document ${row.id}`);
     const chunks = chunkSnapshot.docs
       .flatMap((doc) => {
         const chunk = owned<ChunkRow>(doc, agentId);
-        return chunk && chunk.documentId === id
-          ? [
-              {
-                chunkIndex: chunk.chunkIndex,
-                text: chunk.text,
-                charCount: chunk.charCount,
-              },
-            ]
-          : [];
+        if (!chunk || chunk.documentId !== id)
+          throw new Error('Document detail contains a chunk with invalid owner or identity');
+        return [
+          {
+            chunkIndex: chunk.chunkIndex,
+            text: chunk.text,
+            charCount: chunk.charCount,
+          },
+        ];
       })
       .sort((a, b) => a.chunkIndex - b.chunkIndex);
     await assertConfiguredOwner(this.store, agentId);
@@ -155,9 +200,34 @@ export class FirestoreDocumentReadRepository {
       ...document
     } = {
       ...row,
-      bytes: file?.agentId === agentId && file.id === row.fileId ? (file.bytes ?? 0) : 0,
+      bytes: file.bytes ?? 0,
       error: typeof row.error === 'string' ? row.error : null,
     };
     return { document, chunks };
+  }
+
+  private async readOwnerDocuments(agentId: string): Promise<DocumentRow[]> {
+    const query = this.store
+      .collection('documents')
+      .where('agentId', '==', agentId)
+      .orderBy(FieldPath.documentId());
+    const rows: DocumentRow[] = [];
+    let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+    let scanned = 0;
+    for (;;) {
+      const page = await (cursor ? query.startAfter(cursor) : query)
+        .limit(DOCUMENT_PAGE_SIZE)
+        .get();
+      scanned += page.size;
+      if (scanned > MAX_DOCUMENTS) throw new Error('Documents exceed the bounded owner scan limit');
+      for (const snapshot of page.docs) {
+        const row = owned<DocumentRow>(snapshot, agentId);
+        if (!row) throw new Error('Documents contains a row with invalid owner or identity');
+        rows.push(row);
+      }
+      if (page.size < DOCUMENT_PAGE_SIZE) return rows;
+      cursor = page.docs.at(-1);
+      if (!cursor) throw new Error('Documents owner scan cursor did not advance');
+    }
   }
 }

@@ -48,7 +48,7 @@ export async function GET(request: Request): Promise<Response> {
         isModuleEnabled(config, 'documents')
           ? new FirestoreDocumentReadRepository(store, config.FIRESTORE_AGENT_ID)
               .list(config.FIRESTORE_AGENT_ID)
-              .then((result) => ({ ...result, primaryConversationId: null }))
+              .then((result) => result)
           : Promise.resolve({
               documents: [],
               stats: { total: 0, ready: 0, pending: 0, chunks: 0 },

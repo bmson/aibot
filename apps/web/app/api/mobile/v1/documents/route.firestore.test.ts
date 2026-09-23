@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { resetConfigForTest } from '@assistant/config';
-import { createInstallationStore } from '@assistant/firestore';
+import { createInstallationStore, FirestoreDocumentReadRepository } from '@assistant/firestore';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ mobile: vi.fn(), store: null as unknown }));
@@ -28,6 +28,7 @@ describe.skipIf(!emulator)('Firestore mobile Documents reads with PostgreSQL off
   const otherAgentId = randomUUID();
   const documentId = randomUUID();
   const foreignDocumentId = randomUUID();
+  const primaryConversationId = randomUUID();
   const fileId = randomUUID();
   const otherFileId = randomUUID();
   const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
@@ -54,6 +55,20 @@ describe.skipIf(!emulator)('Firestore mobile Documents reads with PostgreSQL off
     auth.store = store;
     await Promise.all([
       store.doc('agents', agentId).set({ id: agentId }),
+      store.doc('conversations', primaryConversationId).set({
+        id: primaryConversationId,
+        agentId,
+        channel: 'chat',
+        title: '',
+        trust: 'owner',
+        modelOverride: null,
+        isPrimary: true,
+        metadata: {},
+        archivedAt: null,
+        lastReadAt: null,
+        createdAt: now,
+        updatedAt: now,
+      }),
       store.doc('files', fileId).set({ id: fileId, agentId, bytes: 456 }),
       store.doc('files', otherFileId).set({ id: otherFileId, agentId: otherAgentId, bytes: 99 }),
       store.doc('documents', documentId).set({
@@ -146,6 +161,7 @@ describe.skipIf(!emulator)('Firestore mobile Documents reads with PostgreSQL off
       },
     ]);
     expect(list.stats).toEqual({ total: 1, ready: 1, pending: 0, chunks: 2 });
+    expect(list.primaryConversationId).toBe(primaryConversationId);
     expect(JSON.stringify(list)).not.toContain('Private foreign doc');
 
     const detailResponse = await getDetail(new Request(`${url}/${documentId}`), {
@@ -211,6 +227,90 @@ describe.skipIf(!emulator)('Firestore mobile Documents reads with PostgreSQL off
     } finally {
       vi.stubEnv('ASSISTANT_MODULES', 'documents');
       resetConfigForTest();
+    }
+  });
+
+  it('rejects other unsupported modules instead of bypassing persistence validation', async () => {
+    vi.stubEnv('ASSISTANT_MODULES', 'documents,google');
+    resetConfigForTest();
+    try {
+      const { GET } = await import('./route.js');
+      const response = await GET(new Request(url));
+      expect(response.status).toBe(503);
+      expect((await response.json()).error).toContain('only ASSISTANT_MODULES=reminders,calendar');
+    } finally {
+      vi.stubEnv('ASSISTANT_MODULES', 'documents');
+      resetConfigForTest();
+    }
+  });
+
+  it('fails explicitly when the owner document scan exceeds its bound', async () => {
+    const ids: string[] = [];
+    for (let offset = 0; offset < 5_000; offset += 500) {
+      const batch = store.db.batch();
+      for (let index = offset; index < Math.min(offset + 500, 5_000); index++) {
+        const id = randomUUID();
+        ids.push(id);
+        batch.set(store.doc('documents', id), {
+          id,
+          agentId,
+          fileId: randomUUID(),
+          title: 'Bound fixture',
+          mime: 'text/plain',
+          source: 'upload',
+          trust: 'owner',
+          status: 'ready',
+          extractor: 'text',
+          chunkCount: 0,
+          charCount: 0,
+          error: null,
+          createdAt: now,
+        });
+      }
+      await batch.commit();
+    }
+    try {
+      await expect(
+        new FirestoreDocumentReadRepository(store, agentId).list(agentId),
+      ).rejects.toThrow('bounded owner scan limit');
+    } finally {
+      for (let offset = 0; offset < ids.length; offset += 500) {
+        const batch = store.db.batch();
+        for (const id of ids.slice(offset, offset + 500)) batch.delete(store.doc('documents', id));
+        await batch.commit();
+      }
+    }
+  });
+
+  it('fails explicitly when a document detail exceeds its chunk bound', async () => {
+    const chunkIds: string[] = [];
+    for (let offset = 0; offset < 1_001; offset += 500) {
+      const batch = store.db.batch();
+      for (let index = offset; index < Math.min(offset + 500, 1_001); index++) {
+        const id = `overflow-${index}`;
+        chunkIds.push(id);
+        batch.set(store.doc('documentChunks', id), {
+          id,
+          agentId,
+          documentId,
+          chunkIndex: index,
+          text: 'overflow fixture',
+          charCount: 16,
+        });
+      }
+      await batch.commit();
+    }
+    try {
+      await expect(
+        new FirestoreDocumentReadRepository(store, agentId).get(agentId, documentId),
+      ).rejects.toThrow('bounded chunk limit');
+    } finally {
+      for (let offset = 0; offset < chunkIds.length; offset += 500) {
+        const batch = store.db.batch();
+        for (const id of chunkIds.slice(offset, offset + 500))
+          batch.delete(store.doc('documentChunks', id));
+        await batch.commit();
+      }
     }
   });
 });
