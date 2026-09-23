@@ -102,6 +102,7 @@ import {
   createInstallationStore,
   FirestoreApplicationChatPersistence,
   FirestoreGoalMutationRepository,
+  FirestoreMcpConnectionMutationRepository,
   FirestoreShellStatusRepository,
   FirestoreSkillMutationRepository,
 } from '@assistant/firestore';
@@ -139,6 +140,44 @@ export function getFirestoreInstallationStore() {
     databaseId: config.FIRESTORE_DATABASE_ID,
   });
   return globalCache.__assistantFirestoreStore;
+}
+
+/** Run guarded discovery through the shared SSRF-checked MCP transport. */
+export async function discoverFirestoreMcpConnection(connectionId: string) {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER !== 'firestore')
+    return { error: 'Firestore MCP discovery requires Firestore persistence.' };
+  const repository = new FirestoreMcpConnectionMutationRepository(
+    getFirestoreInstallationStore(),
+    config.FIRESTORE_AGENT_ID,
+  );
+  try {
+    const connection = await repository.beginDiscovery(connectionId);
+    if (!connection) return { error: 'MCP connection not found or disabled.' };
+    const result = await inspectMcpConnection(connection.endpoint, {
+      bearerTokenEncrypted: connection.bearerTokenEncrypted,
+    });
+    if (
+      !(await repository.saveDiscovery(connectionId, connection.attemptId, {
+        status: result.status,
+        serverName: result.serverName ?? null,
+        serverVersion: result.serverVersion ?? null,
+        instructions: result.instructions ?? null,
+        tools: result.tools,
+        error: result.error ?? null,
+      }))
+    )
+      return { error: 'MCP connection changed while discovery was running.' };
+    return {
+      connectionId,
+      status: result.status,
+      ...(result.error ? { error: result.error } : {}),
+    };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : 'MCP discovery could not be completed.',
+    };
+  }
 }
 
 export function getFirestoreGoalScheduleUpdate(id: string, input: GoalInput) {

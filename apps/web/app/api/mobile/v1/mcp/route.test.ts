@@ -9,11 +9,15 @@ import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ allowed: vi.fn() }));
+const discovery = vi.hoisted(() => ({ inspect: vi.fn() }));
 vi.mock('@/mobile-auth', () => ({
   isMobileAuthed: auth.allowed,
   mobileJson: (value: unknown, init?: ResponseInit) =>
     Response.json(value, { ...init, headers: { 'cache-control': 'no-store' } }),
   mobileUnauthorized: () => Response.json({ error: 'unauthorized' }, { status: 401 }),
+}));
+vi.mock('@assistant/tools/mcp', () => ({
+  inspectMcpConnection: discovery.inspect,
 }));
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
@@ -73,6 +77,13 @@ describe.skipIf(!localEmulator)(
       vi.stubEnv('LOCATION_PING_SECRET', '');
       resetConfigForTest();
       auth.allowed.mockResolvedValue(true);
+      discovery.inspect.mockResolvedValue({
+        status: 'ready',
+        serverName: 'Mock MCP',
+        serverVersion: '1.2',
+        instructions: 'Mock instructions',
+        tools: [{ name: 'lookup', description: 'Find records', inputSchema: { type: 'object' } }],
+      });
       route = await import('./route.js');
       itemRoute = await import('./[id]/route.js');
       const alphaId = randomUUID();
@@ -157,7 +168,7 @@ describe.skipIf(!localEmulator)(
       await store.doc('privacyErasureJobs', agentId).delete();
     });
 
-    it('creates an encrypted owner connection and supports enable, disable, and delete offline', async () => {
+    it('discovers an encrypted owner connection and supports refresh, enable, disable, and delete offline', async () => {
       auth.allowed.mockResolvedValue(true);
       const createdResponse = await route.POST(
         new Request('http://localhost/api/mobile/v1/mcp', {
@@ -172,15 +183,16 @@ describe.skipIf(!localEmulator)(
       );
       expect(createdResponse.status).toBe(201);
       const created = await createdResponse.json();
-      expect(created).toMatchObject({
-        status: 'error',
-        error: 'MCP discovery is unavailable in Firestore mode.',
-      });
+      expect(created).toMatchObject({ connectionId: expect.any(String), status: 'ready' });
       const stored = await store.doc('mcpConnections', created.connectionId).get();
       expect(stored.get('name')).toBe('New Service');
       expect(stored.get('endpoint')).toBe('https://service.example.test/mcp');
       expect(stored.get('bearerTokenEncrypted')).not.toBe('owner-secret-token');
       expect(stored.get('bearerTokenEncrypted')).toMatch(/^v2\./);
+      expect(stored.get('serverName')).toBe('Mock MCP');
+      expect(stored.get('tools')).toEqual([
+        { name: 'lookup', description: 'Find records', inputSchema: { type: 'object' } },
+      ]);
 
       const postAction = (action: string) =>
         itemRoute.POST(
@@ -194,11 +206,11 @@ describe.skipIf(!localEmulator)(
       const disabled = await postAction('disable');
       expect(await disabled.json()).toMatchObject({ status: 'disabled' });
       const enabled = await postAction('enable');
-      expect(await enabled.json()).toMatchObject({
-        status: 'error',
-        error: 'MCP discovery is unavailable in Firestore mode.',
+      expect(await enabled.json()).toMatchObject({ status: 'ready' });
+      expect(await postAction('refresh').then((response) => response.json())).toMatchObject({
+        connectionId: created.connectionId,
+        status: 'ready',
       });
-      expect((await postAction('refresh')).status).toBe(503);
       expect((await store.doc('mcpConnections', created.connectionId).get()).get('enabled')).toBe(
         true,
       );
@@ -225,6 +237,82 @@ describe.skipIf(!localEmulator)(
       await store.doc('privacyErasureJobs', agentId).delete();
       expect(await repository.setEnabled(foreignId, false)).toBeNull();
       expect(await repository.delete(foreignId)).toBe(false);
+    });
+
+    it('does not save discovery results if erasure starts during the network request', async () => {
+      const id = randomUUID();
+      await store.doc('mcpConnections', id).set(connection(id, 'fenced-discovery'));
+      const repository = new FirestoreMcpConnectionMutationRepository(store, agentId);
+      await expect(repository.beginDiscovery(id)).resolves.toMatchObject({
+        endpoint: 'https://fenced-discovery.example.test/mcp',
+      });
+      await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+      await expect(
+        repository.saveDiscovery(id, 'stale-attempt', {
+          status: 'ready',
+          serverName: 'late result',
+          serverVersion: null,
+          instructions: null,
+          tools: [{ name: 'late' }],
+          error: null,
+        }),
+      ).rejects.toThrow('Privacy erasure is in progress');
+      await store.doc('privacyErasureJobs', agentId).delete();
+      expect((await store.doc('mcpConnections', id).get()).get('status')).toBe('checking');
+      await store.doc('mcpConnections', id).delete();
+    });
+
+    it('allows only the newest concurrent refresh to commit discovery metadata', async () => {
+      const id = randomUUID();
+      await store.doc('mcpConnections', id).set(connection(id, 'racing-discovery'));
+      const repository = new FirestoreMcpConnectionMutationRepository(store, agentId);
+      const first = await repository.beginDiscovery(id);
+      const second = await repository.beginDiscovery(id);
+      expect(first?.attemptId).not.toBe(second?.attemptId);
+      const discovery = {
+        status: 'ready' as const,
+        serverName: 'winner',
+        serverVersion: null,
+        instructions: null,
+        tools: [{ name: 'current' }],
+        error: null,
+      };
+      await expect(
+        repository.saveDiscovery(id, first?.attemptId ?? '', {
+          ...discovery,
+          serverName: 'stale response',
+        }),
+      ).resolves.toBe(false);
+      await expect(repository.saveDiscovery(id, second?.attemptId ?? '', discovery)).resolves.toBe(
+        true,
+      );
+      expect((await store.doc('mcpConnections', id).get()).get('serverName')).toBe('winner');
+      await store.doc('mcpConnections', id).delete();
+    });
+
+    it('returns HTTP success with the discovery error when an MCP endpoint rejects inspection', async () => {
+      discovery.inspect.mockResolvedValueOnce({
+        status: 'error',
+        tools: [],
+        error: 'Endpoint did not speak MCP.',
+      });
+      const response = await route.POST(
+        new Request('http://localhost/api/mobile/v1/mcp', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            name: 'Unresponsive MCP',
+            endpoint: 'https://unresponsive.example.test/mcp',
+          }),
+        }),
+      );
+      expect(response.status).toBe(201);
+      const body = await response.json();
+      expect(body).toMatchObject({
+        status: 'error',
+        error: 'Endpoint did not speak MCP.',
+      });
+      await store.doc('mcpConnections', body.connectionId).delete();
     });
   },
 );

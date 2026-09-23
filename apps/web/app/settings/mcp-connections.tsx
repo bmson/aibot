@@ -48,9 +48,11 @@ const STATUS: Record<
 export function McpConnectionsPanel({
   connections,
   discoveryAvailable = true,
+  executionAvailable = true,
 }: {
   connections: McpConnection[];
   discoveryAvailable?: boolean;
+  executionAvailable?: boolean;
 }) {
   const [name, setName] = useState('');
   const [endpoint, setEndpoint] = useState('');
@@ -80,7 +82,9 @@ export function McpConnectionsPanel({
       <div>
         <p className="text-sm leading-6 text-muted">
           {discoveryAvailable
-            ? 'Connect Streamable HTTP MCP servers here. The assistant can inspect their tools, but every remote call still follows your approval rules.'
+            ? executionAvailable
+              ? 'Connect Streamable HTTP MCP servers here. The assistant can inspect their tools, but every remote call still follows your approval rules.'
+              : 'Connect and inspect Streamable HTTP MCP servers here. MCP tool execution is not yet available with Firestore persistence.'
             : 'Save and manage Streamable HTTP MCP endpoints here. Tool discovery is unavailable with Firestore persistence.'}
         </p>
       </div>

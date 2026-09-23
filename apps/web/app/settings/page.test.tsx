@@ -6,8 +6,12 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ owner: vi.fn() }));
+const mcpDiscovery = vi.hoisted(() => ({ inspect: vi.fn() }));
 vi.mock('@/auth', () => ({ requireOwner: auth.owner }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
+vi.mock('@assistant/tools/mcp', () => ({
+  inspectMcpConnection: mcpDiscovery.inspect,
+}));
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
 const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
@@ -46,6 +50,12 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     vi.stubEnv('LOCATION_PING_SECRET', '');
     resetConfigForTest();
     auth.owner.mockResolvedValue({ user: { email: 'owner@example.test' } });
+    mcpDiscovery.inspect.mockResolvedValue({
+      status: 'ready',
+      serverName: 'Settings test MCP',
+      serverVersion: '1.0',
+      tools: [{ name: 'search' }],
+    });
     page = await import('./page.js');
     actions = await import('./actions.js');
 
@@ -151,7 +161,8 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     expect(html).toContain('Delete');
     expect(html).not.toContain('/costs');
     expect(html).toContain('MCP connections');
-    expect(html).toContain('Tool discovery is unavailable with Firestore persistence.');
+    expect(html).toContain('MCP tool execution is not yet available with Firestore persistence.');
+    expect(html).toContain('Add');
   });
 
   it('saves, toggles, and deletes MCP connections from Firestore Settings with encrypted credentials', async () => {
@@ -163,15 +174,13 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     expect(created).toEqual({});
     let pageMarkup = renderToStaticMarkup(await page.default());
     expect(pageMarkup).toContain('Settings MCP');
-    expect(pageMarkup).toContain('MCP discovery is unavailable in Firestore mode.');
+    expect(pageMarkup).toContain('Settings test MCP');
     const [connection] = (await store.collection('mcpConnections').get()).docs;
     expect(connection.get('bearerTokenEncrypted')).not.toBe('settings-secret-token');
     expect(connection.get('bearerTokenEncrypted')).toMatch(/^v2\./);
-    expect(connection.get('status')).toBe('error');
+    expect(connection.get('status')).toBe('ready');
 
-    expect(await actions.refreshMcpConnectionAction(connection.get('id'))).toEqual({
-      error: 'MCP discovery is unavailable in Firestore mode.',
-    });
+    expect(await actions.refreshMcpConnectionAction(connection.get('id'))).toEqual({});
     expect(await actions.setMcpConnectionEnabledAction(connection.get('id'), false)).toEqual({});
     expect((await store.doc('mcpConnections', connection.get('id')).get()).get('enabled')).toBe(
       false,

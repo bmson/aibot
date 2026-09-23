@@ -124,7 +124,16 @@ function safeTools(value: unknown): McpConnectionTool[] {
   });
 }
 
-/** Firestore owner mutations. Discovery is deliberately left to a future safe network boundary. */
+export type McpDiscoveryResult = {
+  status: 'ready' | 'authorization_required' | 'error';
+  serverName: string | null;
+  serverVersion: string | null;
+  instructions: string | null;
+  tools: McpConnectionTool[];
+  error: string | null;
+};
+
+/** Firestore owner mutations and fenced discovery persistence. */
 export class FirestoreMcpConnectionMutationRepository {
   constructor(
     readonly store: InstallationStore,
@@ -234,6 +243,76 @@ export class FirestoreMcpConnectionMutationRepository {
         updatedAt: this.now(),
       });
       return { connectionId: id, status };
+    });
+  }
+
+  /** Mark an enabled owner connection as checking and return private discovery inputs. */
+  async beginDiscovery(id: string): Promise<{
+    endpoint: string;
+    bearerTokenEncrypted: string | null;
+    attemptId: string;
+  } | null> {
+    const ref = this.store.doc('mcpConnections', id);
+    const attemptId = this.newId();
+    return this.store.db.runTransaction(async (tx) => {
+      await this.ownerInTransaction(tx);
+      const snapshot = await tx.get(ref);
+      if (!snapshot.exists) return null;
+      const row = decodeRecord<Records['mcpConnections']>(snapshot.data());
+      if (
+        row.id !== id ||
+        documentKey(row.id) !== snapshot.id ||
+        row.agentId !== this.configuredAgentId ||
+        !row.enabled
+      )
+        return null;
+      tx.update(ref, {
+        status: 'checking',
+        lastError: null,
+        discoveryAttemptId: attemptId,
+        updatedAt: this.now(),
+      });
+      return {
+        endpoint: row.endpoint,
+        bearerTokenEncrypted: row.bearerTokenEncrypted,
+        attemptId,
+      };
+    });
+  }
+
+  /** Persist results only if the same owner still has this connection enabled. */
+  async saveDiscovery(
+    id: string,
+    attemptId: string,
+    discovery: McpDiscoveryResult,
+  ): Promise<boolean> {
+    const ref = this.store.doc('mcpConnections', id);
+    return this.store.db.runTransaction(async (tx) => {
+      await this.ownerInTransaction(tx);
+      const snapshot = await tx.get(ref);
+      if (!snapshot.exists) return false;
+      const row = decodeRecord<Records['mcpConnections']>(snapshot.data());
+      if (
+        row.id !== id ||
+        documentKey(row.id) !== snapshot.id ||
+        row.agentId !== this.configuredAgentId ||
+        !row.enabled ||
+        row.status !== 'checking' ||
+        snapshot.get('discoveryAttemptId') !== attemptId
+      )
+        return false;
+      tx.update(ref, {
+        status: discovery.status,
+        serverName: discovery.serverName,
+        serverVersion: discovery.serverVersion,
+        instructions: discovery.instructions,
+        tools: discovery.tools,
+        lastCheckedAt: this.now(),
+        lastError: discovery.error,
+        discoveryAttemptId: null,
+        updatedAt: this.now(),
+      });
+      return true;
     });
   }
 

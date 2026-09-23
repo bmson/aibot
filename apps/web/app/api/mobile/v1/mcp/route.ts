@@ -4,6 +4,7 @@ import {
   FirestoreMcpConnectionReadRepository,
 } from '@assistant/firestore';
 import {
+  discoverFirestoreMcpConnection,
   encryptMcpConnectionBearerToken,
   getApplication,
   getFirestoreInstallationStore,
@@ -69,18 +70,24 @@ export async function POST(request: Request): Promise<Response> {
       getFirestoreInstallationStore(),
       config.FIRESTORE_AGENT_ID,
     ).create({ name: body.name, endpoint: body.endpoint, bearerTokenEncrypted });
-    return 'error' in result
+    if (!('connectionId' in result))
+      return mobileJson(
+        { error: result.error },
+        {
+          status:
+            result.error === 'Give this MCP connection a name.' ||
+            result.error.startsWith('Enter an HTTP')
+              ? 400
+              : 409,
+        },
+      );
+    const discovery = await discoverFirestoreMcpConnection(result.connectionId);
+    return !('status' in discovery)
       ? mobileJson(
-          { error: result.error },
-          {
-            status:
-              result.error === 'Give this MCP connection a name.' ||
-              result.error === 'Enter an HTTP or HTTPS MCP endpoint without embedded credentials.'
-                ? 400
-                : 409,
-          },
+          { connectionId: result.connectionId, status: 'error', error: discovery.error },
+          { status: 201 },
         )
-      : mobileJson(result, { status: 201 });
+      : mobileJson(discovery, { status: 201 });
   }
   const result = await getApplication().addMcpConnection({
     name: body.name,

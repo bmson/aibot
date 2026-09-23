@@ -13,6 +13,7 @@ import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import { runFirestoreSettingsMutation } from '@/lib/firestore-settings-mutation';
 import {
+  discoverFirestoreMcpConnection,
   encryptMcpConnectionBearerToken,
   getApplication,
   getFirestoreInstallationStore,
@@ -124,6 +125,7 @@ export async function createMcpConnectionAction(input: {
       config.FIRESTORE_AGENT_ID,
     ).create({ name: input.name, endpoint: input.endpoint, bearerTokenEncrypted });
     if (!('connectionId' in result)) return { error: result.error };
+    await discoverFirestoreMcpConnection(result.connectionId);
     revalidateSettings();
     return {};
   }
@@ -136,10 +138,17 @@ export async function createMcpConnectionAction(input: {
 /** Re-run MCP tool discovery without changing the saved endpoint. */
 export async function refreshMcpConnectionAction(id: string): Promise<{ error?: string }> {
   await requireOwner();
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-    return { error: 'MCP discovery is unavailable in Firestore mode.' };
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return { error: problems.join('; ') };
+    const result = await discoverFirestoreMcpConnection(id);
+    if (!('status' in result)) return { error: result.error };
+    revalidateSettings();
+    return {};
+  }
   const result = await getApplication().refreshMcpConnection(id);
-  if ('error' in result) return { error: result.error };
+  if (!('status' in result)) return { error: result.error };
   revalidateSettings();
   return {};
 }
@@ -159,6 +168,10 @@ export async function setMcpConnectionEnabledAction(
       config.FIRESTORE_AGENT_ID,
     ).setEnabled(id, enabled);
     if (!result) return { error: 'MCP connection not found.' };
+    if (enabled) {
+      const discovery = await discoverFirestoreMcpConnection(id);
+      if (!('status' in discovery)) return { error: discovery.error };
+    }
     revalidateSettings();
     return {};
   }
