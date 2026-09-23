@@ -245,6 +245,7 @@ describe('customer-owned image publisher', () => {
     await expect(stat(configured?.dockerConfig ?? '')).rejects.toMatchObject({ code: 'ENOENT' });
     for (const build of builds) {
       expect(build.args).toContain(`GIT_SHA=${sha}`);
+      expect(build.args).toContain('--provenance=false');
       expect(build.args).toContain('--push');
       expect(build.args[build.args.indexOf('--tag') + 1]).toMatch(
         new RegExp(

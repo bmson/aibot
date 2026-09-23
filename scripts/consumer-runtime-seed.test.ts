@@ -32,7 +32,7 @@ function fixture(installationId = `seed-${randomUUID()}`) {
     embeddingSpace: {
       provider: 'vertex',
       model: 'example-embedding',
-      dimensions: 768,
+      dimensions: 1536,
       revision: 'fixture-v1',
     },
     models: [
@@ -93,6 +93,12 @@ describe('consumer runtime seed plan', () => {
       planConsumerRuntimeSeed({
         ...input,
         embeddingSpace: { ...input.embeddingSpace, model: 'foreign-embedding' },
+      }),
+    ).toThrow();
+    expect(() =>
+      planConsumerRuntimeSeed({
+        ...input,
+        embeddingSpace: { ...input.embeddingSpace, dimensions: 768 },
       }),
     ).toThrow();
     expect(() =>

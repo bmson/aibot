@@ -218,6 +218,7 @@ async function publishOne(
       'build',
       '--platform',
       'linux/amd64',
+      '--provenance=false',
       '--file',
       path.join(context, 'infra/docker', `${name}.Dockerfile`),
       '--build-arg',

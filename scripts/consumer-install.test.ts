@@ -20,7 +20,7 @@ const agentId = '8202725c-1311-4eec-bddc-698c92db37d4';
 const embeddingSpace = {
   provider: 'vertex',
   model: 'example-embedding',
-  dimensions: 768,
+  dimensions: 1536,
   revision: 'fixture-v1',
 };
 

@@ -108,6 +108,26 @@ describe('injected model providers', () => {
       location: 'global',
       apiKey: '',
     });
+    expect(
+      createConfiguredModelProvider({
+        ...config,
+        LLM_PROVIDER: 'vertex',
+        VERTEX_PROJECT: 'customer-project',
+        VERTEX_LOCATION: 'global',
+        FIRESTORE_EMBEDDING_SPACE:
+          '{"provider":"vertex","model":"gemini-embedding-001","dimensions":768,"revision":"v1"}',
+      }).embeddingOptions(),
+    ).toEqual({ vertex: { outputDimensionality: 768 } });
+    expect(() =>
+      createConfiguredModelProvider({
+        ...config,
+        LLM_PROVIDER: 'vertex',
+        VERTEX_PROJECT: 'customer-project',
+        VERTEX_LOCATION: 'global',
+        FIRESTORE_EMBEDDING_SPACE:
+          '{"provider":"openrouter","model":"other","dimensions":768,"revision":"v1"}',
+      }),
+    ).toThrow('Vertex Firestore embedding space');
   });
 
   it('does not record Vertex request IDs as OpenRouter generation IDs', async () => {
@@ -160,6 +180,12 @@ describe('injected model providers', () => {
       vertex: { thinkingConfig: { thinkingBudget: 0 } },
     });
     expect(vertex.optionsFor({ reasoning: 'unsupported' })).toBeUndefined();
+    expect(
+      vertex.optionsFor({ reasoning: 'enabled', modelId: 'vertex/gemini-3.1-flash-lite' }),
+    ).toEqual({ vertex: { thinkingConfig: { thinkingLevel: 'high' } } });
+    expect(
+      vertex.optionsFor({ reasoning: 'disabled', modelId: 'vertex/gemini-3.1-flash-lite' }),
+    ).toEqual({ vertex: { thinkingConfig: { thinkingLevel: 'minimal' } } });
     expect(vertex.embeddingOptions()).toEqual({ vertex: { outputDimensionality: 1_536 } });
     expect(() => vertex.assertModelId('vertex:gemini-3.8-flash')).not.toThrow();
     expect(() => vertex.assertModelId('vertex:text-embedding-005')).not.toThrow();
@@ -216,6 +242,13 @@ describe('injected model providers', () => {
     expect(() =>
       createVertexModelProvider({ project: 'assistant-prod', location: 'global' }),
     ).not.toThrow();
+    expect(() =>
+      createVertexModelProvider({
+        project: 'assistant-prod',
+        location: 'global',
+        embeddingDimensions: 0,
+      }),
+    ).toThrow('embedding dimensions');
   });
 
   it('forces ADC even when the Vertex API-key environment setting exists', async () => {

@@ -100,10 +100,11 @@ For the optional runtime, create three enabled, numbered owner-auth Secret Manag
   "firestoreAgentId": "11111111-1111-4111-8111-111111111111",
   "firestoreEmbeddingSpace": {
     "provider": "vertex",
-    "model": "text-embedding-005",
-    "dimensions": 768,
+    "model": "gemini-embedding-001",
+    "dimensions": 1536,
     "revision": "customer-seed-v1"
   },
+  "vertexLocation": "global",
   "ownerEmail": "owner@example.com",
   "webAuthUrl": "https://assistant.example.com",
   "authSecretVersion": 1,
@@ -112,6 +113,8 @@ For the optional runtime, create three enabled, numbered owner-auth Secret Manag
   "mobileApiTokenVersion": 1
 }
 ```
+
+Set `vertexLocation` to a location where the selected Google models are available. It defaults to the Cloud Run region when omitted. Current global-only models need `"global"`; Cloud Run, Firestore, and storage remain in the installation region. The runtime checks the configured Vertex location against the deployed web service before marking the stage initialized.
 
 Create the mobile secret in the customer's Secret Manager console and add a high-entropy token as a secret version. Generate the token locally with a trusted password manager or other cryptographically secure generator; keep its value out of shell arguments, terminal output, Terraform variables, the runtime JSON, installation archives, source control, and chat. Copy only the **version number** into `mobileApiTokenVersion`. The installer checks that exact version is enabled and binds `MOBILE_API_TOKEN` to the web Cloud Run service account only; it never retrieves the payload. Transfer the token itself through a private, trusted password-manager channel to the owner's iPhone, then enter it once in the app's **Connection → Mobile access key** field alongside the configured HTTPS server URL. The app stores it in the device Keychain. The customer must verify an authenticated mobile request after web access is configured; provisioning alone does not establish mobile readiness.
 
