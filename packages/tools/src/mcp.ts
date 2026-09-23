@@ -32,6 +32,26 @@ export interface McpInspection {
   error?: string;
 }
 
+export interface McpToolConnectionSummary {
+  id: string;
+  name: string;
+  status: string;
+  enabled: boolean;
+  serverName: string | null;
+  tools: unknown;
+}
+
+export interface McpToolConnectionRecord extends McpToolConnectionSummary {
+  endpoint: string;
+  bearerTokenEncrypted: string | null;
+}
+
+/** Persistence port used by owner-scoped MCP tools in portable runtimes. */
+export interface McpToolConnectionReadPort {
+  list(agentId: string): Promise<McpToolConnectionSummary[]>;
+  get(agentId: string, connectionId: string): Promise<McpToolConnectionRecord | null>;
+}
+
 type FetchImplementation = typeof fetch;
 
 interface McpSession {
@@ -452,7 +472,45 @@ async function invokeMcpTool(
  * a saved server and its cached tool list first; every invocation then passes
  * through the existing approval, audit, and taint spine.
  */
-export function registerMcpTools(registry: ToolRegistry): ToolRegistry {
+export function registerMcpTools(
+  registry: ToolRegistry,
+  connectionReadPort?: McpToolConnectionReadPort,
+): ToolRegistry {
+  const listConnections = async (ctx: import('./types.js').ToolContext) => {
+    if (connectionReadPort) return connectionReadPort.list(ctx.agentId);
+    return ctx.db
+      .select({
+        id: mcpConnections.id,
+        name: mcpConnections.name,
+        status: mcpConnections.status,
+        enabled: mcpConnections.enabled,
+        serverName: mcpConnections.serverName,
+        tools: mcpConnections.tools,
+      })
+      .from(mcpConnections)
+      .where(eq(mcpConnections.agentId, ctx.agentId))
+      .orderBy(asc(mcpConnections.name));
+  };
+  const getConnection = async (
+    ctx: import('./types.js').ToolContext,
+    connectionId: string,
+  ): Promise<McpToolConnectionRecord | null> => {
+    if (connectionReadPort) return connectionReadPort.get(ctx.agentId, connectionId);
+    const [row] = await ctx.db
+      .select({
+        id: mcpConnections.id,
+        name: mcpConnections.name,
+        status: mcpConnections.status,
+        enabled: mcpConnections.enabled,
+        serverName: mcpConnections.serverName,
+        tools: mcpConnections.tools,
+        endpoint: mcpConnections.endpoint,
+        bearerTokenEncrypted: mcpConnections.bearerTokenEncrypted,
+      })
+      .from(mcpConnections)
+      .where(and(eq(mcpConnections.id, connectionId), eq(mcpConnections.agentId, ctx.agentId)));
+    return row ?? null;
+  };
   register(
     registry,
     {
@@ -463,18 +521,7 @@ export function registerMcpTools(registry: ToolRegistry): ToolRegistry {
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (_args, ctx) => {
-        const rows = await ctx.db
-          .select({
-            id: mcpConnections.id,
-            name: mcpConnections.name,
-            status: mcpConnections.status,
-            enabled: mcpConnections.enabled,
-            serverName: mcpConnections.serverName,
-            tools: mcpConnections.tools,
-          })
-          .from(mcpConnections)
-          .where(eq(mcpConnections.agentId, ctx.agentId))
-          .orderBy(asc(mcpConnections.name));
+        const rows = await listConnections(ctx);
         return {
           connections: rows.map((row) => ({
             id: row.id,
@@ -499,17 +546,7 @@ export function registerMcpTools(registry: ToolRegistry): ToolRegistry {
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
-        const [connection] = await ctx.db
-          .select({
-            name: mcpConnections.name,
-            status: mcpConnections.status,
-            enabled: mcpConnections.enabled,
-            tools: mcpConnections.tools,
-          })
-          .from(mcpConnections)
-          .where(
-            and(eq(mcpConnections.id, args.connectionId), eq(mcpConnections.agentId, ctx.agentId)),
-          );
+        const connection = await getConnection(ctx, args.connectionId);
         if (!connection) return { error: 'MCP connection not found.' };
         if (!connection.enabled || connection.status !== 'ready') {
           return { error: `MCP connection ${connection.name} is not ready.` };
@@ -541,19 +578,7 @@ export function registerMcpTools(registry: ToolRegistry): ToolRegistry {
       approvalSummary: (args) =>
         `Call MCP tool ${args.toolName} with ${clip(JSON.stringify(args.arguments), 360) || 'no arguments'}`,
       execute: async (args, ctx) => {
-        const [connection] = await ctx.db
-          .select({
-            endpoint: mcpConnections.endpoint,
-            name: mcpConnections.name,
-            status: mcpConnections.status,
-            enabled: mcpConnections.enabled,
-            tools: mcpConnections.tools,
-            bearerTokenEncrypted: mcpConnections.bearerTokenEncrypted,
-          })
-          .from(mcpConnections)
-          .where(
-            and(eq(mcpConnections.id, args.connectionId), eq(mcpConnections.agentId, ctx.agentId)),
-          );
+        const connection = await getConnection(ctx, args.connectionId);
         if (!connection) throw new Error('MCP connection not found.');
         if (!connection.enabled || connection.status !== 'ready') {
           throw new Error(`MCP connection ${connection.name} is not ready.`);

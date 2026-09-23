@@ -100,6 +100,57 @@ export class FirestoreMcpConnectionReadRepository {
     await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
     return rows;
   }
+
+  /** Private runtime projection: bearer ciphertext is returned only to the tool adapter. */
+  async getForTools(
+    agentId: string,
+    connectionId: string,
+  ): Promise<{
+    id: string;
+    name: string;
+    status: string;
+    enabled: boolean;
+    serverName: string | null;
+    tools: McpConnectionTool[];
+    endpoint: string;
+    bearerTokenEncrypted: string | null;
+  } | null> {
+    if (agentId !== this.configuredAgentId)
+      throw new Error('MCP connection read is outside the configured installation');
+    await this.assertConfiguredOwner();
+    const fence = await readPrivacyErasureFence(this.store, agentId);
+    const snapshot = await this.store.doc('mcpConnections', connectionId).get();
+    if (!snapshot.exists) {
+      await this.assertConfiguredOwner();
+      await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+      return null;
+    }
+    const row = decodeRecord<Records['mcpConnections']>(snapshot.data());
+    const invalid =
+      row.id !== connectionId ||
+      documentKey(row.id) !== snapshot.id ||
+      row.agentId !== agentId ||
+      typeof row.name !== 'string' ||
+      typeof row.endpoint !== 'string' ||
+      typeof row.enabled !== 'boolean' ||
+      typeof row.status !== 'string' ||
+      !MCP_CONNECTION_STATUSES.includes(row.status as McpConnectionStatus);
+    const result = invalid
+      ? null
+      : {
+          id: row.id,
+          name: row.name,
+          status: row.enabled ? row.status : 'disabled',
+          enabled: row.enabled,
+          serverName: row.serverName,
+          tools: safeTools(row.tools),
+          endpoint: row.endpoint,
+          bearerTokenEncrypted: row.bearerTokenEncrypted,
+        };
+    await this.assertConfiguredOwner();
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    return result;
+  }
 }
 
 const pendingDiscoveryError = 'MCP discovery is unavailable in Firestore mode.';
