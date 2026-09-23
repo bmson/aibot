@@ -19,6 +19,10 @@ function isAlreadyExists(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 6;
 }
 
+function isPreconditionFailed(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 9;
+}
+
 function watchRecord(
   input: WatchCreateInput,
   id: string,
@@ -444,29 +448,56 @@ export class FirestoreWatchRepository implements WatchRepository {
       )
         return null;
     }
-    if (suggestion.conversationId !== conversationId) {
-      await suggestionRef.update(encodeRecord({ conversationId, updatedAt: now }));
-      suggestion = { ...suggestion, conversationId, updatedAt: now };
-    }
-    // A destination may have been removed after its first read. Repair the
-    // suggestion before returning it, including a partially completed commit.
-    const destination = await this.store.doc('conversations', conversationId).get();
-    const destinationConversation = destination.exists
-      ? decodeRecord<Records['conversations']>(destination.data())
-      : null;
-    if (
-      !destinationConversation ||
-      destinationConversation.agentId !== input.agentId ||
-      documentKey(destinationConversation.id) !== destination.id
-    ) {
-      const replacement = await ensureNotifications();
-      if (!replacement) return null;
-      conversationId = replacement;
-      if (suggestion.conversationId !== replacement) {
-        await suggestionRef.update(encodeRecord({ conversationId: replacement, updatedAt: now }));
-        suggestion = { ...suggestion, conversationId: replacement, updatedAt: now };
+    // A competing commit may have linked the suggestion after our first read.
+    // Preserve any current owner-scoped destination and repair stale links with
+    // a compare-and-swap so a later caller cannot overwrite that decision.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      suggestionSnapshot = await suggestionRef.get();
+      if (!suggestionSnapshot.exists) return null;
+      suggestion = decodeRecord<Records['suggestions']>(suggestionSnapshot.data());
+      if (
+        documentKey(suggestion.id) !== suggestionSnapshot.id ||
+        suggestion.agentId !== input.agentId ||
+        suggestion.sourceRef !== sourceRef
+      )
+        return null;
+      let selectedId: string | null = null;
+      const currentCandidates = [suggestion.conversationId, watch.conversationId].filter(
+        (id, index, all): id is string => Boolean(id) && all.indexOf(id) === index,
+      );
+      for (const candidateId of currentCandidates) {
+        const candidate = await this.store.doc('conversations', candidateId).get();
+        if (!candidate.exists) continue;
+        const row = decodeRecord<Records['conversations']>(candidate.data());
+        if (documentKey(row.id) === candidate.id && row.agentId === input.agentId) {
+          selectedId = row.id;
+          break;
+        }
       }
+      if (!selectedId) selectedId = await ensureNotifications();
+      if (!selectedId) return null;
+      const priorUpdateTime = suggestionSnapshot.updateTime;
+      if (!priorUpdateTime) return null;
+      if (suggestion.conversationId !== selectedId) {
+        try {
+          await suggestionRef.update(encodeRecord({ conversationId: selectedId, updatedAt: now }), {
+            lastUpdateTime: priorUpdateTime,
+          });
+        } catch (error) {
+          if (isPreconditionFailed(error)) continue;
+          throw error;
+        }
+        continue;
+      }
+      const destination = await this.store.doc('conversations', selectedId).get();
+      if (!destination.exists) continue;
+      const row = decodeRecord<Records['conversations']>(destination.data());
+      if (documentKey(row.id) !== destination.id || row.agentId !== input.agentId) continue;
+      const latestSuggestion = await suggestionRef.get();
+      if (!latestSuggestion.exists) return null;
+      if (!latestSuggestion.updateTime?.isEqual(priorUpdateTime)) continue;
+      return { suggestion, conversationId: selectedId, fireId: fire.id, watchName: watch.name };
     }
-    return { suggestion, conversationId, fireId: fire.id, watchName: watch.name };
+    throw new Error('Watch suggestion destination changed during concurrent commits');
   }
 }

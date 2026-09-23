@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FirestoreApplicationChatPersistence } from './application-chat.js';
 import { decodeRecord } from './store.js';
 import { disposeStore, emulatorStore } from './test-store.js';
@@ -382,6 +382,86 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore watches', () =>
       expect((await store.doc('conversations', first.conversationId).get()).get('agentId')).toBe(
         'agent-a',
       );
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('does not overwrite a newer owner-scoped suggestion destination', async () => {
+    const store = emulatorStore();
+    try {
+      const repository = new FirestoreWatchRepository(store);
+      const now = new Date('2026-09-19T12:00:00Z');
+      const watch = await repository.create({
+        agentId: 'agent-a',
+        kind: 'email',
+        tier: 'suggest',
+        name: 'Destination race',
+        match: {},
+        maxFires: null,
+        expiresAt: new Date('2026-09-20T12:00:00Z'),
+      });
+      await store.doc('conversations', 'foreign').set({
+        id: 'foreign',
+        agentId: 'agent-b',
+        title: 'Foreign',
+      });
+      await store.doc('conversations', 'new-owner-destination').set({
+        id: 'new-owner-destination',
+        agentId: 'agent-a',
+        title: 'Owner destination',
+      });
+      await store.doc('watches', watch.id).update({ conversationId: 'foreign' });
+      await repository.recordFire({
+        watchId: watch.id,
+        agentId: 'agent-a',
+        triggerRef: 'gmail:destination-race',
+        summary: 'race',
+        excerpt: '',
+        now,
+      });
+      const suggestionRef = store.doc('suggestions', 'legacy-race');
+      await suggestionRef.set({
+        id: 'legacy-race',
+        agentId: 'agent-a',
+        sourceRef: `watch:${watch.id}:gmail:destination-race`,
+        conversationId: 'foreign',
+      });
+
+      const prototype = Object.getPrototypeOf(suggestionRef) as {
+        update: typeof suggestionRef.update;
+      };
+      const originalUpdate = prototype.update;
+      let injected = false;
+      const updateSpy = vi.spyOn(prototype, 'update').mockImplementation(function (
+        this: typeof suggestionRef,
+        ...args
+      ) {
+        if (this.path === suggestionRef.path && !injected) {
+          injected = true;
+          const competingUpdate = Reflect.apply(originalUpdate, this, [
+            { conversationId: 'new-owner-destination', updatedAt: now },
+          ]) as ReturnType<typeof suggestionRef.update>;
+          return competingUpdate.then(() => Reflect.apply(originalUpdate, this, args));
+        }
+        return Reflect.apply(originalUpdate, this, args);
+      });
+      try {
+        const result = await repository.commitSuggestion({
+          agentId: 'agent-a',
+          watchId: watch.id,
+          triggerRef: 'gmail:destination-race',
+          summary: 'Race',
+          proposedAction: 'Act',
+          now,
+        });
+        expect(injected).toBe(true);
+        expect(result?.conversationId).toBe('new-owner-destination');
+        expect(result?.suggestion.conversationId).toBe('new-owner-destination');
+        expect((await suggestionRef.get()).get('conversationId')).toBe('new-owner-destination');
+      } finally {
+        updateSpy.mockRestore();
+      }
     } finally {
       await disposeStore(store);
     }
