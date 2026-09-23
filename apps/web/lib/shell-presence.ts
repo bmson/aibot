@@ -14,6 +14,7 @@ function getFirestoreRepository(config: ReturnType<typeof loadConfig>) {
     createInstallationStore({
       projectId: config.GCP_PROJECT,
       installationId: config.ASSISTANT_WORKSPACE_ID,
+      databaseId: config.FIRESTORE_DATABASE_ID,
     }),
     config.FIRESTORE_AGENT_ID,
   );

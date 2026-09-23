@@ -113,7 +113,8 @@ describe('consumer runtime seed plan', () => {
     const file = path.join(directory, 'plan.json');
     const previousCredentials = process.env.GOOGLE_APPLICATION_CREDENTIALS;
     try {
-      await writeFile(file, JSON.stringify(fixture()), 'utf8');
+      const input = fixture();
+      await writeFile(file, JSON.stringify(input), 'utf8');
       process.env.GOOGLE_APPLICATION_CREDENTIALS = '/definitely/missing/customer-credentials.json';
       const result = await runConsumerRuntimeSeedCli(['--input', file]);
       expect(result).toMatchObject({ dryRun: true, recordCount: 15 });
@@ -122,6 +123,17 @@ describe('consumer runtime seed plan', () => {
       await expect(runConsumerRuntimeSeedCli(['--input', file, '--apply'])).rejects.toThrow(
         'explicitly match',
       );
+      await expect(
+        runConsumerRuntimeSeedCli([
+          '--input',
+          file,
+          '--apply',
+          '--project',
+          input.projectId,
+          '--installation',
+          input.installationId,
+        ]),
+      ).rejects.toThrow('--database');
     } finally {
       if (previousCredentials === undefined) delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
       else process.env.GOOGLE_APPLICATION_CREDENTIALS = previousCredentials;

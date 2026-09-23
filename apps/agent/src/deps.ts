@@ -287,6 +287,7 @@ function buildFirestoreDeps(config: Config): AgentDeps {
   const store = createInstallationStore({
     projectId: config.GCP_PROJECT,
     installationId: config.ASSISTANT_WORKSPACE_ID,
+    databaseId: config.FIRESTORE_DATABASE_ID,
   });
   const embeddingSpace = parseFirestoreEmbeddingSpace(config.FIRESTORE_EMBEDDING_SPACE);
   const persistence = createFirestoreExecutionPersistence(

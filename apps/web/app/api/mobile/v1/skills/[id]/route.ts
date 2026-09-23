@@ -19,6 +19,7 @@ async function firestoreMutation(id: string, deprecated?: boolean): Promise<Resp
   const store = createInstallationStore({
     projectId: config.GCP_PROJECT,
     installationId: config.ASSISTANT_WORKSPACE_ID,
+    databaseId: config.FIRESTORE_DATABASE_ID,
   });
   try {
     const repository = new FirestoreSkillMutationRepository(store);

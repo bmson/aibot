@@ -99,6 +99,8 @@ run "digest_pinned_private_runtime_uses_minimal_firestore_profile" {
   assert {
     condition = (
       one([for env in google_cloud_run_v2_service.agent["current"].template[0].containers[0].env : env.value if env.name == "PERSISTENCE_DRIVER"]) == "firestore" &&
+      one([for env in google_cloud_run_v2_service.agent["current"].template[0].containers[0].env : env.value if env.name == "FIRESTORE_DATABASE_ID"]) == "(default)" &&
+      one([for env in google_cloud_run_v2_service.web["current"].template[0].containers[0].env : env.value if env.name == "FIRESTORE_DATABASE_ID"]) == "(default)" &&
       one([for env in google_cloud_run_v2_service.agent["current"].template[0].containers[0].env : env.value if env.name == "ASSISTANT_MODULES"]) == "minimal" &&
       one([for env in google_cloud_run_v2_service.agent["current"].template[0].containers[0].env : env.value if env.name == "QUEUE_DRIVER"]) == "local" &&
       one([for env in google_cloud_run_v2_service.web["current"].template[0].containers[0].env : env.value if env.name == "AUTH_DEV_BYPASS"]) == "false" &&

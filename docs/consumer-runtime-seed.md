@@ -22,13 +22,13 @@ First inspect the plan without Google authentication:
 pnpm consumer:seed-runtime --input /private/path/runtime-seed.json
 ```
 
-The dry-run prints only scope identifiers, plan hash, catalog IDs, embedding provenance, and record count. It does not create a Google client or print owner email, token prices, or credential material. Review these identifiers before applying. With customer-scoped Google credentials and the foundation ready, explicitly bind the apply to the same project and installation:
+The dry-run prints only scope identifiers, plan hash, catalog IDs, embedding provenance, and record count. It does not create a Google client or print owner email, token prices, or credential material. Review these identifiers before applying. With customer-scoped Google credentials and the foundation ready, explicitly bind the apply to the same project, installation, and Firestore database:
 
 ```sh
 pnpm consumer:seed-runtime --input /private/path/runtime-seed.json --apply \
-  --project CUSTOMER_PROJECT --installation CUSTOMER_INSTALLATION
+  --project CUSTOMER_PROJECT --installation CUSTOMER_INSTALLATION --database CUSTOMER_DATABASE
 ```
 
 The apply requires the configured installation's known runtime collections to be empty before creating a seed marker. It never overwrites existing records. An interrupted apply can resume only with the identical plan hash and unchanged records; a foreign record, changed value, or changed plan stops it. A completed rerun performs the read-only preflight and reports `already_seeded` without rewriting records. Do not edit an incomplete seed manually or use this command to migrate an existing installation. The initial zero day/month counters are for `seedAt`; later periods are created on demand by the budget repository.
 
-After apply, run the read-only preflight with `GCP_PROJECT`, `ASSISTANT_WORKSPACE_ID`, `FIRESTORE_AGENT_ID`, `FIRESTORE_EMBEDDING_SPACE`, and `LLM_PROVIDER=vertex` matching the plan. A passing data preflight proves internal configuration consistency only. Customer authentication, Cloud Run wiring, live Vertex model/IAM checks, Firestore indexes, public ingress, and application smoke remain separate gates. This command does not set `runtimeReady`, start containers, merge an installer stage, or deploy anything.
+After apply, run the read-only preflight with `GCP_PROJECT`, `ASSISTANT_WORKSPACE_ID`, `FIRESTORE_DATABASE_ID`, `FIRESTORE_AGENT_ID`, `FIRESTORE_EMBEDDING_SPACE`, and `LLM_PROVIDER=vertex` matching the plan and installation. A passing data preflight proves internal configuration consistency only. Customer authentication, Cloud Run wiring, live Vertex model/IAM checks, Firestore indexes, public ingress, and application smoke remain separate gates. This command does not set `runtimeReady`, start containers, merge an installer stage, or deploy anything.

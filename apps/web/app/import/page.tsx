@@ -22,6 +22,7 @@ async function getFirestorePageImports() {
   const store = createInstallationStore({
     projectId: config.GCP_PROJECT,
     installationId: config.ASSISTANT_WORKSPACE_ID,
+    databaseId: config.FIRESTORE_DATABASE_ID,
   });
   try {
     const configured = await store.collection('agents').limit(2).get();

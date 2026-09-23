@@ -481,8 +481,6 @@ function validateRuntimeInput(
   raw: NonNullable<ConsumerInstallOptions['runtime']>,
   manifest: InstallationManifest,
 ): RuntimeInput {
-  if (manifest.identity.databaseId !== '(default)')
-    throw new Error('Runtime requires the (default) Firestore database');
   if (manifest.selection.modelProvider !== 'google')
     throw new Error('Runtime requires the Google model provider');
   const images = record(raw.images, 'Image manifest', [

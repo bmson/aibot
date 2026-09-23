@@ -95,6 +95,7 @@ export function getCapabilityDiagnostics(): Promise<CapabilityDiagnostics> {
   const store = createInstallationStore({
     projectId: config.GCP_PROJECT,
     installationId: config.ASSISTANT_WORKSPACE_ID,
+    databaseId: config.FIRESTORE_DATABASE_ID,
   });
   return new FirestoreWorkspaceCapabilityRepository(
     store,

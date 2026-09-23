@@ -41,8 +41,8 @@ function validateSeedScope(plan: ConsumerRuntimeSeedPlan, options: ConsumerInsta
     plan.input.installationId !== manifest.identity.installationId
   )
     throw new Error('Runtime seed project and installation must match the manifest');
-  if (manifest.identity.databaseId !== '(default)' || manifest.selection.modelProvider !== 'google')
-    throw new Error('Runtime seed requires the default Firestore database and Google provider');
+  if (manifest.selection.modelProvider !== 'google')
+    throw new Error('Runtime seed requires the Google provider');
   if (
     manifest.selection.embeddingModel !== space.model ||
     manifest.selection.embeddingDimension !== space.dimensions
@@ -94,6 +94,7 @@ export async function provisionConsumerInstallationWithSeed(
   const store = createInstallationStore({
     projectId: plan.input.projectId,
     installationId: plan.input.installationId,
+    databaseId: preview.manifest.identity.databaseId,
   });
   let status: 'seeded' | 'already_seeded';
   try {

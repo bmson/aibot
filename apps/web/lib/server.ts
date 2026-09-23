@@ -120,6 +120,7 @@ export function getFirestoreInstallationStore() {
   globalCache.__assistantFirestoreStore ??= createInstallationStore({
     projectId: config.GCP_PROJECT,
     installationId: config.ASSISTANT_WORKSPACE_ID,
+    databaseId: config.FIRESTORE_DATABASE_ID,
   });
   return globalCache.__assistantFirestoreStore;
 }
