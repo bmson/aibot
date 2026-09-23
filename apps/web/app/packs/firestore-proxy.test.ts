@@ -8,15 +8,17 @@ afterEach(() => {
   resetConfigForTest();
 });
 
-it('opens only exact read routes for packs in Firestore mode', () => {
+it('opens only exact read and owner-action routes for packs in Firestore mode', () => {
   vi.stubEnv('PERSISTENCE_DRIVER', 'firestore');
   resetConfigForTest();
   const status = (path: string, method = 'GET') =>
     proxy(new NextRequest(`http://localhost${path}`, { method })).status;
   expect(status('/packs')).toBe(200);
   expect(status('/api/mobile/v1/packs')).toBe(200);
-  expect(status('/packs', 'POST')).toBe(503);
-  expect(status('/api/mobile/v1/packs', 'POST')).toBe(503);
+  expect(status('/packs', 'POST')).toBe(200);
+  expect(status('/api/mobile/v1/packs', 'POST')).toBe(200);
+  expect(status('/packs', 'DELETE')).toBe(503);
+  expect(status('/api/mobile/v1/packs', 'DELETE')).toBe(503);
   expect(status('/packs/nested')).toBe(503);
   expect(status('/api/mobile/v1/packs/nested')).toBe(503);
 });
