@@ -95,13 +95,50 @@ const requiredApis = (provider: InstallationManifest['selection']['modelProvider
   ...(provider === 'google' ? ['aiplatform.googleapis.com'] : []),
 ];
 
+async function verifyCustomerBilling(runner: CommandRunner, project: string): Promise<void> {
+  const described = await runOk(runner, 'gcloud', [
+    'projects',
+    'describe',
+    project,
+    '--format=value(projectId)',
+  ]);
+  if (described.stdout !== project)
+    throw new Error('Customer project lookup did not match the installation project');
+  const result = await runner.run('gcloud', [
+    'billing',
+    'projects',
+    'describe',
+    project,
+    '--format=json',
+  ]);
+  if (!result.ok)
+    throw new Error(
+      `Cannot verify billing for customer project ${project}; check gcloud billing access and retry`,
+    );
+  const value = jsonOutput(result, 'Customer project billing') as Record<string, unknown> | null;
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    (value.projectId !== undefined && value.projectId !== project)
+  )
+    throw new Error('Customer project billing returned malformed or mismatched JSON');
+  if (
+    value.billingEnabled !== true ||
+    typeof value.billingAccountName !== 'string' ||
+    !/^billingAccounts\/[A-Za-z0-9-]+$/.test(value.billingAccountName)
+  )
+    throw new Error(
+      `Customer project ${project} needs an active billing account before provisioning`,
+    );
+}
+
 async function verifyProjectAndDatabase(
   runner: CommandRunner,
   manifest: InstallationManifest,
   apply: boolean,
 ): Promise<string[]> {
   const project = manifest.identity.projectId;
-  await runOk(runner, 'gcloud', ['projects', 'describe', project, '--format=value(projectId)']);
   const services = await runOk(runner, 'gcloud', [
     'services',
     'list',
@@ -897,6 +934,7 @@ export async function provisionConsumerInstallation(
     throw new Error('Runtime config differs from the initialized checkpoint');
   if (options.ownerAccessCallback && current.stage.current !== 'initialized')
     throw new Error('Deploy and verify the private runtime before enabling owner access');
+  await verifyCustomerBilling(dependencies.runner, current.identity.projectId);
   if (current.stage.current === 'previewed' || current.stage.current === 'authorized') {
     const missingApis = await verifyProjectAndDatabase(dependencies.runner, current, options.apply);
     if (!options.apply) {
@@ -912,13 +950,6 @@ export async function provisionConsumerInstallation(
           : 'Validated archive, project, and database absence. No resources were changed; pass --apply to provision the foundation.',
       };
     }
-  } else {
-    await runOk(dependencies.runner, 'gcloud', [
-      'projects',
-      'describe',
-      current.identity.projectId,
-      '--format=value(projectId)',
-    ]);
   }
   if (!options.apply) {
     if (current.stage.current === 'provisioned')
