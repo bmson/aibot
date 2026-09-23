@@ -2,7 +2,7 @@ import { MessageSquareText } from 'lucide-react';
 import Link from 'next/link';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
-import { getApplication } from '@/lib/server';
+import { getChatApplication } from '@/lib/server';
 import {
   Badge,
   btn,
@@ -37,7 +37,7 @@ export default async function ChatListPage({
     archivedCount,
     totalInScope,
     activeConversationIds: activeIds,
-  } = await getApplication().listChatHistory(archived);
+  } = await getChatApplication().listChatHistory(archived);
   const activeConversationIds = new Set(activeIds);
   const now = new Date();
 

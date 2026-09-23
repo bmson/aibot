@@ -205,38 +205,39 @@ function badgeCountFor(
   return 0;
 }
 
+function emptyShellStatus() {
+  return {
+    dashboard: { pendingApprovals: 0, needsAttention: 0, presence: 'idle' as const },
+    memoryHealth: {
+      totalUsable: 0,
+      notYetOrganized: 0,
+      awaitingReview: 0,
+      ownerConfirmed: 0,
+      lastOrganizedAt: null,
+    },
+  };
+}
+
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const config = loadConfig();
   const hiddenNav = hiddenModuleNavHrefs(config);
-  const visibleNavItems = navItems.filter((item) => !hiddenNav.has(item.href));
+  const visibleNavItems = navItems.filter(
+    (item) =>
+      !hiddenNav.has(item.href) &&
+      (config.PERSISTENCE_DRIVER !== 'firestore' ||
+        item.href === '/chat' ||
+        item.href === '/chat/all'),
+  );
   const identity = await getAgentIdentity();
   const [shell, session] = await Promise.all([
-    identity.id
+    identity.id && config.PERSISTENCE_DRIVER !== 'firestore'
       ? getApplication()
           .getShellStatus(identity.id)
           .catch((error) => {
             console.error('[layout] failed to load shell status', error);
-            return {
-              dashboard: { pendingApprovals: 0, needsAttention: 0, presence: 'idle' as const },
-              memoryHealth: {
-                totalUsable: 0,
-                notYetOrganized: 0,
-                awaitingReview: 0,
-                ownerConfirmed: 0,
-                lastOrganizedAt: null,
-              },
-            };
+            return emptyShellStatus();
           })
-      : Promise.resolve({
-          dashboard: { pendingApprovals: 0, needsAttention: 0, presence: 'idle' as const },
-          memoryHealth: {
-            totalUsable: 0,
-            notYetOrganized: 0,
-            awaitingReview: 0,
-            ownerConfirmed: 0,
-            lastOrganizedAt: null,
-          },
-        }),
+      : Promise.resolve(emptyShellStatus()),
     (async () => {
       if (authMode !== 'google') return null;
       try {

@@ -3,8 +3,8 @@ import { createInstallationStore, FirestoreTaskRepository } from '@assistant/fir
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const auth = vi.hoisted(() => ({ web: vi.fn(), mobile: vi.fn() }));
-vi.mock('@/auth', () => ({ isAuthed: auth.web }));
+const auth = vi.hoisted(() => ({ web: vi.fn(), mobile: vi.fn(), owner: vi.fn() }));
+vi.mock('@/auth', () => ({ isAuthed: auth.web, requireOwner: auth.owner }));
 vi.mock('@/mobile-auth', () => ({
   isMobileAuthed: auth.mobile,
   mobileJson: (body: unknown, init?: ResponseInit) => Response.json(body, init),
@@ -44,6 +44,7 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
     vi.stubEnv('OPENROUTER_API_KEY', 'test-key');
     auth.web.mockResolvedValue({ user: { email: 'owner@example.com' } });
     auth.mobile.mockResolvedValue(true);
+    auth.owner.mockResolvedValue({ user: { email: 'owner@example.com' } });
     const now = new Date();
     await store.doc('agents', agentId).set({
       id: agentId,
@@ -170,10 +171,32 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
     const request = (path: string, method = 'GET') =>
       new NextRequest(`http://localhost${path}`, { method });
     expect(proxy(request('/api/mobile/v1/bootstrap')).status).toBe(503);
-    expect(proxy(request('/chat')).status).toBe(503);
+    expect(proxy(request('/chat')).status).toBe(200);
+    expect(proxy(request(`/chat/${randomUUID()}`)).status).toBe(200);
+    expect(proxy(request('/chat/all')).status).toBe(200);
+    expect(proxy(request('/tasks')).status).toBe(503);
     expect(proxy(request('/api/mobile/v1/chats', 'POST')).status).toBe(503);
     expect(proxy(request('/api/chat', 'POST')).status).toBe(200);
     expect(proxy(request('/api/mobile/v1/chat/status')).status).toBe(200);
     expect(proxy(request('/api/auth/session')).status).toBe(200);
   });
+
+  it('bootstraps and renders the primary chat and history without PostgreSQL', async () => {
+    const { getChatApplication, getAgentIdentity } = await import('./server.js');
+    const application = getChatApplication();
+    const primaryId = await application.getPrimaryConversationId();
+    expect(await application.getPrimaryConversationId()).toBe(primaryId);
+    expect(await getAgentIdentity()).toMatchObject({ id: agentId, name: 'Assistant' });
+
+    const ChatIndexPage = (await import('../app/chat/page.js')).default;
+    const index = await ChatIndexPage({ searchParams: Promise.resolve({}) });
+    expect(index.props).toMatchObject({ conversationId: primaryId, isPrimary: true });
+
+    const ChatListPage = (await import('../app/chat/all/page.js')).default;
+    const history = await ChatListPage({ searchParams: Promise.resolve({}) });
+    expect(history).toBeTruthy();
+    expect((await application.listChatHistory(false)).conversations).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: primaryId, agentId })]),
+    );
+  }, 30_000);
 });

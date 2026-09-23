@@ -158,8 +158,12 @@ export const getAgentTimezone = cache(async (): Promise<string> => {
  * the dashboard displays it wherever the assistant "speaks".
  */
 export const getAgentIdentity = cache(
-  async (): Promise<{ id: string; name: string; avatarUrl: string | null }> =>
-    getAssistantIdentity(getDb()),
+  async (): Promise<{ id: string; name: string; avatarUrl: string | null }> => {
+    if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+      return getFirestoreChatApplication().getAgentIdentity();
+    }
+    return getAssistantIdentity(getDb());
+  },
 );
 
 /** Same workspace identity the agent composition root uses. */
@@ -355,6 +359,20 @@ function createFirestoreChatApplication() {
   );
   const chatReads = { chat, generatedCards: persistence.generatedCards };
   return {
+    getAgentIdentity: async () => {
+      const agent = await chat.resolveAgent();
+      return { id: agent.id, name: agent.name || 'Assistant', avatarUrl: agent.avatarUrl ?? null };
+    },
+    getPrimaryConversationId: () => getPrimaryConversationId(chat),
+    createChat: () => createChatConversation(chat),
+    changeChatModel: (conversationId: string, modelId: string | null) =>
+      changeChatModel(chat, conversationId, modelId),
+    archiveChat: (conversationId: string) => archiveChatConversation(chat, conversationId),
+    restoreChat: (conversationId: string) => restoreChatConversation(chat, conversationId),
+    archiveInactiveChats: () => archiveInactiveChats(chat),
+    listChatHistory: (archived: boolean) => listChatHistory(chat, archived),
+    getChatConversation: (conversationId: string, input: { taskId?: string; cursor?: string }) =>
+      getChatConversationView(chatReads, conversationId, input),
     handleChatTurn: (request: Request) =>
       handleChatTurn(request, { config, router, chat, persistence }),
     getChatUpdates: (input: Parameters<typeof waitForChatUpdates>[1]) =>
@@ -367,8 +385,13 @@ const firestoreChatCache = globalThis as unknown as {
   __assistantFirestoreChatApplication?: ReturnType<typeof createFirestoreChatApplication>;
 };
 
-export function getChatApplication() {
-  if (loadConfig().PERSISTENCE_DRIVER !== 'firestore') return getApplication();
+function getFirestoreChatApplication() {
   firestoreChatCache.__assistantFirestoreChatApplication ??= createFirestoreChatApplication();
   return firestoreChatCache.__assistantFirestoreChatApplication;
+}
+
+export function getChatApplication() {
+  return loadConfig().PERSISTENCE_DRIVER === 'firestore'
+    ? getFirestoreChatApplication()
+    : getApplication();
 }

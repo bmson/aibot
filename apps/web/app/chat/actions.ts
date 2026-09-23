@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { isAuthed } from '@/auth';
-import { getApplication } from '@/lib/server';
+import { getApplication, getChatApplication } from '@/lib/server';
 
 function revalidateChatViews(conversationId?: string): void {
   revalidatePath('/chat');
@@ -13,7 +13,7 @@ function revalidateChatViews(conversationId?: string): void {
 
 export async function newConversation(): Promise<void> {
   if (!(await isAuthed())) throw new Error('unauthorized');
-  redirect(`/chat/${await getApplication().createChat()}`);
+  redirect(`/chat/${await getChatApplication().createChat()}`);
 }
 
 /** Composer `/model` command — modelId null means "Auto (role default)". */
@@ -22,14 +22,14 @@ export async function changeConversationModel(
   modelId: string | null,
 ): Promise<void> {
   if (!(await isAuthed())) throw new Error('unauthorized');
-  await getApplication().changeChatModel(conversationId, modelId);
+  await getChatApplication().changeChatModel(conversationId, modelId);
   revalidatePath(`/chat/${conversationId}`);
 }
 
 /** Hide a finished chat without erasing its messages or task evidence. */
 export async function archiveConversation(conversationId: string): Promise<void> {
   if (!(await isAuthed())) throw new Error('unauthorized');
-  const result = await getApplication().archiveChat(conversationId);
+  const result = await getChatApplication().archiveChat(conversationId);
   if (result === 'primary') {
     // The primary thread is intentionally permanent. Treat a stale form
     // submission as an idempotent no-op instead of surfacing a generic RSC 500.
@@ -48,7 +48,7 @@ export async function archiveConversation(conversationId: string): Promise<void>
 /** Restore a chat to the current list. Its messages and evidence were never removed. */
 export async function restoreConversation(conversationId: string): Promise<void> {
   if (!(await isAuthed())) throw new Error('unauthorized');
-  await getApplication().restoreChat(conversationId);
+  await getChatApplication().restoreChat(conversationId);
   revalidateChatViews(conversationId);
   redirect(`/chat/${conversationId}`);
 }
@@ -59,7 +59,7 @@ export async function restoreConversation(conversationId: string): Promise<void>
  */
 export async function archiveInactiveConversations(): Promise<void> {
   if (!(await isAuthed())) throw new Error('unauthorized');
-  await getApplication().archiveInactiveChats();
+  await getChatApplication().archiveInactiveChats();
   revalidateChatViews();
   redirect('/chat/all');
 }
