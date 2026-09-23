@@ -1,11 +1,11 @@
-import { getTaskDetail, type RecordedValue } from '@assistant/application/tasks';
+import type { RecordedValue } from '@assistant/application/tasks';
 import { Brain, Hand, MessageSquare, Wrench } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, relativeTime } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getTaskActivityDetail } from '@/lib/task-activity';
 import {
   BackLink,
   Badge,
@@ -83,12 +83,11 @@ export default async function TaskDetailPage({
   const [{ id }, { before }] = await Promise.all([params, searchParams]);
   if (!UUID_RE.test(id)) notFound();
 
-  const db = getDb();
   const now = new Date();
   // The timeline is paged from the newest end; `before` walks backwards from
   // the oldest entry already shown. A malformed cursor just starts over.
   const cursor = before ? new Date(before) : undefined;
-  const detail = await getTaskDetail(db, id, {
+  const detail = await getTaskActivityDetail(id, {
     ...(cursor && !Number.isNaN(cursor.getTime()) ? { before: cursor } : {}),
   });
   if (!detail) notFound();

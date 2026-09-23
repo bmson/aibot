@@ -1,4 +1,9 @@
-import type { ActivityTaskRecord, TaskActivityRepository } from '@assistant/persistence';
+import type {
+  ActivityTaskRecord,
+  TaskActivityDetail,
+  TaskActivityDetailRepository,
+  TaskActivityRepository,
+} from '@assistant/persistence';
 import { FieldPath, type QueryDocumentSnapshot } from '@google-cloud/firestore';
 import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
@@ -6,6 +11,7 @@ import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 const PAGE_SIZE = 250;
 const MAX_OWNER_TASKS = 25_000;
 const MAX_APPROVALS_PER_TASK = 500;
+const MAX_FILES_PER_TASK = 5_000;
 const FIELDS = [
   'id',
   'agentId',
@@ -58,7 +64,9 @@ function isCanary(trigger: unknown): boolean {
 }
 
 /** A bounded owner scan preserves SQL's archived count, filters, and updated ordering. */
-export class FirestoreTaskActivityRepository implements TaskActivityRepository {
+export class FirestoreTaskActivityRepository
+  implements TaskActivityRepository, TaskActivityDetailRepository
+{
   readonly kind = 'task-activity-repository' as const;
 
   constructor(readonly store: InstallationStore) {}
@@ -138,5 +146,240 @@ export class FirestoreTaskActivityRepository implements TaskActivityRepository {
     }
     await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
     return { tasks, archivedCount, pendingApprovalTaskIds };
+  }
+
+  async getDetail(
+    agentId: string,
+    taskId: string,
+    input: { pageSize: number; before?: Date },
+  ): Promise<TaskActivityDetail | null> {
+    if (
+      !agentId ||
+      !taskId ||
+      !Number.isSafeInteger(input.pageSize) ||
+      input.pageSize < 1 ||
+      input.pageSize > 500 ||
+      (input.before && !Number.isFinite(input.before.getTime()))
+    )
+      throw new Error('Invalid owner activity detail request');
+    const agents = await this.store.collection('agents').limit(2).get();
+    const agent = agents.docs[0];
+    if (
+      agents.size !== 1 ||
+      !agent ||
+      agent.id !== documentKey(agentId) ||
+      agent.get('id') !== agentId
+    )
+      throw new Error('Activity requires one matching configured agent');
+    const fence = await readPrivacyErasureFence(this.store, agentId);
+    const taskSnapshot = await this.store
+      .collection('tasks')
+      .where(FieldPath.documentId(), '==', documentKey(taskId))
+      .select(
+        'id',
+        'agentId',
+        'type',
+        'status',
+        'title',
+        'trust',
+        'spentUsd',
+        'budgetUsdLimit',
+        'updatedAt',
+        'deadline',
+        'nextAction',
+        'progress',
+        'progressPercent',
+        'plan',
+        'state.requestChecklist',
+        'archivedAt',
+        'autonomyGrant',
+      )
+      .limit(1)
+      .get();
+    const taskDocument = taskSnapshot.docs[0];
+    if (!taskDocument) return null;
+    const task = decodeRecord<Record<string, unknown>>(taskDocument.data());
+    if (task.agentId !== agentId) return null;
+    if (
+      task.id !== taskId ||
+      documentKey(taskId) !== taskDocument.id ||
+      typeof task.type !== 'string' ||
+      typeof task.status !== 'string' ||
+      !(task.title === null || typeof task.title === 'string') ||
+      typeof task.trust !== 'string' ||
+      typeof task.spentUsd !== 'string' ||
+      typeof task.budgetUsdLimit !== 'string' ||
+      !(task.updatedAt instanceof Date) ||
+      !(task.deadline === null || task.deadline instanceof Date) ||
+      typeof task.nextAction !== 'string' ||
+      typeof task.progress !== 'string' ||
+      !(task.progressPercent === null || typeof task.progressPercent === 'number') ||
+      !(task.archivedAt === null || task.archivedAt instanceof Date)
+    )
+      throw new Error('Invalid owner activity task');
+
+    const timedQuery = (
+      collection: string,
+      timeField: 'createdAt' | 'requestedAt',
+      fields: string[],
+    ) => {
+      let query = this.store
+        .collection(collection)
+        .where('taskId', '==', taskId)
+        .select(...fields);
+      if (input.before) query = query.where(timeField, '<', input.before);
+      return query.orderBy(timeField, 'desc').orderBy('id', 'desc').limit(input.pageSize).get();
+    };
+    const [
+      toolSnapshot,
+      modelSnapshot,
+      approvalSnapshot,
+      messageSnapshot,
+      filesSnapshot,
+      actionsSnapshot,
+      pendingSnapshot,
+    ] = await Promise.all([
+      timedQuery('toolCalls', 'createdAt', [
+        'id',
+        'taskId',
+        'createdAt',
+        'finishedAt',
+        'toolName',
+        'step',
+        'status',
+        'decision',
+        'args',
+        'result',
+        'error',
+      ]),
+      timedQuery('modelCalls', 'createdAt', [
+        'id',
+        'taskId',
+        'createdAt',
+        'role',
+        'model',
+        'costUsd',
+        'latencyMs',
+      ]),
+      timedQuery('approvals', 'requestedAt', [
+        'id',
+        'taskId',
+        'requestedAt',
+        'status',
+        'summary',
+        'shortCode',
+        'resolvedVia',
+        'resolvedAt',
+      ]),
+      timedQuery('messages', 'createdAt', ['id', 'taskId', 'createdAt', 'role', 'text']),
+      this.store
+        .collection('files')
+        .where('taskId', '==', taskId)
+        .select('id', 'taskId', 'workspacePath', 'bytes')
+        .orderBy('createdAt', 'asc')
+        .orderBy('id', 'asc')
+        .limit(MAX_FILES_PER_TASK + 1)
+        .get(),
+      this.store
+        .collection('toolCalls')
+        .where('taskId', '==', taskId)
+        .select(
+          'id',
+          'taskId',
+          'createdAt',
+          'finishedAt',
+          'toolName',
+          'step',
+          'status',
+          'result',
+          'error',
+        )
+        .orderBy('step', 'asc')
+        .orderBy('id', 'asc')
+        .limit(5001)
+        .get(),
+      this.store
+        .collection('approvals')
+        .where('taskId', '==', taskId)
+        .where('status', '==', 'pending')
+        .limit(1)
+        .get(),
+    ]);
+    if (actionsSnapshot.size > 5000) throw new Error('Activity action history exceeds its bound');
+    if (filesSnapshot.size > MAX_FILES_PER_TASK)
+      throw new Error('Activity file list exceeds its bound');
+    const rows = <T>(snapshot: {
+      docs: Array<{ id: string; data(): FirebaseFirestore.DocumentData }>;
+    }) =>
+      snapshot.docs.map((doc) => {
+        const row = decodeRecord<Record<string, unknown>>(doc.data());
+        if (row.taskId !== taskId || typeof row.id !== 'string' || documentKey(row.id) !== doc.id)
+          throw new Error('Invalid owner activity audit record');
+        return row as T;
+      });
+    const [toolCalls, modelCalls, approvals, messages, files, actions] = [
+      rows<TaskActivityDetail['toolCalls'][number]>(toolSnapshot),
+      rows<TaskActivityDetail['modelCalls'][number]>(modelSnapshot),
+      rows<TaskActivityDetail['approvals'][number]>(approvalSnapshot),
+      rows<TaskActivityDetail['messages'][number]>(messageSnapshot),
+      rows<TaskActivityDetail['files'][number]>(filesSnapshot),
+      rows<TaskActivityDetail['actions'][number]>(actionsSnapshot),
+    ];
+    const validDate = (value: unknown) => value instanceof Date && Number.isFinite(value.getTime());
+    if (
+      toolCalls.some(
+        (row) =>
+          !validDate(row.createdAt) ||
+          !(row.finishedAt === null || validDate(row.finishedAt)) ||
+          typeof row.toolName !== 'string' ||
+          !Number.isSafeInteger(row.step) ||
+          typeof row.status !== 'string',
+      ) ||
+      modelCalls.some(
+        (row) =>
+          !validDate(row.createdAt) ||
+          typeof row.role !== 'string' ||
+          typeof row.model !== 'string' ||
+          typeof row.costUsd !== 'string' ||
+          !(row.latencyMs === null || typeof row.latencyMs === 'number'),
+      ) ||
+      approvals.some(
+        (row) =>
+          !validDate(row.requestedAt) ||
+          typeof row.status !== 'string' ||
+          typeof row.summary !== 'string' ||
+          typeof row.shortCode !== 'string' ||
+          !(row.resolvedVia === null || typeof row.resolvedVia === 'string') ||
+          !(row.resolvedAt === null || validDate(row.resolvedAt)),
+      ) ||
+      messages.some(
+        (row) =>
+          !validDate(row.createdAt) || typeof row.role !== 'string' || typeof row.text !== 'string',
+      ) ||
+      files.some(
+        (row) => typeof row.workspacePath !== 'string' || !Number.isSafeInteger(row.bytes),
+      ) ||
+      actions.some(
+        (row) =>
+          !validDate(row.createdAt) ||
+          !(row.finishedAt === null || validDate(row.finishedAt)) ||
+          typeof row.toolName !== 'string' ||
+          typeof row.status !== 'string' ||
+          !(row.error === null || typeof row.error === 'string'),
+      )
+    )
+      throw new Error('Invalid owner activity audit record');
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    return {
+      timezone: typeof agent.get('timezone') === 'string' ? agent.get('timezone') : 'UTC',
+      task: task as TaskActivityDetail['task'],
+      toolCalls,
+      modelCalls,
+      approvals,
+      messages,
+      files,
+      actions,
+      hasPendingApproval: pendingSnapshot.size > 0,
+    };
   }
 }

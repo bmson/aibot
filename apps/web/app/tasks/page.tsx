@@ -1,8 +1,4 @@
-import {
-  type ActivityFilter,
-  listActivity,
-  terminalTaskStatuses,
-} from '@assistant/application/tasks';
+import { type ActivityFilter, terminalTaskStatuses } from '@assistant/application/tasks';
 import {
   Archive,
   CalendarClock,
@@ -17,7 +13,7 @@ import Link from 'next/link';
 import { AutoRefresh } from '@/app/auto-refresh';
 import { requireOwner } from '@/auth';
 import { formatUsd, relativeTime, stripMarkdown, truncate } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { listTaskActivity } from '@/lib/task-activity';
 import {
   btn,
   cardShellClass,
@@ -88,8 +84,7 @@ export default async function TasksPage({
   const filter = FILTERS.some((item) => item.value === rawFilter)
     ? (rawFilter as ActivityFilter)
     : 'all';
-  const db = getDb();
-  const { items: rows, archivedCount } = await listActivity(db, { archived, filter });
+  const { items: rows, archivedCount } = await listTaskActivity({ archived, filter });
   const now = new Date();
   const groups = [...new Set(rows.map((task) => calendarDay(task.updatedAt)))].map((day) => ({
     day,

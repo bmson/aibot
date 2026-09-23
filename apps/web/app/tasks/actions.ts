@@ -1,11 +1,8 @@
 'use server';
 
 import {
-  archiveActivity,
-  archiveOldActivity,
   cancelActivity,
   raiseTaskBudget,
-  restoreActivity,
   retryActivity,
   revokeTaskAutonomy,
 } from '@assistant/application/tasks';
@@ -13,6 +10,11 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireOwner } from '@/auth';
 import { getDb } from '@/lib/server';
+import {
+  archiveOldTaskActivity,
+  archiveTaskActivity,
+  restoreTaskActivity,
+} from '@/lib/task-activity';
 
 function revalidateTaskViews(taskId: string): void {
   revalidatePath('/');
@@ -56,7 +58,7 @@ export async function cancelTask(taskId: string): Promise<void> {
 /** Hide terminal activity from the default list without deleting any evidence. */
 export async function archiveTask(taskId: string): Promise<void> {
   await requireOwner();
-  await archiveActivity(getDb(), taskId);
+  await archiveTaskActivity(taskId);
   revalidateTaskViews(taskId);
   redirect('/tasks');
 }
@@ -64,7 +66,7 @@ export async function archiveTask(taskId: string): Promise<void> {
 /** Restore a hidden activity item to the main Activity list. */
 export async function restoreTask(taskId: string): Promise<void> {
   await requireOwner();
-  await restoreActivity(getDb(), taskId);
+  await restoreTaskActivity(taskId);
   revalidateTaskViews(taskId);
   redirect(`/tasks/${taskId}`);
 }
@@ -72,7 +74,7 @@ export async function restoreTask(taskId: string): Promise<void> {
 /** Archive only terminal activity that has been quiet for at least 30 days. */
 export async function archiveOldTasks(): Promise<void> {
   await requireOwner();
-  await archiveOldActivity(getDb());
+  await archiveOldTaskActivity();
   revalidateTaskViews('');
   redirect('/tasks');
 }
