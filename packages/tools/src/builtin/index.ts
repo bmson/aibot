@@ -26,9 +26,11 @@ import type { ToolRegistry } from '../registry.js';
 import type { WorkspaceStore } from '../workspace-store.js';
 import { registerSituationTools } from './situations.js';
 import { registerSportsTools } from './sports.js';
+import { registerPortableTaskTools } from './task-schedule.js';
 import { lookupWeather } from './weather.js';
 import { extractWebText, fetchPublicWebPage, looksLikeBotChallenge } from './web-fetch.js';
 
+export { registerPortableTaskTools } from './task-schedule.js';
 export * from './weather.js';
 // The `web.fetch` machinery lives in web-fetch.ts; re-exported here so the
 // package surface (and the web-watch poller's imports) stay unchanged.
@@ -215,6 +217,7 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
   registerSituationTools(registry);
   registerSportsTools(registry, deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {});
   registerPortableMemoryTools(registry, deps);
+  registerPortableTaskTools(registry, deps);
 
   register(
     registry,
@@ -738,46 +741,6 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
     // every external (known/unknown) task registry.
     { ownerVisibleOnly: true },
   );
-
-  // ── future self-tasks ──────────────────────────────────────────────────────
-  register(registry, {
-    name: 'task.schedule',
-    description:
-      'Defer work: schedule a future task for YOURSELF to run later (e.g. "check back on this thread tomorrow"). NOT for calendar events — calendar entries are created with calendar.create_event immediately, even when the event is in the future. when is an ISO 8601 timestamp.',
-    inputSchema: z.object({
-      when: z.string().datetime({ offset: true }),
-      instruction: z.string().min(3).max(2000),
-    }),
-    risk: 'autonomous',
-    acceptsUntrustedInput: false,
-    // The scheduling step is itself gated under taint (acceptsUntrustedInput:false),
-    // so the owner sees this card. Make the card show WHAT is being scheduled —
-    // a generic "schedule follow-up work" would let an injected instruction ride
-    // through an approval the owner cannot actually inspect.
-    approvalSummary: (args) => {
-      const when = new Date(args.when);
-      const at = Number.isNaN(when.getTime()) ? args.when : when.toISOString();
-      return `Schedule a future task for ${at}: “${args.instruction.slice(0, 200)}”`;
-    },
-    execute: async (args, ctx) => {
-      const runAfter = new Date(args.when);
-      if (Number.isNaN(runAfter.getTime())) throw new Error('invalid timestamp');
-      if (runAfter.getTime() <= ctx.now().getTime()) throw new Error('when must be in the future');
-      if (!deps.tasks) throw new Error('task lifecycle repository unavailable');
-      const result = await deps.tasks.createScheduledFollowUp({
-        parentTaskId: ctx.taskId,
-        agentId: ctx.agentId,
-        conversationId: ctx.conversationId,
-        instruction: args.instruction,
-        runAfter,
-        trust: ctx.trust === 'owner' ? 'owner' : 'assistant',
-        // Taint laundering defense: carry taint into the internal child so its
-        // future outward/egress calls remain approval-gated.
-        tainted: ctx.tainted,
-      });
-      return { scheduled: result.created, taskId: result.task.id, runAfter: args.when };
-    },
-  });
 
   // ── missions & goals ───────────────────────────────────────────────────────
   register(registry, {

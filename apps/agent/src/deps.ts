@@ -44,7 +44,11 @@ import {
   type ModelRoutingRepository,
 } from '@assistant/persistence';
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
-import { registerBuiltinTools, registerPortableMemoryTools } from '@assistant/tools/builtin';
+import {
+  registerBuiltinTools,
+  registerPortableMemoryTools,
+  registerPortableTaskTools,
+} from '@assistant/tools/builtin';
 import { ToolDispatcher } from '@assistant/tools/dispatcher';
 import { registerMcpTools } from '@assistant/tools/mcp';
 import { ToolRegistry } from '@assistant/tools/registry';
@@ -309,23 +313,26 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     config.FILES_DRIVER === 'gcs'
       ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, workspacePrefix)
       : new LocalWorkspaceStore(workspaceRoot);
-  // Memory save and recall use portable repositories. Other built-ins still
-  // depend on SQL and remain unavailable in this preview profile.
-  const registry = registerPortableMemoryTools(new ToolRegistry(), {
-    memory: persistence.memory,
-    embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
-      router.embed(texts),
-    ),
-    supersede: (input) =>
-      supersedeContradictedFacts(
-        {
-          memory: persistence.memorySupersede,
-          router,
-          onRetired: () => compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
-        },
-        input,
+  // Memory save/recall and future-self scheduling use portable repositories.
+  // Other built-ins still depend on SQL and remain unavailable in this profile.
+  const registry = registerPortableTaskTools(
+    registerPortableMemoryTools(new ToolRegistry(), {
+      memory: persistence.memory,
+      embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
+        router.embed(texts),
       ),
-  });
+      supersede: (input) =>
+        supersedeContradictedFacts(
+          {
+            memory: persistence.memorySupersede,
+            router,
+            onRetired: () => compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
+          },
+          input,
+        ),
+    }),
+    { tasks: persistence.tasks },
+  );
   const modules = installModules(composition.modules, {
     config,
     db,
