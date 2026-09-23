@@ -47,6 +47,19 @@ resource "google_firestore_database" "consumer" {
   depends_on = [google_project_service.required]
 }
 
+# Managed backups are an explicit opt-in because Firestore bills backup
+# storage and restore operations separately from the database and PITR.
+resource "google_firestore_backup_schedule" "daily" {
+  count = var.daily_backup_schedule_enabled ? 1 : 0
+
+  project         = var.project_id
+  database        = google_firestore_database.consumer.name
+  retention       = "${var.backup_retention_days * 86400}s"
+  deletion_policy = "DELETE"
+
+  daily_recurrence {}
+}
+
 resource "google_storage_bucket" "assets" {
   project                     = var.project_id
   name                        = var.assets_bucket_name

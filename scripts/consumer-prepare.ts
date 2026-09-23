@@ -16,6 +16,9 @@ const usage = `Usage: pnpm consumer:prepare --project-id ID --region REGION --in
   --embedding-model MODEL --embedding-dimension 1536 \\
   --archive PATH --commit-sha SHA --archive-sha256 SHA [--output-dir PATH]
 
+Optional: --daily-backup-retention-days DAYS creates a daily Firestore backup schedule (1-98 days).
+Backups and restores are billed to the customer project; the default is no scheduled backup.
+
 Prepares private local manifest and incomplete runtime-seed template files.
 It never reads cloud credentials, calls Google Cloud, extracts the archive, or writes cloud resources.
 The supplied release commit and archive digest are recorded; the archive digest is verified locally.
@@ -34,6 +37,7 @@ export interface ConsumerPrepareInput {
   archiveSha256: string;
   embeddingModel: string;
   embeddingDimension: number;
+  dailyBackupRetentionDays?: number;
   outputDir: string;
   now?: Date;
   agentId?: string;
@@ -104,6 +108,13 @@ export async function prepareConsumerInstallation(
     throw new Error(
       `embedding dimension must be ${CURRENT_RUNTIME_EMBEDDING_DIMENSION} for the current runtime`,
     );
+  if (
+    input.dailyBackupRetentionDays !== undefined &&
+    (!Number.isInteger(input.dailyBackupRetentionDays) ||
+      input.dailyBackupRetentionDays < 1 ||
+      input.dailyBackupRetentionDays > 98)
+  )
+    throw new Error('daily backup retention must be a whole number from 1 through 98 days');
   const actualDigest = await digestArchive(path.resolve(input.archivePath));
   if (actualDigest !== expectedDigest) throw new Error('release archive SHA-256 does not match');
   const timezone = safeTimezone(input.timezone);
@@ -124,6 +135,14 @@ export async function prepareConsumerInstallation(
       modelProvider: 'google',
       embeddingModel: input.embeddingModel,
       embeddingDimension: input.embeddingDimension,
+      ...(input.dailyBackupRetentionDays === undefined
+        ? {}
+        : {
+            backupSchedule: {
+              recurrence: 'daily' as const,
+              retentionDays: input.dailyBackupRetentionDays,
+            },
+          }),
       resources: [],
       createdAt,
     }),
@@ -191,6 +210,11 @@ export async function prepareConsumerInstallation(
         'The seed-plan.template.json is intentionally incomplete and cannot be applied.',
         'The selected embedding model is recorded in both manifest and seed template. Verify its availability, capabilities, and current prices for the chosen Vertex location before completing the model catalog, roles, and budget.',
         'The installation-state.json path is reserved for consumer:install; it is not pre-created or advanced here.',
+        ...(input.dailyBackupRetentionDays === undefined
+          ? ['No managed backup schedule is selected.']
+          : [
+              `Daily managed Firestore backups are selected with ${input.dailyBackupRetentionDays} days of retention. Backup storage and restore operations are billed to the customer project.`,
+            ]),
         'The selected database is create-only. Provisioning must verify absence and must refuse to adopt an existing database.',
         '',
         `Project: ${input.projectId}`,
@@ -273,6 +297,7 @@ export async function runConsumerPrepareCli(argv = process.argv.slice(2)): Promi
       archive: { type: 'string' },
       'commit-sha': { type: 'string' },
       'archive-sha256': { type: 'string' },
+      'daily-backup-retention-days': { type: 'string' },
       'output-dir': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -311,6 +336,9 @@ export async function runConsumerPrepareCli(argv = process.argv.slice(2)): Promi
     archivePath: values.archive as string,
     commitSha: values['commit-sha'] as string,
     archiveSha256: values['archive-sha256'] as string,
+    ...(values['daily-backup-retention-days'] === undefined
+      ? {}
+      : { dailyBackupRetentionDays: Number(values['daily-backup-retention-days']) }),
     outputDir,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

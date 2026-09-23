@@ -18,6 +18,11 @@ output "firestore_database_name" {
   value       = google_firestore_database.consumer.name
 }
 
+output "daily_backup_schedule_name" {
+  description = "Managed daily backup schedule resource name, or null when the optional schedule is disabled."
+  value       = var.daily_backup_schedule_enabled ? google_firestore_backup_schedule.daily[0].name : null
+}
+
 output "assets_bucket_name" {
   description = "Private customer-owned assets bucket."
   value       = google_storage_bucket.assets.name

@@ -43,6 +43,8 @@ export interface InstallationSelection {
   modelProvider: 'google' | 'openrouter';
   embeddingModel?: string;
   embeddingDimension?: number;
+  /** Optional, customer-billed daily Firestore backup retained for a fixed number of days. */
+  backupSchedule?: { recurrence: 'daily'; retentionDays: number };
 }
 
 export interface InstallationStageState {
@@ -71,6 +73,7 @@ export interface CreateInstallationManifestInput {
   modelProvider: InstallationSelection['modelProvider'];
   embeddingModel?: string;
   embeddingDimension?: number;
+  backupSchedule?: InstallationSelection['backupSchedule'];
   resources: readonly InstallationResource[];
   createdAt: string;
 }
@@ -196,6 +199,7 @@ function canonicalInput(value: unknown): Record<string, unknown> {
       'modelProvider',
       'embeddingModel',
       'embeddingDimension',
+      'backupSchedule',
       'resources',
       'createdAt',
     ],
@@ -277,7 +281,14 @@ function canonicalResources(
 function canonicalSelection(input: Record<string, unknown>): InstallationSelection {
   assertKnownKeys(
     input,
-    ['profile', 'modules', 'modelProvider', 'embeddingModel', 'embeddingDimension'],
+    [
+      'profile',
+      'modules',
+      'modelProvider',
+      'embeddingModel',
+      'embeddingDimension',
+      'backupSchedule',
+    ],
     'selection',
   );
   if (input.profile !== 'firestore') fail('selection.profile', 'must be firestore');
@@ -304,6 +315,25 @@ function canonicalSelection(input: Record<string, unknown>): InstallationSelecti
       fail('selection.embeddingDimension', 'must be an integer from 1 through 2048');
     }
     selection.embeddingDimension = embeddingDimension;
+  }
+  if (input.backupSchedule !== undefined) {
+    if (
+      !input.backupSchedule ||
+      typeof input.backupSchedule !== 'object' ||
+      Array.isArray(input.backupSchedule)
+    )
+      fail('selection.backupSchedule', 'must be an object');
+    const backup = input.backupSchedule as Record<string, unknown>;
+    assertKnownKeys(backup, ['recurrence', 'retentionDays'], 'selection.backupSchedule');
+    if (backup.recurrence !== 'daily') fail('selection.backupSchedule.recurrence', 'must be daily');
+    if (
+      typeof backup.retentionDays !== 'number' ||
+      !Number.isInteger(backup.retentionDays) ||
+      backup.retentionDays < 1 ||
+      backup.retentionDays > 98
+    )
+      fail('selection.backupSchedule.retentionDays', 'must be an integer from 1 through 98');
+    selection.backupSchedule = { recurrence: 'daily', retentionDays: backup.retentionDays };
   }
   return selection;
 }
@@ -345,6 +375,7 @@ export function createInstallationManifest(
     ...(rawInput.embeddingDimension === undefined
       ? {}
       : { embeddingDimension: rawInput.embeddingDimension }),
+    ...(rawInput.backupSchedule === undefined ? {} : { backupSchedule: rawInput.backupSchedule }),
   });
   const createdAt = timestampAt(rawInput.createdAt, 'stage.updatedAt');
   return {

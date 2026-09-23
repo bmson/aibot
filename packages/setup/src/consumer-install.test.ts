@@ -85,7 +85,7 @@ async function foundationArchive(
   );
 }
 
-function manifest(digest: string) {
+function manifest(digest: string, dailyBackupRetentionDays?: number) {
   return createInstallationManifest({
     identity: {
       installationId: 'consumer-install',
@@ -99,6 +99,11 @@ function manifest(digest: string) {
     },
     modules: [],
     modelProvider: 'google',
+    ...(dailyBackupRetentionDays === undefined
+      ? {}
+      : {
+          backupSchedule: { recurrence: 'daily' as const, retentionDays: dailyBackupRetentionDays },
+        }),
     resources: [],
     createdAt: '2026-09-12T12:00:00.000Z',
   });
@@ -113,6 +118,7 @@ function fakeRunner(
     installation_id: { value: 'consumer-install' },
     region: { value: 'us-central1' },
     firestore_database_name: { value: '(default)' },
+    daily_backup_schedule_name: { value: null },
     assets_bucket_name: { value: 'customer-project-consumer-install-assets' },
     source_bucket_name: { value: 'customer-project-consumer-install-source' },
     artifact_registry_repository: {
@@ -376,7 +382,7 @@ describe('consumer installation', () => {
     const archive = join(dir, 'release.tar.gz');
     const state = join(dir, 'state.json');
     await foundationArchive(archive);
-    const source = manifest(await sha256File(archive));
+    const source = manifest(await sha256File(archive), 7);
     const logs: string[] = [];
     const runner = fakeRunner(logs);
     let agentPublic = false;
@@ -476,6 +482,9 @@ describe('consumer installation', () => {
             ...JSON.parse(result.stdout),
             cloud_run_web_service_name: { value: 'consumer-install-web' },
             cloud_run_agent_service_name: { value: 'consumer-install-agent' },
+            daily_backup_schedule_name: {
+              value: 'projects/customer-project/databases/(default)/backupSchedules/daily',
+            },
           }),
         };
       }
@@ -581,6 +590,16 @@ describe('consumer installation', () => {
       { ...options, runtime },
     );
     expect(result.manifest.stage.current).toBe('initialized');
+    expect(result.manifest.selection.backupSchedule).toEqual({
+      recurrence: 'daily',
+      retentionDays: 7,
+    });
+    expect(result.manifest.resources).toContainEqual(
+      expect.objectContaining({
+        kind: 'firestore-backup-schedule',
+        name: 'projects/customer-project/databases/(default)/backupSchedules/daily',
+      }),
+    );
     expect(result.runtimeReady).toBe(false);
     expect(result.pending).toEqual(['ready']);
     expect(
@@ -590,6 +609,8 @@ describe('consumer installation', () => {
     ).toBe(true);
     expect(logs.some((entry) => entry.includes('mobile_api_token_version=4'))).toBe(true);
     expect(logs.some((entry) => entry.includes('vertex_location=global'))).toBe(true);
+    expect(logs.some((entry) => entry.includes('daily_backup_schedule_enabled=true'))).toBe(true);
+    expect(logs.some((entry) => entry.includes('backup_retention_days=7'))).toBe(true);
     expect(
       logs.filter((entry) => entry.includes('terraform') && entry.includes('apply')).length,
     ).toBe(4);

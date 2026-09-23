@@ -41,6 +41,39 @@ run "default_creation_is_database_scoped" {
     condition     = google_firestore_database.consumer.point_in_time_recovery_enablement == "POINT_IN_TIME_RECOVERY_ENABLED"
     error_message = "Consistent managed snapshot exports require point-in-time recovery."
   }
+  assert {
+    condition     = length(google_firestore_backup_schedule.daily) == 0
+    error_message = "Billable recurring backups must remain an explicit opt-in."
+  }
+}
+
+run "daily_managed_backup_is_opt_in_and_retention_is_pinned" {
+  command = plan
+  variables {
+    firestore_database_id         = "assistant-backup-test"
+    daily_backup_schedule_enabled = true
+    backup_retention_days         = 7
+  }
+
+  assert {
+    condition = (
+      google_firestore_backup_schedule.daily[0].project == "consumer-test-project" &&
+      google_firestore_backup_schedule.daily[0].database == "assistant-backup-test" &&
+      google_firestore_backup_schedule.daily[0].retention == "604800s" &&
+      google_firestore_backup_schedule.daily[0].deletion_policy == "DELETE" &&
+      length(google_firestore_backup_schedule.daily[0].daily_recurrence) == 1
+    )
+    error_message = "The optional daily backup schedule must target only the selected database and retain seven days."
+  }
+}
+
+run "backup_retention_must_fit_firestore_limits" {
+  command = plan
+  variables {
+    firestore_database_id = "assistant-backup-test"
+    backup_retention_days = 99
+  }
+  expect_failures = [var.backup_retention_days]
 }
 
 run "named_creation_remains_explicit" {

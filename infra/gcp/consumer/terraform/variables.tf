@@ -43,6 +43,23 @@ variable "firestore_database_id" {
   }
 }
 
+variable "daily_backup_schedule_enabled" {
+  description = "Explicitly create a daily managed Firestore backup schedule. Backup storage is billable; see the consumer Terraform README before enabling."
+  type        = bool
+  default     = false
+}
+
+variable "backup_retention_days" {
+  description = "Retention period in days for the optional daily managed Firestore backup schedule."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.backup_retention_days >= 1 && var.backup_retention_days <= 98 && floor(var.backup_retention_days) == var.backup_retention_days
+    error_message = "backup_retention_days must be a whole number from 1 through 98 (Firestore's 14-week maximum)."
+  }
+}
+
 variable "create_default_database" {
   description = "Explicit creation intent for (default) in a fresh customer project. The installer must verify absence first; this never imports or adopts an existing database."
   type        = bool
