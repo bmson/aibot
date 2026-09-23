@@ -1,4 +1,6 @@
-import { getApplication } from '@/lib/server';
+import { loadConfig } from '@assistant/config';
+import { FirestoreWorkspaceImprovementRepository } from '@assistant/firestore';
+import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -14,9 +16,15 @@ export async function POST(
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid proposal id' }, { status: 400 });
   const body = (await request.json().catch(() => null)) as { action?: unknown } | null;
   try {
-    if (body?.action === 'apply') await getApplication().applyImprovementProposal(id);
-    else if (body?.action === 'dismiss') await getApplication().dismissImprovementProposal(id);
-    else return mobileJson({ error: 'action must be apply or dismiss' }, { status: 400 });
+    if (body?.action !== 'apply' && body?.action !== 'dismiss')
+      return mobileJson({ error: 'action must be apply or dismiss' }, { status: 400 });
+    if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+      const { FIRESTORE_AGENT_ID: agentId } = loadConfig();
+      await new FirestoreWorkspaceImprovementRepository(
+        getFirestoreInstallationStore(),
+      ).applyAction(agentId, id, body.action);
+    } else if (body.action === 'apply') await getApplication().applyImprovementProposal(id);
+    else await getApplication().dismissImprovementProposal(id);
     return mobileJson({ ok: true });
   } catch (error) {
     return mobileJson(

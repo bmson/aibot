@@ -23,6 +23,8 @@ export function proxy(request: NextRequest) {
     /^\/api\/mobile\/v1\/memory\/occasions\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const approvalIdPath =
     /^\/api\/mobile\/v1\/approvals\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const improvementIdPath =
+    /^\/api\/mobile\/v1\/improvements\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const chatMessagePath =
     /^\/api\/mobile\/v1\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (
@@ -79,6 +81,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/workspace' && request.method === 'GET') ||
     (path === '/api/mobile/v1/costs' && request.method === 'PATCH') ||
     (approvalIdPath.test(path) && request.method === 'POST') ||
+    (improvementIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/memory/profile' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/mobile/v1/memory/people' && request.method === 'POST') ||
     (memoryPersonPath.test(path) && request.method === 'PATCH') ||
