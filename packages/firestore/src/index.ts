@@ -79,6 +79,7 @@ export { FirestoreSituationPackReadRepository } from './situation-packs.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { FirestoreSkillMutationRepository } from './skill-mutations.js';
 export { createInstallationStore, InstallationStore } from './store.js';
+export { FirestoreSuggestionDecisionRepository } from './suggestion-decisions.js';
 export { FirestoreTaskActivityRepository } from './task-activity.js';
 export { FirestoreTaskActivityCommandRepository } from './task-activity-commands.js';
 export { FirestoreTaskRepository } from './task-lifecycle.js';

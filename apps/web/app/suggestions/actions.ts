@@ -5,9 +5,22 @@ import {
   type SuggestionDecision,
   snoozeSuggestionUntil,
 } from '@assistant/application/suggestions';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { FirestoreSuggestionDecisionRepository } from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getDb } from '@/lib/server';
+import { getDb, getFirestoreInstallationStore } from '@/lib/server';
+
+function firestoreDecisions(): FirestoreSuggestionDecisionRepository | null {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER !== 'firestore') return null;
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  return new FirestoreSuggestionDecisionRepository(
+    getFirestoreInstallationStore(),
+    config.FIRESTORE_AGENT_ID,
+  );
+}
 
 /**
  * Accept or dismiss a suggestion from its inline card.
@@ -21,7 +34,10 @@ export async function decideSuggestionInline(
   decision: SuggestionDecision,
 ): Promise<{ ok: boolean; taskId?: string; error?: string }> {
   await requireOwner();
-  const result = await decideSuggestion(getDb(), suggestionId, decision);
+  const firestore = firestoreDecisions();
+  const result = firestore
+    ? await firestore.decide(suggestionId, decision)
+    : await decideSuggestion(getDb(), suggestionId, decision);
   revalidatePath('/');
   revalidatePath('/tasks');
   revalidatePath('/chat', 'layout');
@@ -39,7 +55,10 @@ export async function snoozeSuggestionInline(
   suggestionId: string,
 ): Promise<{ ok: boolean; snoozedUntil?: string; error?: string }> {
   await requireOwner();
-  const result = await snoozeSuggestionUntil(getDb(), suggestionId);
+  const firestore = firestoreDecisions();
+  const result = firestore
+    ? await firestore.decide(suggestionId, 'snoozed')
+    : await snoozeSuggestionUntil(getDb(), suggestionId);
   revalidatePath('/chat', 'layout');
   return result.ok
     ? { ok: true, snoozedUntil: result.snoozedUntil }
