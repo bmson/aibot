@@ -17,6 +17,7 @@ describe('config', () => {
     expect(config.QUEUE_DRIVER).toBe('local');
     expect(config.AGENT_PORT).toBe(8787);
     expect(config.DATABASE_URL).toContain('postgres://');
+    expect(config.POSTGRES_SOURCE_WRITES_FENCED).toBe(false);
     expect(config.PERSISTENCE_DRIVER).toBe('postgres');
     expect(config.INTERNAL_AUTH_MODE).toBe('oidc');
     expect(config.AUTH_DEV_BYPASS).toBe(false);
@@ -31,9 +32,14 @@ describe('config', () => {
   });
 
   it('parses overrides and coerces numbers', () => {
-    const config = loadConfig({ QUEUE_DRIVER: 'cloudtasks', AGENT_PORT: '9000' });
+    const config = loadConfig({
+      QUEUE_DRIVER: 'cloudtasks',
+      AGENT_PORT: '9000',
+      POSTGRES_SOURCE_WRITES_FENCED: 'true',
+    });
     expect(config.QUEUE_DRIVER).toBe('cloudtasks');
     expect(config.AGENT_PORT).toBe(9000);
+    expect(config.POSTGRES_SOURCE_WRITES_FENCED).toBe(true);
   });
 
   it('supports minimal and explicit module installations', () => {
@@ -52,6 +58,8 @@ describe('config', () => {
     expect(() => loadConfig({ AUTH_DEV_BYPASS: 'yes' })).toThrow();
     resetConfigForTest();
     expect(() => loadConfig({ AUTH_LOCALHOST_BYPASS: 'yes' })).toThrow();
+    resetConfigForTest();
+    expect(() => loadConfig({ POSTGRES_SOURCE_WRITES_FENCED: 'yes' })).toThrow();
     resetConfigForTest();
     expect(() => loadConfig({ FIRESTORE_DATABASE_ID: 'Invalid_Name' })).toThrow();
     resetConfigForTest();

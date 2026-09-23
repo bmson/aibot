@@ -1,6 +1,7 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from './schema.js';
+import { withPostgresSourceWriteFence } from './write-fence.js';
 
 export type Db = ReturnType<typeof createDb>;
 
@@ -10,6 +11,8 @@ export interface DbPoolOptions {
   idleTimeoutSeconds?: number;
   connectTimeoutSeconds?: number;
   statementTimeoutMs?: number;
+  /** Block writes through the application's Drizzle connection during cutover. */
+  sourceWritesFenced?: boolean;
 }
 
 /**
@@ -34,5 +37,6 @@ export function createDb(url: string, options: DbPoolOptions = {}) {
     onnotice: () => {},
     ...(statementTimeoutMs > 0 ? { connection: { statement_timeout: statementTimeoutMs } } : {}),
   });
-  return drizzle(client, { schema });
+  const database = drizzle(client, { schema });
+  return options.sourceWritesFenced ? withPostgresSourceWriteFence(database) : database;
 }

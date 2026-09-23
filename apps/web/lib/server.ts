@@ -213,6 +213,7 @@ export function getDb(): Db {
       idleTimeoutSeconds: config.DB_IDLE_TIMEOUT_SECONDS,
       connectTimeoutSeconds: config.DB_CONNECT_TIMEOUT_SECONDS,
       statementTimeoutMs: config.DB_STATEMENT_TIMEOUT_MS,
+      sourceWritesFenced: config.POSTGRES_SOURCE_WRITES_FENCED,
     });
   }
   return globalCache.__assistantDb;
