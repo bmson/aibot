@@ -1,0 +1,69 @@
+name: Import Firestore workspace snapshot
+
+# Preview and verify are read-only. Write only targets an empty installation.
+on:
+  workflow_dispatch:
+    inputs:
+      source_agent_id:
+        description: PostgreSQL owner agent UUID from the export summary
+        required: true
+        type: string
+      firestore_database_id:
+        description: Target Firestore database ID
+        required: true
+        default: assistant-production
+        type: string
+      snapshot_uri:
+        description: Private gs:// snapshot URI from the export summary
+        required: true
+        type: string
+      snapshot_generation:
+        description: Immutable Cloud Storage object generation
+        required: true
+        type: string
+      snapshot_sha256:
+        description: SHA-256 of the exact exported snapshot bytes
+        required: true
+        type: string
+      mode:
+        description: Preview validates; write imports to an empty installation; verify checks imported data
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - write
+          - verify
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  import:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+      GCP_REGION: ${{ vars.GCP_REGION || 'us-west1' }}
+      ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}
+      IMPORT_RELEASE_SHA: ${{ github.sha }}
+      MIGRATION_SOURCE_AGENT_ID: ${{ inputs.source_agent_id }}
+      FIRESTORE_TARGET_DATABASE_ID: ${{ inputs.firestore_database_id }}
+      MIGRATION_SNAPSHOT_URI: ${{ inputs.snapshot_uri }}
+      MIGRATION_SNAPSHOT_GENERATION: ${{ inputs.snapshot_generation }}
+      MIGRATION_SNAPSHOT_SHA256: ${{ inputs.snapshot_sha256 }}
+      MIGRATION_IMPORT_MODE: ${{ inputs.mode }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ vars.GCP_PROJECT }}
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Import the pinned snapshot inside Cloud Run
+        run: bash infra/gcp/workspace-import.sh
