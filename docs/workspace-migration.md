@@ -23,6 +23,18 @@ New exports use snapshot version 3. They preserve PostgreSQL timestamp microseco
 
 Output is created with mode 0600 and cannot overwrite an existing file. Treat it as a full private database export. The default table set is the complete current migration registry. `--tables` exists only for focused rehearsals; its manifest has `coverage.complete=false` and lists every omitted source table.
 
+## Audit referenced workspace objects
+
+Before cutover, compare the version 3 snapshot's direct path fields (`files.workspacePath` and `import_sources.workspacePath`) with the installation's private workspace bucket. The audit reads the pinned snapshot and GCS object metadata; it never writes or deletes objects. It reports counts only and does not print file names or contents. Missing counts include lifecycle status grouped by reference table: import-source status or, for task-created files, the associated task status. These labels provide context and do not automatically make missing objects safe. The import runner marks an archive `done` without deleting it; the explicit source-purge flow deletes the source row and object, so a still-present row alone does not prove an intentional purge. In the pinned rehearsal, all 17 missing references have `done` status: 13 import sources and four browser artifacts. The application code has no completion-time cleanup for either class, so these remain unresolved missing assets rather than expected lifecycle deletions. Add `--verify-digests` to stream referenced objects with a recorded SHA-256 and compare bytes; size is compared for `files` rows when the source recorded it. Output separates references that carry expected size or digest metadata from checks that could be performed, so missing objects and absent source checksums remain visible. GCS generations are inventoried, including retained historical versions, but PostgreSQL references do not pin a generation, so only a live current generation is considered available to the application.
+
+```sh
+pnpm workspace:assets-audit --snapshot gs://PROJECT-workspace/workspace/INSTALLATION_ID/migration/snapshots/EXECUTION.json \
+  --generation SNAPSHOT_GENERATION --sha256 SNAPSHOT_SHA256 \
+  --bucket PROJECT-workspace --gcloud-auth --verify-digests
+```
+
+The current reference registry covers the database's explicit workspace path columns, including browser screenshots and traces inventoried in `files`. It does not crawl arbitrary JSON, prose, or external URLs for path-like strings; add any future structured asset-reference field to `ASSET_REFERENCE_FIELDS` and its schema coverage test before treating it as covered. A missing object may predate migration, so retain the report and classify each exception instead of deleting or silently dropping the reference.
+
 ## Validate and rehearse
 
 ```sh
