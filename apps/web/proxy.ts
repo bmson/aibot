@@ -11,6 +11,8 @@ export function proxy(request: NextRequest) {
     /^\/chat\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path);
   const chatIdPath =
     /^\/api\/mobile\/v1\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const activityIdPath =
+    /^\/api\/mobile\/v1\/activity\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const chatMessagePath =
     /^\/api\/mobile\/v1\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (
@@ -37,6 +39,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/shell/status' && request.method === 'GET') ||
     (path === '/api/mobile/v1/bootstrap' && request.method === 'GET') ||
     (path === '/api/mobile/v1/activity' && request.method === 'GET') ||
+    (activityIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/workspace' && request.method === 'GET') ||
     (path === '/api/card-image' && request.method === 'GET') ||
     (path === '/api/mobile/v1/cards' && request.method === 'GET') ||

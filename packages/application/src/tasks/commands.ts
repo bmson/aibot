@@ -1,6 +1,7 @@
 import { getAgent } from '@assistant/core/chat';
 import { completeTask, wakeTask } from '@assistant/core/workflow/machine';
 import { type Db, tasks } from '@assistant/db';
+import type { TaskActivityCommandRepository } from '@assistant/persistence';
 import { and, eq, inArray, isNull, lt } from 'drizzle-orm';
 
 import { terminalTaskStatuses } from './queries.js';
@@ -54,6 +55,23 @@ export async function raiseTaskBudget(db: Db, taskId: string, requested: number)
 
 export function cancelActivity(db: Db, taskId: string): Promise<boolean> {
   return completeTask(db, taskId, { status: 'cancelled' });
+}
+
+/** Portable owner-scoped commands used by the Firestore mobile Activity route. */
+export function archiveActivityWithRepository(
+  repository: TaskActivityCommandRepository,
+  agentId: string,
+  taskId: string,
+): Promise<void> {
+  return repository.archive(agentId, taskId);
+}
+
+export function restoreActivityWithRepository(
+  repository: TaskActivityCommandRepository,
+  agentId: string,
+  taskId: string,
+): Promise<void> {
+  return repository.restore(agentId, taskId);
 }
 
 export async function archiveActivity(db: Db, taskId: string): Promise<void> {
