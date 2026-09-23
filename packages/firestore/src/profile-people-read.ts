@@ -4,7 +4,12 @@ import type {
   ProfileOccasion,
   ProfilePeopleReadRepository,
 } from '@assistant/persistence';
-import { FieldPath, type Query, type QueryDocumentSnapshot } from '@google-cloud/firestore';
+import {
+  FieldPath,
+  type Query,
+  type QueryDocumentSnapshot,
+  Timestamp,
+} from '@google-cloud/firestore';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const PAGE_SIZE = 200;
@@ -25,13 +30,44 @@ async function collect<T extends { id: string }>(query: Query): Promise<T[]> {
   }
 }
 
-function profileFactOrder(a: ProfileFact, b: ProfileFact): number {
+type PreciseFact = { row: ProfileFact; seconds: number; nanoseconds: number };
+
+async function collectFacts(query: Query): Promise<PreciseFact[]> {
+  const rows: PreciseFact[] = [];
+  let cursor: QueryDocumentSnapshot | undefined;
+  for (;;) {
+    let pageQuery = query.orderBy(FieldPath.documentId()).limit(PAGE_SIZE);
+    if (cursor) pageQuery = pageQuery.startAfter(cursor);
+    const page = await pageQuery.get();
+    for (const doc of page.docs) {
+      const row = decodeRecord<ProfileFact>(doc.data());
+      if (documentKey(row.id) !== doc.id || !(row.createdAt instanceof Date)) continue;
+      const createdAt = doc.get('createdAt');
+      rows.push({
+        row,
+        seconds:
+          createdAt instanceof Timestamp
+            ? createdAt.seconds
+            : Math.floor(row.createdAt.getTime() / 1000),
+        nanoseconds:
+          createdAt instanceof Timestamp
+            ? createdAt.nanoseconds
+            : (row.createdAt.getTime() % 1000) * 1_000_000,
+      });
+    }
+    if (page.size < PAGE_SIZE) return rows;
+    cursor = page.docs.at(-1);
+  }
+}
+
+function profileFactOrder(a: PreciseFact, b: PreciseFact): number {
   return (
-    Number(b.pinned) - Number(a.pinned) ||
-    b.importance - a.importance ||
-    Number(b.confidence) - Number(a.confidence) ||
-    b.createdAt.getTime() - a.createdAt.getTime() ||
-    b.id.localeCompare(a.id)
+    Number(b.row.pinned) - Number(a.row.pinned) ||
+    b.row.importance - a.row.importance ||
+    Number(b.row.confidence) - Number(a.row.confidence) ||
+    b.seconds - a.seconds ||
+    b.nanoseconds - a.nanoseconds ||
+    b.row.id.localeCompare(a.row.id)
   );
 }
 
@@ -69,23 +105,22 @@ export class FirestoreProfilePeopleReadRepository implements ProfilePeopleReadRe
   ): Promise<{ rows: ProfileFact[]; total: number }> {
     if (!Number.isSafeInteger(limit) || limit < 0) throw new Error('Invalid profile fact limit');
     const now = this.store.now();
-    const candidates = await collect<ProfileFact>(
+    const candidates = await collectFacts(
       this.store
         .collection('memories')
         .where('agentId', '==', this.agentId)
         .where('subjectContactId', '==', contactId),
     );
     const active = candidates.filter(
-      (row) =>
+      ({ row }) =>
         row.agentId === this.agentId &&
         row.subjectContactId === contactId &&
         row.category === 'knowledge' &&
         row.quarantined === false &&
-        (row.expiresAt === null || (row.expiresAt instanceof Date && row.expiresAt > now)) &&
-        row.createdAt instanceof Date,
+        (row.expiresAt === null || (row.expiresAt instanceof Date && row.expiresAt > now)),
     );
     active.sort(profileFactOrder);
-    return { rows: active.slice(0, limit), total: active.length };
+    return { rows: active.slice(0, limit).map(({ row }) => row), total: active.length };
   }
 
   async getOwnerCard(): Promise<{ content: string; compiledAt: Date } | null> {

@@ -11,6 +11,7 @@ import { firestoreApplicationSmoke } from './firestore-application-smoke.js';
 import { firestoreApprovalSmoke } from './firestore-approval-smoke.js';
 import { firestoreChatSmoke } from './firestore-chat-smoke.js';
 import { firestoreExecutorSmoke } from './firestore-executor-smoke.js';
+import { firestoreProfilePeopleSmoke } from './firestore-profile-people-smoke.js';
 import { firestoreRuntimeSmoke } from './firestore-runtime-smoke.js';
 import { firestoreScheduleSmoke } from './firestore-schedule-smoke.js';
 import { firestoreSettingsSmoke } from './firestore-settings-smoke.js';
@@ -47,6 +48,7 @@ const indexes = spec.indexes.filter((index) =>
     'generatedCards',
     'conversationSegments',
     'memories',
+    'occasions',
     'knowledgeGraphRelations',
     'skills',
     'locationPings',
@@ -102,6 +104,7 @@ if (!values.run) {
       dueTaskQueryExplain: await explainDueTaskQuery(store),
       schedules: await firestoreScheduleSmoke(store),
       settings: await firestoreSettingsSmoke(store),
+      profilePeople: await firestoreProfilePeopleSmoke(store),
       approvals: await firestoreApprovalSmoke(store),
       runtime: await firestoreRuntimeSmoke(store),
       executor: await firestoreExecutorSmoke(store),

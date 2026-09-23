@@ -3,7 +3,8 @@ import { createDb, createPostgresProfilePeopleReadRepository } from '@assistant/
 import { agents, contacts, memories, occasions } from '@assistant/db/schema';
 import { FirestoreProfilePeopleReadRepository } from '@assistant/firestore';
 import type { ProfileContact, ProfileFact } from '@assistant/persistence';
-import { eq } from 'drizzle-orm';
+import { Timestamp } from '@google-cloud/firestore';
+import { eq, sql } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   getOwnerFactsView,
@@ -11,6 +12,7 @@ import {
 } from '../packages/application/src/profile/queries.js';
 import { encodeRecord, type InstallationStore } from '../packages/firestore/src/store.js';
 import { disposeStore, emulatorStore } from '../packages/firestore/src/test-store.js';
+import { firestoreProfilePeopleSmoke } from './firestore-profile-people-smoke.js';
 
 const now = new Date('2026-09-22T12:00:00.000Z');
 const rolledBack = Symbol('transaction rolled back');
@@ -74,6 +76,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('profile people read parit
     store = undefined;
   });
 
+  it('exercises the real-cloud profile index workload on the emulator', async () => {
+    store = emulatorStore(() => now);
+    await expect(firestoreProfilePeopleSmoke(store)).resolves.toEqual({ facts: 1, occasions: 1 });
+  });
+
   it('matches PostgreSQL for ordered facts, exact totals, all contacts, and occasion dates', async () => {
     const db = createDb(
       process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant_test',
@@ -97,9 +104,19 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('profile people read parit
         fact(randomUUID(), agent.id, personId, { importance: 4, confidence: '0.82' }),
         fact(randomUUID(), agent.id, personId, { importance: 2, confidence: '0.73' }),
       ];
-      const overflowFacts = Array.from({ length: 205 }, () =>
-        fact(randomUUID(), agent.id, personId, { importance: 1 }),
-      );
+      const preciseEarly = fact('00000000-0000-4000-8000-000000000222', agent.id, personId, {
+        importance: 1,
+      });
+      const preciseLate = fact('00000000-0000-4000-8000-000000000111', agent.id, personId, {
+        importance: 1,
+      });
+      const overflowFacts = [
+        preciseEarly,
+        preciseLate,
+        ...Array.from({ length: 203 }, () =>
+          fact(randomUUID(), agent.id, personId, { importance: 1 }),
+        ),
+      ];
       const excluded = [
         fact(randomUUID(), foreignAgentId, personId),
         fact(randomUUID(), agent.id, personId, { quarantined: true }),
@@ -136,8 +153,16 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('profile people read parit
         await batch.commit();
       }
       const batch = installation.db.batch();
-      for (const row of [...owned, ...overflowFacts, ...excluded, ownerFact, foreignOwnerFact])
-        batch.set(installation.doc('memories', row.id), encodeRecord(row));
+      for (const row of [...owned, ...overflowFacts, ...excluded, ownerFact, foreignOwnerFact]) {
+        const value = encodeRecord(row);
+        const timestamp =
+          row.id === preciseEarly.id
+            ? new Timestamp(Math.floor(row.createdAt.getTime() / 1000), 345_456_000)
+            : row.id === preciseLate.id
+              ? new Timestamp(Math.floor(row.createdAt.getTime() / 1000), 345_789_000)
+              : row.createdAt;
+        batch.set(installation.doc('memories', row.id), { ...value, createdAt: timestamp });
+      }
       batch.set(installation.doc('occasions', occasion.id), encodeRecord(occasion));
       await batch.commit();
 
@@ -153,6 +178,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('profile people read parit
           await tx
             .insert(memories)
             .values([...owned, ...overflowFacts, ...excluded, ownerFact, foreignOwnerFact]);
+          await tx.execute(
+            sql`update memories set created_at = '2026-09-21T10:11:12.345456Z'::timestamptz where id = ${preciseEarly.id}`,
+          );
+          await tx.execute(
+            sql`update memories set created_at = '2026-09-21T10:11:12.345789Z'::timestamptz where id = ${preciseLate.id}`,
+          );
           await tx.insert(occasions).values(occasion);
 
           const pg = createPostgresProfilePeopleReadRepository(tx as never, agent.id, () => now);
@@ -174,6 +205,10 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('profile people read parit
             allPgFacts.rows.map((row) => row.id),
           );
           expect(allFsFacts.rows).toHaveLength(208);
+          expect(allFsFacts.rows.slice(3, 5).map((row) => row.id)).toEqual([
+            preciseLate.id,
+            preciseEarly.id,
+          ]);
           expect(fsPerson?.facts.map((row) => row.id)).toEqual(
             owned.slice(0, 2).map((row) => row.id),
           );
