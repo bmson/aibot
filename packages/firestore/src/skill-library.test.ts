@@ -1,5 +1,5 @@
 import { FieldValue } from '@google-cloud/firestore';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FirestoreSkillLibraryRepository } from './skill-library.js';
 import type { InstallationStore } from './store.js';
 import { disposeStore, emulatorStore } from './test-store.js';
@@ -8,9 +8,10 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore learned-skill l
   let store: InstallationStore;
   let repository: FirestoreSkillLibraryRepository;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     store = emulatorStore();
     repository = new FirestoreSkillLibraryRepository(store);
+    await Promise.all(['owner', 'other'].map((id) => store.doc('agents', id).set({ id })));
   });
 
   afterEach(async () => disposeStore(store));
@@ -78,6 +79,43 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore learned-skill l
 
     await seed('bad-counter', { failureCount: -1 });
     await expect(repository.list('owner')).rejects.toThrow('Invalid learned-skill document');
+  });
+
+  it('refuses missing agents and active or changed privacy erasure', async () => {
+    await seed('private');
+    await expect(repository.list('missing')).rejects.toThrow('agent is missing');
+    await store.doc('privacyErasureJobs', 'owner').set({ agentId: 'owner', status: 'active' });
+    await expect(repository.list('owner')).rejects.toThrow('Privacy erasure is in progress');
+    await store.doc('privacyErasureJobs', 'owner').set({ agentId: 'owner', status: 'complete' });
+    expect(await repository.list('owner')).toHaveLength(1);
+  });
+
+  it('rejects skills when erasure completes during the read', async () => {
+    await seed('private');
+    const originalDoc = store.doc.bind(store);
+    let fenceReads = 0;
+    const spy = vi.spyOn(store, 'doc').mockImplementation((collection, id) => {
+      const ref = originalDoc(collection, id);
+      if (collection === 'privacyErasureJobs' && id === 'owner') {
+        const get = ref.get.bind(ref);
+        vi.spyOn(ref, 'get').mockImplementation(async () => {
+          fenceReads += 1;
+          if (fenceReads === 2)
+            await originalDoc('privacyErasureJobs', 'owner').set({
+              agentId: 'owner',
+              status: 'complete',
+            });
+          return get();
+        });
+      }
+      return ref;
+    });
+    try {
+      await expect(repository.list('owner')).rejects.toThrow('Privacy erasure changed during read');
+      expect(fenceReads).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('rejects a library larger than the bounded mobile response', async () => {
