@@ -9,6 +9,7 @@ import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import {
   assertPrivacyErasureFenceUnchanged,
   createInstallationStore,
+  FirestoreOwnerCardCompilationRepository,
   FirestoreProfileVoiceOverviewRepository,
   FirestoreVoiceProfileRepository,
   readPrivacyErasureFence,
@@ -78,7 +79,7 @@ export async function POST(request: Request): Promise<Response> {
     Array.isArray(value) ? value.map(text).join('\n') : text(value);
   const config = loadConfig();
   const firestore = config.PERSISTENCE_DRIVER === 'firestore';
-  if (firestore && body?.action !== 'voice-profile')
+  if (firestore && body?.action !== 'voice-profile' && body?.action !== 'recompile')
     return mobileJson(
       { error: 'This memory profile action is unavailable in Firestore mode.' },
       { status: 503 },
@@ -89,7 +90,36 @@ export async function POST(request: Request): Promise<Response> {
       case 'organize':
         return mobileJson({ ok: true, ...(await organizeMemoryNow(getDb())) });
       case 'recompile':
-        await recompileProfileCard(getDb());
+        if (firestore) {
+          const problems = validateAgentPersistenceConfig(config);
+          if (problems.length) throw new Error(problems.join('; '));
+          const store = createInstallationStore({
+            projectId: config.GCP_PROJECT,
+            installationId: config.ASSISTANT_WORKSPACE_ID,
+            databaseId: config.FIRESTORE_DATABASE_ID,
+          });
+          try {
+            const assertConfiguredOwner = async () => {
+              const owners = await store.collection('agents').limit(2).get();
+              if (
+                owners.size !== 1 ||
+                owners.docs[0]?.id !== store.doc('agents', config.FIRESTORE_AGENT_ID).id ||
+                owners.docs[0]?.get('id') !== config.FIRESTORE_AGENT_ID
+              )
+                throw new Error('Profile recompilation requires one matching configured owner');
+            };
+            await assertConfiguredOwner();
+            const fence = await readPrivacyErasureFence(store, config.FIRESTORE_AGENT_ID);
+            await recompileProfileCard(
+              new FirestoreOwnerCardCompilationRepository(store),
+              config.FIRESTORE_AGENT_ID,
+            );
+            await assertConfiguredOwner();
+            await assertPrivacyErasureFenceUnchanged(store, config.FIRESTORE_AGENT_ID, fence);
+          } finally {
+            await store.db.terminate();
+          }
+        } else await recompileProfileCard(getDb());
         return mobileJson({ ok: true });
       case 'purge-voice':
         return mobileJson({

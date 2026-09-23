@@ -19,8 +19,10 @@ import {
   voiceProfile,
 } from '@assistant/db';
 import {
+  isOwnerCardCompilationRepository,
   isProfileOccasionCommandRepository,
   normalizeVoiceProfileEdit,
+  type OwnerCardCompilationRepository,
   type ProfileOccasionCommandRepository,
 } from '@assistant/persistence';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
@@ -226,8 +228,20 @@ export async function deletePerson(db: Db, contactId: string): Promise<{ error?:
   return {};
 }
 
-export function recompileProfileCard(db: Db): Promise<unknown> {
-  return compileOwnerCard(db);
+export function recompileProfileCard(db: Db): Promise<string>;
+export function recompileProfileCard(
+  repository: OwnerCardCompilationRepository,
+  agentId: string,
+): Promise<string>;
+export function recompileProfileCard(
+  store: Db | OwnerCardCompilationRepository,
+  agentId?: string,
+): Promise<string> {
+  if (isOwnerCardCompilationRepository(store)) {
+    if (!agentId) throw new Error('Owner card recompilation requires a configured owner');
+    return compileOwnerCard(store, agentId);
+  }
+  return compileOwnerCard(store as Db);
 }
 
 export interface OrganizeMemoryState {

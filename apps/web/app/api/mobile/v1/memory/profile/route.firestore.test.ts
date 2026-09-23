@@ -105,6 +105,43 @@ describe.skipIf(!localEmulator)(
       );
     });
 
+    it('recompiles the configured owner card with PostgreSQL offline', async () => {
+      auth.allowed.mockResolvedValue(true);
+      const ownerContactId = randomUUID();
+      const memoryId = randomUUID();
+      await store.doc('contacts', ownerContactId).set({
+        id: ownerContactId,
+        name: 'Owner',
+        trust: 'owner',
+        relationship: '',
+      });
+      await store.doc('memories', memoryId).set({
+        id: memoryId,
+        agentId,
+        subjectContactId: ownerContactId,
+        category: 'knowledge',
+        content: 'Owner-requested profile fact',
+        contentHash: `hash-${memoryId}`,
+        confidence: '0.90',
+        importance: 5,
+        domain: 'work',
+        pinned: true,
+        quarantined: false,
+        supersededById: null,
+        expiresAt: null,
+        validFrom: null,
+        validUntil: null,
+      });
+
+      const response = await post({ action: 'recompile' });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true });
+      expect((await store.doc('ownerCards', agentId).get()).get('content')).toContain(
+        'Owner-requested profile fact',
+      );
+    });
+
     it('requires mobile authentication before reading', async () => {
       auth.allowed.mockResolvedValue(false);
       expect((await get()).status).toBe(401);
