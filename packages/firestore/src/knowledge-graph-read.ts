@@ -54,14 +54,26 @@ async function sourcesFor(
 ): Promise<Map<string, Source>> {
   const result = new Map<string, Source>();
   const ids = new Map(memories.map((memory) => [documentKey(memory.id), memory.id]));
-  for (let offset = 0; offset < memories.length; offset += 300) {
-    const refs = memories
-      .slice(offset, offset + 300)
-      .map((row) => store.doc('knowledgeGraphSources', row.id));
-    for (const doc of await store.db.getAll(...refs)) {
-      if (!doc.exists) continue;
-      const row = decodeRecord<Source>(doc.data());
-      if (row.memoryId === ids.get(doc.id)) result.set(row.memoryId, row);
+  const batchSize = 300;
+  // Independent source reads can overlap, but keep the in-flight work bounded
+  // for the imported histories this owner view must scan in full.
+  const concurrentBatches = 4;
+  for (let offset = 0; offset < memories.length; offset += batchSize * concurrentBatches) {
+    const pages = await Promise.all(
+      Array.from({ length: concurrentBatches }, (_, batch) =>
+        memories
+          .slice(offset + batch * batchSize, offset + (batch + 1) * batchSize)
+          .map((row) => store.doc('knowledgeGraphSources', row.id)),
+      )
+        .filter((refs) => refs.length > 0)
+        .map((refs) => store.db.getAll(...refs)),
+    );
+    for (const page of pages) {
+      for (const doc of page) {
+        if (!doc.exists) continue;
+        const row = decodeRecord<Source>(doc.data());
+        if (row.memoryId === ids.get(doc.id)) result.set(row.memoryId, row);
+      }
     }
   }
   return result;
