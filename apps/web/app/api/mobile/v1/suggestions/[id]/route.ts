@@ -1,5 +1,7 @@
 import { decideSuggestion, snoozeSuggestionUntil } from '@assistant/application/suggestions';
-import { getDb } from '@/lib/server';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { FirestoreSuggestionDecisionRepository } from '@assistant/firestore';
+import { getDb, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -31,10 +33,20 @@ export async function POST(
     );
   }
 
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
+  }
   const result =
-    decision === 'snoozed'
-      ? await snoozeSuggestionUntil(getDb(), id)
-      : await decideSuggestion(getDb(), id, decision);
+    config.PERSISTENCE_DRIVER === 'firestore'
+      ? await new FirestoreSuggestionDecisionRepository(
+          getFirestoreInstallationStore(),
+          config.FIRESTORE_AGENT_ID,
+        ).decide(id, decision)
+      : decision === 'snoozed'
+        ? await snoozeSuggestionUntil(getDb(), id)
+        : await decideSuggestion(getDb(), id, decision);
   if (!result.ok) {
     return mobileJson(
       { error: result.reason ?? 'This suggestion could not be updated.' },
