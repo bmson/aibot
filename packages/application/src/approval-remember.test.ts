@@ -74,6 +74,7 @@ describe('approveAndRememberApproval', () => {
       approvalId: 'approval-1',
       decision: 'approved',
       via: 'web',
+      expectedAgentId: 'agent-1',
       policy: {
         agentId: 'agent-1',
         toolName: 'gmail.send',
@@ -97,6 +98,7 @@ describe('approveAndRememberApproval', () => {
       approvalId: 'approval-1',
       decision: 'approved',
       via: 'web',
+      expectedAgentId: 'agent-1',
     });
   });
 

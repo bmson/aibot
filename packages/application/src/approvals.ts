@@ -65,15 +65,20 @@ export async function listApprovalInbox(
 
 /** Resolve one owner decision through the durable approval workflow. */
 export function decideApproval(
-  db: Db,
+  store: Db | ApprovalRememberStore,
   approvalId: string,
   decision: ApprovalDecision,
   editedPayload?: Record<string, unknown>,
 ): Promise<ResolveApprovalResult> {
-  return resolveApproval(db, {
+  const portableStore = 'approvals' in store ? store : undefined;
+  const repository: Db | ApprovalRepository = portableStore
+    ? portableStore.approvals
+    : (store as Db);
+  return resolveApproval(repository, {
     approvalId,
     decision,
     via: 'web',
+    ...(portableStore ? { expectedAgentId: portableStore.agentId } : {}),
     ...(editedPayload ? { editedPayload } : {}),
   });
 }
@@ -141,6 +146,7 @@ export async function approveAndRememberApproval(
     approvalId,
     decision: 'approved',
     via: 'web',
+    ...(portable ? { expectedAgentId: agentId } : {}),
     ...(policy ? { policy } : {}),
   });
 }
