@@ -7,30 +7,26 @@ import type { MemoryHealth } from '@assistant/core/memory/health';
 import { detectOccasionInText } from '@assistant/core/memory/occasions';
 import type { VoiceSampleStats } from '@assistant/core/memory/voice-ingest';
 import {
-  contacts,
   createPostgresProfileLibraryRepository,
-  createPostgresProfilePeopleReadRepository,
   createPostgresProfileMemoryHubRepository,
   createPostgresProfileOverviewRepository,
+  createPostgresProfilePeopleReadRepository,
   createPostgresProfileVoiceOverviewRepository,
   type Db,
   findDuplicateContactSuggestions,
-  memories,
-  ownerCard,
 } from '@assistant/db';
 import {
   isProfileMemoryHubRepository,
   isProfileOverviewRepository,
   isProfilePeopleReadRepository,
-  type ProfilePeopleReadRepository,
   isProfileVoiceOverviewRepository,
   type ProfileMemoryHubOverview,
   type ProfileMemoryHubRepository,
   type ProfileOverviewRepository,
+  type ProfilePeopleReadRepository,
   type ProfileVoiceOverview,
   type ProfileVoiceOverviewRepository,
 } from '@assistant/persistence';
-import { and, count, desc, eq, gt, inArray, isNull, like, ne, or, sql } from 'drizzle-orm';
 import {
   type MemoryLibraryFilters,
   type MemoryLibraryInput,
