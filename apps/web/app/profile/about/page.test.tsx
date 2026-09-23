@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ owner: vi.fn() }));
 vi.mock('@/auth', () => ({ requireOwner: auth.owner }));
+vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
 const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
@@ -27,7 +28,7 @@ describe.skipIf(!localEmulator)('Firestore About page with PostgreSQL offline', 
     vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
     vi.stubEnv(
       'FIRESTORE_EMBEDDING_SPACE',
-      '{"provider":"vertex","model":"fixture","dimensions":768,"revision":"1"}',
+      '{"provider":"vertex","model":"fixture","dimensions":1536,"revision":"1"}',
     );
     vi.stubEnv('LLM_PROVIDER', 'vertex');
     vi.stubEnv('ASSISTANT_MODULES', 'minimal');
@@ -46,12 +47,14 @@ describe.skipIf(!localEmulator)('Firestore About page with PostgreSQL offline', 
       category: 'knowledge',
       kind: 'fact',
       content,
+      contentHash: `hash-${id}`,
       confidence: '0.9',
       importance: 5,
       domain: 'identity',
       pinned: true,
       ownerConfirmed: true,
       quarantined: false,
+      supersededById: null,
       expiresAt: null,
       originTrust: 'owner',
       sourceTaskId: null,
@@ -82,20 +85,28 @@ describe.skipIf(!localEmulator)('Firestore About page with PostgreSQL offline', 
     resetConfigForTest();
   });
 
-  it('only admits GET and renders owner facts and summary without controls', async () => {
+  it('admits owner summary refresh and keeps other fact controls unavailable', async () => {
     const { proxy } = await import('../../../proxy.js');
     expect(proxy(new NextRequest('http://localhost/profile/about')).status).toBe(200);
     expect(
       proxy(new NextRequest('http://localhost/profile/about', { method: 'POST' })).status,
-    ).toBe(503);
+    ).toBe(200);
     const html = renderToStaticMarkup(await page.default());
     expect(auth.owner).toHaveBeenCalled();
     expect(html).toContain('Private owner fact');
     expect(html).toContain('Private conversation summary');
     expect(html).not.toContain('Foreign fact');
-    expect(html).not.toContain('<form');
+    expect(html).toContain('Refresh summary');
     expect(html).not.toContain('Correct');
     expect(html).not.toContain('Forget');
+  });
+
+  it('recompiles the configured owner card with PostgreSQL unreachable', async () => {
+    const { recompileCard } = await import('../actions.js');
+    await recompileCard();
+    const card = await store.doc('ownerCards', agentId).get();
+    expect(card.get('content')).toContain('Private owner fact');
+    expect(card.get('content')).not.toContain('Foreign fact');
   });
 
   it('requires owner authentication before reading', async () => {
@@ -104,9 +115,11 @@ describe.skipIf(!localEmulator)('Firestore About page with PostgreSQL offline', 
   });
 
   it('fails closed during privacy erasure or when the configured agent is missing', async () => {
+    const { recompileCard } = await import('../actions.js');
     await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
     try {
       await expect(page.default()).rejects.toThrow('Privacy erasure is in progress');
+      await expect(recompileCard()).rejects.toThrow('Privacy erasure is in progress');
     } finally {
       await store.doc('privacyErasureJobs', agentId).delete();
     }
@@ -114,6 +127,9 @@ describe.skipIf(!localEmulator)('Firestore About page with PostgreSQL offline', 
     resetConfigForTest();
     try {
       await expect(page.default()).rejects.toThrow('Configured Memory hub agent is missing');
+      await expect(recompileCard()).rejects.toThrow(
+        'Owner card refresh requires exactly one configured agent',
+      );
     } finally {
       vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
       resetConfigForTest();

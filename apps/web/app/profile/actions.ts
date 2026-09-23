@@ -21,8 +21,10 @@ import {
 } from '@assistant/application/profile';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import {
+  FirestoreOwnerCardCompilationRepository,
   FirestorePrivacyErasureRepository,
   FirestoreVoiceProfileRepository,
+  readPrivacyErasureFence,
 } from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
@@ -145,7 +147,28 @@ export async function deleteContactAction(contactId: string): Promise<{ error?: 
 
 export async function recompileCard(): Promise<void> {
   await requireOwner();
-  await recompileProfileCard(getDb());
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    const store = getFirestoreInstallationStore();
+    const agents = await store.collection('agents').limit(2).get();
+    const owner = agents.docs[0];
+    if (
+      agents.size !== 1 ||
+      !owner ||
+      owner.id !== store.doc('agents', config.FIRESTORE_AGENT_ID).id ||
+      owner.get('id') !== config.FIRESTORE_AGENT_ID
+    )
+      throw new Error('Owner card refresh requires exactly one configured agent');
+    await readPrivacyErasureFence(store, config.FIRESTORE_AGENT_ID);
+    await recompileProfileCard(
+      new FirestoreOwnerCardCompilationRepository(store),
+      config.FIRESTORE_AGENT_ID,
+    );
+  } else {
+    await recompileProfileCard(getDb());
+  }
   revalidateProfile();
 }
 

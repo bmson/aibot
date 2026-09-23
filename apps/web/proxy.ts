@@ -37,7 +37,7 @@ export function proxy(request: NextRequest) {
     // authentication and Firestore persistence checks before changing caps.
     (path === '/costs' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/profile/voice' && ['GET', 'POST'].includes(request.method)) ||
-    (path === '/profile/about' && request.method === 'GET') ||
+    (path === '/profile/about' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/cards' && ['GET', 'POST'].includes(request.method)) ||
     // Settings Server Actions recheck owner auth; Firestore supports the
     // assistant identity and notification preference updates.
