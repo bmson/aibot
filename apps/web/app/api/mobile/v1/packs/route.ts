@@ -4,7 +4,10 @@ import {
   listSituationPacks,
 } from '@assistant/application/situations';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import { FirestoreSituationPackReadRepository } from '@assistant/firestore';
+import {
+  FirestoreSituationPackMutationRepository,
+  FirestoreSituationPackReadRepository,
+} from '@assistant/firestore';
 import { getAgentIdentity, getDb, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -30,11 +33,26 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-    return mobileJson(
-      { ok: false, error: 'Situation pack changes are unavailable in Firestore mode.' },
-      { status: 503 },
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
+    const text = await request.text();
+    if (text.length > 32_000)
+      return mobileJson({ ok: false, error: 'Pack command is too large.' }, { status: 413 });
+    let input: unknown;
+    try {
+      input = JSON.parse(text);
+    } catch {
+      return mobileJson({ ok: false, error: 'Invalid JSON.' }, { status: 400 });
+    }
+    const repository = new FirestoreSituationPackMutationRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
     );
+    const result = await repository.command(input, { ownerConfirmed: true });
+    return mobileJson(result, { status: result.ok ? 200 : 409 });
+  }
   const agent = await getAgentIdentity();
   if (!agent.id) return mobileJson({ ok: false, error: 'Owner unavailable.' }, { status: 404 });
   const text = await request.text();

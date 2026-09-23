@@ -76,6 +76,7 @@ export { FirestoreSettingsRepository } from './settings.js';
 export { createFirestoreSettingsPersistence } from './settings-persistence.js';
 export { FirestoreShellPresenceRepository } from './shell-presence.js';
 export { FirestoreShellStatusRepository } from './shell-status.js';
+export { FirestoreSituationPackMutationRepository } from './situation-pack-mutations.js';
 export { FirestoreSituationPackReadRepository } from './situation-packs.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { FirestoreSkillMutationRepository } from './skill-mutations.js';

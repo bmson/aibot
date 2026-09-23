@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { FirestoreSituationPackMutationRepository } from './situation-pack-mutations.js';
 import { FirestoreSituationPackReadRepository } from './situation-packs.js';
+import { documentKey } from './store.js';
 import { disposeStore, emulatorStore } from './test-store.js';
 
 const now = new Date('2026-09-23T12:00:00.000Z');
@@ -159,6 +161,110 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore situation pack 
         generation: randomUUID(),
       });
       await expect(repository.overview(owner)).rejects.toThrow('Privacy erasure');
+    } finally {
+      await disposeStore(store);
+    }
+  });
+});
+
+describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore situation pack writes', () => {
+  it('creates idempotently, checks owner and version, and commits a validated item atomically', async () => {
+    const store = emulatorStore(() => now);
+    try {
+      const owner = randomUUID();
+      const other = randomUUID();
+      await store.doc('agents', owner).set({ id: owner });
+      const repository = new FirestoreSituationPackMutationRepository(store, owner);
+      const command = { action: 'create', title: 'Trip', creationKey: 'trip-2026' };
+      const first = await repository.command(command);
+      expect(first.ok).toBe(true);
+      const repeated = await repository.command(command);
+      expect(repeated).toEqual(first);
+      if (!first.ok) throw new Error('Expected pack creation');
+      const packRef = store.doc('situationPacks', first.packId);
+      const added = await repository.command({
+        action: 'item',
+        packId: first.packId,
+        version: 1,
+        item: { id: 'flight', title: 'Confirm flight', dependsOn: [], source: null },
+      });
+      expect(added).toEqual({ ok: true, packId: first.packId });
+      expect((await packRef.get()).data()).toMatchObject({
+        version: 2,
+        data: { items: [{ id: 'flight' }] },
+      });
+      expect(
+        await new FirestoreSituationPackMutationRepository(store, other).command({
+          action: 'archive',
+          packId: first.packId,
+          version: 2,
+        }),
+      ).toMatchObject({ ok: false });
+      expect(
+        await repository.command({
+          action: 'archive',
+          packId: first.packId,
+          version: 1,
+        }),
+      ).toMatchObject({ ok: false, error: 'This pack changed. Reload it before trying again.' });
+      expect((await packRef.get()).get('archived')).toBe(false);
+      expect(documentKey(first.packId)).toBe((await packRef.get()).id);
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('rejects a foreign linked source and privacy-erasure fence without changing the pack', async () => {
+    const store = emulatorStore(() => now);
+    try {
+      const owner = randomUUID();
+      const other = randomUUID();
+      const packId = randomUUID();
+      const cardId = randomUUID();
+      await Promise.all([
+        store.doc('agents', owner).set({ id: owner }),
+        store.doc('situationPacks', packId).set({
+          id: packId,
+          agentId: owner,
+          creationKey: 'c',
+          title: 'Trip',
+          version: 1,
+          archived: false,
+          data: { items: [], decisions: [] },
+          createdAt: now,
+          updatedAt: now,
+        }),
+        store.doc('generatedCards', cardId).set({
+          id: cardId,
+          agentId: other,
+          currentRevisionId: randomUUID(),
+          status: 'active',
+          updatedAt: now,
+        }),
+      ]);
+      const repository = new FirestoreSituationPackMutationRepository(store, owner);
+      const rejected = await repository.command({
+        action: 'item',
+        packId,
+        version: 1,
+        item: { id: 'ticket', title: 'Use ticket', source: { kind: 'card', id: cardId } },
+      });
+      expect(rejected).toMatchObject({
+        ok: false,
+        error: 'The linked source is unavailable or belongs to another owner.',
+      });
+      expect((await store.doc('situationPacks', packId).get()).get('version')).toBe(1);
+      await store
+        .doc('privacyErasureJobs', owner)
+        .set({ agentId: owner, status: 'active', generation: randomUUID() });
+      await expect(
+        repository.command({
+          action: 'archive',
+          packId,
+          version: 1,
+        }),
+      ).resolves.toMatchObject({ ok: false, error: 'Privacy erasure is in progress' });
+      expect((await store.doc('situationPacks', packId).get()).get('archived')).toBe(false);
     } finally {
       await disposeStore(store);
     }
