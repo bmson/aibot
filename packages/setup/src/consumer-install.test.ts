@@ -13,6 +13,7 @@ import type { CommandRunner } from './runner.js';
 const execFileAsync = promisify(execFile);
 const requiredServiceRows = [
   'artifactregistry.googleapis.com',
+  'cloudresourcemanager.googleapis.com',
   'firestore.googleapis.com',
   'iam.googleapis.com',
   'iamcredentials.googleapis.com',
@@ -870,6 +871,40 @@ describe('consumer installation', () => {
     expect(result.runtimeReady).toBe(false);
     expect(log.some((entry) => entry.includes('terraform'))).toBe(false);
     await expect(readFile(state)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reports Cloud Resource Manager as a prerequisite when disabled', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-api-'));
+    const archive = join(dir, 'release.tar.gz');
+    await foundationArchive(archive);
+    const log: string[] = [];
+    const runner = fakeRunner(log);
+    const baseRun = runner.run.bind(runner);
+    runner.run = (command, args) =>
+      command === 'gcloud' && args[0] === 'services' && args[1] === 'list'
+        ? Promise.resolve({
+            ok: true,
+            stdout: JSON.stringify(
+              requiredServiceRows.filter(
+                (row) => row.config.name !== 'cloudresourcemanager.googleapis.com',
+              ),
+            ),
+            stderr: '',
+          })
+        : baseRun(command, args);
+    const result = await provisionConsumerInstallation(
+      { runner },
+      {
+        manifest: manifest(await sha256File(archive)),
+        archivePath: archive,
+        statePath: join(dir, 'state.json'),
+        terraformDir: 'infra/gcp/consumer/terraform',
+        stateBucket: 'customer-project-consumer-install-state',
+        apply: false,
+      },
+    );
+    expect(result.disabledApis).toEqual(['cloudresourcemanager.googleapis.com']);
+    expect(log.some((entry) => entry.includes('services enable'))).toBe(false);
   });
 
   it('applies foundation stages and leaves readiness gated', async () => {

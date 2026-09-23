@@ -18,6 +18,18 @@ resource "google_firestore_index" "application" {
   database    = google_firestore_database.consumer.name
   collection  = each.value.collectionGroup
   query_scope = each.value.queryScope
+  # Index backfills can exceed a short-lived gcloud OAuth token. The installer
+  # separately checks every live index is READY before recording provisioning.
+  skip_wait = true
+
+  lifecycle {
+    # Firestore inserts an implicit __name__ field before vector fields. The
+    # provider reads that ordering back as a different fields list and would
+    # otherwise replace a healthy index on every subsequent apply. A changed
+    # index specification changes its for_each key, while the installer checks
+    # the exact live definition and READY state before provisioning.
+    ignore_changes = [fields]
+  }
 
   dynamic "fields" {
     for_each = each.value.fields

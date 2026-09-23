@@ -72,6 +72,10 @@ run "application_indexes_use_selected_database" {
     firestore_database_id = "assistant-index-test"
   }
   assert {
+    condition     = alltrue([for index in google_firestore_index.application : index.skip_wait])
+    error_message = "Index backfills must not hold Terraform open past a short-lived installer token."
+  }
+  assert {
     condition = alltrue([
       for index in google_firestore_index.application :
       index.project == "consumer-test-project" && index.database == "assistant-index-test" && index.query_scope == "COLLECTION"
