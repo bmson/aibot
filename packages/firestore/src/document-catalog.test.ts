@@ -1,14 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { FirestoreDocumentCatalogRepository } from './document-catalog.js';
-import { createInstallationStore } from './store.js';
+import { createInstallationStore, decodeRecord } from './store.js';
 
 const emulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(process.env.FIRESTORE_EMULATOR_HOST ?? '');
 
 describe.skipIf(!emulator)('Firestore document catalog records', () => {
   const installationId = `document-catalog-${randomUUID()}`;
   const agentId = randomUUID();
-  const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+  const store = createInstallationStore({
+    projectId: 'demo-assistant-test',
+    installationId,
+    databaseId: 'assistant-documents-test',
+  });
   const repository = new FirestoreDocumentCatalogRepository(store, agentId);
   const now = new Date('2026-09-22T12:00:00.000Z');
   const sha256 = 'a'.repeat(64);
@@ -67,10 +71,10 @@ describe.skipIf(!emulator)('Firestore document catalog records', () => {
     const first = input();
     const created = await repository.createDocumentCatalog(first);
     expect(created).toEqual({ document: first.document, duplicate: false });
-    expect((await store.doc('files', first.file.id).get()).data()).toMatchObject(first.file);
-    expect((await store.doc('documents', first.document.id).get()).data()).toMatchObject(
-      first.document,
-    );
+    const storedFile = await store.doc('files', first.file.id).get();
+    const storedDocument = await store.doc('documents', first.document.id).get();
+    expect(decodeRecord(storedFile.data())).toMatchObject(first.file);
+    expect(decodeRecord(storedDocument.data())).toMatchObject(first.document);
 
     const duplicate = input();
     const result = await repository.createDocumentCatalog(duplicate);
@@ -115,5 +119,14 @@ describe.skipIf(!emulator)('Firestore document catalog records', () => {
     expect(claim.docs.filter((snapshot) => snapshot.get('sha256') === 'd'.repeat(64)).length).toBe(
       1,
     );
+  });
+
+  it('rejects a deduplicated document whose linked file hash does not match', async () => {
+    const original = input({ sha256: 'e'.repeat(64) });
+    await repository.createDocumentCatalog(original);
+    await store.doc('files', original.file.id).update({ sha256: 'f'.repeat(64) });
+    await expect(
+      repository.createDocumentCatalog(input({ sha256: 'e'.repeat(64) })),
+    ).rejects.toThrow('invalid owner, identity, or content hash');
   });
 });

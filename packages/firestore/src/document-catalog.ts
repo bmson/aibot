@@ -69,10 +69,19 @@ function validDocument(snapshot: FirebaseFirestore.DocumentSnapshot, agentId: st
   return row;
 }
 
-function validFile(snapshot: FirebaseFirestore.DocumentSnapshot, agentId: string): FileRow {
+function validFile(
+  snapshot: FirebaseFirestore.DocumentSnapshot,
+  agentId: string,
+  expectedSha256: string,
+): FileRow {
   const row = decodeRecord<FileRow>(snapshot.data());
-  if (!row.id || documentKey(row.id) !== snapshot.id || row.agentId !== agentId)
-    throw new Error('Document catalog found a file with invalid owner or identity');
+  if (
+    !row.id ||
+    documentKey(row.id) !== snapshot.id ||
+    row.agentId !== agentId ||
+    row.sha256 !== expectedSha256
+  )
+    throw new Error('Document catalog found a file with invalid owner, identity, or content hash');
   return row;
 }
 
@@ -141,7 +150,7 @@ export class FirestoreDocumentCatalogRepository implements DocumentCatalogReposi
           throw new Error('Document deduplication claim points outside its owner or hash');
         const existingFileSnapshot = await tx.get(this.store.doc('files', existing.fileId));
         if (!existingFileSnapshot.exists) throw new Error('Duplicate document file is missing');
-        validFile(existingFileSnapshot, agentId);
+        validFile(existingFileSnapshot, agentId, input.document.sha256);
         return { document: existing, duplicate: true };
       }
 
@@ -159,7 +168,7 @@ export class FirestoreDocumentCatalogRepository implements DocumentCatalogReposi
         if (existing.sha256 !== input.document.sha256) continue;
         const existingFileSnapshot = await tx.get(this.store.doc('files', existing.fileId));
         if (!existingFileSnapshot.exists) throw new Error('Duplicate document file is missing');
-        validFile(existingFileSnapshot, agentId);
+        validFile(existingFileSnapshot, agentId, input.document.sha256);
         const key: DedupClaim = {
           id: claimId,
           agentId,
