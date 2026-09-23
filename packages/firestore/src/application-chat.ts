@@ -96,6 +96,104 @@ export class FirestoreApplicationChatPersistence implements ApplicationChatPersi
     );
   }
 
+  async getOrCreatePrimaryConversation(agentId: string) {
+    return this.store.db.runTransaction(async (tx) => {
+      // All bootstrap callers contend on one owner-scoped document. A query for
+      // `isPrimary` alone does not prevent concurrent transactions from each
+      // creating a different conversation when the query is initially empty.
+      const markerRef = this.store.doc('primaryConversations', agentId);
+      const marker = await tx.get(markerRef);
+      if (marker.exists) {
+        const conversationId = marker.get('conversationId');
+        if (
+          marker.get('agentId') !== agentId ||
+          typeof conversationId !== 'string' ||
+          !conversationId
+        )
+          throw new Error('Primary conversation marker is malformed');
+        const current = await tx.get(this.store.doc('conversations', conversationId));
+        if (
+          !current.exists ||
+          !isOwnedChat(current.data(), agentId) ||
+          current.get('isPrimary') !== true
+        )
+          throw new Error('Primary conversation marker does not match an owned chat');
+        const conversation = decodeRecord<ApplicationChatConversation>(current.data());
+        if (!conversation.archivedAt) return conversation;
+        const now = this.store.now();
+        tx.update(current.ref, { archivedAt: null, archived: false, updatedAt: now });
+        return { ...conversation, archivedAt: null, updatedAt: now };
+      }
+
+      const primarySnapshot = await tx.get(
+        this.store
+          .collection('conversations')
+          .where('agentId', '==', agentId)
+          .where('isPrimary', '==', true)
+          .limit(1),
+      );
+      const primary = primarySnapshot.docs[0];
+      if (primary) {
+        if (!isOwnedChat(primary.data(), agentId))
+          throw new Error('Primary conversation belongs to another agent');
+        const conversation = decodeConversation(primary);
+        tx.create(markerRef, {
+          agentId,
+          conversationId: conversation.id,
+          createdAt: this.store.now(),
+        });
+        if (conversation.archivedAt) {
+          const now = this.store.now();
+          tx.update(primary.ref, { archivedAt: null, archived: false, updatedAt: now });
+          return { ...conversation, archivedAt: null, updatedAt: now };
+        }
+        return conversation;
+      }
+
+      const candidates = await tx.get(
+        this.store
+          .collection('conversations')
+          .where('agentId', '==', agentId)
+          .where('channel', '==', 'chat')
+          .where('archived', '==', false)
+          .orderBy('updatedAt', 'desc')
+          .orderBy('id', 'desc'),
+      );
+      const recent = candidates.docs.find(
+        (document) =>
+          isOwnedChat(document.data(), agentId) &&
+          !(document.get('metadata') as Record<string, unknown> | undefined)?.goalId,
+      );
+      if (recent) {
+        const conversation = decodeConversation(recent);
+        const now = this.store.now();
+        tx.update(recent.ref, { isPrimary: true, updatedAt: now });
+        tx.create(markerRef, { agentId, conversationId: conversation.id, createdAt: now });
+        return { ...conversation, isPrimary: true, updatedAt: now };
+      }
+
+      const id = randomUUID();
+      const now = this.store.now();
+      const created: ApplicationChatConversation = {
+        id,
+        agentId,
+        channel: 'chat',
+        title: '',
+        trust: 'owner',
+        modelOverride: null,
+        isPrimary: true,
+        metadata: {},
+        archivedAt: null,
+        lastReadAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      tx.create(this.store.doc('conversations', id), encodeRecord({ ...created, archived: false }));
+      tx.create(markerRef, { agentId, conversationId: id, createdAt: now });
+      return created;
+    });
+  }
+
   async createConversation(agentId: string) {
     const id = randomUUID();
     const now = this.store.now();
