@@ -68,7 +68,7 @@ describe.skipIf(!localEmulator)('Firestore mobile chat routes with PostgreSQL of
       proxy(new NextRequest(`http://localhost${path}`, { method })).status;
     const id = randomUUID();
     const messageId = randomUUID();
-    expect(status('/api/mobile/v1/bootstrap')).toBe(503);
+    expect(status('/api/mobile/v1/bootstrap')).toBe(200);
     expect(status('/api/mobile/v1/chats')).toBe(503);
     expect(status('/api/mobile/v1/chats', 'POST')).toBe(200);
     expect(status(`/api/mobile/v1/chats/${id}`)).toBe(200);

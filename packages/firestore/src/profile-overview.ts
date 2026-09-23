@@ -8,15 +8,27 @@ const VOICE_IMPORT_LIMIT = 5;
 export class FirestoreProfileVoiceOverviewRepository implements ProfileVoiceOverviewRepository {
   readonly kind = 'profile-voice-overview-repository' as const;
 
-  constructor(readonly store: InstallationStore) {}
+  constructor(
+    readonly store: InstallationStore,
+    readonly configuredAgentId?: string,
+  ) {}
 
   async load() {
-    const configured = await this.store.collection('agents').limit(2).get();
-    if (configured.size !== 1 || !configured.docs[0])
+    const configured = this.configuredAgentId
+      ? null
+      : await this.store.collection('agents').limit(2).get();
+    if (configured && (configured.size !== 1 || !configured.docs[0]))
       throw new Error('Voice overview requires exactly one configured agent');
-    const agent = configured.docs[0];
+    const agent = this.configuredAgentId
+      ? await this.store.doc('agents', this.configuredAgentId).get()
+      : configured?.docs[0];
+    if (!agent?.exists) throw new Error('Configured voice overview agent is missing');
     const agentId = agent.get('id');
-    if (typeof agentId !== 'string' || documentKey(agentId) !== agent.id)
+    if (
+      typeof agentId !== 'string' ||
+      documentKey(agentId) !== agent.id ||
+      (this.configuredAgentId !== undefined && agentId !== this.configuredAgentId)
+    )
       throw new Error('Configured agent record is malformed');
     const fence = await readPrivacyErasureFence(this.store, agentId);
 

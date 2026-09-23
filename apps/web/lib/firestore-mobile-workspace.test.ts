@@ -2,6 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { createInstallationStore } from '@assistant/firestore';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+const auth = vi.hoisted(() => ({ isMobileAuthed: vi.fn() }));
+vi.mock('@/mobile-auth', () => ({
+  isMobileAuthed: auth.isMobileAuthed,
+  mobileJson: (body: unknown) => Response.json(body),
+  mobileUnauthorized: () => Response.json({ error: 'unauthorized' }, { status: 401 }),
+}));
+vi.mock('@/lib/agent-readiness-source', () => ({
+  getAgentReadinessSource: () => ({ read: async () => null }),
+}));
+
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
 const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
 
@@ -33,6 +43,7 @@ describe.skipIf(!localEmulator)('Firestore mobile workspace with PostgreSQL offl
     vi.stubEnv('CANARY_ENABLED', 'false');
     vi.stubEnv('LOCATION_PING_SECRET', '');
     vi.stubEnv('OPENROUTER_API_KEY', 'test-key');
+    auth.isMobileAuthed.mockResolvedValue(true);
     await Promise.all([
       store.doc('agents', agentId).set({
         id: agentId,
@@ -94,6 +105,14 @@ describe.skipIf(!localEmulator)('Firestore mobile workspace with PostgreSQL offl
       result.capabilities.every((capability) => !capability.enabled && !capability.ready),
     ).toBe(true);
     expect(JSON.stringify(result)).not.toContain(foreignAgentId);
+
+    const { GET } = await import('../app/api/mobile/v1/workspace/route.js');
+    const response = await GET(new Request('http://localhost/api/mobile/v1/workspace'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      memory: { ownerContactId },
+      settings: { agent: { name: 'Owner Assistant' } },
+    });
   });
 
   it('refuses to return any section while privacy erasure is active', async () => {
@@ -102,5 +121,12 @@ describe.skipIf(!localEmulator)('Firestore mobile workspace with PostgreSQL offl
     await expect(getFirestoreMobileWorkspace({ read: async () => null })).rejects.toThrow(
       'Privacy erasure is in progress',
     );
+  });
+
+  it('requires mobile owner authentication at the GET route', async () => {
+    const { GET } = await import('../app/api/mobile/v1/workspace/route.js');
+    auth.isMobileAuthed.mockResolvedValueOnce(false);
+    const unauthorized = await GET(new Request('http://localhost/api/mobile/v1/workspace'));
+    expect(unauthorized.status).toBe(401);
   });
 });

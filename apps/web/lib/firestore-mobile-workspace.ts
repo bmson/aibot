@@ -52,7 +52,7 @@ export async function getFirestoreMobileWorkspace(readinessSource: AgentReadines
   ] = await Promise.all([
     chat.listChatHistory(false),
     chat.listChatHistory(true),
-    getProfileOverview(new FirestoreProfileOverviewRepository(store)),
+    getProfileOverview(new FirestoreProfileOverviewRepository(store, agentId)),
     listMobileWorkspaceSkills(new FirestoreSkillLibraryRepository(store), agentId),
     getWorkspaceSettings(),
     getFirestoreMobileCosts(store, agentId),
