@@ -11,6 +11,7 @@ import {
 } from '@assistant/persistence';
 import { type DocumentSnapshot, FieldValue, type Transaction } from '@google-cloud/firestore';
 import { embeddingSpaceKey } from './memory.js';
+import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 type Memory = Records['memories'];
@@ -44,6 +45,9 @@ export class FirestoreProfileMemoryManagementRepository
     const id = snapshot.get('id');
     if (typeof id !== 'string' || !id || documentKey(id) !== snapshot.id)
       throw new Error('Configured agent record is malformed');
+    const erasure = await tx.get(this.store.doc('privacyErasureJobs', id));
+    if (erasure.exists && privacyErasureIsActive(erasure.get('status')))
+      throw new Error('Privacy erasure is in progress');
     return id;
   }
 

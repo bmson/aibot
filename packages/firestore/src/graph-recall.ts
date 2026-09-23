@@ -9,6 +9,7 @@ import {
 } from '@assistant/persistence';
 import type { DocumentSnapshot, Query, Transaction } from '@google-cloud/firestore';
 import { embeddingSpaceKey } from './memory.js';
+import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const RELATION_BOUND = 1000;
@@ -196,6 +197,8 @@ export class FirestoreGraphRecallRepository implements GraphRecallRepository {
     );
     return this.store.db.runTransaction(
       async (tx) => {
+        const erasure = await tx.get(this.store.doc('privacyErasureJobs', input.agentId));
+        if (erasure.exists && privacyErasureIsActive(erasure.get('status'))) return [];
         const ids = [...scores.keys()],
           queries: Query[] = [];
         for (let offset = 0; offset < ids.length; offset += 30)
@@ -233,6 +236,8 @@ export class FirestoreGraphRecallRepository implements GraphRecallRepository {
       throw new Error('Graph traversal bound reached');
     return this.store.db.runTransaction(
       async (tx) => {
+        const erasure = await tx.get(this.store.doc('privacyErasureJobs', input.agentId));
+        if (erasure.exists && privacyErasureIsActive(erasure.get('status'))) return [];
         const queries: Query[] = [];
         for (let offset = 0; offset < input.entityIds.length; offset += 30) {
           const ids = input.entityIds.slice(offset, offset + 30);

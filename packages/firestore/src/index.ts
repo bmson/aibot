@@ -25,6 +25,7 @@ export {
 } from './outbox.js';
 export { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 export { FirestoreOwnerContextRepository } from './owner-context.js';
+export { FirestorePrivacyErasureRepository } from './privacy-erasure.js';
 export { FirestorePrivacyExportRepository } from './privacy-export.js';
 export { FirestoreProfileLibraryRepository } from './profile-library.js';
 export { createFirestoreProfileMemoryCommandPersistence } from './profile-memory-commands.js';

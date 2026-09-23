@@ -12,6 +12,7 @@ import { firestoreApprovalSmoke } from './firestore-approval-smoke.js';
 import { firestoreChatSmoke } from './firestore-chat-smoke.js';
 import { firestoreExecutorSmoke } from './firestore-executor-smoke.js';
 import { firestoreProfilePeopleSmoke } from './firestore-profile-people-smoke.js';
+import { firestorePrivacyErasureSmoke } from './firestore-privacy-erasure-smoke.js';
 import { firestoreRuntimeSmoke } from './firestore-runtime-smoke.js';
 import { firestoreScheduleSmoke } from './firestore-schedule-smoke.js';
 import { firestoreSettingsSmoke } from './firestore-settings-smoke.js';
@@ -55,6 +56,7 @@ const indexes = spec.indexes.filter((index) =>
     'commitments',
     'watches',
     'proactivePings',
+    'importSources',
   ].includes(index.collectionGroup),
 );
 const input = {
@@ -99,6 +101,13 @@ if (!values.run) {
       store.projectId,
       store.databaseId,
     );
+    const privacyStore = new InstallationStore(
+      store.db,
+      `${store.installationId}-privacy-erasure`,
+      store.now,
+      store.projectId,
+      store.databaseId,
+    );
     return {
       ...(await firestoreTaskSmoke(store)),
       dueTaskQueryExplain: await explainDueTaskQuery(store),
@@ -110,6 +119,7 @@ if (!values.run) {
       executor: await firestoreExecutorSmoke(store),
       chat: await firestoreChatSmoke(store, { recall: true }),
       application: await firestoreApplicationSmoke(applicationStore),
+      privacyErasure: await firestorePrivacyErasureSmoke(privacyStore),
       watches: await firestoreWatchSmoke(store),
     };
   });

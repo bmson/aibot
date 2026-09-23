@@ -5,6 +5,7 @@ import type {
   OwnerLocationPing,
 } from '@assistant/persistence';
 import type { QueryDocumentSnapshot } from '@google-cloud/firestore';
+import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const SNOOZED_PAGE_SIZE = 100;
@@ -41,6 +42,8 @@ export class FirestoreOwnerContextRepository implements OwnerContextRepository {
   constructor(readonly store: InstallationStore) {}
 
   async getOwnerCard(agentId: string) {
+    const erasure = await this.store.doc('privacyErasureJobs', agentId).get();
+    if (erasure.exists && privacyErasureIsActive(erasure.get('status'))) return null;
     const snapshot = await this.store.doc('ownerCards', agentId).get();
     if (!snapshot.exists) return null;
     const row = decodeRecord<{ agentId?: unknown; content?: unknown; compiledAt?: unknown }>(
