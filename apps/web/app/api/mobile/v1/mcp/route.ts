@@ -1,4 +1,6 @@
-import { getApplication } from '@/lib/server';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { FirestoreMcpConnectionReadRepository } from '@assistant/firestore';
+import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -6,6 +8,16 @@ export const dynamic = 'force-dynamic';
 /** Owner-managed MCP servers, surfaced in the native app's Connections view. */
 export async function GET(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
+    const repository = new FirestoreMcpConnectionReadRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    );
+    return mobileJson({ connections: await repository.list(config.FIRESTORE_AGENT_ID) });
+  }
   return mobileJson({ connections: await getApplication().listMcpConnections() });
 }
 

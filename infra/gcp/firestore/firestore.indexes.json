@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionGroup": "mcpConnections",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "name", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "proactivePings",
       "queryScope": "COLLECTION",
       "fields": [
