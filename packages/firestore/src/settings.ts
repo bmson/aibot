@@ -18,21 +18,43 @@ function createdAtOrder(value: unknown): Timestamp {
 export class FirestoreSettingsRepository implements SettingsRepository {
   readonly kind = 'settings-repository' as const;
 
-  constructor(readonly store: InstallationStore) {}
+  constructor(
+    readonly store: InstallationStore,
+    readonly configuredAgentId?: string,
+  ) {}
 
   async getOwner(): Promise<OwnerSettings | null> {
-    const snapshot = await this.store.collection('agents').get();
-    const rows = snapshot.docs
-      .map((doc) => ({ doc, row: decodeRecord<Records['agents']>(doc.data()) }))
-      .filter(({ doc, row }) => row.id && documentKey(row.id) === doc.id)
-      .map(({ doc, row }) => ({ row, createdAt: createdAtOrder(doc.get('createdAt')) }))
-      .sort(
-        (a, b) =>
-          a.createdAt.seconds - b.createdAt.seconds ||
-          a.createdAt.nanoseconds - b.createdAt.nanoseconds ||
-          (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0),
-      );
-    const owner = rows[0]?.row;
+    let owner: Records['agents'] | undefined;
+    if (this.configuredAgentId) {
+      const snapshot = await this.store.doc('agents', this.configuredAgentId).get();
+      if (!snapshot.exists) return null;
+      const row = decodeRecord<Records['agents']>(snapshot.data());
+      if (
+        row.id !== this.configuredAgentId ||
+        documentKey(row.id) !== snapshot.id ||
+        typeof row.name !== 'string' ||
+        typeof row.timezone !== 'string' ||
+        typeof row.locale !== 'string' ||
+        typeof row.signature !== 'string' ||
+        !(row.createdAt instanceof Date) ||
+        !(row.updatedAt instanceof Date)
+      )
+        throw new Error('Configured agent record is malformed');
+      owner = row;
+    } else {
+      const snapshot = await this.store.collection('agents').get();
+      const rows = snapshot.docs
+        .map((doc) => ({ doc, row: decodeRecord<Records['agents']>(doc.data()) }))
+        .filter(({ doc, row }) => row.id && documentKey(row.id) === doc.id)
+        .map(({ doc, row }) => ({ row, createdAt: createdAtOrder(doc.get('createdAt')) }))
+        .sort(
+          (a, b) =>
+            a.createdAt.seconds - b.createdAt.seconds ||
+            a.createdAt.nanoseconds - b.createdAt.nanoseconds ||
+            (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0),
+        );
+      owner = rows[0]?.row;
+    }
     if (!owner) return null;
     return {
       id: owner.id,
