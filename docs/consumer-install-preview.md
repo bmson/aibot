@@ -68,7 +68,7 @@ Before a later runtime stage starts containers, `pnpm firestore:runtime-data-pre
 
 For a fresh installation, the [minimal runtime seed](consumer-runtime-seed.md) can create this data from an explicit customer plan. Pass `--seed-plan /private/path/runtime-seed.json` to `consumer:install` to run it after the foundation and before the optional Cloud Run runtime stage. The same create-only seed remains available as a standalone command. It does not mark the runtime ready.
 
-Use Node/pnpm, gcloud credentials for the target project, Application Default Credentials for Terraform, and Terraform 1.14.5. The target project must have billing available. Generate a canonical source archive from the selected release checkout:
+Use Node/pnpm, gcloud credentials for the target project, Application Default Credentials for Terraform, and Terraform 1.6.0 or newer (the checked CI toolchain is 1.14.5). An apply checks the Terraform version before it creates customer resources; the offline preview does not require Terraform. The target project must have billing available. Generate a canonical source archive from the selected release checkout:
 
 ```sh
 git archive --format=tar.gz --output=assistant-source.tar.gz HEAD
