@@ -102,8 +102,9 @@ run "application_indexes_use_selected_database" {
   assert {
     condition = (
       google_firestore_field.unindexed_payload["toolCalls/result"].database == "assistant-index-test" &&
+      google_firestore_field.unindexed_payload["toolCalls/result"].skip_wait &&
       length(google_firestore_field.unindexed_payload["toolCalls/result"].index_config[0].indexes) == 0
     )
-    error_message = "Large tool results must have single-field indexing disabled in the selected database."
+    error_message = "Large tool results must skip provider waiting and have single-field indexing disabled in the selected database."
   }
 }
