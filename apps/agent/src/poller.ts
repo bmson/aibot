@@ -12,6 +12,7 @@ import {
   resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
+import { FirestoreScheduleRepository } from '@assistant/firestore';
 import { type AgentDeps, agentServices, firestoreOwnerReady } from './deps.js';
 import { executorDeps } from './executor-deps.js';
 import { executeAgentTask } from './task-runner.js';
@@ -77,6 +78,17 @@ export function startPoller(deps: AgentDeps): () => void {
             watches.expire(deps.config.FIRESTORE_AGENT_ID, new Date()),
           );
         }
+        const store = deps.firestoreStore;
+        if (!store) throw new Error('Firestore schedule persistence is unavailable');
+        const owner = await store.doc('agents', deps.config.FIRESTORE_AGENT_ID).get();
+        const timezone = owner.get('timezone');
+        if (typeof timezone !== 'string' || !timezone.trim())
+          throw new Error('Firestore agent timezone is unavailable');
+        await runStep('runDueSchedules', async () => {
+          const fired = await runDueSchedules(new FirestoreScheduleRepository(store), timezone);
+          for (const item of fired)
+            console.log(`schedule fired: ${item.schedule} → ${item.taskId.slice(0, 8)}`);
+        });
         return;
       }
       await runStep('expireStaleApprovals', async () => {
