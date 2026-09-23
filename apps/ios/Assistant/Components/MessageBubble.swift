@@ -1187,6 +1187,7 @@ enum MessageResponseCard: Identifiable {
     case generated(GeneratedCard)
     case briefing(BriefingCard)
     case scoreboard(id: String, title: String, games: [ScoreGame], fetchedAt: Date?, pollSeconds: Int, live: Bool)
+    case route(RouteInfo)
 
     var id: String {
         switch self {
@@ -1213,6 +1214,7 @@ enum MessageResponseCard: Identifiable {
         case let .generated(card): card.id
         case let .briefing(card): card.id
         case let .scoreboard(id, _, _, _, _, _): id
+        case let .route(route): route.id
         }
     }
 
@@ -1541,6 +1543,9 @@ enum MessageResponseCard: Identifiable {
         case "briefing":
             guard let card = BriefingCard(data: data) else { return nil }
             self = .briefing(card)
+        case "route":
+            guard let route = RouteInfo(data: data) else { return nil }
+            self = .route(route)
         case "scoreboard":
             guard let id = data["id"]?.string, case let .array(values)? = data["games"] else { return nil }
             let games = values.compactMap(ScoreGame.init)
@@ -1554,7 +1559,7 @@ enum MessageResponseCard: Identifiable {
                 id: id,
                 title: data["title"]?.string ?? "Scores",
                 games: games,
-                fetchedAt: (data["fetchedAt"]?.string).flatMap { ISO8601DateFormatter().date(from: $0) },
+                fetchedAt: (data["fetchedAt"]?.string).flatMap(ISO8601DateFormatter.flexible),
                 pollSeconds: poll,
                 live: live != nil
             )
@@ -1678,6 +1683,8 @@ enum MessageResponseCard: Identifiable {
         if case let .generated(card) = self { return card.groundedOnAnswer }
         // A scoreboard sits under the reply's one-line takeaway, not in place of it.
         if case .scoreboard = self { return true }
+        // The reply carries "leave by 2:40"; the route card is its map.
+        if case .route = self { return true }
         return false
     }
     static func inferredLegacy(from text: String) -> [Self] {
@@ -2286,6 +2293,9 @@ struct RichResponseCards: View {
                 ScoreboardCardView(title: title, initialGames: games, fetchedAt: fetchedAt,
                                    pollSeconds: pollSeconds, live: live)
                     .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 20)
+            case let .route(route):
+                RouteCardView(route: route)
+                    .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 16)
             }
         }
     }

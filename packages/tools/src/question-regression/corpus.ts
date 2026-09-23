@@ -8,6 +8,8 @@ export interface QuestionCase {
   weather?: 'current' | 'failed';
   /** Stub `sports.scores` with a live Twins at Giants game. */
   sports?: 'live';
+  /** Stub `maps.directions` with a drive to Oracle Park. */
+  maps?: 'route';
   mailbox?: 'hotel' | 'empty';
   memory?: boolean;
   plan?: 'reply' | 'workflow';
@@ -28,6 +30,8 @@ export interface QuestionCase {
     card?: boolean;
     /** A scoreboard card rides the reply. */
     scoreboard?: boolean;
+    /** A route card rides the reply. */
+    route?: boolean;
     cardValues?: string[];
   };
 }
@@ -154,6 +158,22 @@ export const QUESTION_CASES: QuestionCase[] = [
       excludes: ['ahead 7-3'],
       tools: ['sports.scores'],
       statuses: ['needs_attention', 'failed'],
+    },
+  },
+  {
+    id: 'directions-drive-time',
+    // Not from the September audit: the trip path did not exist then.
+    records: [],
+    request: "What's the drive time to Oracle Park?",
+    maps: 'route',
+    script: [
+      { toolCalls: [{ toolName: 'maps.directions', input: { destination: 'Oracle Park' } }] },
+      { text: 'About 9 minutes by car via King St, so you would arrive at 11:09.' },
+    ],
+    expect: {
+      matches: ['9 min', 'King St'],
+      tools: ['maps.directions'],
+      route: true,
     },
   },
   {

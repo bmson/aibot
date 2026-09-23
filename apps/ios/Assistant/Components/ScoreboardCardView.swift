@@ -74,9 +74,13 @@ struct ScoreGame: Hashable, Identifiable {
     }
 }
 
-private extension ISO8601DateFormatter {
-    /// The provider writes "2026-09-22T01:45Z" — minutes, no seconds.
+extension ISO8601DateFormatter {
+    /// Server stamps carry milliseconds ("…:10.123Z"); the scores provider
+    /// writes minutes only ("2026-09-22T01:45Z"). Either parses.
     static func flexible(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) { return date }
         let full = ISO8601DateFormatter()
         if let date = full.date(from: value) { return date }
         return full.date(from: value.replacingOccurrences(of: "Z", with: ":00Z"))

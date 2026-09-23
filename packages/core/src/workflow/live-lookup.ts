@@ -6,7 +6,7 @@ import {
 } from './read-intent.js';
 import type { ActionEvidence } from './response-contract.js';
 
-export type LiveLookup = { kind: 'weather' | 'web' | 'sports'; request: string };
+export type LiveLookup = { kind: 'weather' | 'web' | 'sports' | 'directions'; request: string };
 
 const QUESTION = /^(?:how|what|who|when|where|will|is|are|any|do|does|should|can|could)\b/i;
 const WEATHER = /\b(?:weather|forecast|temperature|rain|raining|snow|snowing)\b/i;
@@ -26,6 +26,19 @@ const SPORT_WORD =
 const NOT_SPORTS =
   /\b(?:credit|test|exam|sat|act|gre|fico|risk|health|sleep|readiness|lighthouse|nps|quiz)\s+scores?\b|\bmy\b[^.?!]{0,40}\b(?:game|match|practice|score)\b/i;
 const SPORTS_IMPERATIVE = /\b(?:show|give|get|check|track|follow|create|make|build|render)\b/i;
+
+/**
+ * A trip question: "directions to Oracle Park", "how long to drive to SFO",
+ * "how far is Palo Alto", "when should I leave for the airport". Deliberately
+ * narrow — "how long to cook rice" and "how far along is the project" are not
+ * trips.
+ */
+const DIRECTIONS =
+  /\b(?:directions?\s+(?:to|from)\b|route\s+to|how\s+(?:long|many\s+minutes)\b[^.?!]{0,30}\bto\s+(?:get|drive|walk|bike|cycle)\s+(?:to|there|home|back)|how\s+far\s+(?:is|away\s+is)\s+(?!it\b|along\b)|when\s+(?:should|do)\s+i\s+(?:leave|head\s+out)\s+(?:for|to)|(?:drive|driving|travel|walk|walking|commute)\s+time\s+(?:to|from))/i;
+
+/** A trip whose destination is on the owner's calendar ("my 3pm", "my next meeting"). */
+const MY_EVENT =
+  /\bmy\s+(?:next\s+)?(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|meeting|appointment|event|flight|reservation|call)\b/i;
 
 /** "What's the Giants score?", "any Premier League results?", "make a live score card". */
 function isSportsRequest(request: string, asks: boolean): boolean {
@@ -48,6 +61,9 @@ export function detectLiveLookup(
   if (/\b(?:password|passcode|wifi|wi-fi|API key)\b/i.test(request)) return undefined;
   const asks = QUESTION.test(request) || request.includes('?') || SEARCH.test(request);
   if (WEATHER.test(request) && asks) return { kind: 'weather', request };
+  // Before the personal-read router, which reads "drive time" as Google
+  // Drive. A trip to "my 3pm" still needs the calendar first, so it stays there.
+  if (DIRECTIONS.test(request) && !MY_EVENT.test(request)) return { kind: 'directions', request };
   if (detectPersonalReadRequest(history)) return undefined;
   if (/\binvestigate\b[\s\S]*\b(?:team|club|company|match)\b/i.test(request))
     return { kind: 'web', request };
@@ -123,6 +139,11 @@ export function nextLiveLookup(
   if (lookup.kind === 'weather') {
     if (!rows.some((row) => row.toolName === 'weather.lookup'))
       return { toolName: 'weather.lookup' };
+    return undefined;
+  }
+  if (lookup.kind === 'directions') {
+    if (!rows.some((row) => row.toolName === 'maps.directions'))
+      return { toolName: 'maps.directions' };
     return undefined;
   }
   if (lookup.kind === 'sports') {
@@ -258,6 +279,17 @@ export function liveLookupFailure(
     evidence.some((row) => row.fromCurrentTask !== false && sportsAnswered(row))
   )
     return undefined;
+  if (lookup.kind === 'directions') {
+    const routed = evidence.some(
+      (row) =>
+        row.fromCurrentTask !== false &&
+        row.toolName === 'maps.directions' &&
+        successfulLookup(row),
+    );
+    return routed
+      ? undefined
+      : "I couldn't get a route from Apple Maps for this trip, so I haven't estimated a travel time. The lookup needs to be retried.";
+  }
   const names = lookup.kind === 'weather' ? ['weather.lookup'] : ['web.fetch'];
   const rows = evidence.filter(
     (row) => names.includes(row.toolName) && row.fromCurrentTask !== false,

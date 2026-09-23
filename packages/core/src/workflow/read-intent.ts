@@ -103,7 +103,13 @@ function contextualLodgingQuestion(latest: string, ownerTurns: string[]): boolea
 const CALENDAR_SURFACE =
   /\b(?:calendars?|schedule|agenda|appointments?|events?|meetings?|interviews?|calls?|chats?|flights?|reservations?)\b/i;
 const EMAIL_SURFACE = /\b(?:inbox|mailbox|e-?mails?|mail|messages?|threads?)\b/i;
-const DRIVE_SURFACE = /\b(?:(?:google\s+)?drive|drive files?)\b/i;
+/**
+ * Google Drive, not driving: "drive time to Napa", "drive to SFO", and "how long
+ * a drive is it" are trips, so a bare "drive" followed by a trip word is not a
+ * Drive read.
+ */
+const DRIVE_SURFACE =
+  /\b(?:google\s+drive|drive\s+files?|(?:my|the|in|on|from|shared)\s+drive\b(?!\s+(?:time|to|there|home|over|up|down|back))|drive\b(?!\s+(?:time|to|there|home|over|up|down|back|is|takes?|would|will))(?!s?\s*$))/i;
 const MEDIA_FILE_READ =
   /^\s*(?:please\s+)?(?:pull|open|find|show|search)(?:\s+me)?\b[^.!?]*\b(?:photos?|files?|albums?)\b/i;
 const KNOWLEDGE_GRAPH_SURFACE =

@@ -572,3 +572,18 @@ describe('required read sequence', () => {
     ).toBe('gmail.search');
   });
 });
+
+describe('Google Drive is not driving', () => {
+  it.each(["What's the drive time to Napa?", 'How long is the drive to SFO?'])(
+    'leaves the trip %s for the maps tool',
+    (content) => {
+      expect(detectPersonalReadRequest([{ role: 'user', content }])?.kind).not.toBe('drive');
+    },
+  );
+  it.each(['Find the budget spreadsheet in my Drive', 'Search Google Drive for the lease'])(
+    'still reads %s from Drive',
+    (content) => {
+      expect(detectPersonalReadRequest([{ role: 'user', content }])?.kind).toBe('drive');
+    },
+  );
+});

@@ -86,6 +86,38 @@ describe('live lookup routing from home-screen regressions', () => {
       /do not state 7-3/,
     );
   });
+  it.each([
+    'Directions to Oracle Park',
+    'How long will it take me to drive to SFO?',
+    'How far is Palo Alto from here?',
+    'When should I leave for the airport to be there by 3?',
+    "What's the drive time to Napa?",
+    'Can you give me directions from work to the dentist?',
+  ])('routes %s to the maps tool', (content) => {
+    expect(detectLiveLookup([{ role: 'user', content }])?.kind).toBe('directions');
+  });
+  it.each([
+    'How long to cook rice?',
+    'How far along is the project?',
+    'How long did it take to get the visa?',
+    'Give me directions for assembling the desk',
+  ])('does not treat %s as a trip', (content) => {
+    expect(detectLiveLookup([{ role: 'user', content }])?.kind).not.toBe('directions');
+  });
+  it('asks for one route and reports a failed route instead of guessing a time', () => {
+    const lookup = { kind: 'directions' as const, request: 'Directions to Oracle Park' };
+    expect(nextLiveLookup(lookup, [])).toEqual({ toolName: 'maps.directions' });
+    const routed = {
+      toolName: 'maps.directions',
+      status: 'succeeded' as const,
+      result: { durationSeconds: 540, distanceMeters: 1850 },
+    };
+    expect(nextLiveLookup(lookup, [routed])).toBeUndefined();
+    expect(liveLookupFailure(lookup, [routed])).toBeUndefined();
+    expect(liveLookupFailure(lookup, [{ ...routed, result: { error: 'No route found' } }])).toMatch(
+      /couldn't get a route/,
+    );
+  });
   it('resolves a typo follow-up without querying the previous assistant guess', () => {
     expect(
       detectLiveLookup([

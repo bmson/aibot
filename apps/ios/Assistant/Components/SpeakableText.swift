@@ -124,6 +124,9 @@ enum SpeakableText {
             sentence = generatedCardSpeech(generated)
         case let .briefing(briefing):
             sentence = spoken(briefing.lead)
+        case let .route(route):
+            sentence = join(["\(RouteCardView.duration(route.durationSeconds)) to \(spoken(route.destination.label))",
+                             RouteCardView.distance(route.distanceMeters)])
         case let .scoreboard(_, _, games, _, _, _):
             sentence = join(games.prefix(2).map { game in
                 let scores = game.state == "pre" ? "" : " \(game.away.score ?? "") to \(game.home.score ?? "")"

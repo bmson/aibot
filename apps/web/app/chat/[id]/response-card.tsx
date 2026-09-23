@@ -54,6 +54,7 @@ import { focusRing } from '@/lib/ui';
 import { requestCardPolling } from './card-refresh-events';
 import { CardSteps, cardStepsOf } from './card-steps';
 import { type CardRefreshAttempt, cardIsRefreshing } from './generated-card-state';
+import { RouteCard } from './route-card';
 import { ScoreboardCard } from './scoreboard-card';
 import { SensitiveValue } from './sensitive-value';
 
@@ -1753,6 +1754,12 @@ function ResponseCardView({
       return <WeatherCard data={data} />;
     case 'briefing':
       return <BriefingCard data={data} />;
+    case 'route':
+      return (
+        <CardShell icon={MapPin} label="Directions">
+          <RouteCard data={data} timeZone={timeZone} />
+        </CardShell>
+      );
     case 'scoreboard':
       return (
         <CardShell icon={Trophy} label={str(data.title) || 'Scores'}>
@@ -1920,6 +1927,7 @@ export function rendersAllCards(cards: Raw[]): boolean {
       'proactive-alert',
       'briefing',
       'scoreboard',
+      'route',
     ].includes(str(card.kind));
   });
 }

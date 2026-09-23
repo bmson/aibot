@@ -13,6 +13,7 @@
     "./cost": "./src/cost.ts",
     "./events": "./src/events.ts",
     "./generative-card": "./src/generative-card.ts",
+    "./maps": "./src/maps/apple.ts",
     "./mcp-secrets": "./src/mcp-secrets.ts",
     "./memory/ambient": "./src/memory/ambient.ts",
     "./memory/commitments": "./src/memory/commitments.ts",

@@ -229,11 +229,16 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // A registry without the scores tool (a trimmed install or trust tier) takes
   // a sports question down the general search-then-fetch path instead of
   // failing on a tool that is not there.
+  // Likewise a trip question without the maps module is left to the model,
+  // which can say it has no route source rather than fail on a missing tool.
+  const available = (name: string) =>
+    dispatcher.toolDefs(task.trust as Trust).some((tool) => tool.name === name);
   const liveLookup =
-    detectedLookup?.kind === 'sports' &&
-    !dispatcher.toolDefs(task.trust as Trust).some((tool) => tool.name === 'sports.scores')
+    detectedLookup?.kind === 'sports' && !available('sports.scores')
       ? { ...detectedLookup, kind: 'web' as const }
-      : detectedLookup;
+      : detectedLookup?.kind === 'directions' && !available('maps.directions')
+        ? undefined
+        : detectedLookup;
   const birthdaySaves = directOwner ? requestedBirthdaySaves(rc.window) : [];
   const situationRequest =
     task.trust === 'owner' && !isForwardedIngest(task) && isSituationRequest(ownerText);

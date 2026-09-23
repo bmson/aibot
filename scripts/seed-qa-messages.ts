@@ -82,7 +82,17 @@ await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-us
 await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-cards`));
 await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-answer`));
 await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-answer-user`));
-for (const suffix of ['weather-user', 'weather', 'briefing', 'reflow-user', 'reflow']) {
+for (const suffix of [
+  'weather-user',
+  'weather',
+  'briefing',
+  'reflow-user',
+  'reflow',
+  'scores-user',
+  'scores',
+  'route-user',
+  'route',
+]) {
   await db.delete(messages).where(eq(messages.channelMessageId, `${FIXTURE_TAG}-${suffix}`));
 }
 
@@ -408,6 +418,115 @@ await db.insert(messages).values([
       },
     ],
     channelMessageId: `${FIXTURE_TAG}-briefing`,
+  },
+  {
+    conversationId,
+    role: 'user',
+    origin: 'owner',
+    text: "What's the Giants score?",
+    parts: [{ type: 'text', text: "What's the Giants score?" }],
+    channelMessageId: `${FIXTURE_TAG}-scores-user`,
+  },
+  {
+    conversationId,
+    role: 'assistant',
+    origin: 'assistant',
+    text: 'The Giants lead the Twins 5-2 in the top of the 7th.',
+    parts: [
+      { type: 'text', text: 'The Giants lead the Twins 5-2 in the top of the 7th.' },
+      {
+        type: 'data-card',
+        data: {
+          kind: 'scoreboard',
+          id: `${FIXTURE_TAG}-scoreboard`,
+          title: 'MLB',
+          fetchedAt: new Date().toISOString(),
+          timeZone: 'America/Los_Angeles',
+          accompaniesProse: true,
+          games: [
+            {
+              id: '401873650',
+              league: 'mlb',
+              leagueLabel: 'MLB',
+              state: 'in',
+              statusText: 'Top 7th',
+              startsAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+              venue: 'Oracle Park',
+              broadcast: 'NBC Sports Bay Area',
+              link: 'https://www.espn.com/mlb/game/_/gameId/401873650',
+              home: {
+                id: '26',
+                name: 'San Francisco Giants',
+                shortName: 'Giants',
+                abbreviation: 'SF',
+                logo: 'https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/sf.png',
+                score: '5',
+                record: '78-78',
+              },
+              away: {
+                id: '9',
+                name: 'Minnesota Twins',
+                shortName: 'Twins',
+                abbreviation: 'MIN',
+                logo: 'https://a.espncdn.com/i/teamlogos/mlb/500/scoreboard/min.png',
+                score: '2',
+                record: '69-87',
+              },
+            },
+          ],
+        },
+      },
+    ],
+    channelMessageId: `${FIXTURE_TAG}-scores`,
+  },
+  {
+    conversationId,
+    role: 'user',
+    origin: 'owner',
+    text: 'How long to drive to Oracle Park?',
+    parts: [{ type: 'text', text: 'How long to drive to Oracle Park?' }],
+    channelMessageId: `${FIXTURE_TAG}-route-user`,
+  },
+  {
+    conversationId,
+    role: 'assistant',
+    origin: 'assistant',
+    text: 'About 9 minutes by car via King St.',
+    parts: [
+      { type: 'text', text: 'About 9 minutes by car via King St.' },
+      {
+        type: 'data-card',
+        data: {
+          kind: 'route',
+          id: `${FIXTURE_TAG}-route-card`,
+          mode: 'driving',
+          accompaniesProse: true,
+          origin: { label: 'Current Location', lat: 37.7898, lng: -122.3942, current: true },
+          destination: {
+            label: 'Oracle Park',
+            address: '24 Willie Mays Plaza, San Francisco, CA 94107',
+            lat: 37.7786,
+            lng: -122.3893,
+          },
+          durationSeconds: 540,
+          distanceMeters: 1850,
+          departAt: new Date().toISOString(),
+          arriveAt: new Date(Date.now() + 540_000).toISOString(),
+          routeName: 'King St',
+          steps: [
+            { instruction: 'Head south on Fremont St', distanceMeters: 400 },
+            { instruction: 'Turn left onto Harrison St', distanceMeters: 350 },
+            { instruction: 'Turn right onto 2nd St', distanceMeters: 800 },
+            { instruction: 'Turn left onto King St', distanceMeters: 300 },
+          ],
+          // Fremont St → Harrison → 2nd St → King St, encoded.
+          polyline: 'gyseFvb`jVbQcQrIfJjMcQzJ_N~MjH',
+          mapsUrl:
+            'https://maps.apple.com/?saddr=37.7898%2C-122.3942&daddr=37.7786%2C-122.3893&dirflg=d',
+        },
+      },
+    ],
+    channelMessageId: `${FIXTURE_TAG}-route`,
   },
 ]);
 

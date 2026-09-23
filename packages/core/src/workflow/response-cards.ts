@@ -23,6 +23,7 @@ export interface ResponseCard {
     | 'proactive-alert'
     | 'briefing'
     | 'scoreboard'
+    | 'route'
     | 'generated-card';
   id: string;
   [key: string]: unknown;
@@ -801,6 +802,69 @@ export function scoreboardResponseCards(evidence: ActionEvidence[]): ResponseCar
   ];
 }
 
+/**
+ * A route from `maps.directions`: both ends, time, distance, the line to draw,
+ * and the Apple Maps link. It sits under the reply, which carries the
+ * takeaway ("leave by 2:40"); the card is the map.
+ */
+export function routeResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
+  return evidence.flatMap((row, index) => {
+    if (!succeeded(row) || row.toolName !== 'maps.directions') return [];
+    const result = record(row.result);
+    if (!result || string(result.error)) return [];
+    const origin = record(result.origin);
+    const destination = record(result.destination);
+    const durationSeconds = numeric(result.durationSeconds);
+    const distanceMeters = numeric(result.distanceMeters);
+    const mapsUrl = string(result.mapsUrl);
+    const polyline = string(result.polyline);
+    const place = (value: RecordValue | undefined) => {
+      const lat = numeric(value?.lat);
+      const lng = numeric(value?.lng);
+      if (lat === undefined || lng === undefined || !string(value?.label)) return undefined;
+      return {
+        label: string(value?.label),
+        lat,
+        lng,
+        ...(string(value?.address) ? { address: string(value?.address) } : {}),
+        ...(value?.current === true ? { current: true } : {}),
+      };
+    };
+    const from = place(origin);
+    const to = place(destination);
+    if (!from || !to || durationSeconds === undefined || distanceMeters === undefined) return [];
+    if (!/^https:\/\/maps\.apple\.com\//.test(mapsUrl)) return [];
+    const steps = Array.isArray(result.steps)
+      ? result.steps
+          .map(record)
+          .filter((step): step is RecordValue => !!step && !!string(step.instruction))
+          .map((step) => ({
+            instruction: string(step.instruction),
+            distanceMeters: numeric(step.distanceMeters) ?? 0,
+          }))
+      : [];
+    return [
+      {
+        kind: 'route' as const,
+        id: `route-${index}-${to.lat.toFixed(4)},${to.lng.toFixed(4)}`,
+        mode: string(result.mode) || 'driving',
+        origin: from,
+        destination: to,
+        durationSeconds,
+        distanceMeters,
+        departAt: string(result.departAt),
+        arriveAt: string(result.arriveAt),
+        ...(string(result.routeName) ? { routeName: string(result.routeName) } : {}),
+        ...(typeof result.hasTolls === 'boolean' ? { hasTolls: result.hasTolls } : {}),
+        ...(/^[\x3f-\x7e]{2,4000}$/.test(polyline) ? { polyline } : {}),
+        steps,
+        mapsUrl,
+        accompaniesProse: true,
+      },
+    ];
+  });
+}
+
 export function searchResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
   return evidence.flatMap((row, index) => {
     if (!succeeded(row) || row.toolName !== 'web.search') return [];
@@ -1218,6 +1282,7 @@ export function responseCardsForFinal(input: {
     ...sheetRowsResponseCards(input.evidence),
     ...weatherLookupResponseCards(input.evidence),
     ...scoreboardResponseCards(input.evidence),
+    ...routeResponseCards(input.evidence),
     ...searchResponseCards(input.evidence),
   ];
   if (cards.length > 0) return cards;

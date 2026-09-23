@@ -329,10 +329,13 @@ final class AssistantMarkdownTests: XCTestCase {
         """#.utf8)
         let message = try JSONDecoder().decode(ChatMessage.self, from: data)
         let cards = message.parts.compactMap(MessageResponseCard.init(part:))
-        guard case let .scoreboard(_, title, games, _, poll, live)? = cards.first else {
+        guard case let .scoreboard(_, title, games, fetchedAt, poll, live)? = cards.first else {
             return XCTFail("expected a scoreboard")
         }
         XCTAssertEqual(title, "MLB")
+        XCTAssertNotNil(fetchedAt)
+        XCTAssertNotNil(ISO8601DateFormatter.flexible("2026-09-22T02:10:00.123Z"), "server stamps carry milliseconds")
+        XCTAssertNotNil(ISO8601DateFormatter.flexible("2026-09-22T01:45Z"), "the provider writes minutes only")
         XCTAssertEqual(poll, 30)
         XCTAssertTrue(live)
         XCTAssertEqual(games.map(\.state), ["post", "in"])
@@ -356,6 +359,46 @@ final class AssistantMarkdownTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
+    }
+
+    /// A route decodes both ends and its line, keeps the reply above it, and
+    /// formats time and distance by the device's measurement system.
+    @MainActor
+    func testRouteCardDecodesAndRenders() throws {
+        let data = Data(#"""
+        {"id":"trip","role":"assistant","parts":[
+          {"type":"text","text":"About 9 minutes by car; leave by 11:50 for noon."},
+          {"type":"data-card","data":{"kind":"route","id":"r1","mode":"driving","accompaniesProse":true,
+            "origin":{"label":"Current Location","lat":37.7857,"lng":-122.4011,"current":true},
+            "destination":{"label":"Oracle Park","address":"24 Willie Mays Plaza, San Francisco","lat":37.7786,"lng":-122.3893},
+            "durationSeconds":540,"distanceMeters":1850,"departAt":"2026-09-22T18:51:00.000Z","arriveAt":"2026-09-22T19:00:00.000Z",
+            "routeName":"King St","steps":[{"instruction":"Turn right onto Howard St","distanceMeters":900}],
+            "polyline":"_p~iF~ps|U_ulLnnqC_mqNvxq`@",
+            "mapsUrl":"https://maps.apple.com/?saddr=37.7857%2C-122.4011&daddr=37.7786%2C-122.3893&dirflg=d"}}
+        ]}
+        """#.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        let cards = message.parts.compactMap(MessageResponseCard.init(part:))
+        guard case let .route(route)? = cards.first else { return XCTFail("expected a route") }
+        XCTAssertEqual(route.destination.label, "Oracle Park")
+        XCTAssertTrue(route.origin.current)
+        XCTAssertEqual(route.line.count, 3)
+        XCTAssertEqual(route.line[0].latitude, 38.5, accuracy: 0.00001)
+        XCTAssertEqual(route.line[2].longitude, -126.453, accuracy: 0.00001)
+        XCTAssertNotNil(route.mapsURL)
+        XCTAssertFalse(MessageResponseCard.replacesProse(cards), "the reply stays above the map")
+        XCTAssertEqual(RouteCardView.duration(540), "9 min")
+        XCTAssertEqual(RouteCardView.duration(5400), "1 hr 30 min")
+        XCTAssertEqual(RouteCardView.distance(1850, locale: Locale(identifier: "en_US")), "1.1 mi")
+        XCTAssertEqual(RouteCardView.distance(1850, locale: Locale(identifier: "is_IS")), "1,9 km")
+
+        let renderer = ImageRenderer(content: RichResponseCards(cards: cards).padding(16).frame(width: 390)
+            .background(AssistantTheme.stage))
+        renderer.scale = 2
+        let attachment = XCTAttachment(image: try XCTUnwrap(renderer.uiImage))
+        attachment.name = "route-390"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     @MainActor

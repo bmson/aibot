@@ -10,6 +10,7 @@
     "./code": "./src/code/index.ts",
     "./dispatcher": "./src/dispatcher.ts",
     "./documents": "./src/documents.ts",
+    "./maps": "./src/maps.ts",
     "./mcp": "./src/mcp.ts",
     "./modules/google": "./src/modules/google.ts",
     "./modules/push": "./src/modules/push.ts",

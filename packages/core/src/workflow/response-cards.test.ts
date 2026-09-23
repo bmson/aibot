@@ -3,6 +3,7 @@ import {
   availabilityResponseCards,
   calendarResponseCards,
   responseCardsForFinal,
+  routeResponseCards,
   scoreboardResponseCards,
   searchResponseCards,
   sheetRowsResponseCards,
@@ -1229,5 +1230,45 @@ describe('scoreboardResponseCards', () => {
       row([game('1', 'post'), game('3', 'pre')], { selection: 'last-and-next' }),
     ]);
     expect(card?.title).toBe('Last result and next game');
+  });
+});
+
+describe('routeResponseCards', () => {
+  const route = {
+    origin: { label: 'Current Location', lat: 37.7857, lng: -122.4011, current: true },
+    destination: {
+      label: 'Oracle Park',
+      address: '24 Willie Mays Plaza, San Francisco',
+      lat: 37.7786,
+      lng: -122.3893,
+    },
+    mode: 'driving',
+    durationSeconds: 540,
+    distanceMeters: 1850,
+    departAt: '2026-09-22T18:00:00.000Z',
+    arriveAt: '2026-09-22T18:09:00.000Z',
+    routeName: 'King St',
+    steps: [{ instruction: 'Turn right onto Howard St', distanceMeters: 900 }],
+    polyline: '_p~iF~ps|U_ulLnnqC',
+    mapsUrl: 'https://maps.apple.com/?saddr=37.7857%2C-122.4011&daddr=37.7786%2C-122.3893&dirflg=d',
+  };
+  const row = (result: unknown) => ({ toolName: 'maps.directions', status: 'succeeded', result });
+
+  it('draws the route under the reply from the tool row alone', () => {
+    const [card] = routeResponseCards([row(route)]);
+    expect(card).toMatchObject({
+      kind: 'route',
+      accompaniesProse: true,
+      durationSeconds: 540,
+      destination: { label: 'Oracle Park', address: '24 Willie Mays Plaza, San Francisco' },
+      origin: { current: true },
+      polyline: route.polyline,
+      mapsUrl: route.mapsUrl,
+    });
+  });
+
+  it('draws nothing for a failed route or a link that is not Apple Maps', () => {
+    expect(routeResponseCards([row({ error: 'No route found' })])).toEqual([]);
+    expect(routeResponseCards([row({ ...route, mapsUrl: 'https://evil.example/' })])).toEqual([]);
   });
 });
