@@ -995,7 +995,7 @@ describe('consumer installation', () => {
     };
     await expect(
       provisionConsumerInstallation(
-        { runner },
+        { runner, indexReadinessWait: { timeoutMs: 0 } },
         {
           manifest: manifest(await sha256File(archive)),
           archivePath: archive,
@@ -1005,7 +1005,7 @@ describe('consumer installation', () => {
           apply: true,
         },
       ),
-    ).rejects.toThrow('CREATING');
+    ).rejects.toThrow('did not become READY');
     expect(JSON.parse(await readFile(state, 'utf8')).stage.current).toBe('bootstrapped');
   });
 

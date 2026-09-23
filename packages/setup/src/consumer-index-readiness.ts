@@ -12,6 +12,20 @@ type Index = { collectionGroup: string; queryScope: string; fields: IndexField[]
 type FieldOverride = { collectionGroup: string; fieldPath: string; indexes: unknown[] };
 type IndexSpec = { indexes: Index[]; fieldOverrides: FieldOverride[] };
 
+export class ConsumerIndexBuildingError extends Error {
+  constructor(name: string) {
+    super(`Firestore index ${name} is CREATING`);
+  }
+}
+
+export interface ConsumerIndexWaitOptions {
+  /** Bounded wait; a timed-out installation stays resumable at bootstrapped. */
+  timeoutMs?: number;
+  intervalMs?: number;
+  now?: () => number;
+  sleep?: (milliseconds: number) => Promise<void>;
+}
+
 function object(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error(`${label} is malformed`);
@@ -273,9 +287,11 @@ export async function verifyConsumerIndexReadiness(
     list(runner, ['firestore', 'indexes', 'composite', 'list', ...flags], 'Composite indexes'),
     list(runner, ['firestore', 'indexes', 'fields', 'list', ...flags], 'Field overrides'),
   ]);
+  // Check every definition before waiting on a build. A foreign or changed
+  // index must fail immediately even if a different index is still CREATING.
   exactlyExpected(
     expectedIndexes.map(indexKey),
-    composites.map((index) => indexKey(canonicalIndex(index, prefix, false))),
+    composites.map((index) => indexKey(canonicalIndex(index, prefix, false, false))),
     'Firestore composite indexes',
   );
   let defaultFields = 0;
@@ -302,4 +318,44 @@ export async function verifyConsumerIndexReadiness(
     return [fieldKey(match[1], match[2])];
   });
   exactlyExpected(expectedFields, actualFields, 'Firestore field overrides');
+  for (const raw of composites) {
+    const index = object(raw, 'Firestore composite index');
+    const name = string(index.name, 'Firestore composite index name');
+    if (index.state === 'CREATING') throw new ConsumerIndexBuildingError(name);
+    if (index.state !== 'READY')
+      throw new Error(`Firestore index ${name} is ${String(index.state ?? 'not READY')}`);
+  }
+}
+
+/** Wait for expected new indexes only; never retry drift, malformed data, or read failures. */
+export async function waitForConsumerIndexReadiness(
+  runner: CommandRunner,
+  identity: InstallationIdentity,
+  verifiedSpec: Buffer,
+  options: ConsumerIndexWaitOptions = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 30 * 60_000;
+  const intervalMs = options.intervalMs ?? 10_000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0)
+    throw new Error('Index readiness timeout must be a nonnegative integer');
+  if (!Number.isSafeInteger(intervalMs) || intervalMs <= 0)
+    throw new Error('Index readiness interval must be a positive integer');
+  const now = options.now ?? Date.now;
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const deadline = now() + timeoutMs;
+  while (true) {
+    try {
+      await verifyConsumerIndexReadiness(runner, identity, verifiedSpec);
+      return;
+    } catch (error) {
+      if (!(error instanceof ConsumerIndexBuildingError)) throw error;
+      const remaining = deadline - now();
+      if (remaining <= 0)
+        throw new Error(
+          `Firestore indexes did not become READY within ${timeoutMs}ms; ${error.message}`,
+        );
+      await sleep(Math.min(intervalMs, remaining));
+    }
+  }
 }
