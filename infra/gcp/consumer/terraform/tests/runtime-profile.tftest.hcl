@@ -30,8 +30,8 @@ variables {
   firestore_agent_id = "11111111-1111-4111-8111-111111111111"
   firestore_embedding_space = {
     provider   = "vertex"
-    model      = "text-embedding-005"
-    dimensions = 768
+    model      = "gemini-embedding-001"
+    dimensions = 1536
     revision   = "customer-seed-v1"
   }
   owner_email                  = "owner@example.com"
