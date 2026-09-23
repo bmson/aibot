@@ -86,8 +86,11 @@ function decodedString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-export function migrationAssetReferences(bundle: MigrationBundle): AssetReference[] {
-  if (bundle.manifest.formatVersion !== 3)
+export function migrationAssetReferences(
+  bundle: MigrationBundle,
+  options: { requireVersion3?: boolean } = {},
+): AssetReference[] {
+  if (options.requireVersion3 !== false && bundle.manifest.formatVersion !== 3)
     throw new Error('Workspace asset audit requires a version 3 migration bundle');
   const references: AssetReference[] = [];
   const taskStatuses = new Map(
@@ -119,9 +122,13 @@ export function migrationAssetReferences(bundle: MigrationBundle): AssetReferenc
     const expectedBytes =
       typeof rawBytes === 'number'
         ? rawBytes
-        : typeof bigintValue === 'string' && /^\d+$/.test(bigintValue)
-          ? Number(bigintValue)
-          : undefined;
+        : options.requireVersion3 === false &&
+            typeof rawBytes === 'string' &&
+            /^\d+$/.test(rawBytes)
+          ? Number(rawBytes)
+          : typeof bigintValue === 'string' && /^\d+$/.test(bigintValue)
+            ? Number(bigintValue)
+            : undefined;
     if (rawBytes !== undefined && expectedBytes === undefined)
       throw new Error(`Invalid ${record.table} byte count`);
     if (expectedBytes !== undefined && (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0))
