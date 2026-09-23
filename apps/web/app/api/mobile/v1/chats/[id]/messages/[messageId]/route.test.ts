@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   unhide: vi.fn(),
 }));
 vi.mock('@/lib/server', () => ({
-  getApplication: () => ({
+  getChatApplication: () => ({
     hideChatMessage: mocks.hide,
     unhideChatMessage: mocks.unhide,
   }),

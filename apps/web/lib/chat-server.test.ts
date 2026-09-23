@@ -175,7 +175,7 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
     expect(proxy(request(`/chat/${randomUUID()}`)).status).toBe(200);
     expect(proxy(request('/chat/all')).status).toBe(200);
     expect(proxy(request('/tasks')).status).toBe(503);
-    expect(proxy(request('/api/mobile/v1/chats', 'POST')).status).toBe(503);
+    expect(proxy(request('/api/mobile/v1/chats', 'POST')).status).toBe(200);
     expect(proxy(request('/api/chat', 'POST')).status).toBe(200);
     expect(proxy(request('/api/mobile/v1/chat/status')).status).toBe(200);
     expect(proxy(request('/api/card-image?url=https%3A%2F%2Fexample.com%2Flogo.png')).status).toBe(

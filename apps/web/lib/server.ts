@@ -336,7 +336,7 @@ export function getApplication(): ReturnType<typeof createApplication> {
   return globalCache.__assistantApplication;
 }
 
-/** Only chat ingress and status polling are portable in this web preview. */
+/** Portable chat operations exposed to web and mobile transports in Firestore mode. */
 function createFirestoreChatApplication() {
   const config = loadConfig();
   const problems = validateAgentPersistenceConfig(config);
@@ -369,6 +369,10 @@ function createFirestoreChatApplication() {
       changeChatModel(chat, conversationId, modelId),
     archiveChat: (conversationId: string) => archiveChatConversation(chat, conversationId),
     restoreChat: (conversationId: string) => restoreChatConversation(chat, conversationId),
+    hideChatMessage: (conversationId: string, messageId: string) =>
+      hideChatMessage(chat, conversationId, messageId),
+    unhideChatMessage: (conversationId: string, messageId: string) =>
+      unhideChatMessage(chat, conversationId, messageId),
     archiveInactiveChats: () => archiveInactiveChats(chat),
     listChatHistory: (archived: boolean) => listChatHistory(chat, archived),
     getChatConversation: (conversationId: string, input: { taskId?: string; cursor?: string }) =>
