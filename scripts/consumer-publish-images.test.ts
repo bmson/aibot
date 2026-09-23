@@ -151,13 +151,18 @@ describe('customer-owned image publisher', () => {
   it('dry-runs from the committed archive without Google auth, Docker, or local env files', async () => {
     const { root, sha } = await fixture();
     const seen: string[] = [];
+    const progress: string[] = [];
     const runner: CommandRunner = async (command, args, config) => {
       seen.push(command);
       if (command !== 'git' && command !== 'tar')
         throw new Error('dry-run reached cloud or Docker');
       return systemCommand(command, args, config);
     };
-    const result = await publishConsumerImages(options(sha), { repoRoot: root, runner });
+    const result = await publishConsumerImages(options(sha), {
+      repoRoot: root,
+      runner,
+      onProgress: (message) => progress.push(message),
+    });
     expect(result).toMatchObject({
       dryRun: true,
       sourceSha: sha,
@@ -165,6 +170,7 @@ describe('customer-owned image publisher', () => {
       tags: { web: `us-west1-docker.pkg.dev/customer-project/assistant-runtime/web:${sha}` },
     });
     expect(seen).toEqual(['git', 'git', 'tar']);
+    expect(progress).toEqual(['Verified committed source archive.']);
   });
 
   it('rejects a committed env override before contacting Google or Docker', async () => {
@@ -204,10 +210,22 @@ describe('customer-owned image publisher', () => {
     const { root, sha } = await fixture();
     const outputPath = path.join(root, 'published.json');
     const fake = fakePublisher(sha);
+    const progress: string[] = [];
     const result = await publishConsumerImages(options(sha, outputPath), {
       repoRoot: root,
       runner: fake.runner,
+      onProgress: (message) => progress.push(message),
     });
+    expect(progress).toEqual([
+      'Verified committed source archive.',
+      'Checking customer image repository.',
+      'Configuring temporary Docker authentication.',
+      'Building and publishing web image.',
+      'Verified web image digest.',
+      'Building and publishing agent image.',
+      'Verified agent image digest.',
+      'Saved verified image manifest.',
+    ]);
     expect(result).toMatchObject({
       schemaVersion: 1,
       sourceSha: sha,
