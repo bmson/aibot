@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { canaryRuns, createDb, type Db } from '@assistant/db';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   CANARY_CHECK_NAMES,
+  claimCanaryRun,
   mailboxMismatch,
   recordCanaryBrowserResult,
   runBoundedCanaryCheck,
@@ -150,6 +151,66 @@ describe('browser canary callback persistence', () => {
       expect(stored?.browserResult).toEqual({ ok: true, outputs: ['first'] });
     } finally {
       if (run) await db.delete(canaryRuns).where(eq(canaryRuns.id, run.id));
+    }
+  });
+});
+
+describe('claiming the canary run', () => {
+  const clearRunning = () => db.delete(canaryRuns).where(eq(canaryRuns.status, 'running'));
+
+  it('lets one run in at a time and frees the slot when it finishes', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await clearRunning();
+    const first = await claimCanaryRun(db);
+    expect(first?.status).toBe('running');
+    try {
+      expect(await claimCanaryRun(db)).toBeNull();
+      await db
+        .update(canaryRuns)
+        .set({ status: 'completed', ok: true, finishedAt: new Date() })
+        .where(eq(canaryRuns.id, first?.id ?? ''));
+      const next = await claimCanaryRun(db);
+      expect(next?.id).not.toBe(first?.id);
+      if (next) await db.delete(canaryRuns).where(eq(canaryRuns.id, next.id));
+    } finally {
+      if (first) await db.delete(canaryRuns).where(eq(canaryRuns.id, first.id));
+    }
+  });
+
+  it('expires a run abandoned mid-flight instead of waiting on it forever', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await clearRunning();
+    const [stale] = await db
+      .insert(canaryRuns)
+      .values({ status: 'running', startedAt: new Date(Date.now() - 11 * 60_000) })
+      .returning();
+    try {
+      const run = await claimCanaryRun(db);
+      expect(run).not.toBeNull();
+      const [expired] = await db
+        .select()
+        .from(canaryRuns)
+        .where(eq(canaryRuns.id, stale?.id ?? ''));
+      expect(expired).toMatchObject({ status: 'failed', error: 'run abandoned before completion' });
+      if (run) await db.delete(canaryRuns).where(eq(canaryRuns.id, run.id));
+    } finally {
+      if (stale) await db.delete(canaryRuns).where(eq(canaryRuns.id, stale.id));
+    }
+  });
+
+  it('is not blocked by a session lock the old code leaked through the pooler', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    await clearRunning();
+    const holder = createDb(DATABASE_URL);
+    const connection = await holder.$client.reserve();
+    try {
+      await connection`select pg_advisory_lock(hashtext('assistant:canaries'))`;
+      const run = await claimCanaryRun(db);
+      expect(run).not.toBeNull();
+      if (run) await db.delete(canaryRuns).where(eq(canaryRuns.id, run.id));
+    } finally {
+      connection.release();
+      await holder.$client.end();
     }
   });
 });

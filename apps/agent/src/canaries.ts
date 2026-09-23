@@ -661,19 +661,25 @@ function canaryOperations(deps: AgentDeps, runId: string): CanaryOperations {
 }
 
 /** Distributed single-flight entry point used by the internal route and Scheduler. */
-export async function runCanaries(deps: AgentDeps): Promise<CanaryRunOutcome> {
-  const connection = await deps.db.$client.reserve();
-  let acquired = false;
-  try {
-    const [lock] = await connection<[{ acquired: boolean }]>`
-      select pg_try_advisory_lock(hashtext('assistant:canaries')) as acquired
-    `;
-    acquired = lock?.acquired === true;
-    if (!acquired) {
-      return { skipped: true, reason: 'already_running', latest: await latestCanaryRun(deps.db) };
-    }
-
-    await deps.db
+/**
+ * Claim the one running canary slot, or report that a run already holds it.
+ *
+ * A session-level advisory lock held across the run used to guard this. The
+ * application connects through a transaction pooler, where a session lock and
+ * its unlock can land on different server connections: on 2026-09-23 a
+ * completed run's lock stayed held, and every later trigger returned
+ * "already_running" without writing a row. The claim is now one short
+ * transaction — a transaction-scoped lock serializes it on a single server
+ * connection — and the running row itself is what later triggers see. The key
+ * is new so a lock leaked by the old code cannot block it.
+ */
+export async function claimCanaryRun(db: Db): Promise<typeof canaryRuns.$inferSelect | null> {
+  return db.transaction(async (tx) => {
+    const [lock] = await tx.execute<{ acquired: boolean }>(
+      sql`select pg_try_advisory_xact_lock(hashtext('assistant:canaries:claim')) as acquired`,
+    );
+    if (lock?.acquired !== true) return null;
+    await tx
       .update(canaryRuns)
       .set({
         status: 'failed',
@@ -687,41 +693,47 @@ export async function runCanaries(deps: AgentDeps): Promise<CanaryRunOutcome> {
           sql`${canaryRuns.startedAt} < now() - (${STALE_RUN_MINUTES} * interval '1 minute')`,
         ),
       );
-
-    const [run] = await deps.db.insert(canaryRuns).values({ status: 'running' }).returning();
+    const [active] = await tx
+      .select({ id: canaryRuns.id })
+      .from(canaryRuns)
+      .where(eq(canaryRuns.status, 'running'))
+      .limit(1);
+    if (active) return null;
+    const [run] = await tx.insert(canaryRuns).values({ status: 'running' }).returning();
     if (!run) throw new Error('failed to create canary run');
-    try {
-      assertCanaryConfiguration(deps);
-      await assertRunCostCeiling(deps);
-      const checks = await runCanaryOperationSet(canaryOperations(deps, run.id));
-      const ok = CANARY_CHECK_NAMES.every((name) => checks[name].ok);
-      const [completed] = await deps.db
-        .update(canaryRuns)
-        .set({ status: 'completed', ok, checks, finishedAt: new Date() })
-        .where(and(eq(canaryRuns.id, run.id), eq(canaryRuns.status, 'running')))
-        .returning();
-      if (!completed) throw new Error('canary run lost its running state');
-      return rowToResult(completed);
-    } catch (error) {
-      const [failed] = await deps.db
-        .update(canaryRuns)
-        .set({
-          status: 'failed',
-          ok: false,
-          error: safeError(error),
-          finishedAt: new Date(),
-        })
-        .where(eq(canaryRuns.id, run.id))
-        .returning();
-      return failed ? rowToResult(failed) : { ...rowToResult(run), status: 'failed', ok: false };
-    }
-  } finally {
-    if (acquired) {
-      await connection`select pg_advisory_unlock(hashtext('assistant:canaries'))`.catch((error) =>
-        console.error('canaries: failed to release advisory lock', error),
-      );
-    }
-    connection.release();
+    return run;
+  });
+}
+
+export async function runCanaries(deps: AgentDeps): Promise<CanaryRunOutcome> {
+  const run = await claimCanaryRun(deps.db);
+  if (!run) {
+    return { skipped: true, reason: 'already_running', latest: await latestCanaryRun(deps.db) };
+  }
+  try {
+    assertCanaryConfiguration(deps);
+    await assertRunCostCeiling(deps);
+    const checks = await runCanaryOperationSet(canaryOperations(deps, run.id));
+    const ok = CANARY_CHECK_NAMES.every((name) => checks[name].ok);
+    const [completed] = await deps.db
+      .update(canaryRuns)
+      .set({ status: 'completed', ok, checks, finishedAt: new Date() })
+      .where(and(eq(canaryRuns.id, run.id), eq(canaryRuns.status, 'running')))
+      .returning();
+    if (!completed) throw new Error('canary run lost its running state');
+    return rowToResult(completed);
+  } catch (error) {
+    const [failed] = await deps.db
+      .update(canaryRuns)
+      .set({
+        status: 'failed',
+        ok: false,
+        error: safeError(error),
+        finishedAt: new Date(),
+      })
+      .where(eq(canaryRuns.id, run.id))
+      .returning();
+    return failed ? rowToResult(failed) : { ...rowToResult(run), status: 'failed', ok: false };
   }
 }
 
