@@ -12,6 +12,7 @@ import { firestoreApprovalSmoke } from './firestore-approval-smoke.js';
 import { firestoreChatSmoke } from './firestore-chat-smoke.js';
 import { firestoreCommitmentSmoke } from './firestore-commitment-smoke.js';
 import { firestoreExecutorSmoke } from './firestore-executor-smoke.js';
+import { firestoreMobileCostsSmoke } from './firestore-mobile-costs-smoke.js';
 import { firestorePrivacyErasureSmoke } from './firestore-privacy-erasure-smoke.js';
 import { firestoreProfilePeopleSmoke } from './firestore-profile-people-smoke.js';
 import { firestoreRuntimeSmoke } from './firestore-runtime-smoke.js';
@@ -58,6 +59,7 @@ const indexes = spec.indexes.filter((index) =>
     'watches',
     'proactivePings',
     'importSources',
+    'costReservations',
   ].includes(index.collectionGroup),
 );
 const input = {
@@ -114,6 +116,7 @@ if (!values.run) {
       dueTaskQueryExplain: await explainDueTaskQuery(store),
       schedules: await firestoreScheduleSmoke(store),
       settings: await firestoreSettingsSmoke(store),
+      mobileCosts: await firestoreMobileCostsSmoke(store),
       commitments: await firestoreCommitmentSmoke(store),
       profilePeople: await firestoreProfilePeopleSmoke(store),
       approvals: await firestoreApprovalSmoke(store),
