@@ -35,9 +35,11 @@ WORKDIR /app
 COPY --from=build --chown=node:node /src/apps/agent/dist/index.mjs ./index.mjs
 COPY --from=build --chown=node:node /src/apps/agent/dist/index.mjs.map ./index.mjs.map
 
-# unpdf is external to the bundle (it alone was 28% of it, and PDF extraction
-# is rare in-agent), so the runtime installs exactly that one package.
-RUN npm install --no-save --omit=dev unpdf@1.6.2 && chown -R node:node /app/node_modules
+# These packages must keep their own filesystem layout at runtime. unpdf is
+# large and rarely used; Firestore's Google SDK loads protobuf files relative
+# to its package and cannot run when flattened into the ESM agent bundle.
+RUN npm install --no-save --omit=dev unpdf@1.6.2 @google-cloud/firestore@9.0.1 \
+  && chown -R node:node /app/node_modules
 
 # npm is only needed for the install above, never at runtime (the app runs on
 # node directly). Strip it so the base image's bundled npm — whose vendored deps
