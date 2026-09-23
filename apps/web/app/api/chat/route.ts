@@ -1,5 +1,5 @@
 import { isAuthed } from '@/auth';
-import { getApplication } from '@/lib/server';
+import { getChatApplication } from '@/lib/server';
 
 export async function POST(request: Request): Promise<Response> {
   if (!(await isAuthed())) {
@@ -8,5 +8,5 @@ export async function POST(request: Request): Promise<Response> {
       { status: 401 },
     );
   }
-  return getApplication().handleChatTurn(request);
+  return getChatApplication().handleChatTurn(request);
 }

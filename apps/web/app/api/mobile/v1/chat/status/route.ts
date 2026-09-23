@@ -1,4 +1,4 @@
-import { getApplication } from '@/lib/server';
+import { getChatApplication } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -39,7 +39,7 @@ export async function GET(request: Request): Promise<Response> {
     return mobileJson({ error: 'invalid wait' }, { status: 400 });
   }
 
-  const application = getApplication();
+  const application = getChatApplication();
   if (cursor && !application.isValidChatCursor(cursor)) {
     return mobileJson({ error: 'invalid cursor' }, { status: 400 });
   }

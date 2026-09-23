@@ -80,9 +80,22 @@ function isOwnedChat(data: FirebaseFirestore.DocumentData | undefined, agentId: 
 export class FirestoreApplicationChatPersistence implements ApplicationChatPersistence {
   readonly kind = 'application-chat-persistence' as const;
 
-  constructor(readonly store: InstallationStore) {}
+  constructor(
+    readonly store: InstallationStore,
+    private readonly configuredAgentId?: string,
+  ) {}
 
   async resolveAgent() {
+    if (this.configuredAgentId) {
+      const snapshot = await this.store.doc('agents', this.configuredAgentId).get();
+      if (!snapshot.exists) throw new Error('configured Firestore agent is missing');
+      const agent = decodeRecord<Awaited<ReturnType<ApplicationChatPersistence['resolveAgent']>>>(
+        snapshot.data(),
+      );
+      if (agent.id !== this.configuredAgentId)
+        throw new Error('configured Firestore agent is missing');
+      return agent;
+    }
     const snapshot = await this.store
       .collection('agents')
       .orderBy('createdAt', 'asc')

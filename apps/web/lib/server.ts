@@ -74,7 +74,12 @@ import {
   type ProfileMemoryCommandPersistence,
   profileMemoryCommands,
 } from '@assistant/application/profile';
-import { loadConfig, repoRoot } from '@assistant/config';
+import {
+  loadConfig,
+  parseFirestoreEmbeddingSpace,
+  repoRoot,
+  validateAgentPersistenceConfig,
+} from '@assistant/config';
 import { createConfiguredModelProvider, ModelRouter } from '@assistant/core/model-router';
 import {
   createDb,
@@ -82,6 +87,11 @@ import {
   createPostgresGeneratedCardRepository,
   type Db,
 } from '@assistant/db';
+import {
+  createFirestoreExecutionPersistence,
+  createInstallationStore,
+  FirestoreApplicationChatPersistence,
+} from '@assistant/firestore';
 import { inspectMcpConnection } from '@assistant/tools/mcp';
 import {
   GcsWorkspaceStore,
@@ -99,6 +109,9 @@ const globalCache = globalThis as unknown as {
 };
 
 export function getDb(): Db {
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    throw new Error('PostgreSQL-backed web surface is unavailable in Firestore mode');
+  }
   if (!globalCache.__assistantDb) {
     const config = loadConfig();
     globalCache.__assistantDb = createDb(config.DATABASE_URL, {
@@ -317,4 +330,45 @@ function createApplication(options: { profileMemory?: ProfileMemoryCommandPersis
 export function getApplication(): ReturnType<typeof createApplication> {
   globalCache.__assistantApplication ??= createApplication();
   return globalCache.__assistantApplication;
+}
+
+/** Only chat ingress and status polling are portable in this web preview. */
+function createFirestoreChatApplication() {
+  const config = loadConfig();
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  const store = createInstallationStore({
+    projectId: config.GCP_PROJECT,
+    installationId: config.ASSISTANT_WORKSPACE_ID,
+  });
+  const persistence = createFirestoreExecutionPersistence(
+    store,
+    config.FIRESTORE_AGENT_ID,
+    parseFirestoreEmbeddingSpace(config.FIRESTORE_EMBEDDING_SPACE),
+  );
+  const chat = new FirestoreApplicationChatPersistence(store, config.FIRESTORE_AGENT_ID);
+  const router = new ModelRouter(
+    persistence.modelRouting,
+    config.OPENROUTER_API_KEY,
+    config.LLM_AUDIT_CAPTURE,
+    createConfiguredModelProvider(config),
+  );
+  const chatReads = { chat, generatedCards: persistence.generatedCards };
+  return {
+    handleChatTurn: (request: Request) =>
+      handleChatTurn(request, { config, router, chat, persistence }),
+    getChatUpdates: (input: Parameters<typeof waitForChatUpdates>[1]) =>
+      waitForChatUpdates(chatReads, input),
+    isValidChatCursor,
+  };
+}
+
+const firestoreChatCache = globalThis as unknown as {
+  __assistantFirestoreChatApplication?: ReturnType<typeof createFirestoreChatApplication>;
+};
+
+export function getChatApplication() {
+  if (loadConfig().PERSISTENCE_DRIVER !== 'firestore') return getApplication();
+  firestoreChatCache.__assistantFirestoreChatApplication ??= createFirestoreChatApplication();
+  return firestoreChatCache.__assistantFirestoreChatApplication;
 }

@@ -160,6 +160,9 @@ importers:
       '@assistant/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@assistant/firestore':
+        specifier: workspace:*
+        version: link:../../packages/firestore
       '@assistant/modules':
         specifier: workspace:*
         version: link:../../packages/modules
