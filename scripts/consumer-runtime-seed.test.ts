@@ -72,7 +72,11 @@ describe('consumer runtime seed plan', () => {
   it('requires explicit prices, provenance, complete routing, and matching embedding identity', () => {
     const input = fixture();
     const plan = planConsumerRuntimeSeed(input);
-    expect(plan.records).toHaveLength(15);
+    expect(plan.records).toHaveLength(16);
+    expect(plan.records.find((record) => record.collection === 'budgets')).toMatchObject({
+      id: 'task_default',
+      data: { scope: 'task_default', limitUsd: '0.50' },
+    });
     expect(plan.records.find((record) => record.collection === 'models')?.data).toMatchObject({
       enabled: true,
       pricingSource: source,
@@ -117,7 +121,7 @@ describe('consumer runtime seed plan', () => {
       await writeFile(file, JSON.stringify(input), 'utf8');
       process.env.GOOGLE_APPLICATION_CREDENTIALS = '/definitely/missing/customer-credentials.json';
       const result = await runConsumerRuntimeSeedCli(['--input', file]);
-      expect(result).toMatchObject({ dryRun: true, recordCount: 15 });
+      expect(result).toMatchObject({ dryRun: true, recordCount: 16 });
       expect(JSON.stringify(result)).not.toContain('owner@example.test');
       expect(JSON.stringify(result)).not.toContain('promptCostPerMTok');
       await expect(runConsumerRuntimeSeedCli(['--input', file, '--apply'])).rejects.toThrow(
@@ -155,7 +159,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('consumer runtime seed emu
   ) {
     const plan = planConsumerRuntimeSeed(input);
     await store.doc('coordination', 'runtime-seed').create({
-      schemaVersion: 1,
+      schemaVersion: 2,
       planHash: plan.planHash,
       projectId: input.projectId,
       installationId: input.installationId,
@@ -179,7 +183,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('consumer runtime seed emu
     const plan = planConsumerRuntimeSeed(input);
     expect(await applyConsumerRuntimeSeed(store, plan)).toMatchObject({
       status: 'seeded',
-      created: 15,
+      created: 16,
       preflight: { ready: true, issues: [] },
     });
     const cost = new FirestoreCostRepository(store);
@@ -189,6 +193,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('consumer runtime seed emu
       heldUsd: 0,
       dailyLimitUsd: 1,
       monthlyLimitUsd: 10,
+    });
+    expect((await store.doc('budgets', 'task_default').get()).data()).toMatchObject({
+      scope: 'task_default',
+      limitUsd: '0.50',
+      seedPlanHash: plan.planHash,
     });
     const firstMarker = await store.doc('coordination', 'runtime-seed').get();
     expect(firstMarker.get('status')).toBe('complete');
@@ -210,7 +219,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('consumer runtime seed emu
     await store.doc(agent.collection, agent.id).create(agent.data);
     expect(await applyConsumerRuntimeSeed(store, plan)).toMatchObject({
       status: 'seeded',
-      created: 14,
+      created: 15,
       preflight: { ready: true, issues: [] },
     });
     expect((await store.doc('agents', agentId).get()).get('name')).toBe('Fixture Assistant');
@@ -225,6 +234,37 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('consumer runtime seed emu
       'refusing to adopt foreign records',
     );
     expect((await store.doc('coordination', 'runtime-seed').get()).exists).toBe(false);
+  });
+
+  it('refuses to adopt a pre-existing default task cap', async () => {
+    const input = fixture();
+    const store = storeFor(input.installationId);
+    await store
+      .doc('budgets', 'task_default')
+      .create({ scope: 'task_default', limitUsd: '100.00' });
+    await expect(applyConsumerRuntimeSeed(store, planConsumerRuntimeSeed(input))).rejects.toThrow(
+      'refusing to adopt foreign records',
+    );
+    expect((await store.doc('coordination', 'runtime-seed').get()).exists).toBe(false);
+  });
+
+  it('refuses an older completed seed marker that predates the default task cap', async () => {
+    const input = fixture();
+    const store = storeFor(input.installationId);
+    const plan = planConsumerRuntimeSeed(input);
+    await store.doc('coordination', 'runtime-seed').create({
+      schemaVersion: 1,
+      planHash: plan.planHash,
+      projectId: input.projectId,
+      installationId: input.installationId,
+      agentId,
+      embeddingSpace: input.embeddingSpace,
+      createdAt: new Date(seedAt),
+      status: 'complete',
+    });
+    await expect(applyConsumerRuntimeSeed(store, plan)).rejects.toThrow(
+      'runtime seed marker belongs to another plan',
+    );
   });
 
   it('refuses changed seed records and foreign runtime data during partial resume', async () => {

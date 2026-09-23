@@ -27,6 +27,8 @@ const PROJECT_ID = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 const INSTALLATION_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const VERTEX_MODEL_ID = /^vertex\/[A-Za-z0-9][A-Za-z0-9._@-]*$/;
 const MONEY = /^(?:0|[1-9]\d*)(?:\.\d{1,8})?$/;
+// Marker versions track the create-only record set independently of the input format.
+const SEED_MARKER_VERSION = 2;
 
 const isoDate = z.string().refine((value) => {
   const date = new Date(value);
@@ -155,7 +157,9 @@ export function planConsumerRuntimeSeed(value: unknown): ConsumerRuntimeSeedPlan
     models,
     roles: roles as ConsumerRuntimeSeedInput['roles'],
   };
-  const planHash = createHash('sha256').update(canonical(normalized)).digest('hex');
+  const planHash = createHash('sha256')
+    .update(canonical({ recordSetVersion: SEED_MARKER_VERSION, input: normalized }))
+    .digest('hex');
   const date = new Date(input.seedAt);
   const marker = { seedPlanHash: planHash };
   const agent = {
@@ -178,6 +182,13 @@ export function planConsumerRuntimeSeed(value: unknown): ConsumerRuntimeSeedPlan
   const records: SeedRecord[] = [
     { collection: 'agents', id: input.agent.id, data: agent },
     { collection: 'coordination', id: 'budget-policy', data: { ...input.budget, ...marker } },
+    // Direct chat uses this cap, and the owner can adjust it in Costs. Keep
+    // the fresh-install default aligned with the chat fallback.
+    {
+      collection: 'budgets',
+      id: 'task_default',
+      data: { scope: 'task_default', limitUsd: '0.50', updatedAt: date, ...marker },
+    },
     { collection: 'coordination', id: 'budget-holds', data: { heldMicros: 0, ...marker } },
     {
       collection: 'budgetPeriods',
@@ -208,7 +219,7 @@ export function planConsumerRuntimeSeed(value: unknown): ConsumerRuntimeSeedPlan
 
 function markerData(plan: ConsumerRuntimeSeedPlan) {
   return {
-    schemaVersion: 1,
+    schemaVersion: SEED_MARKER_VERSION,
     planHash: plan.planHash,
     projectId: plan.input.projectId,
     installationId: plan.input.installationId,
@@ -223,7 +234,7 @@ function markerMatches(value: unknown, plan: ConsumerRuntimeSeedPlan): boolean {
   if (!value || typeof value !== 'object') return false;
   const row = value as Record<string, unknown>;
   return (
-    row.schemaVersion === 1 &&
+    row.schemaVersion === SEED_MARKER_VERSION &&
     row.planHash === plan.planHash &&
     row.projectId === plan.input.projectId &&
     row.installationId === plan.input.installationId &&
@@ -239,6 +250,7 @@ const FRESH_COLLECTIONS = [
   'models',
   'modelRoles',
   'coordination',
+  'budgets',
   'budgetPeriods',
   'tasks',
   'conversations',
@@ -329,7 +341,14 @@ export async function applyConsumerRuntimeSeed(
   let created = 0;
   if (state !== 'complete') {
     await assertNoForeignSeedRecords(store, plan);
-    for (const collection of ['agents', 'coordination', 'budgetPeriods', 'models', 'modelRoles']) {
+    for (const collection of [
+      'agents',
+      'coordination',
+      'budgets',
+      'budgetPeriods',
+      'models',
+      'modelRoles',
+    ]) {
       const rows = plan.records.filter((row) => row.collection === collection);
       if (rows.length) created += await createMissing(store, plan, rows);
     }
