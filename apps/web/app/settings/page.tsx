@@ -151,30 +151,13 @@ export default async function SettingsPage() {
       <section>
         <SectionHeading title="Assistant" hint={`${agent.name} · ${agent.email}`} />
         <Card className="mt-3">
-          {readOnly ? (
-            <dl className="grid gap-4 text-sm sm:grid-cols-2">
-              <div>
-                <dt className="text-muted">Timezone</dt>
-                <dd>{agent.timezone}</dd>
-              </div>
-              <div>
-                <dt className="text-muted">Locale</dt>
-                <dd>{agent.locale}</dd>
-              </div>
-              <div className="sm:col-span-2">
-                <dt className="text-muted">Email signature</dt>
-                <dd className="whitespace-pre-wrap">{agent.signature || 'None'}</dd>
-              </div>
-            </dl>
-          ) : (
-            <AgentForm
-              initial={{
-                timezone: agent.timezone,
-                locale: agent.locale,
-                signature: agent.signature,
-              }}
-            />
-          )}
+          <AgentForm
+            initial={{
+              timezone: agent.timezone,
+              locale: agent.locale,
+              signature: agent.signature,
+            }}
+          />
           <p className="mt-5 border-t border-edge pt-3 text-xs leading-5 text-muted">
             {agent.phoneE164
               ? `Name, email, and phone (${agent.phoneE164}) are`

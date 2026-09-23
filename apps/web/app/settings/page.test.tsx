@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ owner: vi.fn() }));
 vi.mock('@/auth', () => ({ requireOwner: auth.owner }));
+vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
 const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
@@ -18,6 +19,7 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
   const policyId = randomUUID();
   const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
   let page: typeof import('./page.js');
+  let actions: typeof import('./actions.js');
 
   beforeAll(async () => {
     vi.stubEnv('PERSISTENCE_DRIVER', 'firestore');
@@ -25,6 +27,11 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     vi.stubEnv('GCP_PROJECT', 'demo-assistant-test');
     vi.stubEnv('ASSISTANT_WORKSPACE_ID', installationId);
     vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
+    vi.stubEnv(
+      'FIRESTORE_EMBEDDING_SPACE',
+      '{"provider":"vertex","model":"example-embedding","dimensions":768,"revision":"fixture-v1"}',
+    );
+    vi.stubEnv('LLM_PROVIDER', 'vertex');
     vi.stubEnv('ASSISTANT_MODULES', 'minimal');
     vi.stubEnv('QUEUE_DRIVER', 'local');
     vi.stubEnv('CANARY_ENABLED', 'false');
@@ -32,6 +39,7 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     resetConfigForTest();
     auth.owner.mockResolvedValue({ user: { email: 'owner@example.test' } });
     page = await import('./page.js');
+    actions = await import('./actions.js');
 
     const now = new Date();
     await store.doc('agents', agentId).set({
@@ -87,11 +95,11 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     resetConfigForTest();
   });
 
-  it('admits only GET for settings and renders portable settings without write controls', async () => {
+  it('admits the owner settings action and renders the identity editor only', async () => {
     const { proxy } = await import('../../proxy.js');
     expect(proxy(new NextRequest('http://localhost/settings')).status).toBe(200);
     expect(proxy(new NextRequest('http://localhost/settings', { method: 'POST' })).status).toBe(
-      503,
+      200,
     );
     const html = renderToStaticMarkup(await page.default());
     expect(html).toContain('Owner assistant');
@@ -101,9 +109,58 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     expect(html).toContain('daily job');
     expect(html).toContain('Send email to an approved recipient');
     expect(html).toContain('trusted@example.test');
-    expect(html).not.toContain('<form');
+    expect(html).toContain('Timezone');
+    expect(html).toContain('Locale');
+    expect(html).toContain('Email signature');
+    expect(html).toContain('Save changes');
+    expect(html).not.toContain('Pause');
+    expect(html).not.toContain('Delete');
     expect(html).not.toContain('/costs');
     expect(html).not.toContain('MCP connections');
+  });
+
+  it('updates only the configured owner identity through the validated Firestore facade', async () => {
+    const result = await actions.updateAgentSettings({
+      timezone: 'America/Los_Angeles',
+      locale: 'en-GB',
+      signature: 'Best, assistant',
+    });
+    expect(result).toEqual({});
+    const owner = await store.doc('agents', agentId).get();
+    expect(owner.get('timezone')).toBe('America/Los_Angeles');
+    expect(owner.get('locale')).toBe('en-GB');
+    expect(owner.get('signature')).toBe('Best, assistant');
+    expect(owner.get('credentialRefs')).toEqual({});
+    expect((await store.doc('notificationPrefs', agentId).get()).get('ambientDailyCap')).toBe(3);
+  });
+
+  it('rejects invalid identity values without changing the Firestore owner', async () => {
+    const before = await store.doc('agents', agentId).get();
+    const result = await actions.updateAgentSettings({
+      timezone: 'Not/A_Timezone',
+      locale: 'en-US',
+      signature: 'must not be saved',
+    });
+    expect(result.error).toBeTruthy();
+    expect((await store.doc('agents', agentId).get()).get('signature')).toBe(
+      before.get('signature'),
+    );
+  });
+
+  it('requires owner authentication and an inactive privacy-erasure fence before mutation', async () => {
+    auth.owner.mockRejectedValueOnce(new Error('owner authentication required'));
+    await expect(
+      actions.updateAgentSettings({ timezone: 'UTC', locale: 'en-US', signature: 'No' }),
+    ).rejects.toThrow('owner authentication required');
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+    try {
+      await expect(
+        actions.updateAgentSettings({ timezone: 'UTC', locale: 'en-US', signature: 'No' }),
+      ).rejects.toThrow('Privacy erasure is in progress');
+      expect((await store.doc('agents', agentId).get()).get('signature')).toBe('Best, assistant');
+    } finally {
+      await store.doc('privacyErasureJobs', agentId).delete();
+    }
   });
 
   it('requires owner authentication before reading', async () => {
