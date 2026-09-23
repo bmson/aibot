@@ -81,10 +81,12 @@ import {
   repoRoot,
   validateAgentPersistenceConfig,
 } from '@assistant/config';
+import { encodeMessageCursor } from '@assistant/core/chat';
 import { createConfiguredModelProvider, ModelRouter } from '@assistant/core/model-router';
 import {
   goalAutomationCadence,
   goalAutomationInstruction,
+  nextRun,
 } from '@assistant/core/workflow/schedules';
 import {
   createDb,
@@ -97,6 +99,7 @@ import {
   createFirestoreSettingsPersistence,
   createInstallationStore,
   FirestoreApplicationChatPersistence,
+  FirestoreGoalMutationRepository,
   FirestoreShellStatusRepository,
   FirestoreSkillMutationRepository,
 } from '@assistant/firestore';
@@ -143,6 +146,53 @@ export function getFirestoreGoalScheduleUpdate(id: string, input: GoalInput) {
       targetDate: input.targetDate,
     }),
   };
+}
+
+function goalWorkAutomation(goal: {
+  id: string;
+  title: string;
+  description: string;
+  priority: number;
+  progress: string;
+  nextAction: string;
+  targetDate: Date | null;
+}) {
+  const cadence = goalAutomationCadence(goal);
+  return {
+    cron: cadence.cron,
+    instruction: goalAutomationInstruction(goal),
+    nextRunAt: (timezone: string) => nextRun(cadence.cron, timezone),
+  };
+}
+
+function goalWorkResult(work: { conversationId: string; taskId: string; taskCreatedAt: Date }) {
+  return {
+    conversationId: work.conversationId,
+    taskId: work.taskId,
+    messageCursor: encodeMessageCursor({ createdAt: work.taskCreatedAt, id: work.taskId }),
+  };
+}
+
+export async function createFirestoreGoalWithWork(input: GoalInput) {
+  const config = loadConfig();
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  const repository = new FirestoreGoalMutationRepository(
+    getFirestoreInstallationStore(),
+    config.FIRESTORE_AGENT_ID,
+  );
+  return goalWorkResult(await repository.createWithWork(input, goalWorkAutomation));
+}
+
+export async function startFirestoreGoalWork(id: string) {
+  const config = loadConfig();
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  const repository = new FirestoreGoalMutationRepository(
+    getFirestoreInstallationStore(),
+    config.FIRESTORE_AGENT_ID,
+  );
+  return goalWorkResult(await repository.startWork(id, goalWorkAutomation));
 }
 
 export function getDb(): Db {
