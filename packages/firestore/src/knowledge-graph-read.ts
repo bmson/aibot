@@ -6,7 +6,8 @@ type Entity = Records['knowledgeGraphEntities'];
 type Relation = Records['knowledgeGraphRelations'];
 type Memory = Records['memories'];
 type Source = Records['knowledgeGraphSources'];
-type ModelCall = Records['modelCalls'];
+/** Firestore adds owner attribution to its installation ledger documents. */
+type ModelCall = Records['modelCalls'] & { agentId?: string };
 
 const PAGE_SIZE = 60;
 const RELATION_LIMIT = 80;
