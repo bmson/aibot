@@ -335,6 +335,8 @@ export async function runCodeJob(
       }
       await deps.heartbeat?.();
       const graphSync = deps.persistence?.graphSync;
+      if (deps.persistence && !graphSync)
+        throw new Error('Knowledge graph sync repository is missing from execution persistence');
       const r = await syncKnowledgeGraph(
         { db: deps.db, router: deps.router, graphSync },
         {

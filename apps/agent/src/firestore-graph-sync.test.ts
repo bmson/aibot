@@ -2,7 +2,16 @@ import { createHash, randomUUID } from 'node:crypto';
 import { syncKnowledgeGraph } from '@assistant/core/memory/knowledge-graph';
 import type { ModelRouter } from '@assistant/core/model-router';
 import { FirestoreKnowledgeGraphSyncRepository } from '@assistant/firestore';
-import type { Records } from '@assistant/persistence';
+import { importWorkspaceBundle } from '@assistant/firestore/workspace-migration';
+import {
+  checksumV3,
+  deterministicMigrationCompare,
+  type MigrationBundle,
+  type MigrationRecord,
+  type Records,
+  serializeMigrationTimestamp,
+  serializeMigrationVector,
+} from '@assistant/persistence';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeRecord, type InstallationStore } from '../../../packages/firestore/src/store.js';
 import { disposeStore, emulatorStore } from '../../../packages/firestore/src/test-store.js';
@@ -204,6 +213,189 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore knowledge graph
       canonicalKey: 'project:legacy acme',
       kind: 'project',
     });
+  });
+
+  it('keeps an imported ready, reviewed graph relation without re-extraction', async () => {
+    const migrationStore = emulatorStore();
+    const content = 'Owner works at Acme.';
+    const contentHash = hash(content);
+    const memoryId = randomUUID();
+    const subjectId = randomUUID();
+    const objectId = randomUUID();
+    const relationId = randomUUID();
+    const createdAt = serializeMigrationTimestamp('2026-09-19 12:00:00.000000+00');
+    const records: MigrationRecord[] = [
+      {
+        table: 'agents',
+        collection: 'agents',
+        id: agentId,
+        data: {
+          id: agentId,
+          name: 'Graph Owner',
+          email: 'owner@example.test',
+          workspacePrefix: 'workspace/test',
+          timezone: 'UTC',
+          locale: 'en',
+        },
+        checksum: '',
+      },
+      {
+        table: 'memories',
+        collection: 'memories',
+        id: memoryId,
+        data: {
+          id: memoryId,
+          createdAt,
+          agentId,
+          category: 'knowledge',
+          kind: 'fact',
+          content,
+          contentHash,
+          embedding: serializeMigrationVector([1, 0, 0]),
+          confidence: '0.80',
+          quarantined: false,
+          expiresAt: null,
+          subjectContactId: null,
+        },
+        checksum: '',
+      },
+      {
+        table: 'knowledge_graph_sources',
+        collection: 'knowledgeGraphSources',
+        id: memoryId,
+        data: {
+          memoryId,
+          createdAt,
+          updatedAt: createdAt,
+          contentHash,
+          subjectContactId: null,
+          extractionVersion: 2,
+          status: 'ready',
+          attempts: 1,
+          lastError: null,
+          nextRetryAt: null,
+        },
+        checksum: '',
+      },
+      ...[
+        { id: subjectId, canonicalKey: 'person:owner', label: 'Owner', kind: 'person' },
+        { id: objectId, canonicalKey: 'organization:acme', label: 'Acme', kind: 'organization' },
+      ].map(
+        (entity): MigrationRecord => ({
+          table: 'knowledge_graph_entities',
+          collection: 'knowledgeGraphEntities',
+          id: entity.id,
+          data: {
+            ...entity,
+            agentId,
+            createdAt,
+            updatedAt: createdAt,
+            preferredLabel: null,
+            contactId: null,
+          },
+          checksum: '',
+        }),
+      ),
+      {
+        table: 'knowledge_graph_relations',
+        collection: 'knowledgeGraphRelations',
+        id: relationId,
+        data: {
+          id: relationId,
+          createdAt,
+          agentId,
+          subjectEntityId: subjectId,
+          objectEntityId: objectId,
+          sourceMemoryId: memoryId,
+          sourceFingerprint: 'person:owner|works_at|organization:acme',
+          predicate: 'works_at',
+          evidenceQuote: content,
+          ordinal: 1,
+          confidence: '0.80',
+          validFrom: null,
+          validUntil: null,
+          reviewStatus: 'confirmed',
+          reviewedAt: createdAt,
+        },
+        checksum: '',
+      },
+    ];
+    for (const record of records) record.checksum = checksumV3(record.data);
+    records.sort((left, right) =>
+      deterministicMigrationCompare(`${left.table}:${left.id}`, `${right.table}:${right.id}`),
+    );
+    const tables = Object.fromEntries(
+      [...new Set(records.map((record) => record.table))].map((table) => {
+        const rows = records.filter((record) => record.table === table);
+        return [
+          table,
+          { collection: rows[0]?.collection, count: rows.length, checksum: checksumV3(rows) },
+        ];
+      }),
+    ) as MigrationBundle['manifest']['tables'];
+    const target = {
+      projectId: 'demo-assistant-test',
+      databaseId: '(default)',
+      installationId: migrationStore.installationId,
+    };
+    const bundle: MigrationBundle = {
+      records,
+      manifest: {
+        format: 'assistant-workspace-migration',
+        formatVersion: 3,
+        mode: 'export',
+        source: {
+          kind: 'postgresql',
+          agentId,
+          scope: 'installation',
+          snapshot: '1-1-1',
+          embeddingSpace: { provider: 'test', model: 'migration', dimensions: 3, revision: '1' },
+        },
+        target,
+        tables,
+        coverage: {
+          complete: false,
+          supportedTables: Object.keys(
+            tables,
+          ) as MigrationBundle['manifest']['coverage']['supportedTables'],
+          omittedTables: ['remaining PostgreSQL tables'],
+        },
+        recordCount: records.length,
+        bundleChecksum: checksumV3(records),
+        unsupportedTables: [],
+      },
+    };
+
+    try {
+      expect(
+        await importWorkspaceBundle(migrationStore, bundle, {
+          sourceAgentId: agentId,
+          target,
+          mode: 'write',
+        }),
+      ).toMatchObject({ verified: true });
+      const model = vi.fn(() => {
+        throw new Error('ready graph source must not call the model');
+      });
+      const result = await syncKnowledgeGraph(
+        {
+          graphSync: new FirestoreKnowledgeGraphSyncRepository(migrationStore),
+          router: { object: model } as unknown as ModelRouter,
+        },
+        { agentId },
+      );
+      expect(result).toMatchObject({ candidates: 0, processed: 0 });
+      expect(model).not.toHaveBeenCalled();
+      expect(
+        (await migrationStore.doc('knowledgeGraphRelations', relationId).get()).data(),
+      ).toMatchObject({
+        id: relationId,
+        reviewStatus: 'confirmed',
+        sourceMemoryId: memoryId,
+      });
+    } finally {
+      await disposeStore(migrationStore);
+    }
   });
 
   it('checkpoints extraction failures with a bounded retry deadline', async () => {

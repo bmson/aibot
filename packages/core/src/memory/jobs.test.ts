@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createDb, type Db, messages, schedules, type TaskRow, tasks } from '@assistant/db';
 import type { ExecutionPersistence, KnowledgeGraphSyncRepository } from '@assistant/persistence';
 import { eq, inArray } from 'drizzle-orm';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { getAgent } from '../chat.js';
 import { loadConfig, resetConfigForTest } from '../config.js';
 import type { InboundEvent } from '../events.js';
@@ -162,6 +162,25 @@ describe('feature-gated code jobs', () => {
     expect(result).toMatchObject({ done: true });
     expect(result.summary).toContain('0 pending');
     expect(calls).toEqual(['hydrate', 'candidates', 'orphans', 'pending', 'spend']);
+  });
+
+  it('fails closed before SQL when selected persistence lacks graph sync', async () => {
+    loadConfig({ GRAPH_RAG_ENABLED: 'true' });
+    const sqlCall = vi.fn(() => {
+      throw new Error('unexpected SQL call');
+    });
+    await expect(
+      runCodeJob(
+        {
+          db: { select: sqlCall, transaction: sqlCall, execute: sqlCall } as unknown as Db,
+          persistence: {} as ExecutionPersistence,
+          router: fakeRouter,
+        },
+        'memory.graph_sync',
+        { id: 'graph-task', agentId: 'graph-owner' } as TaskRow,
+      ),
+    ).rejects.toThrow('Knowledge graph sync repository is missing');
+    expect(sqlCall).not.toHaveBeenCalled();
   });
 });
 

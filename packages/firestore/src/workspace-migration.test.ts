@@ -427,6 +427,17 @@ describe.skipIf(!enabled)('Firestore workspace migration import', () => {
     try {
       const source = bundle(target);
       const memoryId = addGraphSource(source);
+      const memoryRecord = source.records.find(
+        (record) => record.table === 'memories' && record.id === memoryId,
+      );
+      if (!memoryRecord) throw new Error('memory fixture missing');
+      source.manifest.source.embeddingSpace = {
+        provider: 'test',
+        model: 'migration',
+        dimensions: 3,
+        revision: '1',
+      };
+      memoryRecord.data.embedding = serializeMigrationVector([1, 0, 0]);
       upgradeFixtureToV3(source);
       await importWorkspaceBundle(store, source, {
         sourceAgentId: source.manifest.source.agentId,
@@ -435,6 +446,16 @@ describe.skipIf(!enabled)('Firestore workspace migration import', () => {
       });
       const graphSource = store.doc('knowledgeGraphSources', memoryId);
       expect((await graphSource.get()).get('agentId')).toBe(source.manifest.source.agentId);
+      expect((await graphSource.get()).get('retrievalRevision')).toBe(memoryRecord.checksum);
+      await graphSource.update({ retrievalRevision: 'wrong-revision' });
+      await expect(
+        importWorkspaceBundle(store, source, {
+          sourceAgentId: source.manifest.source.agentId,
+          target,
+          mode: 'verify',
+        }),
+      ).rejects.toThrow('checksum mismatch');
+      await graphSource.update({ retrievalRevision: memoryRecord.checksum });
       await graphSource.update({ agentId: 'foreign-agent' });
       await expect(
         importWorkspaceBundle(store, source, {
@@ -484,8 +505,11 @@ describe.skipIf(!enabled)('Firestore workspace migration import', () => {
           mode: 'write',
         });
         expect(
-          (await store.doc('knowledgeGraphSources', memoryId).get()).get('agentId'),
-        ).toBeUndefined();
+          (await store.doc('knowledgeGraphSources', memoryId).get()).data(),
+        ).not.toHaveProperty('agentId');
+        expect(
+          (await store.doc('knowledgeGraphSources', memoryId).get()).data(),
+        ).not.toHaveProperty('retrievalRevision');
       } finally {
         await disposeStore(store);
       }
