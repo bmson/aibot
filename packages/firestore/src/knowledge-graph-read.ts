@@ -54,29 +54,21 @@ async function sourcesFor(
 ): Promise<Map<string, Source>> {
   const result = new Map<string, Source>();
   const ids = new Map(memories.map((memory) => [documentKey(memory.id), memory.id]));
-  const batchSize = 300;
-  // Independent source reads can overlap, but keep the in-flight work bounded
-  // for the imported histories this owner view must scan in full.
-  const concurrentBatches = 4;
-  for (let offset = 0; offset < memories.length; offset += batchSize * concurrentBatches) {
-    const pages = await Promise.all(
-      Array.from({ length: concurrentBatches }, (_, batch) =>
-        memories
-          .slice(offset + batch * batchSize, offset + (batch + 1) * batchSize)
-          .map((row) => store.doc('knowledgeGraphSources', row.id)),
-      )
-        .filter((refs) => refs.length > 0)
-        .map((refs) => store.db.getAll(...refs)),
-    );
-    for (const page of pages) {
-      for (const doc of page) {
-        if (!doc.exists) continue;
-        const row = decodeRecord<Source>(doc.data());
-        if (row.memoryId === ids.get(doc.id)) result.set(row.memoryId, row);
-      }
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+  for (;;) {
+    let query = store.collection('knowledgeGraphSources').limit(400);
+    if (cursor) query = query.startAfter(cursor);
+    const page = await query.get();
+    for (const doc of page.docs) {
+      const row = decodeRecord<Source>(doc.data());
+      // Imported source checkpoints can lack agentId. The owner memory and
+      // exact document ID are the join authority, including for stale sources.
+      if (typeof row.memoryId === 'string' && row.memoryId === ids.get(doc.id))
+        result.set(row.memoryId, row);
     }
+    cursor = page.docs.at(-1);
+    if (page.size < 400) return result;
   }
-  return result;
 }
 
 function entityView(row: Entity) {
@@ -158,7 +150,7 @@ function relationOrder(a: Relation, b: Relation): number {
   );
 }
 
-/** Owner-only graph browsing. Sources are loaded by IDs from owner memories, never scanned across installations. */
+/** Owner-only graph browsing. Sources are scanned within the installation and joined to owner memories. */
 export async function getFirestoreKnowledgeGraphOverview(
   store: InstallationStore,
   agentId: string,
