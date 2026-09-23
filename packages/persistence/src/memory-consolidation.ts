@@ -50,12 +50,21 @@ export interface ConsolidationReview {
   merges: ConsolidationMerge[];
   domainFixes: Array<{ id: string; domain: string }>;
   timeline: Array<{ id: string; validFrom?: Date; validUntil?: Date }>;
+  occasions?: Array<{
+    kind: 'birthday' | 'anniversary' | 'custom';
+    label: string;
+    month: number;
+    day: number;
+    year: number | null;
+    notes: string;
+  }>;
 }
 
 export interface ConsolidationReviewResult {
   retired: string[];
   merged: string[];
   domainsAssigned: string[];
+  occasionsSaved?: number;
 }
 
 export interface MemoryConsolidationRepository {

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   agents,
   createPostgresOwnerCardCompilationRepository,
@@ -8,8 +8,10 @@ import {
   ownerCard,
 } from '@assistant/db';
 import {
+  type ConsolidationMerge,
   isOwnerCardCompilationRepository,
   isOwnerContextRepository,
+  type MemoryConsolidationRepository,
   type OwnerCardCompilationInput,
   type OwnerCardCompilationRepository,
   type OwnerContextRepository,
@@ -135,6 +137,168 @@ function parseIsoDate(value: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+async function runFirestoreMemoryConsolidation(
+  repository: MemoryConsolidationRepository,
+  cardRepository: OwnerCardCompilationRepository,
+  router: ModelRouter,
+  opts: { taskId?: string; agentId?: string },
+  heartbeat?: () => Promise<void>,
+): Promise<ConsolidationResult> {
+  const agentId = opts.agentId;
+  if (!agentId) throw new Error('Firestore memory consolidation requires an agent ID');
+  const result: ConsolidationResult = {
+    entities: 0,
+    batches: 0,
+    memoriesReviewed: 0,
+    standaloneReviewed: 0,
+    duplicatesExpired: 0,
+    contradictionsResolved: 0,
+    factsUnified: 0,
+    domainsAssigned: 0,
+    occasionsSaved: 0,
+    cardCompiled: false,
+  };
+  const batch = await repository.candidates(agentId);
+  await heartbeat?.();
+  result.standaloneReviewed = await repository.stampStandalone(agentId, batch.standalone);
+  if (batch.window) {
+    const { subjectContactId, facts } = batch.window;
+    result.entities = 1;
+    const byId = new Map(facts.map((fact) => [fact.id, fact]));
+    const listing = facts
+      .map(
+        (fact) =>
+          `id=${fact.id} | ${fact.createdAt.toISOString().slice(0, 10)} | conf=${fact.confidence} | domain=${fact.domain ?? '?'}${fact.ownerConfirmed || fact.pinned ? ' | [curated]' : ''} | ${fact.content}`,
+      )
+      .join('\n');
+    const outcome = await router
+      .object<ConsolidationFindings>('extract', {
+        taskId: opts.taskId,
+        schema: ConsolidationFindingsSchema,
+        system: [
+          "You review one person's memory facts for a personal assistant.",
+          'Find exact-or-paraphrase duplicates, direct contradictions, missing/wrong life domains,',
+          'explicitly stated temporal validity, and same-topic groups worth merging into one',
+          'unified sentence. Refer to facts ONLY by their id.',
+          'Do NOT invent contradictions — different facts about the same topic are fine unless they cannot both be true.',
+          'Merging: only group fragmented facts about the SAME topic or attribute; invent nothing,',
+          'and leave facts marked [curated] alone.',
+          'Only report recurring occasions with a specific month and day explicitly stated in a fact.',
+        ].join('\n'),
+        prompt: listing,
+      })
+      .catch((err) => {
+        if (!isUnparseableObjectError(err)) throw err;
+        console.error(
+          `memory consolidation: skipping entity ${subjectContactId} the model could not structure`,
+          err,
+        );
+        return null;
+      });
+    if (!outcome) {
+      // Leave this window pending for retry; no partial updates have occurred.
+    } else if (!outcome.ok) {
+      throw new BudgetReservationError(
+        outcome.decision.reason,
+        outcome.decision.reason.includes('monthly') ? nextMonthlyReset() : nextDailyReset(),
+      );
+    } else {
+      await heartbeat?.();
+      const retirements = new Map<string, string>();
+      const chooseLoserRetirements = (groups: string[][]) => {
+        for (const group of groups) {
+          const members = group.map((id) => byId.get(id)).filter((fact) => fact !== undefined);
+          if (members.length < 2) continue;
+          const winner = pickWinner(members);
+          for (const member of members) {
+            if (member.id !== winner.id && (!member.ownerConfirmed || winner.ownerConfirmed))
+              retirements.set(member.id, winner.id);
+          }
+        }
+      };
+      chooseLoserRetirements(outcome.object.duplicateGroups);
+      chooseLoserRetirements(outcome.object.contradictionGroups);
+      const replacement = new Map(retirements);
+      const mostCommon = (values: Array<string | null>) => {
+        const counts = new Map<string, number>();
+        for (const value of values) if (value) counts.set(value, (counts.get(value) ?? 0) + 1);
+        return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+      };
+      const merges: ConsolidationMerge[] = [];
+      for (const merge of outcome.object.mergeGroups) {
+        const members = merge.ids
+          .map((id) => byId.get(id))
+          .filter(
+            (fact): fact is NonNullable<typeof fact> =>
+              fact !== undefined && !fact.ownerConfirmed && !fact.pinned,
+          );
+        if (members.length < 2 || members.some((member) => replacement.has(member.id))) continue;
+        const content = merge.unified.trim();
+        const contentHash = createHash('sha256').update(content).digest('hex');
+        const [embedding] = await router.embed([content]);
+        if (!embedding) continue;
+        merges.push({
+          id: randomUUID(),
+          content,
+          contentHash,
+          embedding,
+          kind: mostCommon(members.map((member) => member.kind)) ?? 'fact',
+          confidence: Math.min(...members.map((member) => Number(member.confidence))).toFixed(2),
+          importance: Math.max(...members.map((member) => member.importance)),
+          domain: mostCommon(members.map((member) => member.domain)),
+          sourceTaskId: opts.taskId ?? null,
+          memberIds: members.map((member) => member.id),
+        });
+        const created = merges.at(-1);
+        if (created) for (const member of members) replacement.set(member.id, created.id);
+      }
+      const fixes = outcome.object.domainFixes.filter((fix) => byId.has(fix.id));
+      const timeline = outcome.object.timeline.flatMap((item) => {
+        if (!byId.has(item.id)) return [];
+        const validFrom = parseIsoDate(item.validFrom);
+        const validUntil = parseIsoDate(item.validUntil);
+        return validFrom || validUntil
+          ? [
+              {
+                id: item.id,
+                ...(validFrom ? { validFrom } : {}),
+                ...(validUntil ? { validUntil } : {}),
+              },
+            ]
+          : [];
+      });
+      const applied = await repository.applyReview({
+        agentId,
+        subjectContactId,
+        facts,
+        retirements: [...retirements].map(([id, supersededById]) => ({ id, supersededById })),
+        merges,
+        domainFixes: fixes.filter((fix) => byId.get(fix.id)?.domain !== fix.domain),
+        timeline,
+        occasions: outcome.object.occasions,
+      });
+      result.batches = 1;
+      result.memoriesReviewed = facts.filter((fact) => fact.lastConsolidatedAt === null).length;
+      result.duplicatesExpired = applied.retired.filter((id) =>
+        outcome.object.duplicateGroups.some((group) => group.includes(id)),
+      ).length;
+      result.contradictionsResolved = applied.retired.filter((id) =>
+        outcome.object.contradictionGroups.some((group) => group.includes(id)),
+      ).length;
+      result.factsUnified = applied.merged.reduce(
+        (count, id) => count + (merges.find((merge) => merge.id === id)?.memberIds.length ?? 0),
+        0,
+      );
+      result.domainsAssigned = applied.domainsAssigned.length;
+      result.occasionsSaved = applied.occasionsSaved ?? 0;
+    }
+  }
+  await heartbeat?.();
+  await compileOwnerCard(cardRepository, agentId, new Date());
+  result.cardCompiled = true;
+  return result;
+}
+
 export interface ConsolidationResult {
   entities: number;
   batches: number;
@@ -149,9 +313,27 @@ export interface ConsolidationResult {
 }
 
 export async function runMemoryConsolidation(
-  deps: { db: Db; router: ModelRouter; heartbeat?: () => Promise<void> },
+  deps: {
+    db: Db;
+    router: ModelRouter;
+    heartbeat?: () => Promise<void>;
+    persistence?: import('@assistant/persistence').ExecutionPersistence;
+  },
   opts: { taskId?: string; agentId?: string } = {},
 ): Promise<ConsolidationResult> {
+  if (deps.persistence?.driver === 'firestore') {
+    const repository = deps.persistence.memoryConsolidation;
+    if (!repository)
+      throw new Error('Memory consolidation repository is missing from Firestore persistence');
+    if (!opts.agentId) throw new Error('Firestore memory consolidation requires an agent ID');
+    return runFirestoreMemoryConsolidation(
+      repository,
+      deps.persistence.ownerCardCompilation,
+      deps.router,
+      opts,
+      deps.heartbeat,
+    );
+  }
   const { db, router } = deps;
   return withSpan('memory.consolidate', {}, async () => {
     const result: ConsolidationResult = {
