@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FirestoreProfileOverviewRepository } from './profile-full-overview.js';
 import { disposeStore, emulatorStore } from './test-store.js';
 
@@ -91,7 +91,10 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore full Profile ov
       });
       await batch.commit();
 
+      const collectionReads = vi.spyOn(store, 'collection');
       const result = await new FirestoreProfileOverviewRepository(store).load();
+      expect(collectionReads.mock.calls.filter(([name]) => name === 'contacts')).toHaveLength(1);
+      expect(collectionReads.mock.calls.filter(([name]) => name === 'memories')).toHaveLength(1);
       expect(result.owner?.id).toBe(ownerId);
       expect(result.people).toMatchObject([{ contact: { id: personId }, factCount: 1 }]);
       expect(result.ownerFacts.map((row) => row.id)).toEqual([ownerFactId]);
