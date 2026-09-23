@@ -1,0 +1,256 @@
+import { randomUUID } from 'node:crypto';
+import { GRAPH_EXTRACTION_VERSION } from '@assistant/application/knowledge-graph';
+import { resetConfigForTest } from '@assistant/config';
+import { createInstallationStore } from '@assistant/firestore';
+import { NextRequest } from 'next/server';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+const auth = vi.hoisted(() => ({ mobile: vi.fn() }));
+vi.mock('@/mobile-auth', () => ({
+  isMobileAuthed: auth.mobile,
+  mobileJson: (body: unknown, init?: ResponseInit) => Response.json(body, init),
+  mobileUnauthorized: () => Response.json({ error: 'unauthorized' }, { status: 401 }),
+}));
+
+import { proxy } from '@/proxy';
+import { GET as detail } from './[id]/route';
+import { GET as list } from './route';
+
+const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
+const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
+
+describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQL offline', () => {
+  const installationId = `mobile-knowledge-${randomUUID()}`;
+  const agentId = randomUUID();
+  const foreignAgentId = randomUUID();
+  const subjectId = randomUUID();
+  const objectId = randomUUID();
+  const foreignId = randomUUID();
+  const activeId = randomUUID();
+  const staleId = randomUUID();
+  const foreignRelationId = randomUUID();
+  const crossOwnerRelationId = randomUUID();
+  const activeMemoryId = randomUUID();
+  const staleMemoryId = randomUUID();
+  const foreignMemoryId = randomUUID();
+  const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+  const now = new Date();
+  const entity = (id: string, owner: string, label: string) => ({
+    id,
+    agentId: owner,
+    label,
+    preferredLabel: null,
+    kind: 'person',
+    canonicalKey: `person:${id}`,
+    contactId: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const memory = (id: string, owner: string, content: string) => ({
+    id,
+    agentId: owner,
+    content,
+    category: 'knowledge',
+    quarantined: false,
+    expiresAt: null,
+    embedding: [0.1],
+    contentHash: `hash-${id}`,
+    subjectContactId: null,
+    createdAt: now,
+    ownerConfirmed: true,
+    originTrust: 'owner',
+  });
+  const relation = (id: string, owner: string, sourceMemoryId: string, objectEntityId: string) => ({
+    id,
+    agentId: owner,
+    subjectEntityId: subjectId,
+    objectEntityId,
+    sourceMemoryId,
+    predicate: 'knows',
+    confidence: '0.9',
+    reviewStatus: 'unreviewed',
+    reviewedAt: null,
+    validFrom: null,
+    validUntil: null,
+    evidenceQuote: 'The two know each other',
+    createdAt: now,
+  });
+
+  beforeAll(async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://offline:offline@127.0.0.1:1/offline_test');
+    vi.stubEnv('PERSISTENCE_DRIVER', 'firestore');
+    vi.stubEnv('GCP_PROJECT', 'demo-assistant-test');
+    vi.stubEnv('ASSISTANT_WORKSPACE_ID', installationId);
+    vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
+    vi.stubEnv(
+      'FIRESTORE_EMBEDDING_SPACE',
+      '{"provider":"vertex","model":"example-embedding","dimensions":768,"revision":"fixture-v1"}',
+    );
+    vi.stubEnv('LLM_PROVIDER', 'vertex');
+    vi.stubEnv('ASSISTANT_MODULES', 'minimal');
+    vi.stubEnv('QUEUE_DRIVER', 'local');
+    vi.stubEnv('CANARY_ENABLED', 'false');
+    vi.stubEnv('LOCATION_PING_SECRET', '');
+    resetConfigForTest();
+    auth.mobile.mockResolvedValue(true);
+    await Promise.all([
+      store.doc('agents', agentId).set({ id: agentId }),
+      store.doc('knowledgeGraphEntities', subjectId).set(entity(subjectId, agentId, 'Anna')),
+      store.doc('knowledgeGraphEntities', objectId).set(entity(objectId, agentId, 'Baldvin')),
+      store
+        .doc('knowledgeGraphEntities', foreignId)
+        .set(entity(foreignId, foreignAgentId, 'Foreign')),
+      store
+        .doc('memories', activeMemoryId)
+        .set(memory(activeMemoryId, agentId, 'Anna knows Baldvin')),
+      store.doc('memories', staleMemoryId).set(memory(staleMemoryId, agentId, 'Old claim')),
+      store
+        .doc('memories', foreignMemoryId)
+        .set(memory(foreignMemoryId, foreignAgentId, 'Foreign claim')),
+      store.doc('knowledgeGraphSources', activeMemoryId).set({
+        memoryId: activeMemoryId,
+        status: 'ready',
+        contentHash: `hash-${activeMemoryId}`,
+        subjectContactId: null,
+        extractionVersion: GRAPH_EXTRACTION_VERSION,
+      }),
+      store.doc('knowledgeGraphSources', staleMemoryId).set({
+        memoryId: staleMemoryId,
+        status: 'failed',
+        contentHash: `hash-${staleMemoryId}`,
+        subjectContactId: null,
+        extractionVersion: GRAPH_EXTRACTION_VERSION,
+      }),
+      store.doc('knowledgeGraphSources', foreignMemoryId).set({
+        memoryId: foreignMemoryId,
+        status: 'ready',
+        contentHash: `hash-${foreignMemoryId}`,
+        subjectContactId: null,
+        extractionVersion: GRAPH_EXTRACTION_VERSION,
+      }),
+      store
+        .doc('knowledgeGraphRelations', activeId)
+        .set(relation(activeId, agentId, activeMemoryId, objectId)),
+      store
+        .doc('knowledgeGraphRelations', staleId)
+        .set(relation(staleId, agentId, staleMemoryId, objectId)),
+      store
+        .doc('knowledgeGraphRelations', foreignRelationId)
+        .set(relation(foreignRelationId, foreignAgentId, foreignMemoryId, foreignId)),
+      store
+        .doc('knowledgeGraphRelations', crossOwnerRelationId)
+        .set(relation(crossOwnerRelationId, agentId, activeMemoryId, foreignId)),
+      ...Array.from({ length: 10 }, (_, index) =>
+        store.doc('modelCalls', `owner-extract-${index}`).set({
+          id: `owner-extract-${index}`,
+          agentId,
+          role: 'extract',
+          costUsd: '0.020000',
+          createdAt: now,
+        }),
+      ),
+      ...Array.from({ length: 10 }, (_, index) =>
+        store.doc('modelCalls', `foreign-extract-${index}`).set({
+          id: `foreign-extract-${index}`,
+          agentId: foreignAgentId,
+          role: 'extract',
+          costUsd: '99.000000',
+          createdAt: now,
+        }),
+      ),
+      store.doc('modelCalls', 'legacy-extract').set({
+        id: 'legacy-extract',
+        role: 'extract',
+        costUsd: '100.000000',
+        createdAt: now,
+      }),
+    ]);
+  });
+
+  afterAll(async () => {
+    await store.db.terminate();
+    vi.unstubAllEnvs();
+    resetConfigForTest();
+  });
+
+  it('browses active owner entities and includes stale evidence only in selected detail', async () => {
+    const response = await list(new Request('http://localhost/api/mobile/v1/knowledge?q=anna'));
+    expect(response.status).toBe(200);
+    const graph = await response.json();
+    expect(graph).toMatchObject({
+      totalEntities: 2,
+      totalRelations: 1,
+      unreviewedRelations: 1,
+      pendingSources: 1,
+      matchingEntities: 1,
+      selected: { id: subjectId },
+      selectedRelationTotal: 2,
+      selectedActiveRelationTotal: 1,
+    });
+    expect(graph.pendingCostUsd).toBeCloseTo(0.02, 6);
+    expect(graph.relations.map((row: { id: string }) => row.id).sort()).toEqual(
+      [activeId, staleId].sort(),
+    );
+    expect(graph.relations.find((row: { id: string }) => row.id === staleId).inRecall).toBe(false);
+    expect(graph.relations[0].presentation.sentence).toContain('Anna');
+    expect(JSON.stringify(graph)).not.toContain(foreignId);
+    expect(JSON.stringify(graph)).not.toContain(crossOwnerRelationId);
+  });
+
+  it('returns the review queue with active and stale owner evidence only', async () => {
+    const response = await list(
+      new Request('http://localhost/api/mobile/v1/knowledge?mode=review'),
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.relations.map((row: { id: string }) => row.id).sort()).toEqual(
+      [activeId, staleId].sort(),
+    );
+    expect(body.relations.find((row: { id: string }) => row.id === activeId).inRecall).toBe(true);
+    expect(JSON.stringify(body)).not.toContain(foreignRelationId);
+    expect(JSON.stringify(body)).not.toContain(crossOwnerRelationId);
+  });
+
+  it('opens owner detail and rejects foreign or malformed IDs', async () => {
+    const request = (id: string) => new Request(`http://localhost/api/mobile/v1/knowledge/${id}`);
+    expect(
+      (await detail(request(subjectId), { params: Promise.resolve({ id: subjectId }) })).status,
+    ).toBe(200);
+    expect(
+      (await detail(request(foreignId), { params: Promise.resolve({ id: foreignId }) })).status,
+    ).toBe(404);
+    expect((await detail(request('bad'), { params: Promise.resolve({ id: 'bad' }) })).status).toBe(
+      400,
+    );
+  });
+
+  it('fails closed for a target with more than one configured agent', async () => {
+    await store.doc('agents', foreignAgentId).set({ id: foreignAgentId });
+    try {
+      await expect(list(new Request('http://localhost/api/mobile/v1/knowledge'))).rejects.toThrow(
+        'exactly one configured agent',
+      );
+      await expect(
+        list(new Request('http://localhost/api/mobile/v1/knowledge?mode=review')),
+      ).rejects.toThrow('exactly one configured agent');
+      await expect(
+        detail(new Request(`http://localhost/api/mobile/v1/knowledge/${subjectId}`), {
+          params: Promise.resolve({ id: subjectId }),
+        }),
+      ).rejects.toThrow('exactly one configured agent');
+    } finally {
+      await store.doc('agents', foreignAgentId).delete();
+    }
+  });
+
+  it('allows only exact GET routes through the Firestore proxy', () => {
+    const status = (path: string, method = 'GET') =>
+      proxy(new NextRequest(`http://localhost${path}`, { method })).status;
+    expect(status('/api/mobile/v1/knowledge')).toBe(200);
+    expect(status(`/api/mobile/v1/knowledge/${subjectId}`)).toBe(200);
+    expect(status('/api/mobile/v1/knowledge', 'POST')).toBe(503);
+    expect(status(`/api/mobile/v1/knowledge/${subjectId}`, 'PATCH')).toBe(503);
+    expect(status('/api/mobile/v1/knowledge/graph')).toBe(503);
+    expect(status('/api/mobile/v1/knowledge/bad')).toBe(503);
+  });
+});

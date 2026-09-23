@@ -1,18 +1,66 @@
 import {
   addOwnerKnowledgeGraphFact,
   asGraphEntityKind,
+  GRAPH_EXTRACTION_VERSION,
   getKnowledgeGraphOverview,
   getKnowledgeGraphReviewQueue,
+  presentKnowledgeGraphRelation,
 } from '@assistant/application';
-import { getDb, getRouter } from '@/lib/server';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import {
+  getFirestoreKnowledgeGraphOverview,
+  getFirestoreKnowledgeGraphReviewQueue,
+} from '@assistant/firestore';
+import { getDb, getFirestoreInstallationStore, getRouter } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
+
+function withPresentation<
+  T extends { subject: { label: string }; predicate: string; object: { label: string } },
+>(row: T) {
+  return {
+    ...row,
+    presentation: presentKnowledgeGraphRelation({
+      subjectLabel: row.subject.label,
+      predicate: row.predicate,
+      objectLabel: row.object.label,
+    }),
+  };
+}
 
 /** Compact graph browsing plus the owner-backed connection creator for iPhone. */
 export async function GET(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const url = new URL(request.url);
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    const store = getFirestoreInstallationStore();
+    if (url.searchParams.get('mode') === 'review') {
+      const rows = await getFirestoreKnowledgeGraphReviewQueue(
+        store,
+        config.FIRESTORE_AGENT_ID,
+        GRAPH_EXTRACTION_VERSION,
+      );
+      return mobileJson({ relations: rows.map(withPresentation) });
+    }
+    const page = Number.parseInt(url.searchParams.get('page') ?? '1', 10);
+    const graph = await getFirestoreKnowledgeGraphOverview(
+      store,
+      config.FIRESTORE_AGENT_ID,
+      GRAPH_EXTRACTION_VERSION,
+      {
+        query: url.searchParams.get('q') ?? '',
+        kind: asGraphEntityKind(url.searchParams.get('kind') ?? undefined),
+        page: Number.isFinite(page) && page > 0 ? page : 1,
+      },
+      undefined,
+      config.GRAPH_SYNC_BATCH_LIMIT,
+    );
+    return mobileJson({ ...graph, relations: graph.relations.map(withPresentation) });
+  }
   if (url.searchParams.get('mode') === 'review') {
     return mobileJson({ relations: await getKnowledgeGraphReviewQueue(getDb()) });
   }

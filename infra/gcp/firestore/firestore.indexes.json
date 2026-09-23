@@ -413,6 +413,15 @@
       ]
     },
     {
+      "collectionGroup": "modelCalls",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "role", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "approvals",
       "queryScope": "COLLECTION",
       "fields": [
