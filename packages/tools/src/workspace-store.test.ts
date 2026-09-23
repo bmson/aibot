@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
-import { LocalWorkspaceStore, safeRelPath } from './workspace-store.js';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { GcsWorkspaceStore, LocalWorkspaceStore, safeRelPath } from './workspace-store.js';
 
 const root = mkdtempSync(path.join(tmpdir(), 'ws-test-'));
 const outside = mkdtempSync(path.join(tmpdir(), 'ws-outside-test-'));
@@ -12,6 +12,8 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true });
   rmSync(outside, { recursive: true, force: true });
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('safeRelPath', () => {
   it('normalizes and accepts nested paths', () => {
@@ -53,5 +55,41 @@ describe('LocalWorkspaceStore', () => {
     symlinkSync(outside, path.join(root, 'escape'), 'dir');
     await expect(store.read('escape/secret.txt')).rejects.toThrow(/outside/);
     await expect(store.write('escape/new.txt', 'nope')).rejects.toThrow(/outside/);
+  });
+});
+
+describe('GcsWorkspaceStore generation fencing', () => {
+  it('captures and conditionally deletes only the recorded object generation', async () => {
+    const store = new GcsWorkspaceStore('private-bucket', 'install/owner');
+    const requests: Array<{ url: URL; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(input.toString());
+        requests.push({ url, init });
+        if (url.hostname === 'metadata.google.internal')
+          return new Response(JSON.stringify({ access_token: 'test-token' }), { status: 200 });
+        if (init?.method === 'DELETE') return new Response('generation changed', { status: 412 });
+        return new Response(JSON.stringify({ generation: '41' }), { status: 200 });
+      }),
+    );
+
+    const generation = await store.objectGeneration?.('import/uploads/voice.mbox');
+    expect(generation).toBe('41');
+    await expect(
+      store.deleteGeneration?.('import/uploads/voice.mbox', generation as string),
+    ).rejects.toThrow('generation-scoped delete failed: 412');
+    const deletion = requests.find(({ init }) => init?.method === 'DELETE');
+    expect(deletion?.url.searchParams.get('ifGenerationMatch')).toBe('41');
+  });
+
+  it('refuses malformed generations before issuing a delete', async () => {
+    const store = new GcsWorkspaceStore('private-bucket', 'install/owner');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(store.deleteGeneration?.('import/uploads/voice.mbox', 'latest')).rejects.toThrow(
+      'invalid GCS object generation',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

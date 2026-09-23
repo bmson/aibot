@@ -63,7 +63,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore full Profile ov
         expiresAt: null,
       });
       const sampleId = randomUUID();
-      batch.set(store.doc('writingSamples', sampleId), { id: sampleId, context: 'upload:test' });
+      batch.set(store.doc('writingSamples', sampleId), {
+        id: sampleId,
+        agentId,
+        context: 'upload:test',
+      });
       const importId = randomUUID();
       batch.set(store.doc('importSources', importId), {
         id: importId,

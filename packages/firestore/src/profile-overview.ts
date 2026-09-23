@@ -33,15 +33,20 @@ export class FirestoreProfileVoiceOverviewRepository implements ProfileVoiceOver
     const fence = await readPrivacyErasureFence(this.store, agentId);
 
     const [samples, imports, profile] = await Promise.all([
-      this.store.collection('writingSamples').select('id', 'context').get(),
+      this.store.collection('writingSamples').get(),
       this.store.collection('importSources').where('agentId', '==', agentId).get(),
       this.store.doc('voiceProfile', '1').get(),
     ]);
-    const contexts = samples.docs.map((doc) => {
-      const row = decodeRecord<Records['writingSamples']>(doc.data());
-      if (!row.id || documentKey(row.id) !== doc.id)
+    const contexts = samples.docs.flatMap((doc) => {
+      const row = decodeRecord<Records['writingSamples'] & { agentId?: unknown }>(doc.data());
+      if (
+        !row.id ||
+        documentKey(row.id) !== doc.id ||
+        typeof row.agentId !== 'string' ||
+        !row.agentId
+      )
         throw new Error('Malformed writing sample record');
-      return row.context;
+      return row.agentId === agentId ? [row.context] : [];
     });
     const voice = profile.exists ? decodeRecord<Records['voiceProfile']>(profile.data()) : null;
     if (voice && voice.id !== 1) throw new Error('Malformed voice profile record');

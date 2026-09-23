@@ -249,6 +249,10 @@ export async function exportWorkspaceSnapshot(
             data.postgresqlId = serializeMigrationValueV3(rawId);
             delete data.id;
           }
+          // `writing_samples` is installation-wide in PostgreSQL. Installation
+          // exports have already proved there is exactly one source owner, so
+          // persist that provenance in Firestore for owner-scoped reads/erasure.
+          if (table === 'writing_samples') data.agentId = options.agentId;
           records.push({
             table,
             collection: definition.collection,

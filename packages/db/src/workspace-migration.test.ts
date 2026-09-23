@@ -14,6 +14,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
     file: randomUUID(),
     message: randomUUID(),
     message2: randomUUID(),
+    sample: randomUUID(),
     mailbox: `migration-${randomUUID()}@example.test`,
   };
   let sql: postgres.Sql;
@@ -24,6 +25,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
     await sql`delete from files where id = ${ids.file}`;
     await sql`delete from messages where id = ${ids.message}`;
     await sql`delete from messages where id = ${ids.message2}`;
+    await sql`delete from writing_samples where id = ${ids.sample}`;
     await sql`delete from tasks where id = ${ids.task}`;
     await sql`delete from conversations where id = ${ids.conversation}`;
     await sql`delete from agents where id = ${ids.agent}`;
@@ -39,6 +41,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
     await sql`insert into tasks (id, agent_id, type, status, conversation_id, trust) values (${ids.task}, ${ids.agent}, 'adhoc', 'waiting_event', ${ids.conversation}, 'owner')`;
     await sql`insert into messages (id, conversation_id, task_id, role, parts, text, origin, created_at) values (${ids.message}, ${ids.conversation}, ${ids.task}, 'assistant', ${sql.json([])}, 'snapshot message', 'assistant', '2026-09-19 12:34:56.123456+00'::timestamptz), (${ids.message2}, ${ids.conversation}, ${ids.task}, 'assistant', ${sql.json([])}, 'snapshot message 2', 'assistant', '2026-09-19 12:34:56.123789+00'::timestamptz)`;
     await sql`insert into files (id, agent_id, workspace_path, bytes) values (${ids.file}, ${ids.agent}, 'migration/precision.bin', ${Number.MAX_SAFE_INTEGER})`;
+    await sql`insert into writing_samples (id, register, text, context) values (${ids.sample}, 'email_casual', 'Owner voice sample for migration ownership', 'upload:test')`;
 
     const bundle = await exportWorkspaceSnapshot({
       databaseUrl,
@@ -48,7 +51,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
         databaseId: '(default)',
         installationId: 'migration-test',
       },
-      tables: ['agents', 'conversations', 'files', 'messages', 'tasks'],
+      tables: ['agents', 'conversations', 'files', 'messages', 'tasks', 'writing_samples'],
     });
 
     expect(bundle.manifest.source.kind).toBe('postgresql');
@@ -61,6 +64,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
         `messages/${ids.message}`,
         `messages/${ids.message2}`,
         `tasks/${ids.task}`,
+        `writing_samples/${ids.sample}`,
       ].sort(),
     );
     expect(bundle.records.find((record) => record.id === ids.message)?.data.text).toBe(
@@ -80,7 +84,10 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
     expect(bundle.records.find((record) => record.id === ids.file)?.data.bytes).toBe(
       Number.MAX_SAFE_INTEGER,
     );
-    expect(bundle.manifest.recordCount).toBe(6);
+    expect(bundle.records.find((record) => record.table === 'writing_samples')?.data.agentId).toBe(
+      ids.agent,
+    );
+    expect(bundle.manifest.recordCount).toBe(7);
     expect(bundle.manifest.bundleChecksum).toMatch(/^[a-f0-9]{64}$/);
   });
 
