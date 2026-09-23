@@ -7,6 +7,8 @@ const executeAgentTask = vi.hoisted(() => vi.fn());
 const sweepStep = vi.hoisted(() => vi.fn());
 const firestoreOwnerReady = vi.hoisted(() => vi.fn());
 const runDueSchedules = vi.hoisted(() => vi.fn());
+const renotifyStalledApprovals = vi.hoisted(() => vi.fn(async () => 0));
+const notifyApproval = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock('@assistant/core', () => ({
   findDueTasks,
@@ -17,7 +19,7 @@ vi.mock('@assistant/core', () => ({
   getAgent: vi.fn(async () => ({ id: 'agent', timezone: 'UTC' })),
   purgeAgedHistory: sweepStep,
   purgeExpired: sweepStep,
-  renotifyStalledApprovals: vi.fn(async () => 0),
+  renotifyStalledApprovals,
   renotifyStalledAttention: vi.fn(async () => 0),
   resumeResolvedApprovalTasks: vi.fn(async () => []),
   runDueSchedules,
@@ -30,7 +32,7 @@ vi.mock('@assistant/firestore', () => ({
 }));
 vi.mock('./task-runner.js', () => ({ executeAgentTask }));
 vi.mock('./executor-deps.js', () => ({
-  executorDeps: () => ({ notifyApproval: vi.fn(), notifyOwner: vi.fn() }),
+  executorDeps: () => ({ notifyApproval, notifyOwner: vi.fn() }),
 }));
 vi.mock('./deps.js', () => ({ agentServices: () => ({}), firestoreOwnerReady }));
 
@@ -59,6 +61,8 @@ beforeEach(() => {
   executeAgentTask.mockReset();
   firestoreOwnerReady.mockReset();
   runDueSchedules.mockReset();
+  renotifyStalledApprovals.mockReset();
+  notifyApproval.mockReset();
   findDueTasks.mockResolvedValue([]);
   executeAgentTask.mockResolvedValue({ outcome: 'done' });
   firestoreOwnerReady.mockResolvedValue(true);
@@ -140,15 +144,17 @@ describe('startPoller', () => {
     const expireStale = vi.fn(async () => []);
     const resumeResolved = vi.fn(async () => []);
     const expireWatches = vi.fn(async () => 0);
+    const firestorePersistence = {
+      approvals: { expireStale, resumeResolved },
+      messages: { append: vi.fn() },
+      watches: { expire: expireWatches },
+    };
     const firestoreDeps = {
       config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: 'owner-agent' },
       db: {},
       router: {},
       modules: { sweepSteps: [], ticks: [] },
-      persistence: {
-        approvals: { expireStale, resumeResolved },
-        watches: { expire: expireWatches },
-      },
+      persistence: firestorePersistence,
     } as never;
 
     const stop = startPoller(firestoreDeps);
@@ -157,6 +163,7 @@ describe('startPoller', () => {
     expect(firestoreOwnerReady).toHaveBeenCalled();
     expect(expireStale).toHaveBeenCalled();
     expect(resumeResolved).toHaveBeenCalled();
+    expect(renotifyStalledApprovals).toHaveBeenCalledWith(firestorePersistence, notifyApproval);
     expect(expireWatches).toHaveBeenCalledWith('owner-agent', expect.any(Date));
     expect(sweepStep).not.toHaveBeenCalled();
     stop();
@@ -180,6 +187,7 @@ describe('startPoller', () => {
       firestoreStore,
       persistence: {
         approvals: { expireStale: vi.fn(async () => []), resumeResolved: vi.fn(async () => []) },
+        messages: { append: vi.fn() },
         watches: { expire: vi.fn(async () => 0) },
       },
     } as never;

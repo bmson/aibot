@@ -70,8 +70,13 @@ export function startPoller(deps: AgentDeps): () => void {
         if (!(await firestoreOwnerReady(deps))) return;
         const approvals = deps.persistence?.approvals;
         if (!approvals) throw new Error('Firestore approval persistence is unavailable');
+        const persistence = deps.persistence;
+        if (!persistence?.messages) throw new Error('Firestore message persistence is unavailable');
         await runStep('expireStaleApprovals', () => approvals.expireStale());
         await runStep('resumeResolvedApprovalTasks', () => approvals.resumeResolved());
+        await runStep('renotifyStalledApprovals', () =>
+          renotifyStalledApprovals(persistence, executorDeps(deps).notifyApproval),
+        );
         const watches = deps.persistence?.watches;
         if (watches) {
           await runStep('expireWatches', () =>
