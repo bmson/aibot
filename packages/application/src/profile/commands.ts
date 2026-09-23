@@ -13,6 +13,7 @@ import {
   deleteContact,
   mergeContacts,
   normalizeContactAliases,
+  normalizeContactName,
   occasions,
   tasks,
   updateContactIdentity,
@@ -21,9 +22,12 @@ import {
 import {
   isOwnerCardCompilationRepository,
   isProfileOccasionCommandRepository,
+  isProfilePeopleCommandRepository,
   normalizeVoiceProfileEdit,
   type OwnerCardCompilationRepository,
+  type ProfileOccasionCommandInput,
   type ProfileOccasionCommandRepository,
+  type ProfilePeopleCommandRepository,
 } from '@assistant/persistence';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
@@ -147,11 +151,16 @@ export function rejectQuarantinedMemory(
 }
 
 export async function updatePersonRelationship(
-  db: Db,
+  store: Db | ProfilePeopleCommandRepository,
   contactId: string,
   relationship: string,
 ): Promise<void> {
   const trimmed = relationship.trim().slice(0, 80);
+  if (isProfilePeopleCommandRepository(store)) {
+    await store.updateRelationship(contactId, trimmed);
+    return;
+  }
+  const db = store;
   await db
     .update(contacts)
     .set({
@@ -176,6 +185,7 @@ export async function updatePersonRelationship(
  * mode nobody anticipated degrades quietly instead of leaking by default.
  */
 const OWNER_FACING_DB_ERRORS: ReadonlySet<string> = new Set([
+  'A person with that name already exists.',
   'Person name is required.',
   'Person name must be 120 characters or fewer.',
   'Person name contains unsupported control characters.',
@@ -194,26 +204,33 @@ export function ownerFacingError(error: unknown, fallback: string): string {
 }
 
 export async function updatePersonIdentity(
-  db: Db,
+  store: Db | ProfilePeopleCommandRepository,
   contactId: string,
   name: string,
   aliasesText: string,
 ): Promise<{ error?: string }> {
   if (!UUID_RE.test(contactId)) return { error: 'Invalid person identifier.' };
   try {
-    await updateContactIdentity(db, {
-      contactId,
-      name,
-      aliases: aliasesText
-        .slice(0, 4_000)
-        .split(/[,\n]/)
-        .map((alias) => alias.trim())
-        .filter(Boolean),
-    });
+    const normalizedName = normalizeContactName(name);
+    const aliases = aliasesText
+      .slice(0, 4_000)
+      .split(/[,\n]/)
+      .map((alias) => alias.trim())
+      .filter(Boolean);
+    const normalizedAliases = normalizeContactAliases(aliases, normalizedName);
+    if (isProfilePeopleCommandRepository(store)) {
+      await store.updateIdentity(contactId, normalizedName, normalizedAliases);
+    } else {
+      await updateContactIdentity(store, {
+        contactId,
+        name: normalizedName,
+        aliases: normalizedAliases,
+      });
+    }
   } catch (error) {
     return { error: ownerFacingError(error, 'Person could not be renamed. Please try again.') };
   }
-  await compileOwnerCard(db);
+  if (!isProfilePeopleCommandRepository(store)) await compileOwnerCard(store);
   return {};
 }
 
@@ -353,11 +370,34 @@ export async function updateVoiceProfile(
 }
 
 export async function createPerson(
-  db: Db,
+  store: Db | ProfilePeopleCommandRepository,
   input: { name: string; relationship: string; aliases: string },
 ): Promise<{ error?: string; contactId?: string }> {
   const name = input.name.trim().slice(0, 120);
   if (name.length < 1) return { error: 'Enter a name.' };
+  if (isProfilePeopleCommandRepository(store)) {
+    try {
+      const aliases = normalizeContactAliases(
+        input.aliases
+          .slice(0, 4_000)
+          .split(/[,\n]/)
+          .map((alias) => alias.trim())
+          .filter(Boolean),
+        name,
+      );
+      const contactId = await store.create({
+        name,
+        relationship: input.relationship.trim().slice(0, 80),
+        aliases,
+      });
+      return { contactId };
+    } catch (error) {
+      return {
+        error: ownerFacingError(error, 'Person could not be added. Please try again.'),
+      };
+    }
+  }
+  const db = store;
   const [existing] = await db
     .select({ id: contacts.id })
     .from(contacts)
@@ -400,11 +440,25 @@ export interface PersonOccasionInput {
 
 /** Edit the exact date in place, including clearing a previously saved year. */
 export async function updatePersonOccasion(
-  db: Db,
+  store: Db | ProfileOccasionCommandRepository,
   occasionId: string,
   input: PersonOccasionInput,
 ): Promise<{ error?: string }> {
   if (!UUID_RE.test(occasionId)) return { error: 'Invalid occasion identifier.' };
+  const normalized = normalizePersonOccasionInput(input);
+  if ('error' in normalized) return { error: normalized.error };
+  if (isProfileOccasionCommandRepository(store)) {
+    try {
+      const updated = await store.update(occasionId, normalized.value);
+      return updated ? {} : { error: 'That occasion no longer exists.' };
+    } catch {
+      return {
+        error:
+          'Occasion could not be saved. Check whether this date is already recorded and try again.',
+      };
+    }
+  }
+  const db = store;
   const agent = await getAgent(db);
   const [existing] = await db
     .select({ contactId: occasions.contactId })
@@ -422,71 +476,38 @@ export async function addPersonOccasion(
   occasionId?: string,
 ): Promise<{ error?: string }> {
   if (!UUID_RE.test(contactId)) return { error: 'Invalid person identifier.' };
-  if (!isOccasionKind(input.kind)) return { error: 'Choose an occasion type.' };
-  const month = Number(input.month);
-  const day = Number(input.day);
-  const year = input.year.trim() ? Number(input.year) : null;
-  if (
-    !Number.isInteger(month) ||
-    month < 1 ||
-    month > 12 ||
-    !Number.isInteger(day) ||
-    day < 1 ||
-    day > 31
-  ) {
-    return { error: 'Enter a valid month (1–12) and day (1–31).' };
-  }
-  if (year !== null && (!Number.isInteger(year) || year < 1900 || year > 2200)) {
-    return { error: 'Enter a valid year, or leave it blank.' };
-  }
-  if (day > new Date(Date.UTC(year ?? 2000, month, 0)).getUTCDate()) {
-    return { error: 'That date does not exist. Check the month, day, and year.' };
-  }
-  const leadDays = input.leadDays.trim() ? Number(input.leadDays) : 7;
-  if (!Number.isInteger(leadDays) || leadDays < 0 || leadDays > 60) {
-    return { error: 'Choose a reminder between 0 and 60 days before.' };
-  }
+  if (occasionId && !UUID_RE.test(occasionId)) return { error: 'Invalid occasion identifier.' };
+  const normalizedInput = normalizePersonOccasionInput(input);
+  if ('error' in normalizedInput) return { error: normalizedInput.error };
   try {
     if (occasionId) {
-      if (isProfileOccasionCommandRepository(store))
-        return { error: 'Editing occasions is unavailable through this command.' };
-      const db = store;
-      const agent = await getAgent(db);
-      const updated = await db
-        .update(occasions)
-        .set({
-          kind: input.kind,
-          label: input.label.trim().slice(0, 120),
-          month,
-          day,
-          year,
-          leadDays,
-          notes: input.notes.trim().slice(0, 2000),
-          originTrust: 'owner',
-          ownerConfirmed: true,
-          quarantined: false,
-          updatedAt: sql`now()`,
-        })
-        .where(
-          and(
-            eq(occasions.id, occasionId),
-            eq(occasions.agentId, agent.id),
-            eq(occasions.contactId, contactId),
-          ),
-        )
-        .returning({ id: occasions.id });
-      return updated.length ? {} : { error: 'That occasion no longer exists.' };
+      if (isProfileOccasionCommandRepository(store)) {
+        const updated = await store.update(occasionId, normalizedInput.value, contactId);
+        return updated ? {} : { error: 'That occasion no longer exists.' };
+      } else {
+        const db = store;
+        const agent = await getAgent(db);
+        const updated = await db
+          .update(occasions)
+          .set({
+            ...normalizedInput.value,
+            originTrust: 'owner',
+            ownerConfirmed: true,
+            quarantined: false,
+            updatedAt: sql`now()`,
+          })
+          .where(
+            and(
+              eq(occasions.id, occasionId),
+              eq(occasions.agentId, agent.id),
+              eq(occasions.contactId, contactId),
+            ),
+          )
+          .returning({ id: occasions.id });
+        return updated.length ? {} : { error: 'That occasion no longer exists.' };
+      }
     }
-    const normalized = {
-      contactId,
-      kind: input.kind,
-      label: input.label.trim().slice(0, 120),
-      month,
-      day,
-      year,
-      leadDays,
-      notes: input.notes.trim().slice(0, 2000),
-    };
+    const normalized = { contactId, ...normalizedInput.value };
     if (isProfileOccasionCommandRepository(store)) {
       await store.create(normalized);
     } else {
@@ -513,17 +534,64 @@ export async function addPersonOccasion(
   return {};
 }
 
-export async function forgetPersonOccasion(db: Db, occasionId: string): Promise<void> {
+function normalizePersonOccasionInput(
+  input: PersonOccasionInput,
+): { value: Omit<ProfileOccasionCommandInput, 'contactId'> } | { error: string } {
+  if (!isOccasionKind(input.kind)) return { error: 'Choose an occasion type.' };
+  const month = Number(input.month);
+  const day = Number(input.day);
+  const year = input.year.trim() ? Number(input.year) : null;
+  if (
+    !Number.isInteger(month) ||
+    month < 1 ||
+    month > 12 ||
+    !Number.isInteger(day) ||
+    day < 1 ||
+    day > 31
+  ) {
+    return { error: 'Enter a valid month (1–12) and day (1–31).' };
+  }
+  if (year !== null && (!Number.isInteger(year) || year < 1900 || year > 2200)) {
+    return { error: 'Enter a valid year, or leave it blank.' };
+  }
+  if (day > new Date(Date.UTC(year ?? 2000, month, 0)).getUTCDate()) {
+    return { error: 'That date does not exist. Check the month, day, and year.' };
+  }
+  const leadDays = input.leadDays.trim() ? Number(input.leadDays) : 7;
+  if (!Number.isInteger(leadDays) || leadDays < 0 || leadDays > 60) {
+    return { error: 'Choose a reminder between 0 and 60 days before.' };
+  }
+  return {
+    value: {
+      kind: input.kind,
+      label: input.label.trim().slice(0, 120),
+      month,
+      day,
+      year,
+      leadDays,
+      notes: input.notes.trim().slice(0, 2000),
+    },
+  };
+}
+
+export async function forgetPersonOccasion(
+  store: Db | ProfileOccasionCommandRepository,
+  occasionId: string,
+): Promise<void> {
   if (!UUID_RE.test(occasionId)) return;
+  if (isProfileOccasionCommandRepository(store)) return store.forget(occasionId);
+  const db = store;
   await db.delete(occasions).where(eq(occasions.id, occasionId));
 }
 
 export async function reviewPersonOccasion(
-  db: Db,
+  store: Db | ProfileOccasionCommandRepository,
   occasionId: string,
   verdict: 'approve' | 'reject',
 ): Promise<void> {
   if (!UUID_RE.test(occasionId)) return;
+  if (isProfileOccasionCommandRepository(store)) return store.review(occasionId, verdict);
+  const db = store;
   if (verdict === 'approve') {
     await db
       .update(occasions)

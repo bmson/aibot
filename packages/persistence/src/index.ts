@@ -32,6 +32,7 @@ export * from './profile-memory-maintenance.js';
 export * from './profile-memory-management.js';
 export * from './profile-occasion-command.js';
 export * from './profile-overview.js';
+export * from './profile-people-command.js';
 export * from './profile-people-read.js';
 export * from './recall-metrics.js';
 export * from './records.js';

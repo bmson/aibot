@@ -55,6 +55,7 @@ export { FirestoreProfileMemoryMaintenance } from './profile-memory-maintenance.
 export { FirestoreProfileMemoryManagementRepository } from './profile-memory-management.js';
 export { FirestoreProfileOccasionCommandRepository } from './profile-occasion-command.js';
 export { FirestoreProfileVoiceOverviewRepository } from './profile-overview.js';
+export { FirestoreProfilePeopleCommandRepository } from './profile-people-command.js';
 export { FirestoreProfilePeopleReadRepository } from './profile-people-read.js';
 export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 export { FirestoreReminderRepository } from './reminders.js';
