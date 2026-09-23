@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { requireOwner } from '@/auth';
-import { getApplication } from '@/lib/server';
+import { getChatApplication } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,5 +10,5 @@ export const dynamic = 'force-dynamic';
  */
 export default async function IndexPage() {
   await requireOwner();
-  redirect(`/chat/${await getApplication().getPrimaryConversationId()}`);
+  redirect(`/chat/${await getChatApplication().getPrimaryConversationId()}`);
 }

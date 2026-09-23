@@ -1,5 +1,5 @@
 import { isAuthed } from '@/auth';
-import { getApplication } from '@/lib/server';
+import { getChatApplication } from '@/lib/server';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PAGE_SIZE = 50;
@@ -47,7 +47,7 @@ export async function GET(req: Request) {
   if (!Number.isFinite(waitMs) || waitMs < 0) {
     return Response.json({ error: 'invalid wait' }, { status: 400 });
   }
-  const application = getApplication();
+  const application = getChatApplication();
   if (cursorValue && !application.isValidChatCursor(cursorValue)) {
     return Response.json({ error: 'invalid cursor' }, { status: 400 });
   }

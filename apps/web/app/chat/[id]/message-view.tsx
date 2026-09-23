@@ -452,7 +452,7 @@ export function AssistantUpdate({
   text: string;
   sources: RecallSource[];
   messageId: string;
-  onFeedback: (messageId: string, verdict: 'helpful' | 'not_helpful') => Promise<void>;
+  onFeedback?: (messageId: string, verdict: 'helpful' | 'not_helpful') => Promise<void>;
 }) {
   const attention = /(?:⚠️|anomaly|waiting for you|needs? (?:your )?attention)/i.test(text);
   const reflection = /(?:🌙|while you slept|reflected)/i.test(text);

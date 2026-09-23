@@ -1,5 +1,5 @@
 import { requireOwner } from '@/auth';
-import { getApplication } from '@/lib/server';
+import { getChatApplication } from '@/lib/server';
 import { type ChatPageQuery, renderChatConversation } from './conversation-page';
 
 export const dynamic = 'force-dynamic';
@@ -16,7 +16,7 @@ export default async function ChatIndexPage({
 }) {
   await requireOwner();
   return renderChatConversation(
-    await getApplication().getPrimaryConversationId(),
+    await getChatApplication().getPrimaryConversationId(),
     await searchParams,
   );
 }

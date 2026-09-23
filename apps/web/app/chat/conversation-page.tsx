@@ -1,7 +1,8 @@
+import { loadConfig } from '@assistant/config';
 import { notFound } from 'next/navigation';
 import { requireOwner } from '@/auth';
 import { chatNoticeMessage } from '@/lib/chat-notices';
-import { getApplication } from '@/lib/server';
+import { getChatApplication } from '@/lib/server';
 import { ChatClient } from './[id]/chat-client';
 
 export interface ChatPageQuery {
@@ -16,7 +17,7 @@ export async function renderChatConversation(id: string, query: ChatPageQuery) {
   await requireOwner();
   if (!UUID_RE.test(id)) notFound();
 
-  const view = await getApplication().getChatConversation(id, {
+  const view = await getChatApplication().getChatConversation(id, {
     taskId: query.task,
     cursor: query.cursor,
   });
@@ -25,6 +26,7 @@ export async function renderChatConversation(id: string, query: ChatPageQuery) {
 
   return (
     <ChatClient
+      firestorePreview={loadConfig().PERSISTENCE_DRIVER === 'firestore'}
       conversationId={conversation.id}
       title={conversation.title || 'Untitled'}
       agentName={view.agentName}

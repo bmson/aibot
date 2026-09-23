@@ -12,12 +12,14 @@ import type { ChatErrorInfo } from './message-view';
  */
 export function ChatErrorBanner({
   error,
+  showCostsLink = true,
   canRetry,
   onRetry,
   onRestoreDraft,
   onDismiss,
 }: {
   error: ChatErrorInfo;
+  showCostsLink?: boolean;
   /** The failed turn's text is known and the composer is empty. */
   canRetry: boolean;
   onRetry: () => void;
@@ -31,7 +33,7 @@ export function ChatErrorBanner({
     >
       <span>{error.message}</span>
       <span className="flex shrink-0 items-center gap-2">
-        {error.code === 'budget_exhausted' ? (
+        {showCostsLink && error.code === 'budget_exhausted' ? (
           <Link
             href="/costs"
             className="text-xs font-medium underline underline-offset-2 hover:no-underline"

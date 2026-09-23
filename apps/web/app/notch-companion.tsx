@@ -46,7 +46,13 @@ const TONE_GLYPH: Record<ThoughtTone, typeof Loader2> = {
   failed: TriangleAlert,
 };
 
-export function NotchCompanion({ presence }: { presence: Presence }) {
+export function NotchCompanion({
+  presence,
+  pollShellStatus = true,
+}: {
+  presence: Presence;
+  pollShellStatus?: boolean;
+}) {
   const [shellPresence, setShellPresence] = useState<Presence>(presence);
 
   // A root layout is preserved across client navigation. Keep its initial
@@ -57,6 +63,7 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
   }, [presence]);
 
   useEffect(() => {
+    if (!pollShellStatus) return;
     let cancelled = false;
     const refresh = async () => {
       if (document.visibilityState !== 'visible') return;
@@ -88,7 +95,7 @@ export function NotchCompanion({ presence }: { presence: Presence }) {
       window.clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, []);
+  }, [pollShellStatus]);
 
   // Publish the server's baseline. Its own effect so a navigation that changes
   // the shell's presence updates the island without remounting it.
