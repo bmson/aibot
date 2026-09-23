@@ -3,10 +3,12 @@ import {
   archiveActivityWithRepository,
   cancelActivity,
   raiseTaskBudget,
+  raiseTaskBudgetWithRepository,
   restoreActivity,
   restoreActivityWithRepository,
   retryActivity,
   revokeTaskAutonomy,
+  revokeTaskAutonomyWithRepository,
 } from '@assistant/application/tasks';
 import { loadConfig } from '@assistant/config';
 import {
@@ -35,11 +37,18 @@ export async function POST(
   try {
     const config = loadConfig();
     if (config.PERSISTENCE_DRIVER === 'firestore') {
-      if (body?.action !== 'archive' && body?.action !== 'restore')
+      if (
+        body?.action !== 'archive' &&
+        body?.action !== 'restore' &&
+        body?.action !== 'revoke-autonomy' &&
+        body?.action !== 'raise-budget'
+      )
         return mobileJson(
           { error: 'This Activity action is unavailable in Firestore mode.' },
           { status: 503 },
         );
+      if (body.action === 'raise-budget' && typeof body.budgetUsdLimit !== 'number')
+        return mobileJson({ error: 'budgetUsdLimit must be a number' }, { status: 400 });
       const store = createInstallationStore({
         projectId: config.GCP_PROJECT,
         installationId: config.ASSISTANT_WORKSPACE_ID,
@@ -49,7 +58,17 @@ export async function POST(
         const repository = new FirestoreTaskActivityCommandRepository(store);
         if (body.action === 'archive')
           await archiveActivityWithRepository(repository, config.FIRESTORE_AGENT_ID, id);
-        else await restoreActivityWithRepository(repository, config.FIRESTORE_AGENT_ID, id);
+        else if (body.action === 'restore')
+          await restoreActivityWithRepository(repository, config.FIRESTORE_AGENT_ID, id);
+        else if (body.action === 'revoke-autonomy')
+          await revokeTaskAutonomyWithRepository(repository, config.FIRESTORE_AGENT_ID, id);
+        else
+          await raiseTaskBudgetWithRepository(
+            repository,
+            config.FIRESTORE_AGENT_ID,
+            id,
+            body.budgetUsdLimit as number,
+          );
         return mobileJson({ ok: true });
       } finally {
         await store.db.terminate();

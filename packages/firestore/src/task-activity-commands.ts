@@ -1,9 +1,12 @@
 import type { TaskActivityCommandRepository } from '@assistant/persistence';
 import {
+  type DocumentReference,
   type DocumentSnapshot,
   FieldPath,
   type QueryDocumentSnapshot,
+  type Transaction,
 } from '@google-cloud/firestore';
+import { createWakeIntent } from './outbox.js';
 import {
   assertPrivacyErasureFenceUnchanged,
   privacyErasureIsActive,
@@ -56,6 +59,68 @@ export class FirestoreTaskActivityCommandRepository implements TaskActivityComma
 
   restore(agentId: string, taskId: string): Promise<void> {
     return this.change(agentId, taskId, 'restore');
+  }
+
+  revokeAutonomy(agentId: string, taskId: string): Promise<void> {
+    return this.changeOwnerTask(
+      agentId,
+      taskId,
+      (task, ref, tx) => {
+        const grant = task.autonomyGrant;
+        if (grant === null || grant === undefined) return;
+        if (typeof grant !== 'object' || Array.isArray(grant))
+          throw new Error('Invalid task autonomy grant');
+        const current = grant as Record<string, unknown>;
+        if (current.revokedAt) return;
+        const now = this.store.now();
+        tx.update(ref, {
+          autonomyGrant: { ...current, revokedAt: now.toISOString() },
+          updatedAt: now,
+        });
+      },
+      true,
+    );
+  }
+
+  async raiseBudget(agentId: string, taskId: string, limit: number): Promise<void> {
+    if (!Number.isFinite(limit) || limit < 0.01 || limit > 10_000)
+      throw new Error('task budget must be between $0.01 and $10,000');
+    await this.changeOwnerTask(agentId, taskId, (task, ref, tx) => {
+      if (task.status !== 'needs_attention') throw new Error('only stalled tasks can be retried');
+      const currentLimit = Number(task.budgetUsdLimit);
+      const spent = Number(task.spentUsd);
+      if (
+        !Number.isFinite(currentLimit) ||
+        !Number.isFinite(spent) ||
+        limit <= currentLimit ||
+        limit < spent
+      )
+        throw new Error('new task budget must be above its current cap and spend');
+      if (!Number.isSafeInteger(task.queueGeneration) || Number(task.queueGeneration) < 0)
+        throw new Error('Invalid activity task');
+
+      const now = this.store.now();
+      const generation = Number(task.queueGeneration) + 1;
+      const state =
+        task.state && typeof task.state === 'object' && !Array.isArray(task.state)
+          ? { ...(task.state as Record<string, unknown>) }
+          : task.state;
+      if (state && typeof state === 'object' && !Array.isArray(state))
+        delete (state as Record<string, unknown>).pendingFinal;
+      const statePatch = state === undefined ? {} : { state };
+      tx.update(ref, {
+        status: 'pending',
+        budgetUsdLimit: limit.toFixed(4),
+        ...statePatch,
+        runAfter: null,
+        lockedUntil: null,
+        queueGeneration: generation,
+        attempt: 0,
+        attentionNotifiedAt: null,
+        updatedAt: now,
+      });
+      createWakeIntent(tx, this.store, { taskId, generation, availableAt: now });
+    });
   }
 
   async archiveOld(agentId: string, olderThanDays = 30): Promise<void> {
@@ -180,6 +245,48 @@ export class FirestoreTaskActivityCommandRepository implements TaskActivityComma
       }
       const now = this.store.now();
       tx.update(ref, { archivedAt: action === 'archive' ? now : null, updatedAt: now });
+    });
+  }
+
+  private async changeOwnerTask(
+    agentId: string,
+    taskId: string,
+    update: (task: Record<string, unknown>, ref: DocumentReference, tx: Transaction) => void,
+    ignoreMissing = false,
+  ): Promise<void> {
+    if (!agentId || !taskId) throw new Error('Activity agent and task are required');
+    await this.store.db.runTransaction(async (tx) => {
+      const agents = await tx.get(this.store.collection('agents').limit(2));
+      const agent = agents.docs[0];
+      if (
+        agents.size !== 1 ||
+        !agent ||
+        agent.id !== documentKey(agentId) ||
+        agent.get('id') !== agentId
+      )
+        throw new Error('Activity requires one matching configured agent');
+
+      const erasure = await tx.get(this.store.doc('privacyErasureJobs', agentId));
+      if (
+        erasure.exists &&
+        (erasure.get('agentId') !== agentId ||
+          privacyErasureIsActive(erasure.get('status')) ||
+          !erasure.updateTime)
+      )
+        throw new Error('Privacy erasure is in progress');
+
+      const ref = this.store.doc('tasks', taskId);
+      const snapshot = await tx.get(ref);
+      // PostgreSQL autonomy revocation treats an absent or foreign row as a no-op.
+      // Budget increases report a missing owner-scoped activity item.
+      if (!snapshot.exists || snapshot.get('agentId') !== agentId) {
+        if (ignoreMissing) return;
+        throw new Error('activity item not found');
+      }
+      const task = decodeRecord<Record<string, unknown>>(snapshot.data());
+      if (task.id !== taskId || documentKey(taskId) !== snapshot.id)
+        throw new Error('Invalid activity task');
+      update(task, ref, tx);
     });
   }
 }
