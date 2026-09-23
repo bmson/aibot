@@ -17,6 +17,7 @@ export * from './graph-recall.js';
 export * from './history-recall.js';
 export * from './import-overview.js';
 export * from './knowledge-graph-sync.js';
+export * from './memory-consolidation.js';
 export * from './memory-supersede.js';
 export * from './memory-tools.js';
 export * from './migration.js';
