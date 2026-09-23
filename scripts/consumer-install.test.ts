@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
 import { createInstallationStore } from '@assistant/firestore';
 import {
   advanceInstallationStage,
@@ -9,7 +10,10 @@ import {
   type provisionConsumerInstallation,
 } from '@assistant/setup/installation';
 import { afterAll, describe, expect, it } from 'vitest';
-import { provisionConsumerInstallationWithSeed } from './consumer-install.js';
+import {
+  provisionConsumerInstallationWithPublishedImages,
+  provisionConsumerInstallationWithSeed,
+} from './consumer-install.js';
 
 const seedAt = '2026-09-22T12:00:00.000Z';
 const agentId = '8202725c-1311-4eec-bddc-698c92db37d4';
@@ -128,6 +132,19 @@ const dependencies = {
     },
   },
 };
+
+function dependenciesForCleanRelease(input: InstallationManifest) {
+  return {
+    runner: {
+      run: async (command: string, args: readonly string[]) => {
+        if (command === 'git' && args[0] === 'rev-parse')
+          return { ok: true, stdout: input.identity.release.commitSha, stderr: '' };
+        if (command === 'git' && args[0] === 'status') return { ok: true, stdout: '', stderr: '' };
+        return { ok: false, stdout: '', stderr: 'unexpected command' };
+      },
+    },
+  };
+}
 
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
   'consumer install runtime seed orchestration',
@@ -338,3 +355,104 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
     });
   },
 );
+
+describe('consumer install image publishing orchestration', () => {
+  it('previews the exact customer image build only after the foundation is provisioned', async () => {
+    const input = manifest('install-images');
+    const current = advanced(input, 'provisioned');
+    const calls: string[] = [];
+    const provision = async (_dependencies: unknown, options: ConsumerInstallOptions) => {
+      calls.push(options.apply ? 'apply' : 'preview');
+      const result: ConsumerInstallResult = {
+        manifest: current,
+        applied: options.apply,
+        runtimeReady: false,
+        completed: current.stage.completed,
+        pending: ['initialized', 'ready'],
+        note: 'fixture',
+      };
+      return result;
+    };
+    const publish = async (options: {
+      projectId: string;
+      region: string;
+      repositoryId: string;
+      sourceSha: string;
+      dryRun: boolean;
+    }) => {
+      calls.push('publish-preview');
+      expect(options).toEqual({
+        projectId: 'demo-assistant-test',
+        region: 'us-central1',
+        repositoryId: 'install-images',
+        sourceSha: input.identity.release.commitSha,
+        dryRun: true,
+      });
+      return { dryRun: true, tags: { web: 'web-tag', agent: 'agent-tag' } };
+    };
+    const result = await provisionConsumerInstallationWithPublishedImages(
+      dependenciesForCleanRelease(input),
+      {
+        manifest: input,
+        archivePath: 'unused',
+        statePath: 'unused',
+        stateBucket: 'unused',
+        terraformDir: 'unused',
+        apply: false,
+        runtimeConfig: {},
+      },
+      provision as typeof provisionConsumerInstallation,
+      publish as unknown as typeof import('./consumer-publish-images.js').publishConsumerImages,
+    );
+    expect(calls).toEqual(['preview', 'publish-preview']);
+    expect(result.imagePublish).toMatchObject({ dryRun: true });
+    expect(result.applied).toBe(false);
+  });
+
+  it('publishes to a private temporary manifest before applying the pinned runtime', async () => {
+    const input = manifest('install-images');
+    const current = advanced(input, 'provisioned');
+    const calls: string[] = [];
+    const imageManifest = { schemaVersion: 1, images: { web: 'web', agent: 'agent' } };
+    const provision = async (_dependencies: unknown, options: ConsumerInstallOptions) => {
+      calls.push(options.apply ? 'runtime-apply' : 'foundation-preview');
+      if (options.apply) expect(options.runtime?.images).toEqual(imageManifest);
+      const result: ConsumerInstallResult = {
+        manifest: options.apply ? advanced(input, 'initialized') : current,
+        applied: options.apply,
+        runtimeReady: false,
+        completed: current.stage.completed,
+        pending: ['initialized', 'ready'],
+        note: 'fixture',
+      };
+      return result;
+    };
+    const publish = async (options: { dryRun: boolean; outputPath?: string }) => {
+      calls.push('publish');
+      expect(options.dryRun).toBe(false);
+      expect(options.outputPath).toBeTruthy();
+      await writeFile(options.outputPath as string, JSON.stringify(imageManifest), { mode: 0o600 });
+      return { schemaVersion: 1 };
+    };
+    const result = await provisionConsumerInstallationWithPublishedImages(
+      dependenciesForCleanRelease(input),
+      {
+        manifest: input,
+        archivePath: 'unused',
+        statePath: 'unused',
+        stateBucket: 'unused',
+        terraformDir: 'unused',
+        apply: true,
+        runtimeConfig: { ownerEmail: 'owner@example.test' },
+      },
+      provision as typeof provisionConsumerInstallation,
+      publish as unknown as typeof import('./consumer-publish-images.js').publishConsumerImages,
+    );
+    expect(calls).toEqual(['foundation-preview', 'publish', 'runtime-apply']);
+    expect(result.manifest.stage.current).toBe('initialized');
+    expect(result.imagePublish).toMatchObject({
+      published: true,
+      sourceSha: input.identity.release.commitSha,
+    });
+  });
+});
