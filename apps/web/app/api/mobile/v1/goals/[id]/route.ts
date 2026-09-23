@@ -9,8 +9,8 @@ import {
   updateGoalSettings,
 } from '@assistant/application/goals';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import { FirestoreGoalReadRepository } from '@assistant/firestore';
-import { getDb, getFirestoreInstallationStore } from '@/lib/server';
+import { FirestoreGoalMutationRepository, FirestoreGoalReadRepository } from '@assistant/firestore';
+import { getDb, getFirestoreGoalScheduleUpdate, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -82,7 +82,17 @@ export async function PATCH(
   const input = goalInput(await request.json().catch(() => null));
   if ('error' in input) return mobileJson({ error: input.error }, { status: 400 });
   try {
-    await updateGoalSettings(getDb(), id, input);
+    const config = loadConfig();
+    if (config.PERSISTENCE_DRIVER === 'firestore') {
+      const problems = validateAgentPersistenceConfig(config);
+      if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
+      await new FirestoreGoalMutationRepository(
+        getFirestoreInstallationStore(),
+        config.FIRESTORE_AGENT_ID,
+      ).updateSettings(id, input, getFirestoreGoalScheduleUpdate(id, input));
+    } else {
+      await updateGoalSettings(getDb(), id, input);
+    }
     return mobileJson({ ok: true });
   } catch (error) {
     return mobileJson(
@@ -105,6 +115,44 @@ export async function POST(
     enabled?: unknown;
     status?: unknown;
   } | null;
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
+    const mutations = new FirestoreGoalMutationRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    );
+    try {
+      if (body?.action === 'start')
+        return mobileJson(
+          { error: 'starting goal work is unavailable with Firestore persistence.' },
+          { status: 503 },
+        );
+      if (body?.action === 'delete' || body?.action === 'archive') await mutations.archive(id);
+      else if (body?.action === 'restore') await mutations.restore(id);
+      else if (body?.action === 'status') {
+        if (!['active', 'paused', 'done', 'abandoned'].includes(String(body.status)))
+          return mobileJson({ error: 'invalid goal status' }, { status: 400 });
+        await mutations.setStatus(id, body.status as 'active' | 'paused' | 'done' | 'abandoned');
+      } else if (body?.action === 'autonomy') {
+        if (typeof body.enabled !== 'boolean')
+          return mobileJson({ error: 'enabled must be a boolean' }, { status: 400 });
+        await mutations.setAutonomy(id, body.enabled);
+      } else {
+        return mobileJson(
+          { error: 'action must be delete, archive, restore, status, or autonomy' },
+          { status: 400 },
+        );
+      }
+      return mobileJson({ ok: true });
+    } catch (error) {
+      return mobileJson(
+        { error: error instanceof Error ? error.message : 'Goal could not be updated.' },
+        { status: 409 },
+      );
+    }
+  }
   try {
     if (body?.action === 'delete' || body?.action === 'archive')
       await archiveGoalRecord(getDb(), id);

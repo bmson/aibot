@@ -4,24 +4,35 @@ import { createInstallationStore } from '@assistant/firestore';
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const auth = vi.hoisted(() => ({ allowed: vi.fn() }));
+const auth = vi.hoisted(() => ({ allowed: vi.fn(), sqlCalls: vi.fn() }));
 vi.mock('@/mobile-auth', () => ({
   isMobileAuthed: auth.allowed,
   mobileJson: (value: unknown, init?: ResponseInit) =>
     Response.json(value, { ...init, headers: { 'cache-control': 'no-store' } }),
   mobileUnauthorized: () => Response.json({ error: 'unauthorized' }, { status: 401 }),
 }));
+vi.mock('@/lib/server', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/server')>('@/lib/server');
+  return {
+    ...actual,
+    getDb: () => {
+      auth.sqlCalls();
+      throw new Error('PostgreSQL must be unreachable for Firestore goal mutations');
+    },
+  };
+});
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
 const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
 
-describe.skipIf(!localEmulator)('Firestore mobile Goals reads with PostgreSQL offline', () => {
+describe.skipIf(!localEmulator)('Firestore mobile Goals routes with PostgreSQL offline', () => {
   const installationId = `mobile-goals-${randomUUID()}`;
   const agentId = randomUUID();
   const otherAgentId = randomUUID();
   const currentId = randomUUID();
   const archivedId = randomUUID();
   const foreignId = randomUUID();
+  const scheduleId = 'goal-schedule';
   const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
   let listRoute: typeof import('./route.js');
   let detailRoute: typeof import('./[id]/route.js');
@@ -67,7 +78,9 @@ describe.skipIf(!localEmulator)('Firestore mobile Goals reads with PostgreSQL of
     await Promise.all([
       store.doc('agents', agentId).set({ id: agentId }),
       store.doc('goals', currentId).set(goal(currentId)),
-      store.doc('goals', archivedId).set(goal(archivedId, { archivedAt: now })),
+      store
+        .doc('goals', archivedId)
+        .set(goal(archivedId, { archivedAt: now, taintedOrigin: true })),
       store.doc('goals', foreignId).set(goal(foreignId, { agentId: otherAgentId })),
       store.doc('conversations', 'goal-chat').set({
         id: 'goal-chat',
@@ -83,12 +96,49 @@ describe.skipIf(!localEmulator)('Firestore mobile Goals reads with PostgreSQL of
         status: 'running',
         updatedAt: now,
       }),
-      store.doc('schedules', 'goal-schedule').set({
-        id: 'goal-schedule',
+      store.doc('tasks', 'goal-queued-task').set({
+        id: 'goal-queued-task',
+        agentId,
+        goalId: currentId,
+        status: 'pending',
+        updatedAt: now,
+        progress: '',
+        runAfter: now,
+        lockedUntil: null,
+      }),
+      store.doc('schedules', scheduleId).set({
+        id: scheduleId,
         agentId,
         name: `goal:${currentId}`,
+        cron: '15 9 * * *',
+        taskTemplate: {
+          type: 'scheduled',
+          goalId: currentId,
+          conversationId: 'goal-chat',
+          instruction: 'old',
+        },
         enabled: true,
         nextRunAt: now,
+        lastRunAt: null,
+        createdAt: now,
+        updatedAt: now,
+      }),
+      store.doc('schedules', `schedule-${archivedId}`).set({
+        id: `schedule-${archivedId}`,
+        agentId,
+        name: `goal:${archivedId}`,
+        cron: '15 9 * * *',
+        taskTemplate: {
+          type: 'scheduled',
+          goalId: archivedId,
+          conversationId: 'goal-chat',
+          instruction: 'old',
+        },
+        enabled: false,
+        nextRunAt: null,
+        lastRunAt: null,
+        createdAt: now,
+        updatedAt: now,
       }),
     ]);
   });
@@ -115,7 +165,14 @@ describe.skipIf(!localEmulator)('Firestore mobile Goals reads with PostgreSQL of
           method: 'PATCH',
         }),
       ).status,
-    ).toBe(503);
+    ).toBe(200);
+    expect(
+      proxy(
+        new NextRequest(`http://localhost/api/mobile/v1/goals/${randomUUID()}`, {
+          method: 'POST',
+        }),
+      ).status,
+    ).toBe(200);
     auth.allowed.mockResolvedValue(false);
     expect((await listRoute.GET(new Request('http://localhost/api/mobile/v1/goals'))).status).toBe(
       401,
@@ -148,6 +205,91 @@ describe.skipIf(!localEmulator)('Firestore mobile Goals reads with PostgreSQL of
     expect(
       (await archived.json()).items.map((item: { goal: { id: string } }) => item.goal.id),
     ).toEqual([archivedId]);
+  });
+
+  it('updates settings and schedule through Firestore without SQL', async () => {
+    const response = await detailRoute.PATCH(
+      new Request(`http://localhost/api/mobile/v1/goals/${currentId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Updated owner goal',
+          priority: 2,
+          description: 'Context',
+          targetDate: '2026-12-01',
+          progress: 'Progress',
+          nextAction: 'Continue',
+          mirrorToPrimary: true,
+        }),
+      }),
+      { params: Promise.resolve({ id: currentId }) },
+    );
+    expect(response.status, await response.clone().text()).toBe(200);
+    expect((await store.doc('goals', currentId).get()).get('title')).toBe('Updated owner goal');
+    const schedule = await store.doc('schedules', scheduleId).get();
+    expect(schedule.get('cron')).toBe('15 9 * * *');
+    expect(schedule.get('nextRunAt')).toBeNull();
+    expect(schedule.get('taskTemplate.instruction')).toContain('Updated owner goal');
+    expect(auth.sqlCalls).not.toHaveBeenCalled();
+  });
+
+  it('supports owner lifecycle and autonomy mutations while rejecting unsafe or foreign cases', async () => {
+    const action = (id: string, body: unknown) =>
+      detailRoute.POST(
+        new Request(`http://localhost/api/mobile/v1/goals/${id}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+        { params: Promise.resolve({ id }) },
+      );
+    const autonomyResponse = await action(currentId, { action: 'autonomy', enabled: true });
+    expect(autonomyResponse.status, await autonomyResponse.clone().text()).toBe(200);
+    expect((await store.doc('goals', currentId).get()).get('autonomy')).toBe(true);
+    expect((await action(archivedId, { action: 'autonomy', enabled: true })).status).toBe(409);
+    expect((await action(foreignId, { action: 'status', status: 'paused' })).status).toBe(409);
+    expect((await store.doc('goals', foreignId).get()).get('status')).toBe('active');
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+    expect((await action(currentId, { action: 'autonomy', enabled: false })).status).toBe(409);
+    expect((await store.doc('goals', currentId).get()).get('autonomy')).toBe(true);
+    await store.doc('privacyErasureJobs', agentId).delete();
+    expect((await action('bad', { action: 'status', status: 'paused' })).status).toBe(400);
+    expect((await action(currentId, { action: 'archive' })).status).toBe(409);
+    expect((await action(currentId, { action: 'status', status: 'abandoned' })).status).toBe(200);
+    expect((await store.doc('tasks', 'goal-queued-task').get()).get('status')).toBe('cancelled');
+    expect((await store.doc('tasks', 'goal-task').get()).get('status')).toBe('running');
+    expect((await action(currentId, { action: 'status', status: 'paused' })).status).toBe(200);
+    expect((await store.doc('schedules', scheduleId).get()).get('enabled')).toBe(false);
+    await store.doc('tasks', 'goal-task').update({ status: 'done' });
+    const archiveAfterStop = await action(currentId, { action: 'archive' });
+    expect(archiveAfterStop.status).toBe(200);
+    expect((await action(archivedId, { action: 'restore' })).status).toBe(200);
+    expect((await store.doc('goals', archivedId).get()).get('archivedAt')).toBeNull();
+    expect((await store.doc('schedules', `schedule-${archivedId}`).get()).get('enabled')).toBe(
+      true,
+    );
+    expect((await action(currentId, { action: 'start' })).status).toBe(503);
+    expect(auth.sqlCalls).not.toHaveBeenCalled();
+  });
+
+  it('keeps collection create and archive-inactive explicitly unavailable on Firestore', async () => {
+    const create = await listRoute.POST(
+      new Request('http://localhost/api/mobile/v1/goals', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'New goal' }),
+      }),
+    );
+    expect(create.status).toBe(503);
+    const archiveInactive = await listRoute.POST(
+      new Request('http://localhost/api/mobile/v1/goals', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'archive-inactive' }),
+      }),
+    );
+    expect(archiveInactive.status).toBe(503);
+    expect(auth.sqlCalls).not.toHaveBeenCalled();
   });
 
   it('returns only a configured-owner goal from the detail route', async () => {
