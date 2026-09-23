@@ -298,4 +298,10 @@ it('keeps deployable composite indexes and field overrides in their correct sect
       'agentId:ASCENDING,runAfter:ASCENDING,status:ASCENDING,updatedAt:ASCENDING',
     ]),
   );
+  const commitmentIndexes = spec.indexes
+    .filter((index: { collectionGroup: string }) => index.collectionGroup === 'commitments')
+    .map((index: { fields: Array<{ fieldPath: string; order: string }> }) =>
+      index.fields.map((field) => `${field.fieldPath}:${field.order}`).join(','),
+    );
+  expect(commitmentIndexes).toContain('agentId:ASCENDING,status:ASCENDING');
 });

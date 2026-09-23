@@ -10,6 +10,7 @@ import {
 import { firestoreApplicationSmoke } from './firestore-application-smoke.js';
 import { firestoreApprovalSmoke } from './firestore-approval-smoke.js';
 import { firestoreChatSmoke } from './firestore-chat-smoke.js';
+import { firestoreCommitmentSmoke } from './firestore-commitment-smoke.js';
 import { firestoreExecutorSmoke } from './firestore-executor-smoke.js';
 import { firestorePrivacyErasureSmoke } from './firestore-privacy-erasure-smoke.js';
 import { firestoreProfilePeopleSmoke } from './firestore-profile-people-smoke.js';
@@ -113,6 +114,7 @@ if (!values.run) {
       dueTaskQueryExplain: await explainDueTaskQuery(store),
       schedules: await firestoreScheduleSmoke(store),
       settings: await firestoreSettingsSmoke(store),
+      commitments: await firestoreCommitmentSmoke(store),
       profilePeople: await firestoreProfilePeopleSmoke(store),
       approvals: await firestoreApprovalSmoke(store),
       runtime: await firestoreRuntimeSmoke(store),
