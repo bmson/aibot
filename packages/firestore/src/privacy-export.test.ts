@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { FirestorePrivacyErasureRepository } from './privacy-erasure.js';
 import { FirestorePrivacyExportRepository } from './privacy-export.js';
 import { disposeStore, emulatorStore } from './test-store.js';
 
@@ -204,5 +205,56 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore privacy export 
 
     await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'complete' });
     expect((await repository.exportOwnerData()).memories).toHaveLength(1);
+  });
+
+  it('rejects an export when erasure completes during the read', async () => {
+    const store = emulatorStore();
+    stores.push(store);
+    const agentId = 'privacy-export-racing-owner';
+    await Promise.all([
+      store.doc('agents', agentId).set({ id: agentId }),
+      store.doc('memories', 'racing-memory').set({
+        id: 'racing-memory',
+        agentId,
+        contentHash: 'racing-hash',
+        content: 'A private owner fact',
+      }),
+      store.doc('privacyErasureJobs', agentId).set({
+        agentId,
+        generation: 'earlier-erasure',
+        status: 'complete',
+        counts: { memories: 0, graphRelations: 0, writingSamples: 0 },
+      }),
+    ]);
+    const repository = new FirestorePrivacyExportRepository(store);
+    const erasure = new FirestorePrivacyErasureRepository(store);
+    const originalDoc = store.doc.bind(store);
+    let fenceReads = 0;
+    const spy = vi.spyOn(store, 'doc').mockImplementation((collection, id) => {
+      const ref = originalDoc(collection, id);
+      if (collection === 'privacyErasureJobs' && id === agentId) {
+        const get = ref.get.bind(ref);
+        vi.spyOn(ref, 'get').mockImplementation(async () => {
+          fenceReads += 1;
+          if (fenceReads === 2) {
+            await erasure.erase();
+            await erasure.complete();
+          }
+          return get();
+        });
+      }
+      return ref;
+    });
+    try {
+      await expect(repository.exportOwnerData()).rejects.toThrow(
+        'Privacy erasure changed during read',
+      );
+      expect(fenceReads).toBe(2);
+      const job = await originalDoc('privacyErasureJobs', agentId).get();
+      expect(job.get('status')).toBe('complete');
+      expect(job.get('generation')).not.toBe('earlier-erasure');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

@@ -4,7 +4,7 @@ import type {
   Records,
 } from '@assistant/persistence';
 import { FieldPath, type Query } from '@google-cloud/firestore';
-import { privacyErasureIsActive } from './privacy-erasure.js';
+import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const PAGE_SIZE = 200;
@@ -31,12 +31,6 @@ export class FirestorePrivacyExportRepository implements PrivacyExportRepository
 
   constructor(readonly store: InstallationStore) {}
 
-  private async assertErasureInactive(agentId: string): Promise<void> {
-    const job = await this.store.doc('privacyErasureJobs', agentId).get();
-    if (job.exists && (job.get('agentId') !== agentId || privacyErasureIsActive(job.get('status'))))
-      throw new Error('Privacy erasure is in progress');
-  }
-
   async exportOwnerData(): Promise<LongTermMemoryExportData> {
     const agentPage = await this.store
       .collection('agents')
@@ -53,7 +47,7 @@ export class FirestorePrivacyExportRepository implements PrivacyExportRepository
     )
       throw new Error('Privacy export requires exactly one configured agent');
     const agentId = agent.id;
-    await this.assertErasureInactive(agentId);
+    const fence = await readPrivacyErasureFence(this.store, agentId);
     const owned = (collection: string) =>
       allRows<Record<string, unknown>>(
         this.store.collection(collection).where('agentId', '==', agentId),
@@ -191,7 +185,7 @@ export class FirestorePrivacyExportRepository implements PrivacyExportRepository
         ]),
       ) as Records['situationPacks'][],
     };
-    await this.assertErasureInactive(agentId);
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
     return result;
   }
 }

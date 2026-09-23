@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { PrivacyErasureCounts, PrivacyErasureRepository } from '@assistant/persistence';
-import { FieldPath, FieldValue, type Query, type Transaction } from '@google-cloud/firestore';
+import {
+  FieldPath,
+  FieldValue,
+  type Query,
+  type Timestamp,
+  type Transaction,
+} from '@google-cloud/firestore';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 const PAGE_SIZE = 50;
@@ -15,6 +21,32 @@ type Job = {
 export function privacyErasureIsActive(status: unknown): boolean {
   // A malformed durable fence must never re-enable recall or writes.
   return status !== 'complete';
+}
+
+/** Read-side token: a completed erasure must still invalidate a read started before it. */
+export async function readPrivacyErasureFence(
+  store: InstallationStore,
+  agentId: string,
+): Promise<Timestamp | null> {
+  const job = await store.doc('privacyErasureJobs', agentId).get();
+  if (!job.exists) return null;
+  if (
+    job.get('agentId') !== agentId ||
+    privacyErasureIsActive(job.get('status')) ||
+    !job.updateTime
+  )
+    throw new Error('Privacy erasure is in progress');
+  return job.updateTime;
+}
+
+export async function assertPrivacyErasureFenceUnchanged(
+  store: InstallationStore,
+  agentId: string,
+  before: Timestamp | null,
+): Promise<void> {
+  const after = await readPrivacyErasureFence(store, agentId);
+  if (before === null ? after !== null : !after?.isEqual(before))
+    throw new Error('Privacy erasure changed during read');
 }
 
 function validJob(job: Job): boolean {

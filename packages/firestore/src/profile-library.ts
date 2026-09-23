@@ -5,7 +5,7 @@ import type {
   Records,
 } from '@assistant/persistence';
 import { Timestamp } from '@google-cloud/firestore';
-import { privacyErasureIsActive } from './privacy-erasure.js';
+import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 async function allByAgent<T extends { id: string; agentId: string }>(
@@ -96,12 +96,6 @@ export class FirestoreProfileLibraryRepository implements ProfileLibraryReposito
   readonly kind = 'profile-library-repository' as const;
   constructor(readonly store: InstallationStore) {}
 
-  private async assertErasureInactive(agentId: string): Promise<void> {
-    const job = await this.store.doc('privacyErasureJobs', agentId).get();
-    if (job.exists && (job.get('agentId') !== agentId || privacyErasureIsActive(job.get('status'))))
-      throw new Error('Privacy erasure is in progress');
-  }
-
   private async memories(agentId: string): Promise<MemoryRow[]> {
     const rows: MemoryRow[] = [];
     let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
@@ -141,7 +135,7 @@ export class FirestoreProfileLibraryRepository implements ProfileLibraryReposito
   }
 
   async listFilters(agentId: string) {
-    await this.assertErasureInactive(agentId);
+    const fence = await readPrivacyErasureFence(this.store, agentId);
     const memories = (await this.memories(agentId))
       .map((row) => row.memory)
       .filter((row) => row.category === 'knowledge');
@@ -163,12 +157,12 @@ export class FirestoreProfileLibraryRepository implements ProfileLibraryReposito
         .sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id)),
       sources: [...new Set(memories.flatMap((row) => (row.source ? [row.source] : [])))].sort(),
     };
-    await this.assertErasureInactive(agentId);
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
     return result;
   }
 
   async list(agentId: string, input: ProfileLibraryInput) {
-    await this.assertErasureInactive(agentId);
+    const fence = await readPrivacyErasureFence(this.store, agentId);
     let candidates = (await this.memories(agentId)).filter((row) => matches(row, input));
     const sources = await getRecords<Records['knowledgeGraphSources']>(
       this.store,
@@ -231,7 +225,7 @@ export class FirestoreProfileLibraryRepository implements ProfileLibraryReposito
           : null,
       };
     });
-    await this.assertErasureInactive(agentId);
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
     return { rows, total, page, totalPages };
   }
 }
