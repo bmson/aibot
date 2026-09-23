@@ -20,6 +20,10 @@ struct RootView: View {
                 isLandscape: geometry.size.width > geometry.size.height
             )
         }
+        // Scoreboard cards anywhere below re-read live games through this.
+        .environment(\.liveScoreboard) { [model] leagues in
+            await model.liveScoreboard(leagues: leagues)
+        }
     }
 
     private func rootContent(

@@ -3,6 +3,8 @@ import {
   availabilityResponseCards,
   calendarResponseCards,
   responseCardsForFinal,
+  routeResponseCards,
+  scoreboardResponseCards,
   searchResponseCards,
   sheetRowsResponseCards,
   statusResponseCards,
@@ -193,6 +195,24 @@ describe('response cards', () => {
     ]);
   });
 
+  it('carries the ambient days as numbers for single-line forecast rows', () => {
+    const [card] = weatherResponseCards(
+      "Right now (ambient context):\nOwner's current location: near San Francisco (37.7749, -122.4194), as of just now.\nWeather there: overcast, 18°C (today 17–19°C, 2% chance of rain, wind 18 km/h, humidity 70%).\nComing days: Tue 16–23°C, clear; Wed 14–21°C, light rain, 80% chance of rain.",
+    );
+    expect(card).toMatchObject({
+      current: { tempC: 18, lowC: 17, highC: 19, precipPct: 2, windKmh: 18, humidity: 70 },
+      days: [
+        { weekday: 'Today', lowC: 17, highC: 19, precipPct: 2, symbol: 'cloudy' },
+        { weekday: 'Tue', lowC: 16, highC: 23, description: 'clear', symbol: 'clear' },
+        { weekday: 'Wed', lowC: 14, highC: 21, precipPct: 80, symbol: 'rain' },
+      ],
+    });
+    // Under 30% the ambient line omits the chance; the card must not claim 0%.
+    expect((card?.days as Array<Record<string, unknown>> | undefined)?.[1]).not.toHaveProperty(
+      'precipPct',
+    );
+  });
+
   it('attaches the ambient card to a plain here-and-now weather question', () => {
     const result = responseCardsForFinal({
       evidence: [],
@@ -288,6 +308,67 @@ describe('response cards', () => {
         ],
       },
     ]);
+  });
+
+  it('gives a lookup card its days as numbers, today first and the headline day omitted', () => {
+    const forecast = [
+      {
+        date: '2026-09-17',
+        weekday: 'Thu',
+        description: 'overcast',
+        lowC: 14,
+        highC: 17,
+        precipProbabilityMax: 1,
+      },
+      {
+        date: '2026-09-18',
+        weekday: 'Fri',
+        description: 'light rain',
+        lowC: 11,
+        highC: 15,
+        precipProbabilityMax: 80,
+      },
+    ];
+    const current = {
+      tempC: 12,
+      description: 'clear',
+      lowC: 9,
+      highC: 14,
+      precipProbabilityMax: 5,
+      windKmh: 20,
+    };
+    const now = weatherLookupResponseCards([
+      {
+        toolName: 'weather.lookup',
+        status: 'succeeded',
+        result: { place: 'Reykjavík', current, forecast },
+      },
+    ])[0];
+    expect(now).toMatchObject({
+      current: { tempC: 12, lowC: 9, highC: 14, precipPct: 5, windKmh: 20 },
+      days: [
+        { weekday: 'Today', lowC: 9, highC: 14, precipPct: 5, symbol: 'clear' },
+        { weekday: 'Thu', date: '2026-09-17', lowC: 14, highC: 17 },
+        { weekday: 'Fri', precipPct: 80, symbol: 'rain' },
+      ],
+    });
+
+    const dated = weatherLookupResponseCards([
+      {
+        toolName: 'weather.lookup',
+        status: 'succeeded',
+        result: {
+          place: 'Reykjavík',
+          current,
+          forecast,
+          target: { date: '2026-09-17', weekday: 'Thu', windows: [], hours: [], day: forecast[0] },
+        },
+      },
+    ])[0];
+    expect(dated).not.toHaveProperty('current');
+    expect(
+      (dated?.days as Array<{ weekday: string }> | undefined)?.map((day) => day.weekday),
+    ).toEqual(['Today', 'Fri']);
   });
 
   const window = (
@@ -1097,5 +1178,97 @@ describe('response cards', () => {
         ],
       }),
     ).toEqual([]);
+  });
+});
+
+describe('scoreboardResponseCards', () => {
+  const game = (id: string, state: string, league = 'mlb') => ({
+    id,
+    league,
+    leagueLabel: league.toUpperCase(),
+    state,
+    statusText: state === 'post' ? 'Final' : 'Top 7th',
+    startsAt: '2026-09-22T01:45Z',
+    home: {
+      id: '26',
+      name: 'San Francisco Giants',
+      shortName: 'Giants',
+      abbreviation: 'SF',
+      score: '5',
+    },
+    away: { id: '9', name: 'Minnesota Twins', shortName: 'Twins', abbreviation: 'MIN', score: '2' },
+    line: 'Minnesota Twins at San Francisco Giants: 2-5, Final',
+  });
+  const row = (games: unknown[], extra: Record<string, unknown> = {}) => ({
+    toolName: 'sports.scores',
+    status: 'succeeded',
+    result: { timeZone: 'America/Los_Angeles', fetchedAt: '2026-09-22T19:00:00Z', games, ...extra },
+  });
+
+  it('draws one board from the tool rows, live only for games still to finish', () => {
+    const [card] = scoreboardResponseCards([row([game('1', 'post'), game('2', 'in')])]);
+    expect(card).toMatchObject({
+      kind: 'scoreboard',
+      title: 'MLB',
+      accompaniesProse: true,
+      live: { provider: 'espn', pollSeconds: 30, leagues: [{ league: 'mlb', eventIds: ['2'] }] },
+    });
+    expect(card?.games).toHaveLength(2);
+  });
+
+  it('stops being live once every game is final, and ignores failed lookups', () => {
+    const [card] = scoreboardResponseCards([row([game('1', 'post')])]);
+    expect(card).not.toHaveProperty('live');
+    expect(scoreboardResponseCards([row([], { error: 'provider down' })])).toEqual([]);
+    expect(
+      scoreboardResponseCards([{ ...row([game('1', 'post')]), fromCurrentTask: false }]),
+    ).toEqual([]);
+  });
+
+  it('titles a team fallback as its last and next game', () => {
+    const [card] = scoreboardResponseCards([
+      row([game('1', 'post'), game('3', 'pre')], { selection: 'last-and-next' }),
+    ]);
+    expect(card?.title).toBe('Last result and next game');
+  });
+});
+
+describe('routeResponseCards', () => {
+  const route = {
+    origin: { label: 'Current Location', lat: 37.7857, lng: -122.4011, current: true },
+    destination: {
+      label: 'Oracle Park',
+      address: '24 Willie Mays Plaza, San Francisco',
+      lat: 37.7786,
+      lng: -122.3893,
+    },
+    mode: 'driving',
+    durationSeconds: 540,
+    distanceMeters: 1850,
+    departAt: '2026-09-22T18:00:00.000Z',
+    arriveAt: '2026-09-22T18:09:00.000Z',
+    routeName: 'King St',
+    steps: [{ instruction: 'Turn right onto Howard St', distanceMeters: 900 }],
+    polyline: '_p~iF~ps|U_ulLnnqC',
+    mapsUrl: 'https://maps.apple.com/?saddr=37.7857%2C-122.4011&daddr=37.7786%2C-122.3893&dirflg=d',
+  };
+  const row = (result: unknown) => ({ toolName: 'maps.directions', status: 'succeeded', result });
+
+  it('draws the route under the reply from the tool row alone', () => {
+    const [card] = routeResponseCards([row(route)]);
+    expect(card).toMatchObject({
+      kind: 'route',
+      accompaniesProse: true,
+      durationSeconds: 540,
+      destination: { label: 'Oracle Park', address: '24 Willie Mays Plaza, San Francisco' },
+      origin: { current: true },
+      polyline: route.polyline,
+      mapsUrl: route.mapsUrl,
+    });
+  });
+
+  it('draws nothing for a failed route or a link that is not Apple Maps', () => {
+    expect(routeResponseCards([row({ error: 'No route found' })])).toEqual([]);
+    expect(routeResponseCards([row({ ...route, mapsUrl: 'https://evil.example/' })])).toEqual([]);
   });
 });

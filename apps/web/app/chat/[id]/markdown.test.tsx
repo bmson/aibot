@@ -9,6 +9,12 @@ describe('MessageMarkdown', () => {
     expect(html).not.toContain('<br/>\n');
   });
 
+  it('renders an overlong reply paragraph as several short ones', () => {
+    const sentence = 'The review moved to Thursday because finance needs two more days to close.';
+    const html = renderToStaticMarkup(<MessageMarkdown text={Array(8).fill(sentence).join(' ')} />);
+    expect(html.match(/<p /g)?.length).toBeGreaterThan(1);
+  });
+
   it('promotes short bold list labels but not emphasized sentences', () => {
     const html = renderToStaticMarkup(
       <MessageMarkdown text={'**Risks**\n\n- Delay\n\n**Keep it simple.**\n\n- Next'} />,

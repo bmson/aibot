@@ -268,6 +268,17 @@ struct APIClient: Sendable {
         return try await perform(request, as: CardRefreshResult.self)
     }
 
+    /// Live scores for a scoreboard card: `leagues` is `mlb:401,402;nfl:77`.
+    func liveScoreboard(leagues: String) async throws -> LiveScoresPayload {
+        var components = URLComponents(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/live/scoreboard"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "leagues", value: leagues)]
+        guard let url = components?.url else { throw APIError.invalidServerURL }
+        return try await perform(makeRequest(url: url), as: LiveScoresPayload.self)
+    }
+
     func situationPacks() async throws -> SituationOverview {
         try await get("api/mobile/v1/packs")
     }

@@ -122,12 +122,22 @@ enum SpeakableText {
         switch card {
         case let .generated(generated):
             sentence = generatedCardSpeech(generated)
+        case let .briefing(briefing):
+            sentence = spoken(briefing.lead)
+        case let .route(route):
+            sentence = join(["\(RouteCardView.duration(route.durationSeconds)) to \(spoken(route.destination.label))",
+                             RouteCardView.distance(route.distanceMeters)])
+        case let .scoreboard(_, _, games, _, _, _):
+            sentence = join(games.prefix(2).map { game in
+                let scores = game.state == "pre" ? "" : " \(game.away.score ?? "") to \(game.home.score ?? "")"
+                return "\(spoken(game.away.shortName)) at \(spoken(game.home.shortName))\(scores), \(spoken(game.statusText))"
+            })
         case let .agenda(title, subtitle, items):
             let lines = items.map { "\(spoken($0.time)): \(spoken($0.title))" }
             sentence = join([spoken(title), spoken(subtitle)] + lines)
         case let .event(_, _, time, title, location, _, _, _, _):
             sentence = join([spoken(title), spoken(time), spoken(location)])
-        case let .weather(location, temperature, condition, _, _):
+        case let .weather(location, temperature, condition, _, _, _):
             let place = location.isEmpty ? "" : "In \(spoken(location))"
             sentence = join([place, spoken(temperature), spoken(condition)])
         case let .duration(title, duration, detail, _):

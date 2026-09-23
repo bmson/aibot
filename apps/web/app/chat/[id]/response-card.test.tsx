@@ -175,6 +175,96 @@ describe('ResponseCards', () => {
     expect(headings).toEqual(['capitalize">Thu<', 'capitalize">Fri<']);
   });
 
+  it('draws numeric forecast days as single-line rows instead of text rows', () => {
+    const html = render({
+      kind: 'weather',
+      id: 'w5',
+      location: 'San Francisco',
+      condition: 'partly cloudy',
+      temperature: '18°C',
+      current: { tempC: 18, windKmh: 18, humidity: 70, precipPct: 40 },
+      days: [
+        {
+          weekday: 'Today',
+          lowC: 14,
+          highC: 21,
+          precipPct: 40,
+          description: 'partly cloudy',
+          symbol: 'partly-cloudy',
+        },
+        {
+          weekday: 'Wed',
+          lowC: 12,
+          highC: 17,
+          precipPct: 80,
+          description: 'light rain',
+          symbol: 'rain',
+        },
+        { weekday: 'Thu', lowC: 11, highC: 19, description: 'overcast', symbol: 'cloudy' },
+      ],
+      details: [
+        { label: 'Today', value: '14–21°C' },
+        { label: 'Wind', value: '18 km/h' },
+        { label: 'Wed', value: '12–17°C, light rain, 80% chance of rain', symbol: 'rain' },
+      ],
+    });
+    expect(html.match(/whitespace-nowrap tabular-nums/g)).toHaveLength(3);
+    expect(html).toContain('aria-label="Wed, light rain, low 12°, high 17°, 80% chance of rain"');
+    // Under 30% the rain column stays empty rather than printing noise.
+    expect(html).toContain('aria-label="Thu, overcast, low 11°, high 19°"');
+    // The text copy of the same days is not drawn a second time.
+    expect(html).not.toContain('12–17°C, light rain, 80% chance of rain');
+    expect(html).toContain('18 km/h');
+  });
+
+  it('renders the briefing as a lead and labelled sections, not a wall of text', () => {
+    const card = {
+      kind: 'briefing',
+      id: 'b1',
+      date: 'Tuesday, Sep 22',
+      timeZone: 'America/Los_Angeles',
+      lead: 'Two overlapping events this morning; one approval waiting.',
+      sections: [
+        {
+          type: 'agenda',
+          title: 'Schedule',
+          complete: true,
+          items: [
+            {
+              day: 'Today',
+              time: '9:30 AM – 10:30 AM',
+              title: 'Dentist',
+              flag: 'conflict',
+              note: 'Overlaps another event',
+            },
+            { day: 'Tomorrow', time: 'All day', title: 'Offsite' },
+          ],
+        },
+        {
+          type: 'weather',
+          title: 'Weather',
+          location: 'SF',
+          temperature: '18°C',
+          condition: 'overcast',
+          range: '14–21°C',
+        },
+        {
+          type: 'attention',
+          title: 'Needs you',
+          items: [{ title: 'Fetch public web page', meta: 'A128DY' }],
+        },
+      ],
+    };
+    expect(rendersAllCards([card])).toBe(true);
+    const html = render(card);
+    expect(html).toContain('Briefing · Tuesday, Sep 22');
+    expect(html).toContain('Two overlapping events this morning');
+    expect(html.match(/<h3[^>]*>(Today|Tomorrow|Weather|Needs you)<\/h3>/g)).toHaveLength(4);
+    expect(html).toContain('Overlaps another event');
+    expect(html).toContain('A128DY');
+    expect(html).toContain('14–21°C');
+  });
+
   it('draws each sky with its own icon and falls back for an unknown one', () => {
     const svgs = (html: string) => html.match(/class="lucide[^"]*"/g) ?? [];
     const rain = svgs(

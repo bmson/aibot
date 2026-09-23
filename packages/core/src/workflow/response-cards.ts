@@ -21,6 +21,9 @@ export interface ResponseCard {
     | 'knowledge-graph'
     | 'calendar-conflicts'
     | 'proactive-alert'
+    | 'briefing'
+    | 'scoreboard'
+    | 'route'
     | 'generated-card';
   id: string;
   [key: string]: unknown;
@@ -306,6 +309,43 @@ function weatherDayValue(day: RecordValue): string {
     .join(', ');
 }
 
+/**
+ * One forecast day as numbers, for clients that draw a fixed-column row
+ * (weekday, sky, rain, low–high bar) that never wraps. `details` keeps the
+ * same days as text for clients that predate this field.
+ */
+export interface WeatherCardDay {
+  weekday: string;
+  date?: string;
+  lowC: number;
+  highC: number;
+  precipPct?: number;
+  description: string;
+  symbol?: string;
+}
+
+function weatherCardDay(
+  weekday: string,
+  day: RecordValue,
+  description = string(day.description),
+): WeatherCardDay | undefined {
+  const lowC = numeric(day.lowC);
+  const highC = numeric(day.highC);
+  if (!weekday || lowC === undefined || highC === undefined) return undefined;
+  const precipPct = numeric(day.precipProbabilityMax ?? day.precipPct);
+  const symbol = weatherSymbol(description);
+  const date = string(day.date);
+  return {
+    weekday,
+    ...(date ? { date } : {}),
+    lowC,
+    highC,
+    ...(precipPct === undefined ? {} : { precipPct }),
+    description,
+    ...(symbol ? { symbol } : {}),
+  };
+}
+
 /** Ambient data is already trusted context, but only a tiny literal subset becomes a card. */
 export function weatherResponseCards(ambient?: string): ResponseCard[] {
   if (!ambient) return [];
@@ -330,6 +370,22 @@ export function weatherResponseCards(ambient?: string): ResponseCard[] {
     // is all the sky classification needs to give each day its own icon.
     .map((day) => weatherDetail(day[1] ?? '', day[2] ?? '', day[2] ?? ''));
   const symbol = weatherSymbol(condition);
+  const days = [
+    weatherCardDay('Today', { lowC: low, highC: high, precipProbabilityMax: rain }, condition),
+    ...coming.split(';').map((entry) => {
+      const day = /^(\w+)\s+(-?\d+)–(-?\d+)°C,\s*([^,]+?)(?:,\s*(\d+)% chance of rain)?\.?$/.exec(
+        entry.trim(),
+      );
+      if (!day) return undefined;
+      const [, weekday = '', dayLow, dayHigh, description = '', dayRain] = day;
+      // The ambient line omits a rain chance under 30%; absent is not zero.
+      return weatherCardDay(
+        weekday,
+        { lowC: dayLow, highC: dayHigh, ...(dayRain ? { precipProbabilityMax: dayRain } : {}) },
+        description.trim(),
+      );
+    }),
+  ].filter((day): day is WeatherCardDay => day !== undefined);
   return [
     {
       kind: 'weather',
@@ -338,6 +394,15 @@ export function weatherResponseCards(ambient?: string): ResponseCard[] {
       condition,
       temperature: `${temperature}°C`,
       ...(symbol ? { symbol } : {}),
+      current: {
+        tempC: Number(temperature),
+        lowC: Number(low),
+        highC: Number(high),
+        precipPct: Number(rain),
+        windKmh: Number(wind),
+        ...(humidity ? { humidity: Number(humidity) } : {}),
+      },
+      days,
       details: [
         { label: 'Today', value: `${low}–${high}°C` },
         { label: 'Wind', value: `${wind} km/h` },
@@ -431,6 +496,29 @@ export function weatherLookupResponseCards(evidence: ActionEvidence[]): Response
       .filter((detail) => detail.label && detail.value);
 
     const cardDetails = [...headlineDetails, ...windows, ...comingDays];
+    // The same days as numbers. The forecast starts tomorrow, so "Today"
+    // leads unless today is the day the card already headlines.
+    const headlinesToday = !!targetDay && !forecast.some((day) => string(day.date) === targetDate);
+    const today = current && !headlinesToday ? weatherCardDay('Today', current) : undefined;
+    const days = [
+      today,
+      ...forecast
+        .filter((day) => !targetDate || string(day.date) !== targetDate)
+        .map((day) => weatherCardDay(string(day.weekday), day)),
+    ].filter((day): day is WeatherCardDay => day !== undefined);
+    const currentReading =
+      current && !targetDay
+        ? Object.fromEntries(
+            Object.entries({
+              tempC: numeric(current.tempC),
+              lowC: numeric(current.lowC),
+              highC: numeric(current.highC),
+              precipPct: numeric(current.precipProbabilityMax),
+              windKmh: numeric(current.windKmh),
+              humidity: numeric(current.humidity),
+            }).filter(([, value]) => value !== undefined),
+          )
+        : undefined;
     if (!temperature && !condition && cardDetails.length === 0) return [];
     const symbol = weatherSymbol(condition);
     return [
@@ -443,6 +531,8 @@ export function weatherLookupResponseCards(evidence: ActionEvidence[]): Response
         // The headline sky, for the client that draws an icon for it. Older
         // clients ignore the field and keep the one weather glyph they have.
         ...(symbol ? { symbol } : {}),
+        ...(currentReading ? { current: currentReading } : {}),
+        ...(days.length ? { days } : {}),
         details: cardDetails,
       },
     ];
@@ -641,6 +731,140 @@ export function knowledgeGraphResponseCards(evidence: ActionEvidence[]): Respons
 }
 
 /** Web search hits stay a flat list of tappable links with provenance visible. */
+/** How often a client re-reads a live game; the provider cache holds 20s. */
+const SCOREBOARD_POLL_SECONDS = 30;
+
+/**
+ * Games from `sports.scores`, as one scoreboard. Built from the tool's
+ * structured rows only, like every card here, so the card can never show a
+ * score the provider did not return. `live` names what a client may re-read
+ * (league + event ids) through the refresh endpoint, which calls the provider
+ * again without a model — the card keeps ticking while a game is on.
+ */
+export function scoreboardResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
+  const games = new Map<string, RecordValue>();
+  let fetchedAt = '';
+  let timeZone = '';
+  let selection = '';
+  for (const row of evidence) {
+    if (!succeeded(row) || row.toolName !== 'sports.scores') continue;
+    const result = record(row.result);
+    if (!result || string(result.error)) continue;
+    fetchedAt = string(result.fetchedAt) || fetchedAt;
+    timeZone = string(result.timeZone) || timeZone;
+    selection = string(result.selection) || selection;
+    for (const game of Array.isArray(result.games) ? result.games : []) {
+      const value = record(game);
+      const id = string(value?.id);
+      const league = string(value?.league);
+      if (value && id && league && record(value.home) && record(value.away))
+        games.set(`${league}:${id}`, value);
+    }
+  }
+  if (!games.size) return [];
+  const rows = [...games.values()];
+  const leagues = [...new Set(rows.map((game) => string(game.league)))];
+  const labels = [...new Set(rows.map((game) => string(game.leagueLabel)).filter(Boolean))];
+  const pollable = rows.filter((game) => string(game.state) !== 'post');
+  return [
+    {
+      kind: 'scoreboard',
+      id: `scoreboard-${rows.map((game) => string(game.id)).join('-')}`,
+      title:
+        selection === 'last-and-next'
+          ? 'Last result and next game'
+          : labels.length === 1
+            ? (labels[0] as string)
+            : 'Scores',
+      fetchedAt,
+      timeZone,
+      // Shown under the reply, not instead of it: the one-line takeaway (and a
+      // "saved to your Cards page" receipt) stays readable above the board.
+      accompaniesProse: true,
+      games: rows,
+      ...(pollable.length
+        ? {
+            live: {
+              provider: 'espn',
+              pollSeconds: SCOREBOARD_POLL_SECONDS,
+              leagues: leagues
+                .map((league) => ({
+                  league,
+                  eventIds: pollable
+                    .filter((game) => string(game.league) === league)
+                    .map((game) => string(game.id)),
+                }))
+                .filter((entry) => entry.eventIds.length > 0),
+            },
+          }
+        : {}),
+    },
+  ];
+}
+
+/**
+ * A route from `maps.directions`: both ends, time, distance, the line to draw,
+ * and the Apple Maps link. It sits under the reply, which carries the
+ * takeaway ("leave by 2:40"); the card is the map.
+ */
+export function routeResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
+  return evidence.flatMap((row, index) => {
+    if (!succeeded(row) || row.toolName !== 'maps.directions') return [];
+    const result = record(row.result);
+    if (!result || string(result.error)) return [];
+    const origin = record(result.origin);
+    const destination = record(result.destination);
+    const durationSeconds = numeric(result.durationSeconds);
+    const distanceMeters = numeric(result.distanceMeters);
+    const mapsUrl = string(result.mapsUrl);
+    const polyline = string(result.polyline);
+    const place = (value: RecordValue | undefined) => {
+      const lat = numeric(value?.lat);
+      const lng = numeric(value?.lng);
+      if (lat === undefined || lng === undefined || !string(value?.label)) return undefined;
+      return {
+        label: string(value?.label),
+        lat,
+        lng,
+        ...(string(value?.address) ? { address: string(value?.address) } : {}),
+        ...(value?.current === true ? { current: true } : {}),
+      };
+    };
+    const from = place(origin);
+    const to = place(destination);
+    if (!from || !to || durationSeconds === undefined || distanceMeters === undefined) return [];
+    if (!/^https:\/\/maps\.apple\.com\//.test(mapsUrl)) return [];
+    const steps = Array.isArray(result.steps)
+      ? result.steps
+          .map(record)
+          .filter((step): step is RecordValue => !!step && !!string(step.instruction))
+          .map((step) => ({
+            instruction: string(step.instruction),
+            distanceMeters: numeric(step.distanceMeters) ?? 0,
+          }))
+      : [];
+    return [
+      {
+        kind: 'route' as const,
+        id: `route-${index}-${to.lat.toFixed(4)},${to.lng.toFixed(4)}`,
+        mode: string(result.mode) || 'driving',
+        origin: from,
+        destination: to,
+        durationSeconds,
+        distanceMeters,
+        departAt: string(result.departAt),
+        arriveAt: string(result.arriveAt),
+        ...(string(result.routeName) ? { routeName: string(result.routeName) } : {}),
+        ...(typeof result.hasTolls === 'boolean' ? { hasTolls: result.hasTolls } : {}),
+        ...(/^[\x3f-\x7e]{2,4000}$/.test(polyline) ? { polyline } : {}),
+        steps,
+        mapsUrl,
+        accompaniesProse: true,
+      },
+    ];
+  });
+}
+
 export function searchResponseCards(evidence: ActionEvidence[]): ResponseCard[] {
   return evidence.flatMap((row, index) => {
     if (!succeeded(row) || row.toolName !== 'web.search') return [];
@@ -1057,6 +1281,8 @@ export function responseCardsForFinal(input: {
     ...driveResponseCards(input.evidence),
     ...sheetRowsResponseCards(input.evidence),
     ...weatherLookupResponseCards(input.evidence),
+    ...scoreboardResponseCards(input.evidence),
+    ...routeResponseCards(input.evidence),
     ...searchResponseCards(input.evidence),
   ];
   if (cards.length > 0) return cards;

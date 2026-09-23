@@ -17,6 +17,8 @@
     "./health": "./src/health.ts",
     "./imports": "./src/imports.ts",
     "./knowledge-graph": "./src/knowledge-graph.ts",
+    "./live-scores": "./src/live-scores.ts",
+    "./maps": "./src/maps.ts",
     "./operations": "./src/operations.ts",
     "./people": "./src/people.ts",
     "./people-presentation": "./src/people-presentation.ts",

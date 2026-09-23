@@ -89,6 +89,11 @@ APNS_KEY_ID="$(envval APNS_KEY_ID)"
 APNS_TEAM_ID="$(envval APNS_TEAM_ID)"
 APNS_PRIVATE_KEY="$(envval APNS_PRIVATE_KEY)"
 APNS_BUNDLE_ID="$(envval APNS_BUNDLE_ID)"
+# Maps signs with its own MapKit key when given one, else with the APNs key
+# (one Apple .p8 key can carry APNs and MapKit together).
+MAPKIT_KEY_ID="$(envval MAPKIT_KEY_ID)"
+MAPKIT_TEAM_ID="$(envval MAPKIT_TEAM_ID)"
+MAPKIT_PRIVATE_KEY="$(envval MAPKIT_PRIVATE_KEY)"
 
 [ -n "$PROD_DATABASE_URL" ] || { echo "PROD_DATABASE_URL missing from .env"; exit 1; }
 [ -n "$OPENROUTER_API_KEY" ] || { echo "OPENROUTER_API_KEY missing from .env"; exit 1; }
@@ -320,6 +325,7 @@ make_secret mcp-enc-key "$MCP_ENC_KEY"
 make_secret search-api-key "$SEARCH_API_KEY"
 make_secret github-token "$GITHUB_TOKEN"
 make_secret apns-private-key "$APNS_PRIVATE_KEY"
+make_secret mapkit-private-key "$MAPKIT_PRIVATE_KEY"
 
 # Explicit per-runtime secret grants. In particular, the browser can read only
 # its profile key and never receives database, model, OAuth, or Twilio secrets.
@@ -331,6 +337,7 @@ grant_secret twilio-auth-token "$AGENT_SA"
 grant_secret search-api-key "$AGENT_SA"
 grant_secret github-token "$AGENT_SA"
 grant_secret apns-private-key "$AGENT_SA"
+grant_secret mapkit-private-key "$AGENT_SA"
 grant_secret mcp-enc-key "$AGENT_SA"
 for secret in database-url openrouter-api-key google-oauth-client-id google-oauth-client-secret auth-secret mobile-api-token; do
   grant_secret "$secret" "$WEB_SA"
@@ -341,7 +348,7 @@ if module_enabled browser; then
 fi
 for secret in database-url openrouter-api-key google-oauth-client-id google-oauth-client-secret \
   bot-google-refresh-token internal-api-secret auth-secret twilio-auth-token profile-enc-key mcp-enc-key \
-  search-api-key github-token mobile-api-token apns-private-key; do
+  search-api-key github-token mobile-api-token apns-private-key mapkit-private-key; do
   revoke_legacy_secret_access "$secret"
 done
 
@@ -382,6 +389,24 @@ if [ -n "$GITHUB_TOKEN" ]; then
 fi
 if [ -n "$APNS_PRIVATE_KEY" ]; then
   AGENT_SECRETS="${AGENT_SECRETS},APNS_PRIVATE_KEY=apns-private-key:latest"
+fi
+# The web service signs route map images, so it needs the same Apple key the
+# agent routes with: the MapKit key when set, otherwise the APNs one.
+MAPS_ENV=""
+WEB_MAPS_ENV=""
+WEB_MAPS_SECRETS=""
+if module_enabled maps; then
+  if [ -n "$MAPKIT_PRIVATE_KEY" ]; then
+    MAPS_ENV="|MAPKIT_KEY_ID=${MAPKIT_KEY_ID}|MAPKIT_TEAM_ID=${MAPKIT_TEAM_ID}"
+    AGENT_SECRETS="${AGENT_SECRETS},MAPKIT_PRIVATE_KEY=mapkit-private-key:latest"
+    WEB_MAPS_ENV="$MAPS_ENV"
+    WEB_MAPS_SECRETS=",MAPKIT_PRIVATE_KEY=mapkit-private-key:latest"
+    grant_secret mapkit-private-key "$WEB_SA"
+  elif [ -n "$APNS_PRIVATE_KEY" ]; then
+    WEB_MAPS_ENV="|APNS_KEY_ID=${APNS_KEY_ID}|APNS_TEAM_ID=${APNS_TEAM_ID}"
+    WEB_MAPS_SECRETS=",APNS_PRIVATE_KEY=apns-private-key:latest"
+    grant_secret apns-private-key "$WEB_SA"
+  fi
 fi
 CANARY_VALUE="$(envval CANARY_ENABLED)"
 if [ -z "$CANARY_VALUE" ]; then
@@ -455,7 +480,7 @@ gcloud run deploy assistant-agent \
   --region "$REGION" --allow-unauthenticated --service-account "$AGENT_SA" \
   --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3 --concurrency 4 --timeout 900 \
   --cpu-boost \
-  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|GMAIL_PUBSUB_TOPIC=${GMAIL_TOPIC_VALUE}|GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_IDENTITY}|APNS_KEY_ID=${APNS_KEY_ID}|APNS_TEAM_ID=${APNS_TEAM_ID}|APNS_BUNDLE_ID=${APNS_BUNDLE_ID}|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|BROWSER_DRIVER=cloudrun|BROWSER_JOB_NAME=assistant-browser|CODE_DRIVER=cloudrun|CODE_JOB_NAME=assistant-code|PROCESSOR_DRIVER=cloudrun|PROCESSOR_JOB_NAME=assistant-processor|TRACES_BUCKET=${TRACES_BUCKET}|CANARY_ENABLED=${CANARY_VALUE}|CANARY_MAX_COST_USD=0.03|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${SEARCH_ENV}${GITHUB_ENV}${TWILIO_ENV}${MAIL_ENV}${AUDIT_ENV}${SELF_URL_ENV}" \
+  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|GMAIL_PUBSUB_TOPIC=${GMAIL_TOPIC_VALUE}|GMAIL_PUSH_SERVICE_ACCOUNT=${GMAIL_PUSH_IDENTITY}|APNS_KEY_ID=${APNS_KEY_ID}|APNS_TEAM_ID=${APNS_TEAM_ID}|APNS_BUNDLE_ID=${APNS_BUNDLE_ID}|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|BROWSER_DRIVER=cloudrun|BROWSER_JOB_NAME=assistant-browser|CODE_DRIVER=cloudrun|CODE_JOB_NAME=assistant-code|PROCESSOR_DRIVER=cloudrun|PROCESSOR_JOB_NAME=assistant-processor|TRACES_BUCKET=${TRACES_BUCKET}|CANARY_ENABLED=${CANARY_VALUE}|CANARY_MAX_COST_USD=0.03|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${SEARCH_ENV}${GITHUB_ENV}${TWILIO_ENV}${MAIL_ENV}${AUDIT_ENV}${SELF_URL_ENV}${MAPS_ENV}" \
   --set-secrets "$AGENT_SECRETS" \
   --quiet
 
@@ -603,8 +628,8 @@ gcloud run deploy assistant-web \
   --region "$REGION" --allow-unauthenticated --service-account "$WEB_SA" \
   --memory 1Gi --cpu 1 --min-instances 1 --max-instances 2 --timeout 300 \
   --cpu-boost \
-  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|AUTH_TRUST_HOST=true|AUTH_DEV_BYPASS=false|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${WEB_MAIL_ENV}${AUDIT_ENV}" \
-  --set-secrets "DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,AUTH_SECRET=auth-secret:latest,AUTH_GOOGLE_ID=google-oauth-client-id:latest,AUTH_GOOGLE_SECRET=google-oauth-client-secret:latest,MOBILE_API_TOKEN=mobile-api-token:latest,MCP_ENC_KEY=mcp-enc-key:latest" \
+  --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|AUTH_TRUST_HOST=true|AUTH_DEV_BYPASS=false|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${WEB_MAIL_ENV}${AUDIT_ENV}${WEB_MAPS_ENV}" \
+  --set-secrets "DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,AUTH_SECRET=auth-secret:latest,AUTH_GOOGLE_ID=google-oauth-client-id:latest,AUTH_GOOGLE_SECRET=google-oauth-client-secret:latest,MOBILE_API_TOKEN=mobile-api-token:latest,MCP_ENC_KEY=mcp-enc-key:latest${WEB_MAPS_SECRETS}" \
   --quiet
 
 WEB_URL="$(gcloud run services describe assistant-web --region "$REGION" --format='value(status.url)')"

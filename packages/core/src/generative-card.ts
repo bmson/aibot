@@ -90,6 +90,7 @@ const READ_SOURCES = new Set([
   'drive.read',
   'web.search',
   'web.fetch',
+  'sports.scores',
 ]);
 export interface CardRefreshSource {
   toolName: string;
@@ -566,6 +567,102 @@ export async function generateEvidenceCard(input: {
     console.error('generative card compilation failed', error);
     return null;
   }
+}
+
+/**
+ * A saved card for "make a card for the Giants game", compiled from the
+ * scores tool's rows without a model. The model composer was built for pages
+ * of prose; a scoreboard is already structured, and composing it again was
+ * where score cards failed. Every value is copied from a game row and then
+ * put through the same grounding check as a composed card.
+ */
+export function scoreboardCardSpec(evidence: ActionEvidence[]): GeneratedCardPayload | null {
+  const rows = evidence.filter((row) => row.toolName === 'sports.scores' && usableSource(row));
+  type Side = { name?: string; shortName?: string; score?: string };
+  type Game = {
+    id?: string;
+    state?: string;
+    statusText?: string;
+    leagueLabel?: string;
+    home?: Side;
+    away?: Side;
+  };
+  const games = rows
+    .flatMap((row) => (row.result as { games?: Game[] } | null)?.games ?? [])
+    .filter((game) => game.id && game.home?.name && game.away?.name)
+    .slice(0, 3);
+  if (!games.length) return null;
+  const facts: GenerativeCardSpecV1['facts'] = [];
+  const blocks: GenerativeCardSpecV1['blocks'] = [];
+  const fact = (id: string, value: string | undefined, label: string) => {
+    if (!value) return undefined;
+    facts.push({ id, value, label, source: 'ESPN scoreboard', sensitive: false });
+    return id;
+  };
+  games.forEach((game, index) => {
+    const away = fact(`g${index}_away`, game.away?.name, 'Away team');
+    const home = fact(`g${index}_home`, game.home?.name, 'Home team');
+    const status = fact(`g${index}_status`, game.statusText, 'Status');
+    const awayScore = fact(`g${index}_away_score`, game.away?.score, 'Away score');
+    const homeScore = fact(`g${index}_home_score`, game.home?.score, 'Home score');
+    if (away && home && awayScore && homeScore && game.state !== 'pre')
+      blocks.push({
+        type: 'score',
+        leftLabelFact: away,
+        leftValueFact: awayScore,
+        rightLabelFact: home,
+        rightValueFact: homeScore,
+        ...(status ? { statusFact: status } : {}),
+      });
+    else if (away && home)
+      blocks.push({ type: 'facts', factIds: [away, home, ...(status ? [status] : [])] });
+  });
+  const [first] = games as [Game];
+  const title =
+    games.length === 1
+      ? `${first.away?.shortName || first.away?.name} at ${first.home?.shortName || first.home?.name}`
+      : 'Scores';
+  const spec = validateGroundedCard(
+    {
+      version: 1,
+      title,
+      ...(first.leagueLabel ? { subtitle: first.leagueLabel } : {}),
+      icon: 'sport',
+      accent: 'sky',
+      accessibilityLabel: games
+        .map((game) =>
+          [
+            game.away?.name,
+            game.away?.score,
+            'at',
+            game.home?.name,
+            game.home?.score,
+            game.statusText,
+          ]
+            .filter(Boolean)
+            .join(' '),
+        )
+        .join('; ')
+        .slice(0, 200),
+      facts,
+      blocks,
+      actions: [],
+      refreshable: true,
+      sourceLabel: 'ESPN scoreboard',
+    },
+    rows.map((row) => JSON.stringify(row.result)).join('\n'),
+  );
+  if (!spec) return null;
+  return {
+    kind: 'generated-card',
+    id: randomUUID(),
+    revisionId: randomUUID(),
+    spec,
+    sourceFingerprint: createHash('sha256')
+      .update(`sports:${games.map((game) => game.id).join(',')}`)
+      .digest('hex'),
+    grounding: 'evidence',
+  };
 }
 
 /** Save or revise one active object; source identity is the idempotency fence. */

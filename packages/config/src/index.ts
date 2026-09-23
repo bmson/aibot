@@ -191,6 +191,14 @@ const ConfigSchema = z.object({
   /** The iOS app's bundle id, which is the APNs topic. */
   APNS_BUNDLE_ID: z.string().default(''),
   /**
+   * Apple Maps Server API + Maps Web Snapshots (directions and route maps).
+   * Optional: when unset, the maps module signs with the APNS_* key, which
+   * works when that .p8 key also has MapKit enabled in the developer portal.
+   */
+  MAPKIT_KEY_ID: z.string().default(''),
+  MAPKIT_TEAM_ID: z.string().default(''),
+  MAPKIT_PRIVATE_KEY: z.string().default(''),
+  /**
    * Age-based pruning of conversation/tool/model history. 0 (the default)
    * keeps everything forever — deleting history is an owner policy decision,
    * so the platform ships the machinery and leaves the knob off. A positive

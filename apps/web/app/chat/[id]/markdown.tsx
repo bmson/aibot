@@ -6,6 +6,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
+import { reflowParagraphs } from '@/lib/paragraph-reflow';
 import { MermaidDiagram } from './mermaid-diagram';
 
 // Currency is much more common than inline TeX in an assistant transcript.
@@ -338,7 +339,7 @@ export const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: s
         rehypePlugins={rehypePlugins}
         components={components}
       >
-        {text}
+        {reflowParagraphs(text)}
       </ReactMarkdown>
     </div>
   );

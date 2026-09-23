@@ -433,6 +433,13 @@ struct ChatMessage: Codable, Identifiable, Hashable, Sendable {
     /// cards and authored/generated answer cards still own their presentation.
     var hasSupportingResultCards: Bool {
         guard role == .assistant, !visibleTextBubbles.isEmpty, noticeKind == nil else { return false }
+        // A briefing card is the answer itself; the conflicts card riding with
+        // it must not fold the briefing into "Sources and details".
+        let hasBriefing = parts.contains { part in
+            guard part.type == "data-card", case let .object(data) = part.data else { return false }
+            return data["kind"]?.string == "briefing"
+        }
+        if hasBriefing { return false }
         let resultKinds: Set<String> = [
             "calendar-event", "email-results", "document-results", "drive-results",
             "web-search-results", "availability", "email-thread", "sheet-rows",
@@ -1007,6 +1014,12 @@ struct WorkspaceResponse: Codable, Sendable {
 
 struct SavedCardsResponse: Codable, Sendable {
     let cards: [SavedCardRecord]
+}
+
+/// A live scoreboard re-read: the same game objects a scoreboard card carries.
+struct LiveScoresPayload: Decodable, Sendable {
+    let fetchedAt: String?
+    let games: [JSONValue]
 }
 
 struct CardRefreshResult: Codable, Sendable {
@@ -1928,6 +1941,7 @@ struct ToolActivity: Codable, Sendable {
         "web.fetch": "Reading a web page",
         "web.search": "Searching the web",
         "weather.lookup": "Checking the weather",
+        "sports.scores": "Checking the scores",
         "memory.recall": "Recalling memory",
         "memory.save": "Saving a note to memory",
         "contacts.lookup": "Looking up a contact",
@@ -1985,6 +1999,7 @@ enum ToolStepLabel {
         "web.fetch": "Read a web page",
         "web.search": "Searched the web",
         "weather.lookup": "Checked the weather",
+        "sports.scores": "Checked the scores",
         "memory.recall": "Recalled memory",
         "memory.save": "Saved a note to memory",
         "contacts.lookup": "Looked up a contact",

@@ -304,6 +304,13 @@ final class AppModel: ObservableObject {
         presentedRoute = nil
     }
 
+    /// Quiet on failure: a scoreboard keeps its last scores rather than raising
+    /// an error banner every poll while the provider is briefly unreachable.
+    func liveScoreboard(leagues: String) async -> LiveScoresPayload? {
+        guard let client else { return nil }
+        return try? await client.liveScoreboard(leagues: leagues)
+    }
+
     func knowledge(query: String = "", kind: String = "", page: Int = 1) async -> KnowledgeOverview? {
         guard let client else { return nil }
         do { return try await client.knowledge(query: query, kind: kind, page: page) }

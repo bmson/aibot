@@ -128,6 +128,23 @@ export function evaluateQuestion(
     } | null;
     return data?.kind === 'generated-card' && data.id && data.revisionId ? [data] : [];
   });
+  const hasScoreboard = result.parts.some(
+    (part) =>
+      typeof part === 'object' &&
+      part !== null &&
+      'data' in part &&
+      (part.data as { kind?: string } | null)?.kind === 'scoreboard',
+  );
+  if (fixture.expect.scoreboard && !hasScoreboard)
+    failures.push('formatting: missing scoreboard card');
+  const hasRoute = result.parts.some(
+    (part) =>
+      typeof part === 'object' &&
+      part !== null &&
+      'data' in part &&
+      (part.data as { kind?: string } | null)?.kind === 'route',
+  );
+  if (fixture.expect.route && !hasRoute) failures.push('formatting: missing route card');
   if (fixture.expect.card && !cards.length)
     failures.push('formatting: missing persisted generated card');
   const cardFacts = cards
@@ -191,6 +208,70 @@ function replayRegistry(
       { networkEgress: true, returnsUntrustedContent: true },
     );
   }
+  if (fixture.sports)
+    add(
+      'sports.scores',
+      'Live scores, results, and fixtures for a team or league.',
+      z.object({ team: z.string().optional(), league: z.string().optional() }),
+      () => ({
+        timeZone: 'America/Los_Angeles',
+        date: '2026-09-22',
+        fetchedAt: '2026-09-22T02:10:00.000Z',
+        selection: 'today',
+        games: [
+          {
+            id: '401873650',
+            league: 'mlb',
+            leagueLabel: 'MLB',
+            state: 'in',
+            statusText: 'Top 7th',
+            startsAt: '2026-09-22T01:45Z',
+            home: {
+              id: '26',
+              name: 'San Francisco Giants',
+              shortName: 'Giants',
+              abbreviation: 'SF',
+              score: '5',
+            },
+            away: {
+              id: '9',
+              name: 'Minnesota Twins',
+              shortName: 'Twins',
+              abbreviation: 'MIN',
+              score: '2',
+            },
+            line: 'Minnesota Twins at San Francisco Giants: 2-5, Top 7th',
+          },
+        ],
+      }),
+      {},
+    );
+  if (fixture.maps)
+    add(
+      'maps.directions',
+      'Directions, travel time, and distance from Apple Maps.',
+      z.object({ destination: z.string(), origin: z.string().optional() }),
+      () => ({
+        origin: { label: 'Current Location', lat: 37.7857, lng: -122.4011, current: true },
+        destination: {
+          label: 'Oracle Park',
+          address: '24 Willie Mays Plaza, San Francisco, CA 94107',
+          lat: 37.7786,
+          lng: -122.3893,
+        },
+        mode: 'driving',
+        durationSeconds: 540,
+        distanceMeters: 1850,
+        departAt: '2026-09-22T18:00:00.000Z',
+        arriveAt: '2026-09-22T18:09:00.000Z',
+        routeName: 'King St',
+        steps: [{ instruction: 'Turn right onto Howard St', distanceMeters: 900 }],
+        polyline: '_p~iF~ps|U',
+        mapsUrl:
+          'https://maps.apple.com/?saddr=37.7857%2C-122.4011&daddr=37.7786%2C-122.3893&dirflg=d',
+      }),
+      {},
+    );
   if (fixture.weather)
     add(
       'weather.lookup',

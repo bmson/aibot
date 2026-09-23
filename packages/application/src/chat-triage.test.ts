@@ -87,6 +87,13 @@ describe('looksLikeActionRequest', () => {
     }
   });
 
+  it('routes a sports result question to the tools, never to memory', () => {
+    // Answered without tools, this reached the owner as a stale score from
+    // training data; the scores tool now answers it live.
+    expect(looksLikeActionRequest('who won the game last night?')).toBe(true);
+    expect(looksLikeActionRequest("what's the Giants score?")).toBe(true);
+  });
+
   it('leaves plain conversation for the model to classify', () => {
     for (const t of [
       'what do you think about the plan?',
@@ -96,7 +103,6 @@ describe('looksLikeActionRequest', () => {
       'how are you doing today?',
       'check this out',
       'I found that really funny',
-      'who won the game last night?',
       'explain how embeddings work',
       'why did that happen?',
       'nice work on the summary',

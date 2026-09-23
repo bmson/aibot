@@ -25,6 +25,7 @@ import { register } from '../register.js';
 import type { ToolRegistry } from '../registry.js';
 import type { WorkspaceStore } from '../workspace-store.js';
 import { registerSituationTools } from './situations.js';
+import { registerSportsTools } from './sports.js';
 import { lookupWeather } from './weather.js';
 import { extractWebText, fetchPublicWebPage, looksLikeBotChallenge } from './web-fetch.js';
 
@@ -70,6 +71,7 @@ export interface BuiltinDeps {
 
 export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps): ToolRegistry {
   registerSituationTools(registry);
+  registerSportsTools(registry, deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {});
   // ── memory ─────────────────────────────────────────────────────────────────
   register(
     registry,

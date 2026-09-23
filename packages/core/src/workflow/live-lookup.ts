@@ -1,3 +1,4 @@
+import { leagueNamedIn } from '../sports/leagues.js';
 import {
   detectPersonalReadRequest,
   type ReadIntentMessage,
@@ -5,7 +6,7 @@ import {
 } from './read-intent.js';
 import type { ActionEvidence } from './response-contract.js';
 
-export type LiveLookup = { kind: 'weather' | 'web'; request: string };
+export type LiveLookup = { kind: 'weather' | 'web' | 'sports' | 'directions'; request: string };
 
 const QUESTION = /^(?:how|what|who|when|where|will|is|are|any|do|does|should|can|could)\b/i;
 const WEATHER = /\b(?:weather|forecast|temperature|rain|raining|snow|snowing)\b/i;
@@ -14,6 +15,39 @@ const SEARCH =
 const CURRENT = /\b(?:current|currently|latest|live|right now|today|tonight|tomorrow)\b/i;
 const PUBLIC_FACT =
   /\b(?:president|prime minister|ceo|score|standings|weather|forecast|price|news|hiring|jobs?)\b/i;
+/** A result, fixture, or table question — about a sport, not a credit score. */
+const SPORTS_RESULT =
+  /\b(?:scores?|scoreline|standings|fixtures?|who won|kick-?off|box score|league table)\b/i;
+const SPORTS_EVENT =
+  /\b(?:game|match|playing|play|plays|won|win|lose|lost|beat|playoffs?|results?|table)\b/i;
+const SPORT_WORD =
+  /\b(?:baseball|football|soccer|basketball|hockey|mlb|nfl|nba|wnba|nhl|mls|premier league|champions league|la ?liga|bundesliga|serie a|ligue 1)\b/i;
+/** Scores that are not sport, and the owner's own games, which live on their calendar. */
+const NOT_SPORTS =
+  /\b(?:credit|test|exam|sat|act|gre|fico|risk|health|sleep|readiness|lighthouse|nps|quiz)\s+scores?\b|\bmy\b[^.?!]{0,40}\b(?:game|match|practice|score)\b/i;
+const SPORTS_IMPERATIVE = /\b(?:show|give|get|check|track|follow|create|make|build|render)\b/i;
+
+/**
+ * A trip question: "directions to Oracle Park", "how long to drive to SFO",
+ * "how far is Palo Alto", "when should I leave for the airport". Deliberately
+ * narrow — "how long to cook rice" and "how far along is the project" are not
+ * trips.
+ */
+const DIRECTIONS =
+  /\b(?:directions?\s+(?:to|from)\b|route\s+to|how\s+(?:long|many\s+minutes)\b[^.?!]{0,30}\bto\s+(?:get|drive|walk|bike|cycle)\s+(?:to|there|home|back)|how\s+far\s+(?:is|away\s+is)\s+(?!it\b|along\b)|when\s+(?:should|do)\s+i\s+(?:leave|head\s+out)\s+(?:for|to)|(?:drive|driving|travel|walk|walking|commute)\s+time\s+(?:to|from))/i;
+
+/** A trip whose destination is on the owner's calendar ("my 3pm", "my next meeting"). */
+const MY_EVENT =
+  /\bmy\s+(?:next\s+)?(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|meeting|appointment|event|flight|reservation|call)\b/i;
+
+/** "What's the Giants score?", "any Premier League results?", "make a live score card". */
+function isSportsRequest(request: string, asks: boolean): boolean {
+  if (NOT_SPORTS.test(request)) return false;
+  if (!asks && !SPORTS_IMPERATIVE.test(request)) return false;
+  if (SPORTS_RESULT.test(request)) return true;
+  return SPORTS_EVENT.test(request) && (SPORT_WORD.test(request) || !!leagueNamedIn(request));
+}
+
 const CORRECTION =
   /^(?:look it up|search the web|check (?:the )?(?:score|wcore)|run it|rub it|try again|check again)\b/i;
 
@@ -27,9 +61,15 @@ export function detectLiveLookup(
   if (/\b(?:password|passcode|wifi|wi-fi|API key)\b/i.test(request)) return undefined;
   const asks = QUESTION.test(request) || request.includes('?') || SEARCH.test(request);
   if (WEATHER.test(request) && asks) return { kind: 'weather', request };
+  // Before the personal-read router, which reads "drive time" as Google
+  // Drive. A trip to "my 3pm" still needs the calendar first, so it stays there.
+  if (DIRECTIONS.test(request) && !MY_EVENT.test(request)) return { kind: 'directions', request };
   if (detectPersonalReadRequest(history)) return undefined;
   if (/\binvestigate\b[\s\S]*\b(?:team|club|company|match)\b/i.test(request))
     return { kind: 'web', request };
+  // Before the generic web branch: "check the score" is a sports lookup, which
+  // the scores tool answers directly instead of a search-then-fetch chain.
+  if (isSportsRequest(request, asks)) return { kind: 'sports', request };
   if (SEARCH.test(request) || (asks && CURRENT.test(request) && PUBLIC_FACT.test(request))) {
     const previous = users.slice(-4, -1).findLast((text) => !CORRECTION.test(text));
     if (
@@ -38,7 +78,10 @@ export function detectLiveLookup(
       detectPersonalReadRequest([{ role: 'user', content: previous }])
     )
       return undefined;
-    return { kind: 'web', request: CORRECTION.test(request) && previous ? previous : request };
+    if (CORRECTION.test(request) && previous)
+      // "Check the wcore" retries the question before it, as that question.
+      return { kind: isSportsRequest(previous, true) ? 'sports' : 'web', request: previous };
+    return { kind: 'web', request };
   }
   // An address supplied in answer to a weather clarification continues that
   // lookup; a city/address alone is not a standalone weather request.
@@ -80,6 +123,13 @@ export function successfulLookup(row: ActionEvidence): boolean {
   );
 }
 
+/** A scores lookup that produced games, or the candidates to ask the owner about. */
+function sportsAnswered(row: ActionEvidence): boolean {
+  if (!successfulLookup(row)) return false;
+  const result = row.result as { games?: unknown[]; candidates?: unknown[] };
+  return (result.games?.length ?? 0) > 0 || (result.candidates?.length ?? 0) > 0;
+}
+
 /** Search snippets are discovery, not a complete live-score or research read. */
 export function nextLiveLookup(
   lookup: LiveLookup,
@@ -90,6 +140,18 @@ export function nextLiveLookup(
     if (!rows.some((row) => row.toolName === 'weather.lookup'))
       return { toolName: 'weather.lookup' };
     return undefined;
+  }
+  if (lookup.kind === 'directions') {
+    if (!rows.some((row) => row.toolName === 'maps.directions'))
+      return { toolName: 'maps.directions' };
+    return undefined;
+  }
+  if (lookup.kind === 'sports') {
+    const scores = rows.filter((row) => row.toolName === 'sports.scores');
+    if (!scores.length) return { toolName: 'sports.scores' };
+    if (scores.some(sportsAnswered)) return undefined;
+    // An uncovered team or league, or a provider outage: search the web.
+    return nextLiveLookup({ kind: 'web', request: lookup.request }, evidence);
   }
   const searches = rows.filter((row) => row.toolName === 'web.search');
   if (!searches.length && !rows.some((row) => row.toolName === 'web.fetch'))
@@ -122,6 +184,10 @@ function retrievedCorpus(evidence: ActionEvidence[]): string {
       // Weather adapters return numbers, not prose; stringify so a temperature
       // reading is searchable in the same corpus as fetched text.
       if (row.toolName === 'weather.lookup') parts.push(JSON.stringify(result));
+      // Each game's `line` states its scoreline next to both team names.
+      if (row.toolName === 'sports.scores')
+        for (const game of (result?.games as Array<{ line?: unknown }> | undefined) ?? [])
+          parts.push(game.line);
       return parts.filter((part) => typeof part === 'string').join('\n');
     })
     .join('\n');
@@ -208,6 +274,22 @@ export function liveLookupFailure(
   lookup: LiveLookup,
   evidence: ActionEvidence[],
 ): string | undefined {
+  if (
+    lookup.kind === 'sports' &&
+    evidence.some((row) => row.fromCurrentTask !== false && sportsAnswered(row))
+  )
+    return undefined;
+  if (lookup.kind === 'directions') {
+    const routed = evidence.some(
+      (row) =>
+        row.fromCurrentTask !== false &&
+        row.toolName === 'maps.directions' &&
+        successfulLookup(row),
+    );
+    return routed
+      ? undefined
+      : "I couldn't get a route from Apple Maps for this trip, so I haven't estimated a travel time. The lookup needs to be retried.";
+  }
   const names = lookup.kind === 'weather' ? ['weather.lookup'] : ['web.fetch'];
   const rows = evidence.filter(
     (row) => names.includes(row.toolName) && row.fromCurrentTask !== false,

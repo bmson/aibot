@@ -1,0 +1,472 @@
+{
+  "events": [
+    {
+      "id": "401817026",
+      "date": "2026-09-20T20:10Z",
+      "name": "San Francisco Giants at Los Angeles Dodgers",
+      "links": [
+        {
+          "href": "https://www.espn.com/mlb/game/_/gameId/401817026/giants-dodgers"
+        }
+      ],
+      "competitions": [
+        {
+          "date": "2026-09-20T20:10Z",
+          "venue": {
+            "fullName": "Dodger Stadium"
+          },
+          "status": {
+            "type": {
+              "id": "3",
+              "name": "STATUS_FINAL",
+              "state": "post",
+              "completed": true,
+              "description": "Final",
+              "detail": "Final",
+              "shortDetail": "Final"
+            }
+          },
+          "broadcasts": [
+            {
+              "type": {
+                "id": "4",
+                "shortName": "Streaming"
+              },
+              "market": {
+                "id": "1",
+                "type": "National"
+              },
+              "media": {
+                "shortName": "MLB.TV"
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            },
+            {
+              "type": {
+                "id": "1",
+                "shortName": "TV"
+              },
+              "market": {
+                "id": "3",
+                "type": "Away"
+              },
+              "media": {
+                "shortName": "NBC Sports BA"
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            },
+            {
+              "type": {
+                "id": "1",
+                "shortName": "TV"
+              },
+              "market": {
+                "id": "2",
+                "type": "Home"
+              },
+              "media": {
+                "shortName": "SportsNet LA"
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            }
+          ],
+          "competitors": [
+            {
+              "homeAway": "home",
+              "winner": true,
+              "score": {
+                "value": 3,
+                "displayValue": "3"
+              },
+              "records": [],
+              "team": {
+                "id": "19",
+                "displayName": "Los Angeles Dodgers",
+                "shortDisplayName": "Dodgers",
+                "abbreviation": "LAD",
+                "logos": [
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/mlb/500/lad.png"
+                  }
+                ]
+              }
+            },
+            {
+              "homeAway": "away",
+              "winner": false,
+              "score": {
+                "value": 1,
+                "displayValue": "1"
+              },
+              "records": [],
+              "team": {
+                "id": "26",
+                "displayName": "San Francisco Giants",
+                "shortDisplayName": "Giants",
+                "abbreviation": "SF",
+                "logos": [
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/mlb/500/sf.png"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "401817029",
+      "date": "2026-09-22T01:45Z",
+      "name": "Minnesota Twins at San Francisco Giants",
+      "links": [
+        {
+          "href": "https://www.espn.com/mlb/game/_/gameId/401817029/twins-giants"
+        }
+      ],
+      "competitions": [
+        {
+          "date": "2026-09-22T01:45Z",
+          "venue": {
+            "fullName": "Oracle Park"
+          },
+          "status": {
+            "type": {
+              "id": "3",
+              "name": "STATUS_FINAL",
+              "state": "post",
+              "completed": true,
+              "description": "Final",
+              "detail": "Final",
+              "shortDetail": "Final"
+            }
+          },
+          "broadcasts": [
+            {
+              "type": {
+                "id": "4",
+                "shortName": "Streaming"
+              },
+              "market": {
+                "id": "1",
+                "type": "National"
+              },
+              "media": {
+                "shortName": "MLB.TV"
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            },
+            {
+              "type": {
+                "id": "4",
+                "shortName": "Streaming"
+              },
+              "market": {
+                "id": "3",
+                "type": "Away"
+              },
+              "media": {
+                "shortName": "Twins.TV"
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            },
+            {
+              "type": {
+                "id": "1",
+                "shortName": "TV"
+              },
+              "market": {
+                "id": "2",
+                "type": "Home"
+              },
+              "media": {
+                "shortName": "NBC Sports BA"
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            }
+          ],
+          "competitors": [
+            {
+              "homeAway": "home",
+              "winner": true,
+              "score": {
+                "value": 5,
+                "displayValue": "5"
+              },
+              "records": [],
+              "team": {
+                "id": "26",
+                "displayName": "San Francisco Giants",
+                "shortDisplayName": "Giants",
+                "abbreviation": "SF",
+                "logos": [
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/mlb/500/sf.png"
+                  }
+                ]
+              }
+            },
+            {
+              "homeAway": "away",
+              "winner": false,
+              "score": {
+                "value": 2,
+                "displayValue": "2"
+              },
+              "records": [],
+              "team": {
+                "id": "9",
+                "displayName": "Minnesota Twins",
+                "shortDisplayName": "Twins",
+                "abbreviation": "MIN",
+                "logos": [
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/mlb/500/min.png"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "401817043",
+      "date": "2026-09-23T01:45Z",
+      "name": "Minnesota Twins at San Francisco Giants",
+      "links": [
+        {
+          "href": "https://www.espn.com/mlb/game/_/gameId/401817043/twins-giants"
+        }
+      ],
+      "competitions": [
+        {
+          "date": "2026-09-23T01:45Z",
+          "venue": {
+            "fullName": "Oracle Park"
+          },
+          "status": {
+            "type": {
+              "id": "1",
+              "name": "STATUS_SCHEDULED",
+              "state": "pre",
+              "completed": false,
+              "description": "Scheduled",
+              "detail": "Scheduled",
+              "shortDetail": "9/22 - 9:45 PM EDT"
+            }
+          },
+          "broadcasts": [
+            {
+              "type": {
+                "id": "4",
+                "shortName": "Streaming"
+              },
+              "market": {
+                "id": "1",
+                "type": "National"
+              },
+              "media": {
+                "shortName": "MLB.TV",
+                "logo": "https://a.espncdn.com/guid/0db644c3-9f87-37e7-9884-858c2ed45218/logos/default.png",
+                "darkLogo": ""
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            },
+            {
+              "type": {
+                "id": "4",
+                "shortName": "Streaming"
+              },
+              "market": {
+                "id": "3",
+                "type": "Away"
+              },
+              "media": {
+                "shortName": "Twins.TV"
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            },
+            {
+              "type": {
+                "id": "1",
+                "shortName": "TV"
+              },
+              "market": {
+                "id": "2",
+                "type": "Home"
+              },
+              "media": {
+                "shortName": "NBC Sports BA"
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            }
+          ],
+          "competitors": [
+            {
+              "homeAway": "home",
+              "records": [],
+              "team": {
+                "id": "26",
+                "displayName": "San Francisco Giants",
+                "shortDisplayName": "Giants",
+                "abbreviation": "SF",
+                "logos": [
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/mlb/500/sf.png"
+                  }
+                ]
+              }
+            },
+            {
+              "homeAway": "away",
+              "records": [],
+              "team": {
+                "id": "9",
+                "displayName": "Minnesota Twins",
+                "shortDisplayName": "Twins",
+                "abbreviation": "MIN",
+                "logos": [
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/mlb/500/min.png"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "401817058",
+      "date": "2026-09-23T19:45Z",
+      "name": "Minnesota Twins at San Francisco Giants",
+      "links": [
+        {
+          "href": "https://www.espn.com/mlb/game/_/gameId/401817058/twins-giants"
+        }
+      ],
+      "competitions": [
+        {
+          "date": "2026-09-23T19:45Z",
+          "venue": {
+            "fullName": "Oracle Park"
+          },
+          "status": {
+            "type": {
+              "id": "1",
+              "name": "STATUS_SCHEDULED",
+              "state": "pre",
+              "completed": false,
+              "description": "Scheduled",
+              "detail": "Scheduled",
+              "shortDetail": "9/23 - 3:45 PM EDT"
+            }
+          },
+          "broadcasts": [
+            {
+              "type": {
+                "id": "4",
+                "shortName": "Streaming"
+              },
+              "market": {
+                "id": "1",
+                "type": "National"
+              },
+              "media": {
+                "shortName": "MLB.TV",
+                "logo": "https://a.espncdn.com/guid/0db644c3-9f87-37e7-9884-858c2ed45218/logos/default.png",
+                "darkLogo": ""
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            },
+            {
+              "type": {
+                "id": "4",
+                "shortName": "Streaming"
+              },
+              "market": {
+                "id": "3",
+                "type": "Away"
+              },
+              "media": {
+                "shortName": "Twins.TV"
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            },
+            {
+              "type": {
+                "id": "1",
+                "shortName": "TV"
+              },
+              "market": {
+                "id": "2",
+                "type": "Home"
+              },
+              "media": {
+                "shortName": "NBC Sports BA"
+              },
+              "lang": "en",
+              "region": "us",
+              "partnered": false
+            }
+          ],
+          "competitors": [
+            {
+              "homeAway": "home",
+              "records": [],
+              "team": {
+                "id": "26",
+                "displayName": "San Francisco Giants",
+                "shortDisplayName": "Giants",
+                "abbreviation": "SF",
+                "logos": [
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/mlb/500/sf.png"
+                  }
+                ]
+              }
+            },
+            {
+              "homeAway": "away",
+              "records": [],
+              "team": {
+                "id": "9",
+                "displayName": "Minnesota Twins",
+                "shortDisplayName": "Twins",
+                "abbreviation": "MIN",
+                "logos": [
+                  {
+                    "href": "https://a.espncdn.com/i/teamlogos/mlb/500/min.png"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

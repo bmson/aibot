@@ -84,6 +84,7 @@ Deterministic checks over the text alone (`packages/core/src/model-router/audit-
 | `empty-output` | A call that produced no text |
 | `truncated-output` | The provider stopped at the token limit |
 | `emoji` | An emoji, which is a defect unless the owner asked for one |
+| `wall-of-text` | A plain paragraph over 400 characters or four sentences — a block on a phone. Review signal only: both clients also split such paragraphs at render time (`apps/web/lib/paragraph-reflow.ts`, `ParagraphReflow.swift`) |
 
 Several of these previously existed **only** inside the question-regression
 harness, so the suite graded properties the runtime never enforced. They live in

@@ -6,6 +6,10 @@ export interface QuestionCase {
   history?: Array<{ role: 'user' | 'assistant'; text: string }>;
   source?: { url: string; text: string; snippet?: string; failed?: boolean };
   weather?: 'current' | 'failed';
+  /** Stub `sports.scores` with a live Twins at Giants game. */
+  sports?: 'live';
+  /** Stub `maps.directions` with a drive to Oracle Park. */
+  maps?: 'route';
   mailbox?: 'hotel' | 'empty';
   memory?: boolean;
   plan?: 'reply' | 'workflow';
@@ -24,6 +28,10 @@ export interface QuestionCase {
     statuses?: string[];
     maxApprovals?: number;
     card?: boolean;
+    /** A scoreboard card rides the reply. */
+    scoreboard?: boolean;
+    /** A route card rides the reply. */
+    route?: boolean;
     cardValues?: string[];
   };
 }
@@ -119,6 +127,70 @@ export const QUESTION_CASES: QuestionCase[] = [
       },
     }),
   ),
+  // The scores tool answers directly; the September web path stays covered
+  // above for registries without it.
+  {
+    id: 'giants-score-live',
+    records: [744],
+    request: "What's the Giants score?",
+    sports: 'live',
+    script: [
+      { toolCalls: [{ toolName: 'sports.scores', input: { team: 'Giants' } }] },
+      { text: 'The Giants lead the Twins 5-2 in the top of the 7th.' },
+    ],
+    expect: {
+      matches: ['Giants', '5', '2', 'Twins'],
+      tools: ['sports.scores'],
+      scoreboard: true,
+    },
+  },
+  {
+    id: 'giants-score-invented',
+    records: [748],
+    request: "What's the Giants score?",
+    sports: 'live',
+    script: [
+      { toolCalls: [{ toolName: 'sports.scores', input: { team: 'Giants' } }] },
+      { text: 'The Giants are ahead 7-3.' },
+    ],
+    expect: {
+      matches: ['do not state 7-3|retried'],
+      excludes: ['ahead 7-3'],
+      tools: ['sports.scores'],
+      statuses: ['needs_attention', 'failed'],
+    },
+  },
+  {
+    id: 'directions-drive-time',
+    // Not from the September audit: the trip path did not exist then.
+    records: [],
+    request: "What's the drive time to Oracle Park?",
+    maps: 'route',
+    script: [
+      { toolCalls: [{ toolName: 'maps.directions', input: { destination: 'Oracle Park' } }] },
+      { text: 'About 9 minutes by car via King St, so you would arrive at 11:09.' },
+    ],
+    expect: {
+      matches: ['9 min', 'King St'],
+      tools: ['maps.directions'],
+      route: true,
+    },
+  },
+  {
+    id: 'score-card-request',
+    records: [750],
+    request: 'Create a card for the Giants game',
+    sports: 'live',
+    script: [
+      { toolCalls: [{ toolName: 'sports.scores', input: { team: 'Giants' } }] },
+      { text: 'The Giants lead the Twins 5-2 in the top of the 7th.' },
+    ],
+    expect: {
+      matches: ['5-2', 'Saved “Twins at Giants”'],
+      tools: ['sports.scores'],
+      scoreboard: true,
+    },
+  },
   ...[
     {
       id: 'weather-work',
