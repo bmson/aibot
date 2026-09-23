@@ -259,9 +259,33 @@ export class FirestoreMemoryConsolidationRepository implements MemoryConsolidati
         this.store.doc('memoryTombstones', merge.contentHash),
       ]);
       const mergeChecks = mergeRefs.length ? await tx.getAll(...mergeRefs) : [];
+      const occasionIds = (input.occasions ?? []).map((occasion) => {
+        const key = [agentId, subjectContactId, occasion.kind, occasion.month, occasion.day].join(
+          '\u0000',
+        );
+        const bytes = createHash('sha256').update(key).digest().subarray(0, 16);
+        bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50;
+        bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+        const hex = bytes.toString('hex');
+        return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+      });
+      if (new Set(occasionIds).size !== occasionIds.length)
+        throw new Error('Duplicate consolidation occasions');
+      const occasionRefs = occasionIds.map((id) => this.store.doc('occasions', id));
+      const [contact, ...existingOccasions] = occasionRefs.length
+        ? await tx.getAll(this.store.doc('contacts', subjectContactId), ...occasionRefs)
+        : [null];
+      if (
+        occasionRefs.length > 0 &&
+        (!contact?.exists ||
+          contact.get('id') !== subjectContactId ||
+          (contact.get('agentId') !== undefined && contact.get('agentId') !== agentId))
+      )
+        throw new Error('Consolidation contact is missing');
       const retired: string[] = [];
       const merged: string[] = [];
       const domainsAssigned: string[] = [];
+      let occasionsSaved = 0;
       const replacement = new Map(input.retirements.map((row) => [row.id, row.supersededById]));
       for (let index = 0; index < input.merges.length; index++) {
         const merge = input.merges[index];
@@ -349,6 +373,66 @@ export class FirestoreMemoryConsolidationRepository implements MemoryConsolidati
             }),
           );
       }
+      for (let index = 0; index < (input.occasions ?? []).length; index += 1) {
+        const occasion = input.occasions?.[index];
+        const ref = occasionRefs[index];
+        const existing = existingOccasions[index];
+        if (!occasion || !ref) continue;
+        if (
+          !Number.isInteger(occasion.month) ||
+          occasion.month < 1 ||
+          occasion.month > 12 ||
+          !Number.isInteger(occasion.day) ||
+          occasion.day < 1 ||
+          occasion.day > 31
+        )
+          continue;
+        if (existing?.exists) {
+          const row = decodeRecord<Records['occasions']>(existing.data());
+          if (
+            row.id !== ref.id ||
+            row.agentId !== agentId ||
+            row.contactId !== subjectContactId ||
+            row.kind !== occasion.kind ||
+            row.month !== occasion.month ||
+            row.day !== occasion.day
+          )
+            throw new Error('Existing consolidation occasion is malformed');
+          if (row.ownerConfirmed || row.originTrust === 'owner') {
+            occasionsSaved += 1;
+            continue;
+          }
+          const notes =
+            !occasion.notes || row.notes.includes(occasion.notes)
+              ? row.notes
+              : row.notes
+                ? `${row.notes}; ${occasion.notes}`
+                : occasion.notes;
+          tx.update(ref, { year: row.year ?? occasion.year, notes, updatedAt: now });
+        } else {
+          const row: Records['occasions'] = {
+            id: ref.id,
+            agentId,
+            contactId: subjectContactId,
+            kind: occasion.kind,
+            label: occasion.label,
+            month: occasion.month,
+            day: occasion.day,
+            year: occasion.year,
+            recurrence: 'annual',
+            leadDays: 7,
+            notes: occasion.notes,
+            originTrust: 'assistant',
+            quarantined: false,
+            ownerConfirmed: false,
+            source: 'consolidation',
+            createdAt: now,
+            updatedAt: now,
+          };
+          tx.create(ref, encodeRecord(row));
+        }
+        occasionsSaved += 1;
+      }
       for (const doc of docs)
         if (doc && !replacement.has(String(doc.get('id'))))
           tx.update(doc.ref, { lastConsolidatedAt: now });
@@ -361,7 +445,12 @@ export class FirestoreMemoryConsolidationRepository implements MemoryConsolidati
           invalidatedAt: now,
         }),
       );
-      return { retired, merged, domainsAssigned };
+      return {
+        retired,
+        merged,
+        domainsAssigned,
+        ...(occasionsSaved > 0 ? { occasionsSaved } : {}),
+      };
     });
   }
 }
