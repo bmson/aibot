@@ -27,6 +27,9 @@ export function MermaidDiagram({ source }: { source: string }) {
           startOnLoad: false,
           securityLevel: 'strict',
           htmlLabels: false,
+          // mermaid 12 defaults to a new layout and look; keep the palette below readable.
+          layout: 'dagre',
+          look: 'classic',
           theme: 'base',
           flowchart: { htmlLabels: false, useMaxWidth: true },
           themeVariables: {
