@@ -5,7 +5,7 @@ import { FirestoreScheduleRepository } from './schedules.js';
 import { FirestoreSettingsRepository } from './settings.js';
 import { disposeStore, emulatorStore } from './test-store.js';
 
-describe('Firestore settings repositories', () => {
+describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore settings repositories', () => {
   const stores: ReturnType<typeof emulatorStore>[] = [];
   afterEach(async () => Promise.all(stores.splice(0).map(disposeStore)));
 
