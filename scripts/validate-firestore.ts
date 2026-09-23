@@ -11,8 +11,10 @@ import { firestoreApplicationSmoke } from './firestore-application-smoke.js';
 import { firestoreApprovalSmoke } from './firestore-approval-smoke.js';
 import { firestoreChatSmoke } from './firestore-chat-smoke.js';
 import { firestoreExecutorSmoke } from './firestore-executor-smoke.js';
+import { firestoreProfilePeopleSmoke } from './firestore-profile-people-smoke.js';
 import { firestoreRuntimeSmoke } from './firestore-runtime-smoke.js';
 import { firestoreScheduleSmoke } from './firestore-schedule-smoke.js';
+import { firestoreSettingsSmoke } from './firestore-settings-smoke.js';
 import { firestoreTaskSmoke } from './firestore-task-smoke.js';
 import { firestoreWatchSmoke } from './firestore-watch-smoke.js';
 import { createGcloudAuthClient } from './gcloud-auth.js';
@@ -46,11 +48,13 @@ const indexes = spec.indexes.filter((index) =>
     'generatedCards',
     'conversationSegments',
     'memories',
+    'occasions',
     'knowledgeGraphRelations',
     'skills',
     'locationPings',
     'commitments',
     'watches',
+    'proactivePings',
   ].includes(index.collectionGroup),
 );
 const input = {
@@ -99,6 +103,8 @@ if (!values.run) {
       ...(await firestoreTaskSmoke(store)),
       dueTaskQueryExplain: await explainDueTaskQuery(store),
       schedules: await firestoreScheduleSmoke(store),
+      settings: await firestoreSettingsSmoke(store),
+      profilePeople: await firestoreProfilePeopleSmoke(store),
       approvals: await firestoreApprovalSmoke(store),
       runtime: await firestoreRuntimeSmoke(store),
       executor: await firestoreExecutorSmoke(store),

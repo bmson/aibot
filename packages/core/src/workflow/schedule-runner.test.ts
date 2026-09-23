@@ -50,6 +50,7 @@ function repository(
   const repo: ScheduleRepository = {
     kind: 'schedule-repository',
     listPage: async () => ({ items: [], nextCursor: null }),
+    setOwnerEnabled: async () => true,
     ensure: async (input) => schedule(input),
     getByName: async () => null,
     listUninitialized: async () => [],

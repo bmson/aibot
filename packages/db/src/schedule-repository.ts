@@ -120,6 +120,21 @@ export function createPostgresScheduleRepository(db: Db): ScheduleRepository {
       return row ?? null;
     },
 
+    async setOwnerEnabled(agentId, scheduleId, enabled) {
+      return db.transaction(async (tx) => {
+        await lockSchedule(tx, scheduleId);
+        const current = await lockedSchedule(tx, scheduleId);
+        if (!current || current.agentId !== agentId || current.name.startsWith('reminder:'))
+          return false;
+        const [updated] = await tx
+          .update(schedules)
+          .set({ enabled, ...(enabled ? { nextRunAt: null } : {}), updatedAt: sql`now()` })
+          .where(and(eq(schedules.id, scheduleId), eq(schedules.agentId, agentId)))
+          .returning({ id: schedules.id });
+        return Boolean(updated);
+      });
+    },
+
     async listUninitialized(limit) {
       const batch = scheduleBatch(limit);
       return db
