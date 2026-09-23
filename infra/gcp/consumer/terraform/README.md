@@ -27,7 +27,7 @@ terraform init \
   -backend-config="prefix=assistant/CUSTOMER_INSTALLATION_ID"
 ```
 
-The bootstrap bucket is outside this state. Keep its versioning, retention, access policy, and backup procedure under the customer's operational controls. Do not put credentials, secret values, image digests, or owner-claim material in Terraform variables or outputs.
+The bootstrap bucket is outside this state. Keep its versioning, retention, access policy, and backup procedure under the customer's operational controls. Do not put credentials, secret values, or owner-claim material in Terraform variables or outputs. The optional runtime accepts immutable image digests as non-secret inputs.
 
 ## Configuration
 
