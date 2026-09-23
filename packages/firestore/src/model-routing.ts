@@ -80,6 +80,7 @@ export class FirestoreModelRoutingRepository implements ModelRoutingRepository {
         this.store.doc('modelCalls', id),
         encodeRecord({
           ...input,
+          agentId: this.agentId,
           taskId: input.taskId ?? null,
           latencyMs: input.latencyMs ?? null,
           finishReason: input.finishReason ?? null,

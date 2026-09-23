@@ -625,6 +625,44 @@ describe.skipIf(!enabled)('Firestore workspace migration import', () => {
     }
   });
 
+  it('attributes imported model calls to the configured owner and verifies the projection', async () => {
+    const store = emulatorStore();
+    const target = {
+      projectId: 'demo-assistant-test',
+      databaseId: '(default)',
+      installationId: store.installationId,
+    };
+    try {
+      const source = bundle(target);
+      const id = randomUUID();
+      addRecord(source, {
+        table: 'model_calls',
+        collection: 'modelCalls',
+        id,
+        data: { id, taskId: null, role: 'extract', model: 'test', costUsd: '0.020000' },
+        checksum: '',
+      });
+      upgradeFixtureToV3(source);
+      await importWorkspaceBundle(store, source, {
+        sourceAgentId: source.manifest.source.agentId,
+        target,
+        mode: 'write',
+      });
+      const modelCall = store.doc('modelCalls', id);
+      expect((await modelCall.get()).get('agentId')).toBe(source.manifest.source.agentId);
+      await modelCall.update({ agentId: 'foreign-agent' });
+      await expect(
+        importWorkspaceBundle(store, source, {
+          sourceAgentId: source.manifest.source.agentId,
+          target,
+          mode: 'verify',
+        }),
+      ).rejects.toThrow('checksum mismatch');
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
   it.each([1, 2] as const)(
     'keeps v%s graph-source documents free of v3 projections',
     async (version) => {

@@ -140,6 +140,30 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
       store
         .doc('knowledgeGraphRelations', crossOwnerRelationId)
         .set(relation(crossOwnerRelationId, agentId, activeMemoryId, foreignId)),
+      ...Array.from({ length: 10 }, (_, index) =>
+        store.doc('modelCalls', `owner-extract-${index}`).set({
+          id: `owner-extract-${index}`,
+          agentId,
+          role: 'extract',
+          costUsd: '0.020000',
+          createdAt: now,
+        }),
+      ),
+      ...Array.from({ length: 10 }, (_, index) =>
+        store.doc('modelCalls', `foreign-extract-${index}`).set({
+          id: `foreign-extract-${index}`,
+          agentId: foreignAgentId,
+          role: 'extract',
+          costUsd: '99.000000',
+          createdAt: now,
+        }),
+      ),
+      store.doc('modelCalls', 'legacy-extract').set({
+        id: 'legacy-extract',
+        role: 'extract',
+        costUsd: '100.000000',
+        createdAt: now,
+      }),
     ]);
   });
 
@@ -163,6 +187,7 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
       selectedRelationTotal: 2,
       selectedActiveRelationTotal: 1,
     });
+    expect(graph.pendingCostUsd).toBeCloseTo(0.02, 6);
     expect(graph.relations.map((row: { id: string }) => row.id).sort()).toEqual(
       [activeId, staleId].sort(),
     );
@@ -197,6 +222,25 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
     expect((await detail(request('bad'), { params: Promise.resolve({ id: 'bad' }) })).status).toBe(
       400,
     );
+  });
+
+  it('fails closed for a target with more than one configured agent', async () => {
+    await store.doc('agents', foreignAgentId).set({ id: foreignAgentId });
+    try {
+      await expect(list(new Request('http://localhost/api/mobile/v1/knowledge'))).rejects.toThrow(
+        'exactly one configured agent',
+      );
+      await expect(
+        list(new Request('http://localhost/api/mobile/v1/knowledge?mode=review')),
+      ).rejects.toThrow('exactly one configured agent');
+      await expect(
+        detail(new Request(`http://localhost/api/mobile/v1/knowledge/${subjectId}`), {
+          params: Promise.resolve({ id: subjectId }),
+        }),
+      ).rejects.toThrow('exactly one configured agent');
+    } finally {
+      await store.doc('agents', foreignAgentId).delete();
+    }
   });
 
   it('allows only exact GET routes through the Firestore proxy', () => {

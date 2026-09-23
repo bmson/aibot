@@ -213,6 +213,7 @@ function projectRecord(
     if (typeof memory?.retrievalRevision === 'string')
       data.retrievalRevision = memory.retrievalRevision;
   }
+  if (record.table === 'model_calls') data.agentId = bundle.manifest.source.agentId;
   return data;
 }
 

@@ -13,6 +13,19 @@ const RELATION_LIMIT = 80;
 const RELATIVE_DATE =
   /\b(today|tomorrow|yesterday|(next|last|this)\s+(week|month|year)|(next|last|this|coming)\s+(mon|tues?|wed(nes)?|thur?s?|fri|satur|sun)day|(mon|tues?|wed(nes)?|thur?s?|fri|satur|sun)day)\b/i;
 
+async function assertConfiguredOwner(store: InstallationStore, agentId: string): Promise<void> {
+  const agents = await store.collection('agents').limit(2).get();
+  const owner = agents.docs[0];
+  if (
+    !agentId ||
+    agents.size !== 1 ||
+    !owner ||
+    owner.get('id') !== agentId ||
+    owner.id !== documentKey(agentId)
+  )
+    throw new Error('Knowledge graph requires exactly one configured agent');
+}
+
 async function byAgent<T extends { id: string; agentId: string }>(
   store: InstallationStore,
   collection: string,
@@ -147,6 +160,7 @@ export async function getFirestoreKnowledgeGraphOverview(
   now: Date = store.now(),
   batchLimit = 25,
 ) {
+  await assertConfiguredOwner(store, agentId);
   const fence = await readPrivacyErasureFence(store, agentId);
   const [entityRows, relationRows, memoryRows] = await Promise.all([
     byAgent<Entity>(store, 'knowledgeGraphEntities', agentId),
@@ -242,6 +256,7 @@ export async function getFirestoreKnowledgeGraphOverview(
   if (pendingMemories.length) {
     const calls = await store
       .collection('modelCalls')
+      .where('agentId', '==', agentId)
       .where('role', '==', 'extract')
       .orderBy('createdAt', 'desc')
       .limit(200)
@@ -251,6 +266,7 @@ export async function getFirestoreKnowledgeGraphOverview(
       .filter(
         (row) =>
           row.role === 'extract' &&
+          row.agentId === agentId &&
           row.createdAt instanceof Date &&
           Number.isFinite(Number(row.costUsd)),
       )
@@ -310,6 +326,7 @@ export async function getFirestoreKnowledgeGraphOverview(
     duplicates,
   };
   await assertPrivacyErasureFenceUnchanged(store, agentId, fence);
+  await assertConfiguredOwner(store, agentId);
   return result;
 }
 
@@ -320,6 +337,7 @@ export async function getFirestoreKnowledgeGraphReviewQueue(
   extractionVersion: number,
   now: Date = store.now(),
 ) {
+  await assertConfiguredOwner(store, agentId);
   const fence = await readPrivacyErasureFence(store, agentId);
   const relations = await byAgent<Relation>(store, 'knowledgeGraphRelations', agentId);
   const pending = relations
@@ -374,5 +392,6 @@ export async function getFirestoreKnowledgeGraphReviewQueue(
       : [];
   });
   await assertPrivacyErasureFenceUnchanged(store, agentId, fence);
+  await assertConfiguredOwner(store, agentId);
   return result;
 }

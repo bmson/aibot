@@ -473,6 +473,8 @@ export interface Records {
   };
   modelCalls: {
     id: string;
+    /** Firestore owner attribution; older installation-scoped rows may lack it. */
+    agentId?: string;
     createdAt: Date;
     taskId: string | null;
     role: string;
