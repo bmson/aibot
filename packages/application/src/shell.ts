@@ -3,7 +3,10 @@ import { getMemoryHealth } from '@assistant/core/memory/health';
 import type { Db } from '@assistant/db';
 import {
   type ApplicationChatPersistence,
+  isShellPresenceRepository,
   isShellStatusRepository,
+  type ShellPresence,
+  type ShellPresenceRepository,
   type ShellStatusProjection,
   type ShellStatusRepository,
 } from '@assistant/persistence';
@@ -62,4 +65,17 @@ export async function getShellStatus(
     getMemoryHealth(source as Db, agentId),
   ]);
   return { dashboard, memoryHealth };
+}
+
+export function getShellPresence(db: Db, agentId: string): Promise<ShellPresence>;
+export function getShellPresence(
+  repository: ShellPresenceRepository,
+  agentId: string,
+): Promise<ShellPresence>;
+export async function getShellPresence(
+  source: Db | ShellPresenceRepository,
+  agentId: string,
+): Promise<ShellPresence> {
+  if (isShellPresenceRepository(source)) return source.load(agentId);
+  return (await getDashboardPresence(source as Db, agentId)).presence;
 }

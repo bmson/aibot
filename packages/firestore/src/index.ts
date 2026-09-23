@@ -10,11 +10,13 @@ export { FirestoreExecutionJobRepository } from './execution-jobs.js';
 export { FirestoreGeneratedCardRepository } from './generated-cards.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
+export { FirestoreImportOverviewRepository } from './import-overview.js';
 export { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 export { embeddingSpaceKey, FirestoreMemoryRepository } from './memory.js';
 export { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 export { FirestoreMemoryToolRepository } from './memory-tools.js';
 export { FirestoreMessageRepository } from './messages.js';
+export { getFirestoreMobileCosts } from './mobile-costs.js';
 export { FirestoreModelRoutingRepository } from './model-routing.js';
 export {
   createWakeIntent,
@@ -45,6 +47,7 @@ export {
 export { FirestoreScheduleRepository } from './schedules.js';
 export { FirestoreSettingsRepository } from './settings.js';
 export { createFirestoreSettingsPersistence } from './settings-persistence.js';
+export { FirestoreShellPresenceRepository } from './shell-presence.js';
 export { FirestoreShellStatusRepository } from './shell-status.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { createInstallationStore, InstallationStore } from './store.js';
