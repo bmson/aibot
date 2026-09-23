@@ -14,11 +14,16 @@ const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
 
 describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL offline', () => {
   const installationId = `web-settings-${randomUUID()}`;
+  const databaseId = `web-settings-${randomUUID()}`;
   const agentId = randomUUID();
   const foreignAgentId = randomUUID();
   const policyId = randomUUID();
   const pausedPolicyId = randomUUID();
-  const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+  const store = createInstallationStore({
+    projectId: 'demo-assistant-test',
+    installationId,
+    databaseId,
+  });
   let page: typeof import('./page.js');
   let actions: typeof import('./actions.js');
 
@@ -28,6 +33,8 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     vi.stubEnv('GCP_PROJECT', 'demo-assistant-test');
     vi.stubEnv('ASSISTANT_WORKSPACE_ID', installationId);
     vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
+    vi.stubEnv('FIRESTORE_DATABASE_ID', databaseId);
+    vi.stubEnv('MCP_ENC_KEY', '22'.repeat(32));
     vi.stubEnv(
       'FIRESTORE_EMBEDDING_SPACE',
       '{"provider":"vertex","model":"example-embedding","dimensions":768,"revision":"fixture-v1"}',
@@ -143,7 +150,36 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     expect(html).toContain('Use');
     expect(html).toContain('Delete');
     expect(html).not.toContain('/costs');
-    expect(html).not.toContain('MCP connections');
+    expect(html).toContain('MCP connections');
+    expect(html).toContain('Tool discovery is unavailable with Firestore persistence.');
+  });
+
+  it('saves, toggles, and deletes MCP connections from Firestore Settings with encrypted credentials', async () => {
+    const created = await actions.createMcpConnectionAction({
+      name: 'Settings MCP',
+      endpoint: 'https://settings.example.test/mcp',
+      bearerToken: 'settings-secret-token',
+    });
+    expect(created).toEqual({});
+    let pageMarkup = renderToStaticMarkup(await page.default());
+    expect(pageMarkup).toContain('Settings MCP');
+    expect(pageMarkup).toContain('MCP discovery is unavailable in Firestore mode.');
+    const [connection] = (await store.collection('mcpConnections').get()).docs;
+    expect(connection.get('bearerTokenEncrypted')).not.toBe('settings-secret-token');
+    expect(connection.get('bearerTokenEncrypted')).toMatch(/^v2\./);
+    expect(connection.get('status')).toBe('error');
+
+    expect(await actions.refreshMcpConnectionAction(connection.get('id'))).toEqual({
+      error: 'MCP discovery is unavailable in Firestore mode.',
+    });
+    expect(await actions.setMcpConnectionEnabledAction(connection.get('id'), false)).toEqual({});
+    expect((await store.doc('mcpConnections', connection.get('id')).get()).get('enabled')).toBe(
+      false,
+    );
+    expect(await actions.deleteMcpConnectionAction(connection.get('id'))).toEqual({});
+    expect((await store.doc('mcpConnections', connection.get('id')).get()).exists).toBe(false);
+    pageMarkup = renderToStaticMarkup(await page.default());
+    expect(pageMarkup).toContain('No MCP connections yet.');
   });
 
   it('updates notification preferences through the validated Firestore settings facade', async () => {

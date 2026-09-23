@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { resetConfigForTest } from '@assistant/config';
 import {
   createInstallationStore,
+  FirestoreMcpConnectionMutationRepository,
   FirestoreMcpConnectionReadRepository,
 } from '@assistant/firestore';
 import { NextRequest } from 'next/server';
@@ -21,11 +22,18 @@ const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
 describe.skipIf(!localEmulator)(
   'Firestore mobile MCP connection summaries with PostgreSQL offline',
   () => {
+    const databaseId = `mobile-mcp-${randomUUID()}`;
     const installationId = `mobile-mcp-read-${randomUUID()}`;
     const agentId = randomUUID();
     const foreignAgentId = randomUUID();
-    const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+    const foreignId = randomUUID();
+    const store = createInstallationStore({
+      projectId: 'demo-assistant-test',
+      installationId,
+      databaseId,
+    });
     let route: typeof import('./route.js');
+    let itemRoute: typeof import('./[id]/route.js');
 
     const connection = (id: string, name: string, patch: Record<string, unknown> = {}) => ({
       id,
@@ -52,6 +60,8 @@ describe.skipIf(!localEmulator)(
       vi.stubEnv('GCP_PROJECT', 'demo-assistant-test');
       vi.stubEnv('ASSISTANT_WORKSPACE_ID', installationId);
       vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
+      vi.stubEnv('FIRESTORE_DATABASE_ID', databaseId);
+      vi.stubEnv('MCP_ENC_KEY', '11'.repeat(32));
       vi.stubEnv(
         'FIRESTORE_EMBEDDING_SPACE',
         '{"provider":"vertex","model":"fixture","dimensions":768,"revision":"1"}',
@@ -64,10 +74,10 @@ describe.skipIf(!localEmulator)(
       resetConfigForTest();
       auth.allowed.mockResolvedValue(true);
       route = await import('./route.js');
+      itemRoute = await import('./[id]/route.js');
       const alphaId = randomUUID();
       const betaId = randomUUID();
       const zuluId = randomUUID();
-      const foreignId = randomUUID();
       await Promise.all([
         store.doc('agents', agentId).set({ id: agentId }),
         store
@@ -95,6 +105,17 @@ describe.skipIf(!localEmulator)(
       expect(proxy(new NextRequest('http://localhost/api/mobile/v1/mcp')).status).toBe(200);
       expect(
         proxy(new NextRequest('http://localhost/api/mobile/v1/mcp', { method: 'POST' })).status,
+      ).toBe(200);
+      expect(
+        proxy(
+          new NextRequest(`http://localhost/api/mobile/v1/mcp/${randomUUID()}`, {
+            method: 'DELETE',
+          }),
+        ).status,
+      ).toBe(200);
+      expect(
+        proxy(new NextRequest('http://localhost/api/mobile/v1/mcp/not-a-uuid', { method: 'POST' }))
+          .status,
       ).toBe(503);
       auth.allowed.mockResolvedValue(false);
       expect((await route.GET(new Request('http://localhost/api/mobile/v1/mcp'))).status).toBe(401);
@@ -134,6 +155,76 @@ describe.skipIf(!localEmulator)(
         new FirestoreMcpConnectionReadRepository(store, agentId).list(agentId),
       ).rejects.toThrow('Privacy erasure is in progress');
       await store.doc('privacyErasureJobs', agentId).delete();
+    });
+
+    it('creates an encrypted owner connection and supports enable, disable, and delete offline', async () => {
+      auth.allowed.mockResolvedValue(true);
+      const createdResponse = await route.POST(
+        new Request('http://localhost/api/mobile/v1/mcp', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            name: ' New   Service ',
+            endpoint: 'https://service.example.test/mcp#ignored',
+            bearerToken: 'owner-secret-token',
+          }),
+        }),
+      );
+      expect(createdResponse.status).toBe(201);
+      const created = await createdResponse.json();
+      expect(created).toMatchObject({
+        status: 'error',
+        error: 'MCP discovery is unavailable in Firestore mode.',
+      });
+      const stored = await store.doc('mcpConnections', created.connectionId).get();
+      expect(stored.get('name')).toBe('New Service');
+      expect(stored.get('endpoint')).toBe('https://service.example.test/mcp');
+      expect(stored.get('bearerTokenEncrypted')).not.toBe('owner-secret-token');
+      expect(stored.get('bearerTokenEncrypted')).toMatch(/^v2\./);
+
+      const postAction = (action: string) =>
+        itemRoute.POST(
+          new Request(`http://localhost/api/mobile/v1/mcp/${created.connectionId}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action }),
+          }),
+          { params: Promise.resolve({ id: created.connectionId }) },
+        );
+      const disabled = await postAction('disable');
+      expect(await disabled.json()).toMatchObject({ status: 'disabled' });
+      const enabled = await postAction('enable');
+      expect(await enabled.json()).toMatchObject({
+        status: 'error',
+        error: 'MCP discovery is unavailable in Firestore mode.',
+      });
+      expect((await postAction('refresh')).status).toBe(503);
+      expect((await store.doc('mcpConnections', created.connectionId).get()).get('enabled')).toBe(
+        true,
+      );
+      const deleted = await itemRoute.DELETE(
+        new Request(`http://localhost/api/mobile/v1/mcp/${created.connectionId}`, {
+          method: 'DELETE',
+        }),
+        { params: Promise.resolve({ id: created.connectionId }) },
+      );
+      expect(await deleted.json()).toEqual({ ok: true });
+      expect((await store.doc('mcpConnections', created.connectionId).get()).exists).toBe(false);
+    });
+
+    it('fences create and mutations during erasure and refuses foreign connection ids', async () => {
+      const repository = new FirestoreMcpConnectionMutationRepository(store, agentId);
+      await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+      await expect(
+        repository.create({
+          name: 'blocked',
+          endpoint: 'https://blocked.example/mcp',
+          bearerTokenEncrypted: null,
+        }),
+      ).resolves.toMatchObject({ error: 'Privacy erasure is in progress' });
+      await store.doc('privacyErasureJobs', agentId).delete();
+      expect(await repository.setEnabled(foreignId, false)).toBeNull();
+      expect(await repository.delete(foreignId)).toBe(false);
     });
   },
 );

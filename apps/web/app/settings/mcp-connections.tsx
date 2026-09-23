@@ -21,7 +21,11 @@ type McpConnection = {
   serverName: string | null;
   serverVersion: string | null;
   instructions: string | null;
-  tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+  tools: Array<{
+    name: string;
+    description?: string;
+    inputSchema?: Record<string, unknown>;
+  }>;
   lastCheckedAt: Date | null;
   lastError: string | null;
 };
@@ -41,7 +45,13 @@ const STATUS: Record<
  * This intentionally uses the same server actions as the mobile transport:
  * discovery belongs to the owner-managed connection, not to either client.
  */
-export function McpConnectionsPanel({ connections }: { connections: McpConnection[] }) {
+export function McpConnectionsPanel({
+  connections,
+  discoveryAvailable = true,
+}: {
+  connections: McpConnection[];
+  discoveryAvailable?: boolean;
+}) {
   const [name, setName] = useState('');
   const [endpoint, setEndpoint] = useState('');
   const [bearerToken, setBearerToken] = useState('');
@@ -69,8 +79,9 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
     <div className="flex flex-col gap-5">
       <div>
         <p className="text-sm leading-6 text-muted">
-          Connect Streamable HTTP MCP servers here. The assistant can inspect their tools, but every
-          remote call still follows your approval rules.
+          {discoveryAvailable
+            ? 'Connect Streamable HTTP MCP servers here. The assistant can inspect their tools, but every remote call still follows your approval rules.'
+            : 'Save and manage Streamable HTTP MCP endpoints here. Tool discovery is unavailable with Firestore persistence.'}
         </p>
       </div>
 
@@ -134,7 +145,7 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
           ) : (
             <Cable className="size-4" />
           )}
-          {pendingAction === 'create' ? 'Inspecting…' : 'Add'}
+          {pendingAction === 'create' ? (discoveryAvailable ? 'Inspecting…' : 'Saving…') : 'Add'}
         </button>
       </form>
 
@@ -183,21 +194,23 @@ export function McpConnectionsPanel({ connections }: { connections: McpConnectio
                     ) : null}
                   </div>
                   <div className="flex shrink-0 flex-wrap gap-2">
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() =>
-                        run(actionKey('refresh'), () => refreshMcpConnectionAction(connection.id))
-                      }
-                      className={btnSm.outline}
-                    >
-                      {pendingAction === actionKey('refresh') ? (
-                        <LoaderCircle className="size-3 motion-safe:animate-spin" />
-                      ) : (
-                        <RefreshCw className="size-3" />
-                      )}
-                      Refresh
-                    </button>
+                    {discoveryAvailable ? (
+                      <button
+                        type="button"
+                        disabled={pending}
+                        onClick={() =>
+                          run(actionKey('refresh'), () => refreshMcpConnectionAction(connection.id))
+                        }
+                        className={btnSm.outline}
+                      >
+                        {pendingAction === actionKey('refresh') ? (
+                          <LoaderCircle className="size-3 motion-safe:animate-spin" />
+                        ) : (
+                          <RefreshCw className="size-3" />
+                        )}
+                        Refresh
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       disabled={pending}

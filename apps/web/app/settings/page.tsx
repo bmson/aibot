@@ -5,6 +5,7 @@ import {
   assertPrivacyErasureFenceUnchanged,
   createFirestoreSettingsPersistence,
   createInstallationStore,
+  FirestoreMcpConnectionReadRepository,
   readPrivacyErasureFence,
 } from '@assistant/firestore';
 import { ArrowRight } from 'lucide-react';
@@ -19,7 +20,7 @@ import { MobileTokenPanel } from '@/app/settings/mobile-token';
 import { NotificationForm } from '@/app/settings/notification-form';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
-import { getApplication } from '@/lib/server';
+import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
 import {
   Badge,
   Card,
@@ -100,7 +101,8 @@ function SettingRow({
 
 export default async function SettingsPage() {
   await requireOwner();
-  const readOnly = loadConfig().PERSISTENCE_DRIVER === 'firestore';
+  const config = loadConfig();
+  const readOnly = config.PERSISTENCE_DRIVER === 'firestore';
   const now = new Date();
   const [
     {
@@ -113,7 +115,14 @@ export default async function SettingsPage() {
     mcpConnections,
     proactiveHealth,
   ] = readOnly
-    ? [await getFirestorePageSettings(), [], null]
+    ? [
+        await getFirestorePageSettings(),
+        await new FirestoreMcpConnectionReadRepository(
+          getFirestoreInstallationStore(),
+          config.FIRESTORE_AGENT_ID,
+        ).list(config.FIRESTORE_AGENT_ID),
+        null,
+      ]
     : await Promise.all([
         getApplication().getSettings(),
         getApplication().listMcpConnections(),
@@ -128,7 +137,6 @@ export default async function SettingsPage() {
   // RSC payload would be one cached-response or shoulder-surf away from a
   // bearer credential that bypasses web sign-in entirely. The full value is
   // revealed once, at rotation time, by the action that generates it.
-  const config = loadConfig();
   const requestHeaders = readOnly ? null : await headers();
   const host = requestHeaders?.get('x-forwarded-host') ?? requestHeaders?.get('host') ?? '';
   const proto = requestHeaders?.get('x-forwarded-proto') ?? 'http';
@@ -264,18 +272,16 @@ export default async function SettingsPage() {
       </section>
 
       {/* MCP servers */}
-      {!readOnly && (
-        <section>
-          <SectionHeading
-            title="MCP connections"
-            count={mcpConnections.length}
-            hint="remote tool servers available to this assistant"
-          />
-          <Card className="mt-3">
-            <McpConnectionsPanel connections={mcpConnections} />
-          </Card>
-        </section>
-      )}
+      <section>
+        <SectionHeading
+          title="MCP connections"
+          count={mcpConnections.length}
+          hint="remote tool servers available to this assistant"
+        />
+        <Card className="mt-3">
+          <McpConnectionsPanel connections={mcpConnections} discoveryAvailable={!readOnly} />
+        </Card>
+      </section>
 
       {/* Schedules */}
       <section>
