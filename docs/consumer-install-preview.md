@@ -1,5 +1,7 @@
 # Offline consumer installation preview
 
+For a guided local artifact setup from explicit target and owner details, start with [consumer preparation](consumer-prepare.md). It writes a validated manifest and a private, deliberately incomplete runtime-seed template after verifying the exact local archive digest; it does not contact Google Cloud.
+
 `pnpm install:plan --input install-input.json` validates a proposed installation and prints JSON. It needs no Google sign-in, runtime environment file, database credentials, or model API key. It does not call a provisioner, enable APIs, create resources, or write a manifest to disk. `pnpm install:plan --help` shows usage.
 
 This is a developer preview, not the finished single-click installer. The response always contains `mode: "preview-only"` and `runtimeGated: true`, plus the remaining implementation and live-validation gates.

@@ -62,6 +62,7 @@
     "workspace:assets-audit": "tsx scripts/workspace-asset-audit.ts",
     "workspace:assets-recover": "tsx scripts/workspace-asset-recovery.ts",
     "consumer:install": "tsx scripts/consumer-install.ts",
+    "consumer:prepare": "tsx scripts/consumer-prepare.ts",
     "consumer:seed-runtime": "tsx scripts/consumer-runtime-seed.ts",
     "consumer:publish-images": "tsx scripts/consumer-publish-images.ts"
   },
