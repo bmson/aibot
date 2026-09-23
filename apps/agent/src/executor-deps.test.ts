@@ -87,6 +87,7 @@ describe('executorDeps channel composition', () => {
     channelUnavailable: (taskType: string) => string | null = () => null,
   ): AgentDeps =>
     ({
+      config: { PERSISTENCE_DRIVER: 'postgres' },
       db: {},
       // The composition root hands agentServices the policy-gated phone legs
       // as a unit; the fixture stands in for it directly.

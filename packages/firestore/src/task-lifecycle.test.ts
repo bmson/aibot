@@ -121,6 +121,33 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect((await store.doc('tasks', 'task').get()).get('status')).toBe('needs_attention');
       expect((await store.collection('outbox').get()).size).toBe(0);
     });
+    it('scopes recovery and the limited due batch before touching foreign tasks', async () => {
+      for (let i = 0; i < 4; i++) {
+        await store.doc('tasks', `foreign-${i}`).set({
+          ...taskFixture({
+            id: `foreign-${i}`,
+            agentId: 'foreign-agent',
+            conversationId: 'foreign-conversation',
+            reminderId: 'reminder',
+          }),
+          updatedAt: new Date(0),
+          ...(i === 0 ? { status: 'running', lockedUntil: new Date(0) } : {}),
+        });
+      }
+      expect((await repo.findDueTasksForAgent('agent', 1)).map((task) => task.id)).toEqual([
+        'task',
+      ]);
+      const foreignRunning = await store.doc('tasks', 'foreign-0').get();
+      expect(foreignRunning.get('status')).toBe('running');
+      expect(foreignRunning.get('reclaimCount')).toBe(0);
+      expect(foreignRunning.get('queueGeneration')).toBe(0);
+      expect((await repo.findDueTasksForAgent('foreign-agent', 3)).map((task) => task.id)).toEqual([
+        'foreign-0',
+        'foreign-1',
+        'foreign-2',
+      ]);
+      expect((await store.doc('tasks', 'foreign-0').get()).get('status')).toBe('pending');
+    });
     it('persists plans only for the current owner lease', async () => {
       const first = await repo.claim('task');
       if (!first) throw new Error('Missing initial lease');

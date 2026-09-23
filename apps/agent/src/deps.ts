@@ -21,6 +21,7 @@ import { createDb, createPostgresExecutionPersistence, type Db } from '@assistan
 import {
   createFirestoreExecutionPersistence,
   createInstallationStore,
+  type FirestoreTaskRepository,
   type InstallationStore,
 } from '@assistant/firestore';
 import {
@@ -60,6 +61,7 @@ export interface AgentDeps {
   db: Db;
   persistence?: ExecutionPersistence;
   firestoreStore?: InstallationStore;
+  firestoreTasks?: FirestoreTaskRepository;
   router: ModelRouter;
   registry: ToolRegistry;
   dispatcher: ToolDispatcher;
@@ -70,6 +72,13 @@ export interface AgentDeps {
   outOfBandNotifier: OwnerNotifier;
   browserLauncher?: BrowserJobLauncher;
   documentProcessor?: DocumentProcessorConfig;
+}
+
+/** Shared readiness fence for the probe and the Firestore local queue. */
+export async function firestoreOwnerReady(deps: AgentDeps): Promise<boolean> {
+  if (!deps.firestoreStore) return false;
+  const owner = await deps.firestoreStore.doc('agents', deps.config.FIRESTORE_AGENT_ID).get();
+  return owner.exists && owner.get('id') === deps.config.FIRESTORE_AGENT_ID;
 }
 
 /**
@@ -295,6 +304,7 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     config,
     db,
     firestoreStore: store,
+    firestoreTasks: persistence.tasks,
     persistence,
     router,
     registry,

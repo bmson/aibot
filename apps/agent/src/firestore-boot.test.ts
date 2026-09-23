@@ -31,6 +31,31 @@ describe.skipIf(!localEmulator)('Firestore agent process without PostgreSQL', ()
 
   it('boots, reports Firestore readiness, and executes a queued task with PostgreSQL offline', async () => {
     const tasks = new FirestoreTaskRepository(store);
+    const task = await tasks.createTask({
+      agentId,
+      type: 'adhoc',
+      trust: 'assistant',
+      trigger: { source: 'internal', payload: { kind: 'application_confirmation' } },
+    });
+    const foreignAgentId = randomUUID();
+    const foreign = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        tasks.createTask({
+          agentId: foreignAgentId,
+          type: 'adhoc',
+          trust: 'assistant',
+          trigger: { source: 'internal', payload: { kind: 'application_confirmation' } },
+        }),
+      ),
+    );
+    const foreignRunning = foreign[0];
+    if (!foreignRunning) throw new Error('Missing foreign task fixture');
+    for (const [index, row] of foreign.entries()) {
+      await store.doc('tasks', row.task.id).update({
+        updatedAt: new Date(0),
+        ...(index === 0 ? { status: 'running', lockedUntil: new Date(0) } : {}),
+      });
+    }
     const port = 20000 + Math.floor(Math.random() * 30000);
     const entry = fileURLToPath(new URL('./index.ts', import.meta.url));
     child = spawn(process.execPath, ['--import', 'tsx', entry], {
@@ -72,23 +97,14 @@ describe.skipIf(!localEmulator)('Firestore agent process without PostgreSQL', ()
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
     expect(unavailable?.status).toBe(503);
+    // The local poller has ticked, but must not claim or reclaim while /ready is 503.
+    await new Promise((resolve) => setTimeout(resolve, 2_300));
+    expect((await tasks.getTask(task.task.id))?.status).toBe('pending');
+    expect((await tasks.getTask(foreignRunning.task.id))?.status).toBe('running');
     await store.doc('agents', agentId).set({ id: agentId, name: 'Test owner' });
     const readyResponse = await fetch(`http://127.0.0.1:${port}/ready`);
     const ready: unknown = await readyResponse.json();
     expect(ready).toMatchObject({ ready: true, database: 'firestore' });
-
-    const task = await tasks.createTask({
-      agentId,
-      type: 'adhoc',
-      trust: 'assistant',
-      trigger: { source: 'internal', payload: { kind: 'application_confirmation' } },
-    });
-    const foreign = await tasks.createTask({
-      agentId: randomUUID(),
-      type: 'adhoc',
-      trust: 'assistant',
-      trigger: { source: 'internal', payload: { kind: 'application_confirmation' } },
-    });
 
     let status: string | undefined;
     for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -97,7 +113,10 @@ describe.skipIf(!localEmulator)('Firestore agent process without PostgreSQL', ()
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
     expect(status, output).toBe('cancelled');
-    expect((await tasks.getTask(foreign.task.id))?.status).toBe('pending');
+    expect((await tasks.getTask(foreignRunning.task.id))?.status).toBe('running');
+    for (const row of foreign.slice(1)) {
+      expect((await tasks.getTask(row.task.id))?.status).toBe('pending');
+    }
     expect(output).toContain('local queue poller started');
     expect(output).not.toContain('PostgreSQL access is unavailable');
   }, 25_000);

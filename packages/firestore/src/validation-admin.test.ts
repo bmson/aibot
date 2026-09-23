@@ -286,4 +286,16 @@ it('keeps deployable composite indexes and field overrides in their correct sect
       'status:ASCENDING,kind:ASCENDING,nextPollAt:ASCENDING',
     ]),
   );
+  const taskIndexes = spec.indexes
+    .filter((index: { collectionGroup: string }) => index.collectionGroup === 'tasks')
+    .map((index: { fields: Array<{ fieldPath: string; order: string }> }) =>
+      index.fields.map((field) => `${field.fieldPath}:${field.order}`).join(','),
+    );
+  expect(taskIndexes).toEqual(
+    expect.arrayContaining([
+      'agentId:ASCENDING,status:ASCENDING,lockedUntil:ASCENDING',
+      'agentId:ASCENDING,status:ASCENDING,updatedAt:ASCENDING,runAfter:ASCENDING',
+      'agentId:ASCENDING,runAfter:ASCENDING,status:ASCENDING,updatedAt:ASCENDING',
+    ]),
+  );
 });

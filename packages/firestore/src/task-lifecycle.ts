@@ -350,11 +350,21 @@ export class FirestoreTaskRepository
     return result ? { id: result.id, queueGeneration: result.queueGeneration } : null;
   }
   async findDueTasks(limit = 10): Promise<Task[]> {
+    return this.findDueTasksWithinScope(limit);
+  }
+  /** Limit and reclaim only this agent's tasks; caller-side filtering is too late. */
+  async findDueTasksForAgent(agentId: string, limit = 10): Promise<Task[]> {
+    if (!agentId) throw new Error('Agent ID required for scoped due tasks');
+    return this.findDueTasksWithinScope(limit, agentId);
+  }
+  private async findDueTasksWithinScope(limit: number, agentId?: string): Promise<Task[]> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 200)
       throw new Error('Invalid due-task batch');
     const now = this.store.now();
-    const expired = await this.store
-      .collection('tasks')
+    const expired = await (agentId
+      ? this.store.collection('tasks').where('agentId', '==', agentId)
+      : this.store.collection('tasks')
+    )
       .where('status', '==', 'running')
       .where(
         Filter.or(Filter.where('lockedUntil', '==', null), Filter.where('lockedUntil', '<=', now)),
@@ -365,7 +375,12 @@ export class FirestoreTaskRepository
     for (const snapshot of expired.docs) {
       await this.change(String(snapshot.get('id')), (row, at) => {
         // Recheck expiry under the transaction: a renewal after the query must win.
-        if (row.status !== 'running' || (row.lockedUntil && row.lockedUntil > at)) return null;
+        if (
+          (agentId && row.agentId !== agentId) ||
+          row.status !== 'running' ||
+          (row.lockedUntil && row.lockedUntil > at)
+        )
+          return null;
         const reclaimCount = row.reclaimCount + 1;
         return {
           reclaimCount,
@@ -383,7 +398,7 @@ export class FirestoreTaskRepository
         };
       });
     }
-    const due = await dueTasksQuery(this.store, now, limit).get();
+    const due = await dueTasksQuery(this.store, now, limit, agentId).get();
     return due.docs.map((doc) => decodeRecord<Task>(doc.data()));
   }
 }
@@ -393,9 +408,11 @@ export function dueTasksQuery(
   store: import('./store.js').InstallationStore,
   now: Date,
   limit: number,
+  agentId?: string,
 ) {
-  return store
-    .collection('tasks')
+  return (
+    agentId ? store.collection('tasks').where('agentId', '==', agentId) : store.collection('tasks')
+  )
     .where(
       Filter.or(
         Filter.and(

@@ -12,7 +12,7 @@ import {
   resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
-import { type AgentDeps, agentServices } from './deps.js';
+import { type AgentDeps, agentServices, firestoreOwnerReady } from './deps.js';
 import { executorDeps } from './executor-deps.js';
 import { executeAgentTask } from './task-runner.js';
 
@@ -128,9 +128,10 @@ export function startPoller(deps: AgentDeps): () => void {
       // Sliced as well as limited: the budget is what this process can afford
       // to run, so it is enforced here rather than assumed of the query.
       if (deps.config.PERSISTENCE_DRIVER === 'firestore') {
-        const tasks = deps.persistence?.tasks;
+        const tasks = deps.firestoreTasks;
         if (!tasks) throw new Error('Firestore execution persistence is unavailable');
-        due = (await tasks.findDueTasks(capacity)).slice(0, capacity);
+        if (!(await firestoreOwnerReady(deps))) return;
+        due = await tasks.findDueTasksForAgent(deps.config.FIRESTORE_AGENT_ID, capacity);
       } else {
         due = (await findDueTasks(deps.db, capacity)).slice(0, capacity);
       }
