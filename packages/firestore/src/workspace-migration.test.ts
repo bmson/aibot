@@ -3,6 +3,7 @@ import {
   checksum,
   checksumV3,
   deterministicMigrationCompare,
+  MIGRATION_TABLES,
   type MigrationBundle,
   type MigrationRecord,
   serializeMigrationTimestamp,
@@ -17,7 +18,7 @@ import { FirestoreScheduleRepository } from './schedules.js';
 import { decodeRecord } from './store.js';
 import { FirestoreTaskLeaseRepository } from './tasks.js';
 import { disposeStore, emulatorStore } from './test-store.js';
-import { importWorkspaceBundle } from './workspace-migration.js';
+import { activateWorkspaceBundle, importWorkspaceBundle } from './workspace-migration.js';
 
 const enabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
 
@@ -180,6 +181,41 @@ function upgradeFixtureToV3(source: MigrationBundle): void {
     summary.checksum = checksumV3(records);
   }
   source.manifest.bundleChecksum = checksumV3(source.records);
+}
+
+function completeV3Bundle(target: MigrationBundle['manifest']['target']): MigrationBundle {
+  const source = bundle(target);
+  const agent = source.records.find((record) => record.table === 'agents');
+  const task = source.records.find((record) => record.table === 'tasks');
+  if (!agent || !task) throw new Error('test owner/task missing');
+  source.manifest.formatVersion = 3;
+  source.manifest.source.exportedAt = '2026-09-23T06:30:00.000000Z';
+  source.manifest.tables = Object.fromEntries(
+    MIGRATION_TABLES.map(({ table, collection }) => [
+      table,
+      { collection, count: 0, checksum: checksumV3([]) },
+    ]),
+  ) as MigrationBundle['manifest']['tables'];
+  agent.checksum = checksumV3(agent.data);
+  source.manifest.tables.agents = {
+    collection: 'agents',
+    count: 1,
+    checksum: checksumV3([agent]),
+  };
+  task.checksum = checksumV3(task.data);
+  source.manifest.tables.tasks = {
+    collection: 'tasks',
+    count: 1,
+    checksum: checksumV3([task]),
+  };
+  source.manifest.coverage = {
+    complete: true,
+    supportedTables: MIGRATION_TABLES.map(({ table }) => table),
+    omittedTables: [],
+  };
+  source.manifest.recordCount = source.records.length;
+  source.manifest.bundleChecksum = checksumV3(source.records);
+  return source;
 }
 
 describe('Firestore migration preview', () => {
@@ -367,6 +403,108 @@ describe.skipIf(!enabled)('Firestore workspace migration import', () => {
           mode: 'write',
         }),
       ).rejects.toThrow('not empty');
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('activates only a fully verified pinned v3 bundle with explicit cutover evidence', async () => {
+    const store = emulatorStore();
+    const target = {
+      projectId: 'demo-assistant-test',
+      databaseId: '(default)',
+      installationId: store.installationId,
+    };
+    try {
+      const source = completeV3Bundle(target);
+      const sourceAgentId = source.manifest.source.agentId;
+      const bytes = Buffer.from(JSON.stringify(source));
+      const evidence = {
+        sourceWriteFenceId: 'change-2026-09-23-001',
+        sourceWritesDrainedAt: '2026-09-23T06:30:00.000Z',
+        snapshotUri: `gs://${target.projectId}-workspace/workspace/${target.installationId}/migration/snapshots/cutover.json`,
+        snapshotGeneration: '1790144100630773',
+        snapshotSha256: createHash('sha256').update(bytes).digest('hex'),
+      };
+      await importWorkspaceBundle(store, source, { sourceAgentId, target, mode: 'write' });
+      const task = source.records.find((record) => record.table === 'tasks');
+      if (!task) throw new Error('test task missing');
+      const leases = new FirestoreTaskLeaseRepository(store);
+      expect(await leases.claim(task.id)).toBeNull();
+      const activation = () =>
+        activateWorkspaceBundle(store, source, {
+          sourceAgentId,
+          target,
+          evidence,
+          snapshotBytes: bytes,
+        });
+      await expect(activation()).resolves.toMatchObject({
+        activated: true,
+        alreadyActivated: false,
+        bundleChecksum: source.manifest.bundleChecksum,
+      });
+      expect((await store.doc('coordination', 'migration').get()).get('status')).toBe('active');
+      expect(await leases.claim(task.id)).not.toBeNull();
+      await expect(activation()).resolves.toMatchObject({
+        activated: true,
+        alreadyActivated: true,
+      });
+      await expect(
+        activateWorkspaceBundle(store, source, {
+          sourceAgentId,
+          target,
+          evidence: { ...evidence, sourceWriteFenceId: 'different-fence' },
+          snapshotBytes: bytes,
+        }),
+      ).rejects.toThrow('conflicting cutover evidence');
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('leaves the imported workspace gated when activation evidence does not match the pinned bytes', async () => {
+    const store = emulatorStore();
+    const target = {
+      projectId: 'demo-assistant-test',
+      databaseId: '(default)',
+      installationId: store.installationId,
+    };
+    try {
+      const source = completeV3Bundle(target);
+      const sourceAgentId = source.manifest.source.agentId;
+      const bytes = Buffer.from(JSON.stringify(source));
+      await importWorkspaceBundle(store, source, { sourceAgentId, target, mode: 'write' });
+      await expect(
+        activateWorkspaceBundle(store, source, {
+          sourceAgentId,
+          target,
+          snapshotBytes: bytes,
+          evidence: {
+            sourceWriteFenceId: 'change-2026-09-23-002',
+            sourceWritesDrainedAt: '2026-09-23T06:31:00.000Z',
+            snapshotUri: `gs://${target.projectId}-workspace/workspace/${target.installationId}/migration/snapshots/cutover.json`,
+            snapshotGeneration: '1790144100630773',
+            snapshotSha256: createHash('sha256').update(bytes).digest('hex'),
+          },
+        }),
+      ).rejects.toThrow('exported before the recorded source drain');
+      await expect(
+        activateWorkspaceBundle(store, source, {
+          sourceAgentId,
+          target,
+          snapshotBytes: bytes,
+          evidence: {
+            sourceWriteFenceId: 'change-2026-09-23-002',
+            sourceWritesDrainedAt: '2026-09-23T06:30:00.000Z',
+            snapshotUri: `gs://${target.projectId}-workspace/workspace/${target.installationId}/migration/snapshots/cutover.json`,
+            snapshotGeneration: '1790144100630773',
+            snapshotSha256: '0'.repeat(64),
+          },
+        }),
+      ).rejects.toThrow('do not match the supplied SHA-256');
+      expect((await store.doc('coordination', 'migration').get()).get('status')).toBe(
+        'pending_activation',
+      );
     } finally {
       await disposeStore(store);
     }

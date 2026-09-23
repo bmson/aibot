@@ -67,6 +67,26 @@ FIRESTORE_EMULATOR_HOST=127.0.0.1:8789 pnpm workspace:import --verify \
 
 Verification rereads every expected source and derived document, compares its checksum, verifies exact collection counts, and requires a complete `pending_activation` marker for the same bundle. Cloud verification also requires `--allow-cloud` as an explicit target-selection fence.
 
+## Explicit activation after final cutover
+
+Activation is a separate operator action. It re-verifies the complete version 3 bundle against Firestore, reads the specified Cloud Storage object generation with `gcloud storage cat`, checks that those exact pinned bytes match the local bundle, SHA-256, and bundle checksum, then changes the matching migration marker from `pending_activation` to `active` in one Firestore transaction. Cloud activation requires an active `gcloud` identity with read access to that object. The transaction permits only one evidence set; an identical retry is idempotent and a different bundle or evidence set is rejected. Task claims and schedule occurrence commits become eligible after this marker transition.
+
+Before activation, stop every PostgreSQL writer and background worker, drain in-flight work, and create a fresh complete export after the fence. Activation checks that the bundle export timestamp is not earlier than the recorded drain time. Retain the operator's source-fence/change identifier and the time the drain was confirmed. Supply the exact GCS object URI, generation, and SHA-256 for the exported bytes. The CLI checks that the URI is in this installation's workspace snapshot prefix and reads the exact generation to compare it with the local file bytes. It cannot independently inspect the PostgreSQL write fence; `--source-write-fence-id` and `--source-writes-drained-at` are explicit operator attestations, not proof from PostgreSQL. Do not activate until the external fence and runtime acceptance have been independently confirmed.
+
+```sh
+pnpm workspace:import --activate --allow-cloud \
+  --in final-cutover.json --agent-id SOURCE_AGENT_UUID \
+  --project-id CUSTOMER_PROJECT --database-id DATABASE_ID \
+  --installation-id INSTALLATION_ID \
+  --source-write-fence-id CHANGE_OR_FENCE_IDENTIFIER \
+  --source-writes-drained-at 2026-09-23T06:30:00.000Z \
+  --snapshot-uri gs://CUSTOMER_PROJECT-workspace/workspace/INSTALLATION_ID/migration/snapshots/EXECUTION.json \
+  --snapshot-generation SNAPSHOT_GENERATION \
+  --snapshot-sha256 SNAPSHOT_SHA256
+```
+
+The command never prints snapshot contents or credentials. This activation command does not change the Cloud Run persistence driver or delete PostgreSQL. A production cutover still requires application deployment/configuration, workload acceptance, a verified managed Firestore backup and restore, and a separately retained PostgreSQL backup.
+
 ## Firestore backup and restore rehearsal
 
 After Firestore activation, PostgreSQL-independent recovery uses Firestore's managed export/import service. It exports the complete customer database to a customer-owned GCS prefix. The version 2 companion manifest records the source identity, completed operation, resolved export prefix, every export object's generation/size/checksum, document counts, collection paths, and a canonical SHA-256 inventory using Firestore wire types. Recursive traversal includes nested collections beneath missing ancestor documents.

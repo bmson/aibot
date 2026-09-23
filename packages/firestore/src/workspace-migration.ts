@@ -24,6 +24,22 @@ export type WorkspaceImportResult = {
   verified?: boolean;
 };
 
+export type WorkspaceActivationEvidence = {
+  /** Operator-recorded identifier for the external PostgreSQL write fence. */
+  sourceWriteFenceId: string;
+  /** UTC timestamp at which the operator confirmed source writers had drained. */
+  sourceWritesDrainedAt: string;
+  snapshotUri: string;
+  snapshotGeneration: string;
+  snapshotSha256: string;
+};
+
+export type WorkspaceActivationResult = {
+  activated: true;
+  alreadyActivated: boolean;
+  bundleChecksum: string;
+};
+
 function preciseTimestamp(timestamp: Timestamp): PreciseMigrationTimestamp {
   if (timestamp.nanoseconds % 1_000 !== 0)
     throw new Error('Unexpected sub-microsecond migration timestamp');
@@ -83,7 +99,7 @@ async function verifyDestination(
   const marker = await store.doc('coordination', 'migration').get();
   if (
     !marker.exists ||
-    marker.get('status') !== 'pending_activation' ||
+    !['pending_activation', 'active'].includes(marker.get('status')) ||
     marker.get('bundleChecksum') !== bundle.manifest.bundleChecksum ||
     !markerFormatVersionMatches(marker.get('formatVersion'), bundle.manifest.formatVersion) ||
     marker.get('sourceAgentId') !== bundle.manifest.source.agentId ||
@@ -91,7 +107,7 @@ async function verifyDestination(
     marker.get('completedWrites') !== writes.length ||
     marker.get('totalWrites') !== writes.length
   )
-    throw new Error('Migration marker does not prove a complete pending import');
+    throw new Error('Migration marker does not prove a complete import for this bundle');
   const actualCollectionNames = (await store.root.listCollections())
     .map((collection) => collection.id)
     .sort();
@@ -671,6 +687,172 @@ export async function importWorkspaceBundle(
     resumed,
     verified: true,
   };
+}
+
+/**
+ * Activate only a fully verified v3 bundle after the operator supplies the
+ * final source-write-fence attestation and the identity of the pinned snapshot.
+ * The transaction is the single-winner fence; repeated identical requests are
+ * idempotent, while any conflicting marker or evidence fails closed.
+ */
+export async function activateWorkspaceBundle(
+  store: InstallationStore,
+  bundle: MigrationBundle,
+  input: {
+    sourceAgentId: string;
+    target: MigrationTarget;
+    evidence: WorkspaceActivationEvidence;
+    snapshotBytes: Uint8Array;
+  },
+): Promise<WorkspaceActivationResult> {
+  validateMigrationBundle(bundle, { sourceAgentId: input.sourceAgentId, target: input.target });
+  if (
+    bundle.manifest.formatVersion !== 3 ||
+    bundle.manifest.coverage.complete !== true ||
+    bundle.manifest.coverage.omittedTables.length !== 0
+  )
+    throw new Error('Activation requires a complete version 3 migration bundle');
+  if (store.installationId !== input.target.installationId)
+    throw new Error('Firestore installation identity does not match migration target');
+  if (store.projectId && store.projectId !== input.target.projectId)
+    throw new Error('Firestore project identity does not match migration target');
+  if (store.databaseId !== input.target.databaseId)
+    throw new Error('Firestore database identity does not match migration target');
+
+  const { evidence } = input;
+  const drainedAt = new Date(evidence.sourceWritesDrainedAt);
+  if (!evidence.sourceWriteFenceId.trim() || evidence.sourceWriteFenceId.length > 200)
+    throw new Error('A source write-fence identifier is required');
+  if (
+    !Number.isFinite(drainedAt.getTime()) ||
+    drainedAt.toISOString() !== evidence.sourceWritesDrainedAt
+  )
+    throw new Error('Source drain time must be a canonical UTC timestamp');
+  const exportDrainBoundary = `${drainedAt.toISOString().slice(0, -1)}000Z`;
+  if ((bundle.manifest.source.exportedAt ?? '') < exportDrainBoundary)
+    throw new Error('Pinned snapshot was exported before the recorded source drain');
+  const snapshotPath = /^gs:\/\/([^/]+)\/(.+)$/.exec(evidence.snapshotUri);
+  if (
+    snapshotPath?.[1] !== `${input.target.projectId}-workspace` ||
+    !snapshotPath[2]?.startsWith(`workspace/${input.target.installationId}/migration/snapshots/`) ||
+    !snapshotPath[2]?.endsWith('.json')
+  )
+    throw new Error('Snapshot URI must identify this installation workspace export');
+  if (!/^[1-9]\d*$/.test(evidence.snapshotGeneration))
+    throw new Error('Snapshot generation must be a positive integer');
+  const snapshotSha256 = createHash('sha256').update(input.snapshotBytes).digest('hex');
+  if (
+    !/^[0-9a-f]{64}$/i.test(evidence.snapshotSha256) ||
+    snapshotSha256 !== evidence.snapshotSha256.toLowerCase()
+  )
+    throw new Error('Snapshot bytes do not match the supplied SHA-256');
+  let pinnedBundle: MigrationBundle;
+  try {
+    pinnedBundle = JSON.parse(Buffer.from(input.snapshotBytes).toString('utf8')) as MigrationBundle;
+  } catch {
+    throw new Error('Pinned snapshot is not valid JSON');
+  }
+  if (pinnedBundle.manifest?.bundleChecksum !== bundle.manifest.bundleChecksum)
+    throw new Error('Pinned snapshot does not match the bundle being activated');
+  validateMigrationBundle(pinnedBundle, {
+    sourceAgentId: input.sourceAgentId,
+    target: input.target,
+  });
+
+  const marker = store.doc('coordination', 'migration');
+  const activation = {
+    sourceWriteFenceId: evidence.sourceWriteFenceId,
+    sourceWritesDrainedAt: drainedAt,
+    snapshotUri: evidence.snapshotUri,
+    snapshotGeneration: evidence.snapshotGeneration,
+    snapshotSha256,
+  };
+  const completedActivation = await store.db.runTransaction(async (tx) => {
+    const current = await tx.get(marker);
+    if (!current.exists || current.get('status') !== 'active') return null;
+    if (
+      current.get('bundleChecksum') !== bundle.manifest.bundleChecksum ||
+      current.get('sourceAgentId') !== input.sourceAgentId ||
+      JSON.stringify(current.get('target')) !== JSON.stringify(input.target)
+    )
+      throw new Error('Migration marker belongs to a different bundle or identity');
+    const prior = current.get('activation') as Record<string, unknown> | undefined;
+    const priorDrainedAt = prior?.sourceWritesDrainedAt;
+    const sameEvidence =
+      prior?.sourceWriteFenceId === activation.sourceWriteFenceId &&
+      (priorDrainedAt instanceof Timestamp
+        ? priorDrainedAt.toDate().toISOString()
+        : priorDrainedAt instanceof Date
+          ? priorDrainedAt.toISOString()
+          : null) === drainedAt.toISOString() &&
+      prior?.snapshotUri === activation.snapshotUri &&
+      prior?.snapshotGeneration === activation.snapshotGeneration &&
+      prior?.snapshotSha256 === activation.snapshotSha256;
+    if (!sameEvidence)
+      throw new Error('Migration was already activated with conflicting cutover evidence');
+    return {
+      activated: true as const,
+      alreadyActivated: true,
+      bundleChecksum: bundle.manifest.bundleChecksum,
+    };
+  });
+  if (completedActivation) return completedActivation;
+
+  // This rereads and checks every imported record and collection count. Tasks
+  // and schedules remain gated until the transaction below changes the marker.
+  await importWorkspaceBundle(store, bundle, {
+    sourceAgentId: input.sourceAgentId,
+    target: input.target,
+    mode: 'verify',
+  });
+
+  return store.db.runTransaction(async (tx) => {
+    const current = await tx.get(marker);
+    if (!current.exists) throw new Error('Migration marker disappeared before activation');
+    const currentChecksum = current.get('bundleChecksum');
+    if (
+      currentChecksum !== bundle.manifest.bundleChecksum ||
+      current.get('sourceAgentId') !== input.sourceAgentId ||
+      JSON.stringify(current.get('target')) !== JSON.stringify(input.target)
+    )
+      throw new Error('Migration marker belongs to a different bundle or identity');
+    if (current.get('status') === 'active') {
+      const prior = current.get('activation') as Record<string, unknown> | undefined;
+      const priorDrainedAt = prior?.sourceWritesDrainedAt;
+      const sameEvidence =
+        prior?.sourceWriteFenceId === activation.sourceWriteFenceId &&
+        (priorDrainedAt instanceof Timestamp
+          ? priorDrainedAt.toDate().toISOString()
+          : priorDrainedAt instanceof Date
+            ? priorDrainedAt.toISOString()
+            : null) === drainedAt.toISOString() &&
+        prior?.snapshotUri === activation.snapshotUri &&
+        prior?.snapshotGeneration === activation.snapshotGeneration &&
+        prior?.snapshotSha256 === activation.snapshotSha256;
+      if (!sameEvidence)
+        throw new Error('Migration was already activated with conflicting cutover evidence');
+      return {
+        activated: true,
+        alreadyActivated: true,
+        bundleChecksum: bundle.manifest.bundleChecksum,
+      };
+    }
+    if (
+      current.get('status') !== 'pending_activation' ||
+      current.get('completedWrites') !== current.get('totalWrites') ||
+      !Number.isSafeInteger(current.get('totalWrites'))
+    )
+      throw new Error('Migration marker does not prove a complete pending import');
+    tx.update(marker, {
+      status: 'active',
+      activation: encodeRecord(activation),
+    });
+    return {
+      activated: true,
+      alreadyActivated: false,
+      bundleChecksum: bundle.manifest.bundleChecksum,
+    };
+  });
 }
 
 export function migrationCoverage(bundle: MigrationBundle): string[] {
