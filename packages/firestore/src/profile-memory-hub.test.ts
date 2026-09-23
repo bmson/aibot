@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { FirestoreProfileMemoryHubRepository } from './profile-memory-hub.js';
+import {
+  FirestoreProfileMemoryHubRepository,
+  loadProfileHubSource,
+  profileMemoryHubFromSource,
+} from './profile-memory-hub.js';
 import { disposeStore, emulatorStore } from './test-store.js';
 
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore profile Memory hub', () => {
@@ -133,6 +137,9 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore profile Memory 
       await batch.commit();
 
       const result = await new FirestoreProfileMemoryHubRepository(store).load();
+      // The bounded projection must preserve the complete preexisting hub
+      // result, including ordering and fields outside the health counts.
+      expect(result).toEqual(profileMemoryHubFromSource(await loadProfileHubSource(store)));
       expect(result.quarantined).toHaveLength(100);
       expect(result.memoryHealth).toEqual({
         totalUsable: 2,

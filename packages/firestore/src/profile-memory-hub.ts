@@ -27,6 +27,25 @@ async function scanProfileCollection(query: Query): Promise<QueryDocumentSnapsho
   }
 }
 
+/** Visit a complete owner collection without retaining all document bodies. */
+async function visitProfileCollection(
+  query: Query,
+  visit: (doc: QueryDocumentSnapshot) => void,
+): Promise<void> {
+  let cursor: QueryDocumentSnapshot | undefined;
+  let scanned = 0;
+  while (true) {
+    let page = query.orderBy(FieldPath.documentId()).limit(PAGE_SIZE);
+    if (cursor) page = page.startAfter(cursor);
+    const snapshot = await page.get();
+    scanned += snapshot.size;
+    if (scanned > MAX_SCAN) throw new Error('Memory hub scan exceeds its explicit limit');
+    for (const doc of snapshot.docs) visit(doc);
+    if (snapshot.size < PAGE_SIZE) return;
+    cursor = snapshot.docs.at(-1);
+  }
+}
+
 function ownedProfileRow<T extends { id: string; agentId: string }>(
   doc: QueryDocumentSnapshot,
   agentId: string,
@@ -177,11 +196,142 @@ export class FirestoreProfileMemoryHubRepository implements ProfileMemoryHubRepo
   ) {}
 
   async load(): Promise<ProfileMemoryHubOverview> {
-    if (this.pinnedAgentId) {
-      const configured = await this.store.collection('agents').limit(2).get();
-      if (configured.size !== 1 || configured.docs[0]?.get('id') !== this.pinnedAgentId)
-        throw new Error('Memory hub requires one matching configured owner');
-    }
-    return profileMemoryHubFromSource(await loadProfileHubSource(this.store, this.pinnedAgentId));
+    const configured = await this.store.collection('agents').limit(2).get();
+    if (configured.size !== 1 || !configured.docs[0])
+      throw new Error('Memory hub requires exactly one configured agent');
+    const agentDoc = configured.docs[0];
+    const agentId = agentDoc.get('id');
+    if (
+      typeof agentId !== 'string' ||
+      documentKey(agentId) !== agentDoc.id ||
+      (this.pinnedAgentId !== undefined && agentId !== this.pinnedAgentId)
+    )
+      throw new Error('Memory hub requires one matching configured owner');
+
+    const fence = await readPrivacyErasureFence(this.store, agentId);
+    const now = this.store.now();
+    let owner: Records['contacts'] | undefined;
+    let peopleCount = 0;
+    let totalUsable = 0;
+    let notYetOrganized = 0;
+    let awaitingReview = 0;
+    let ownerConfirmed = 0;
+    let lastOrganizedAt: Date | null = null;
+    let ownerFactCount = 0;
+    const quarantined: Records['memories'][] = [];
+    let rated = 0;
+    let helpful = 0;
+    let notHelpful = 0;
+    let lastRatedAt: Date | null = null;
+    let latestOrganizer: Records['tasks'] | undefined;
+
+    await visitProfileCollection(this.store.collection('contacts'), (doc) => {
+      const contact = decodeRecord<Records['contacts']>(doc.data());
+      if (!contact.id || documentKey(contact.id) !== doc.id)
+        throw new Error('Malformed Memory hub contact');
+      if (contact.trust === 'owner') owner ??= contact;
+      else peopleCount += 1;
+    });
+    await visitProfileCollection(
+      this.store.collection('memories').where('agentId', '==', agentId) as Query,
+      (doc) => {
+        const memory = ownedProfileRow<Records['memories']>(doc, agentId);
+        if (memory.category !== 'knowledge' || (memory.expiresAt && memory.expiresAt <= now))
+          return;
+        if (memory.quarantined) {
+          awaitingReview += 1;
+          quarantined.push(memory);
+          quarantined.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+          if (quarantined.length > QUARANTINE_LIMIT) quarantined.pop();
+          return;
+        }
+        totalUsable += 1;
+        if (!memory.lastConsolidatedAt) notYetOrganized += 1;
+        else if (memory.lastConsolidatedAt instanceof Date) {
+          if (!lastOrganizedAt || memory.lastConsolidatedAt > lastOrganizedAt)
+            lastOrganizedAt = memory.lastConsolidatedAt;
+        }
+        if (memory.ownerConfirmed) ownerConfirmed += 1;
+        if (owner && memory.subjectContactId === owner.id) ownerFactCount += 1;
+      },
+    );
+    const feedbackSince = new Date(now.getTime() - RECALL_FEEDBACK_WINDOW_DAYS * 86_400_000);
+    await visitProfileCollection(
+      this.store
+        .collection('recallFeedback')
+        .where('agentId', '==', agentId)
+        .select('id', 'agentId', 'verdict', 'createdAt') as Query,
+      (doc) => {
+        const feedback = ownedProfileRow<Records['recallFeedback']>(doc, agentId);
+        if (feedback.createdAt < feedbackSince) return;
+        rated += 1;
+        if (feedback.verdict === 'helpful') helpful += 1;
+        if (feedback.verdict === 'not_helpful') notHelpful += 1;
+        if (!lastRatedAt || feedback.createdAt > lastRatedAt) lastRatedAt = feedback.createdAt;
+      },
+    );
+    await visitProfileCollection(
+      this.store
+        .collection('tasks')
+        .where('agentId', '==', agentId)
+        .select(
+          'id',
+          'agentId',
+          'status',
+          'progress',
+          'trigger',
+          'createdAt',
+          'updatedAt',
+        ) as Query,
+      (doc) => {
+        const task = ownedProfileRow<Records['tasks']>(doc, agentId);
+        const trigger = task.trigger as { payload?: { job?: unknown } } | null;
+        if (trigger?.payload?.job !== 'memory.consolidate') return;
+        if (!latestOrganizer || task.createdAt > latestOrganizer.createdAt) latestOrganizer = task;
+      },
+    );
+    const cardDoc = await this.store.doc('ownerCards', agentId).get();
+    const card = cardDoc.exists
+      ? decodeRecord<{ agentId?: unknown; content?: unknown; compiledAt?: unknown }>(cardDoc.data())
+      : null;
+    if (
+      card &&
+      (card.agentId !== agentId ||
+        typeof card.content !== 'string' ||
+        !(card.compiledAt instanceof Date))
+    )
+      throw new Error('Malformed Memory hub owner card');
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    return {
+      ...(owner ? { owner } : {}),
+      quarantined,
+      memoryHealth: {
+        totalUsable,
+        notYetOrganized,
+        awaitingReview,
+        ownerConfirmed,
+        lastOrganizedAt,
+      },
+      recallFeedback: {
+        rated,
+        helpful,
+        notHelpful,
+        lastRatedAt,
+        windowDays: RECALL_FEEDBACK_WINDOW_DAYS,
+      },
+      latestOrganizer: latestOrganizer
+        ? {
+            id: latestOrganizer.id,
+            status: latestOrganizer.status,
+            progress: latestOrganizer.progress,
+            updatedAt: latestOrganizer.updatedAt,
+          }
+        : null,
+      card: card
+        ? { compiledAt: card.compiledAt as Date, empty: (card.content as string).trim() === '' }
+        : null,
+      ownerFactCount,
+      peopleCount,
+    };
   }
 }
