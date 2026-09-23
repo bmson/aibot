@@ -87,7 +87,10 @@ describe('reasoning is spent only where it earns its latency', () => {
       prompt: 'x',
     });
 
-    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'disabled' });
+    expect(optionsFor).toHaveBeenCalledWith({
+      modelId: 'vendor/model-test',
+      reasoning: 'disabled',
+    });
     // classify's visible budget is 512; headroom would have made it 4608.
     expect(stubs.generateObject.mock.calls[0]?.[0].maxOutputTokens).toBe(512);
   });
@@ -99,7 +102,10 @@ describe('reasoning is spent only where it earns its latency', () => {
 
     await router.stream('draft', { prompt: 'hello' });
 
-    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'disabled' });
+    expect(optionsFor).toHaveBeenCalledWith({
+      modelId: 'vendor/model-test',
+      reasoning: 'disabled',
+    });
     expect(stubs.streamText.mock.calls[0]?.[0].maxOutputTokens).toBe(2_048);
   });
 
@@ -112,7 +118,7 @@ describe('reasoning is spent only where it earns its latency', () => {
     // exhaust the budget before the tool call is emitted.
     await router.step('draft', { prompt: 'hello', tools: {} });
 
-    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'enabled' });
+    expect(optionsFor).toHaveBeenCalledWith({ modelId: 'vendor/model-test', reasoning: 'enabled' });
     expect(stubs.generateText.mock.calls[0]?.[0].maxOutputTokens).toBe(2_048 + 4_096);
   });
 
@@ -122,7 +128,7 @@ describe('reasoning is spent only where it earns its latency', () => {
 
     await router.generate('reason', { prompt: 'think' });
 
-    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'enabled' });
+    expect(optionsFor).toHaveBeenCalledWith({ modelId: 'vendor/model-test', reasoning: 'enabled' });
   });
 
   it('sends no reasoning parameter at all for a model that cannot reason', async () => {
@@ -133,7 +139,10 @@ describe('reasoning is spent only where it earns its latency', () => {
 
     // Not 'disabled': naming a parameter the upstream pool does not implement
     // narrows OpenRouter's provider choice under require_parameters.
-    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'unsupported' });
+    expect(optionsFor).toHaveBeenCalledWith({
+      modelId: 'vendor/model-test',
+      reasoning: 'unsupported',
+    });
   });
 });
 
@@ -198,7 +207,7 @@ describe('OpenRouter reasoning parameters', () => {
     const optionsFor = vi.fn(() => undefined);
     const router = routerWith(provider({ optionsFor, canDisableReasoning: undefined }));
     await router.generate('draft', { prompt: 'hello' });
-    expect(optionsFor).toHaveBeenCalledWith({ reasoning: 'enabled' });
+    expect(optionsFor).toHaveBeenCalledWith({ modelId: 'vendor/model-test', reasoning: 'enabled' });
   });
 
   it('maps each mode to a distinct request, silence included', () => {
