@@ -16,7 +16,12 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
   const installationId = `web-voice-${randomUUID()}`;
   const agentId = randomUUID();
   const foreignAgentId = randomUUID();
-  const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+  const databaseId = 'assistant-web-voice-test';
+  const store = createInstallationStore({
+    projectId: 'demo-assistant-test',
+    installationId,
+    databaseId,
+  });
   let page: typeof import('./page.js');
   let actions: typeof import('../actions.js');
 
@@ -25,6 +30,7 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
     vi.stubEnv('DATABASE_URL', 'postgres://offline:offline@127.0.0.1:1/offline_test');
     vi.stubEnv('GCP_PROJECT', 'demo-assistant-test');
     vi.stubEnv('ASSISTANT_WORKSPACE_ID', installationId);
+    vi.stubEnv('FIRESTORE_DATABASE_ID', databaseId);
     vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
     vi.stubEnv('ASSISTANT_MODULES', 'minimal');
     vi.stubEnv('QUEUE_DRIVER', 'local');

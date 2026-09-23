@@ -19,7 +19,12 @@ describe.skipIf(!localEmulator)(
   () => {
     const installationId = `mobile-memory-profile-${randomUUID()}`;
     const agentId = randomUUID();
-    const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+    const databaseId = 'assistant-voice-profile-test';
+    const store = createInstallationStore({
+      projectId: 'demo-assistant-test',
+      installationId,
+      databaseId,
+    });
     let route: typeof import('./route.js');
 
     beforeAll(async () => {
@@ -27,6 +32,7 @@ describe.skipIf(!localEmulator)(
       vi.stubEnv('DATABASE_URL', 'postgres://offline:offline@127.0.0.1:1/offline_test');
       vi.stubEnv('GCP_PROJECT', 'demo-assistant-test');
       vi.stubEnv('ASSISTANT_WORKSPACE_ID', installationId);
+      vi.stubEnv('FIRESTORE_DATABASE_ID', databaseId);
       vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
       vi.stubEnv(
         'FIRESTORE_EMBEDDING_SPACE',
