@@ -118,6 +118,10 @@ export function proxy(request: NextRequest) {
       path,
     ) &&
       request.method === 'GET') ||
+    (/^\/api\/mobile\/v1\/knowledge\/relations\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      ['GET', 'POST', 'DELETE'].includes(request.method)) ||
     (path === '/api/mobile/v1/people' && request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/commitments' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/mobile/v1/settings' && request.method === 'PATCH') ||
