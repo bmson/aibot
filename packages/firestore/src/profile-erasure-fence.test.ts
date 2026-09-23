@@ -94,7 +94,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Profile overview erasure 
       const { store, agentId, memoryId, sampleId } = await seededStore();
       const erasure = new FirestorePrivacyErasureRepository(store);
       const originalDoc = store.doc.bind(store);
-      const triggerRead = reader === 'full' ? 5 : 2;
+      const triggerRead = reader === 'full' ? 4 : 2;
       let fenceReads = 0;
       const spy = vi.spyOn(store, 'doc').mockImplementation((collection, id) => {
         const ref = originalDoc(collection, id);

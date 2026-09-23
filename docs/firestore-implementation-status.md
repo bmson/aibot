@@ -2,6 +2,8 @@
 
 Updated 2026-09-22. This tracks the implementation batches of the [migration and consumer-install plan](firestore-consumer-install-plan.md). **The complete migration and single-click installer are not finished.** The current application and deployments continue to require PostgreSQL and the existing owner authentication. Model-provider selection is configurable; the deployed provider has not changed. Adapter releases do not activate Firestore or make PostgreSQL safe to delete.
 
+The Firestore mobile workspace profile read now pages through projected task and memory fields, retaining only exact aggregates and the contact/fact rows the response can return. It continues to read every source row (up to the explicit 100,000-row limit) so counts are exact and never silently truncated; read volume and latency therefore still grow with customer data. This is a temporary correctness path until write-maintained counters have a separately validated migration, parity, and repair story.
+
 ## Current recovery checkpoint
 
 The profile-memory command and watches release is deployed at `027060bf985e807c87a0f0182698adfd88912442`; CI, deployment, and the public health endpoint agree on that commit. Production still uses PostgreSQL.
