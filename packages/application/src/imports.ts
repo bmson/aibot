@@ -14,10 +14,15 @@ import {
   startVoiceIngest,
 } from '@assistant/core/memory/voice-ingest';
 import { type Db, importSources, memories } from '@assistant/db';
+import {
+  type ImportOverviewRepository,
+  isImportOverviewRepository,
+  type Records,
+} from '@assistant/persistence';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { safeWorkspacePath, type WorkspacePort } from './workspace.js';
 
-export type ImportSourceSnapshot = typeof importSources.$inferSelect;
+export type ImportSourceSnapshot = Records['importSources'];
 
 export interface ImportOverview {
   sources: ImportSourceSnapshot[];
@@ -25,7 +30,24 @@ export interface ImportOverview {
   unstartedFiles: Array<{ name: string; dir: boolean }>;
 }
 
-export async function getImportOverview(db: Db, workspace: WorkspacePort): Promise<ImportOverview> {
+export function getImportOverview(db: Db, workspace: WorkspacePort): Promise<ImportOverview>;
+export function getImportOverview(
+  repository: ImportOverviewRepository,
+  workspace: WorkspacePort,
+): Promise<ImportOverview>;
+export async function getImportOverview(
+  source: Db | ImportOverviewRepository,
+  workspace: WorkspacePort,
+): Promise<ImportOverview> {
+  if (isImportOverviewRepository(source)) {
+    const [data, importFiles] = await Promise.all([
+      source.load(),
+      workspace.list('import').catch(() => [] as Array<{ name: string; dir: boolean }>),
+    ]);
+    return importOverviewFrom(data.sources, data.quarantineBySource, importFiles);
+  }
+
+  const db = source as Db;
   const [allSources, quarantineCounts, importFiles] = await Promise.all([
     db.select().from(importSources).orderBy(desc(importSources.updatedAt)),
     db
@@ -35,10 +57,18 @@ export async function getImportOverview(db: Db, workspace: WorkspacePort): Promi
       .groupBy(memories.source),
     workspace.list('import').catch(() => [] as Array<{ name: string; dir: boolean }>),
   ]);
-  const sources = allSources.filter((source) => !isVoiceImportSource(source.source));
   const quarantineBySource = Object.fromEntries(
     quarantineCounts.map((row) => [row.source ?? '', Number(row.count)]),
   );
+  return importOverviewFrom(allSources, quarantineBySource, importFiles);
+}
+
+function importOverviewFrom(
+  allSources: ImportSourceSnapshot[],
+  quarantineBySource: Record<string, number>,
+  importFiles: Array<{ name: string; dir: boolean }>,
+): ImportOverview {
+  const sources = allSources.filter((source) => !isVoiceImportSource(source.source));
   const knownPaths = new Set(allSources.map((source) => source.workspacePath));
   const unstartedFiles = importFiles.filter(
     (file) => !file.dir && !knownPaths.has(`import/${file.name}`),

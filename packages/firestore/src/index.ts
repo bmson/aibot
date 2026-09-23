@@ -10,6 +10,7 @@ export { FirestoreExecutionJobRepository } from './execution-jobs.js';
 export { FirestoreGeneratedCardRepository } from './generated-cards.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
+export { FirestoreImportOverviewRepository } from './import-overview.js';
 export { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 export { embeddingSpaceKey, FirestoreMemoryRepository } from './memory.js';
 export { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
