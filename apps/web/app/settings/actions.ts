@@ -2,10 +2,21 @@
 
 import { randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { envFile, reloadConfig } from '@assistant/config';
+import { createSettingsFacade } from '@assistant/application/settings';
+import {
+  envFile,
+  loadConfig,
+  reloadConfig,
+  validateAgentPersistenceConfig,
+} from '@assistant/config';
+import {
+  assertPrivacyErasureFenceUnchanged,
+  createFirestoreSettingsPersistence,
+  readPrivacyErasureFence,
+} from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getApplication } from '@/lib/server';
+import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
 
 function revalidateSettings(): void {
   revalidatePath('/settings');
@@ -18,7 +29,31 @@ export async function updateAgentSettings(input: {
   signature: string;
 }): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await getApplication().updateSettings(input);
+  const config = loadConfig();
+  let result: { error?: string };
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    const store = getFirestoreInstallationStore();
+    const assertConfiguredOwner = async () => {
+      const agents = await store.collection('agents').limit(2).get();
+      if (
+        agents.size !== 1 ||
+        agents.docs[0]?.id !== store.doc('agents', config.FIRESTORE_AGENT_ID).id ||
+        agents.docs[0]?.get('id') !== config.FIRESTORE_AGENT_ID
+      )
+        throw new Error('Settings update requires exactly one configured agent');
+    };
+    await assertConfiguredOwner();
+    const fence = await readPrivacyErasureFence(store, config.FIRESTORE_AGENT_ID);
+    result = await createSettingsFacade(
+      createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID),
+    ).updateAssistantSettings(input);
+    await assertConfiguredOwner();
+    await assertPrivacyErasureFenceUnchanged(store, config.FIRESTORE_AGENT_ID, fence);
+  } else {
+    result = await getApplication().updateSettings(input);
+  }
   if (result.error) return result;
   revalidateSettings();
   return {};
@@ -169,6 +204,9 @@ async function publishToSecretManager(project: string, token: string): Promise<s
  */
 export async function rotateMobileToken(): Promise<{ token?: string; error?: string }> {
   await requireOwner();
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    return { error: 'Mobile app pairing is unavailable in Firestore mode.' };
+  }
   const token = randomBytes(32).toString('hex');
 
   if (existsSync(envFile)) {
