@@ -6,6 +6,7 @@ export * from './card-refresh.js';
 export * from './contracts.js';
 export * from './cost-policy.js';
 export * from './dispatch.js';
+export * from './document-catalog.js';
 export * from './embedding.js';
 export * from './execution.js';
 export * from './execution-context.js';
