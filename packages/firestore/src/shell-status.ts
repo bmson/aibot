@@ -38,7 +38,10 @@ async function countPendingApprovals(
   let cursor: QueryDocumentSnapshot | undefined;
   let scanned = 0;
   let pending = 0;
-  const base = store.collection('approvals').where('status', '==', 'pending') as Query;
+  const base = store
+    .collection('approvals')
+    .where('status', '==', 'pending')
+    .select('id', 'taskId', 'expiresAt') as Query;
   while (true) {
     let query = base.orderBy(FieldPath.documentId()).limit(APPROVAL_PAGE_SIZE);
     if (cursor) query = query.startAfter(cursor);
@@ -88,7 +91,11 @@ async function resolveShellAgent(
   return agentId;
 }
 
-/** Exact owner-facing shell counts, scanned a page at a time without retaining record bodies. */
+/**
+ * Exact owner-facing shell counts, scanned a page at a time without retaining record bodies.
+ * This remains an exact full scan, so Firestore read cost and latency grow with source size;
+ * durable aggregate counters can replace it once their write coverage is reliable.
+ */
 export class FirestoreShellStatusRepository implements ShellStatusRepository {
   readonly kind = 'shell-status-repository' as const;
 
@@ -116,7 +123,10 @@ export class FirestoreShellStatusRepository implements ShellStatusRepository {
     let lastOrganizedAt: Date | null = null;
 
     await scanPages(
-      this.store.collection('tasks').where('agentId', '==', ownerAgentId) as Query,
+      this.store
+        .collection('tasks')
+        .where('agentId', '==', ownerAgentId)
+        .select('id', 'agentId', 'status') as Query,
       'tasks',
       (doc) => {
         const task = decodeRecord<Records['tasks']>(doc.data());
@@ -128,7 +138,18 @@ export class FirestoreShellStatusRepository implements ShellStatusRepository {
       },
     );
     await scanPages(
-      this.store.collection('memories').where('agentId', '==', ownerAgentId) as Query,
+      this.store
+        .collection('memories')
+        .where('agentId', '==', ownerAgentId)
+        .select(
+          'id',
+          'agentId',
+          'category',
+          'expiresAt',
+          'quarantined',
+          'ownerConfirmed',
+          'lastConsolidatedAt',
+        ) as Query,
       'memories',
       (doc) => {
         const memory = decodeRecord<Records['memories']>(doc.data());
@@ -153,6 +174,7 @@ export class FirestoreShellStatusRepository implements ShellStatusRepository {
     await assertPrivacyErasureFenceUnchanged(this.store, ownerAgentId, fence);
 
     const pendingApprovals = await countPendingApprovals(this.store, ownerTaskIds, now);
+    await assertPrivacyErasureFenceUnchanged(this.store, ownerAgentId, fence);
     return {
       dashboard: {
         pendingApprovals,

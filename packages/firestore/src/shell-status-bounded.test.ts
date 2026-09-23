@@ -27,11 +27,16 @@ class FakeDocument {
 class FakeQuery {
   constructor(
     private readonly rows: Entry[],
-    private readonly stats: { largestPage: number; pages: number },
+    private readonly stats: { largestPage: number; pages: number; projections: string[][] },
     private readonly filters: Array<[string, unknown]> = [],
     private readonly pageSize = Number.MAX_SAFE_INTEGER,
     private readonly cursor?: string,
   ) {}
+
+  select(...fields: string[]): FakeQuery {
+    this.stats.projections.push(fields);
+    return new FakeQuery(this.rows, this.stats, this.filters, this.pageSize, this.cursor);
+  }
 
   where(field: string, _operator: string, value: unknown): FakeQuery {
     return new FakeQuery(this.rows, this.stats, [...this.filters, [field, value]], this.pageSize);
@@ -116,7 +121,7 @@ it('pages imported-size source collections and preserves exact shell counts', as
     memories: entries(memoryRows),
     approvals: entries(approvalRows),
   };
-  const stats = { largestPage: 0, pages: 0 };
+  const stats = { largestPage: 0, pages: 0, projections: [] as string[][] };
   const store = {
     collection(name: string) {
       return new FakeQuery(data[name] ?? [], stats);
@@ -150,4 +155,82 @@ it('pages imported-size source collections and preserves exact shell counts', as
   });
   expect(stats.largestPage).toBe(500);
   expect(stats.pages).toBeGreaterThan(30);
+  expect(stats.projections).toContainEqual(['id', 'agentId', 'status']);
+  expect(stats.projections).toContainEqual([
+    'id',
+    'agentId',
+    'category',
+    'expiresAt',
+    'quarantined',
+    'ownerConfirmed',
+    'lastConsolidatedAt',
+  ]);
+  expect(stats.projections).toContainEqual(['id', 'taskId', 'expiresAt']);
+});
+
+it('rechecks the privacy erasure fence after the approval scan', async () => {
+  const now = new Date('2026-09-23T12:00:00.000Z');
+  const changedAt = { isEqual: () => false };
+  let fenceReads = 0;
+  const emptyQuery = {
+    where() {
+      return this;
+    },
+    select() {
+      return this;
+    },
+    orderBy() {
+      return this;
+    },
+    limit() {
+      return this;
+    },
+    startAfter() {
+      return this;
+    },
+    async get() {
+      return { size: 0, docs: [] };
+    },
+  };
+  const store = {
+    collection() {
+      return emptyQuery;
+    },
+    doc(collection: string) {
+      if (collection === 'agents') {
+        return {
+          async get() {
+            return { exists: true, id: documentKey('owner'), get: () => 'owner' };
+          },
+        };
+      }
+      if (collection === 'privacyErasureJobs') {
+        return {
+          async get() {
+            fenceReads += 1;
+            return fenceReads < 3
+              ? { exists: false }
+              : {
+                  exists: true,
+                  updateTime: changedAt,
+                  get(field: string) {
+                    return field === 'agentId' ? 'owner' : 'complete';
+                  },
+                };
+          },
+        };
+      }
+      return {
+        async get() {
+          return { exists: false };
+        },
+      };
+    },
+    now: () => now,
+  } as unknown as InstallationStore;
+
+  await expect(new FirestoreShellStatusRepository(store, 'owner').load('owner')).rejects.toThrow(
+    'Privacy erasure changed during read',
+  );
+  expect(fenceReads).toBe(3);
 });
