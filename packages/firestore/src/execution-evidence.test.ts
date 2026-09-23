@@ -66,6 +66,70 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore execution evide
     ).resolves.toEqual([]);
   });
 
+  it('finds only an exact document tool call in the owner conversation regardless of status', async () => {
+    await store.doc('toolCalls', 'foreign-doc-read').set({
+      id: 'foreign-doc-read',
+      taskId: 'foreign-task',
+      step: 1,
+      toolName: 'docs.get',
+      status: 'succeeded',
+      args: { documentId: 'doc-1' },
+      result: { title: 'Foreign' },
+      error: null,
+      createdAt: new Date('2026-09-12T12:00:03Z'),
+    });
+    await store.doc('toolCalls', 'doc-read').set({
+      id: 'doc-read',
+      taskId: 'task',
+      step: 2,
+      toolName: 'docs.get',
+      status: 'failed',
+      args: { documentId: 'doc-1' },
+      result: null,
+      error: 'permission denied',
+      createdAt: new Date('2026-09-12T12:00:04Z'),
+    });
+    const input = {
+      agentId: 'owner',
+      conversationId: 'conversation',
+      toolName: 'docs.get',
+      documentId: 'doc-1',
+    };
+
+    await expect(repository.hasConversationToolCall(input)).resolves.toBe(true);
+    await expect(
+      repository.hasConversationToolCall({ ...input, documentId: 'doc-2' }),
+    ).resolves.toBe(false);
+    await expect(
+      repository.hasConversationToolCall({ ...input, toolName: 'sheets.get' }),
+    ).resolves.toBe(false);
+  });
+
+  it('fails explicitly when matching document receipts exceed the lookup bound', async () => {
+    for (let start = 0; start < 501; start += 500) {
+      const batch = store.db.batch();
+      for (let index = start; index < Math.min(start + 500, 501); index += 1) {
+        const id = `crowded-doc-${index}`;
+        batch.set(store.doc('toolCalls', id), {
+          id,
+          taskId: 'foreign-task',
+          toolName: 'docs.get',
+          args: { documentId: 'crowded-doc' },
+        });
+      }
+      await batch.commit();
+    }
+
+    await expect(
+      repository.hasConversationToolCall({
+        agentId: 'owner',
+        conversationId: 'conversation',
+        toolName: 'docs.get',
+        documentId: 'crowded-doc',
+      }),
+    ).rejects.toThrow('exceeds its explicit scan limit');
+  });
+
   it('finds an exact final beyond one message page without weakening outbound bounds', async () => {
     const messageBatch = store.db.batch();
     const messageIds = Array.from({ length: 121 }, (_, index) => `message-${index}`);

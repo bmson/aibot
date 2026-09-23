@@ -7,6 +7,8 @@ import { evidenceLimit, type Records } from '@assistant/persistence';
 import { FieldPath } from '@google-cloud/firestore';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
+const MAX_SHARED_DOCUMENT_RECEIPT_SCAN = 500;
+
 function read<T>(snapshot: { exists: boolean; data(): unknown }, id?: string): T | null {
   if (!snapshot.exists) return null;
   const value = decodeRecord<T>(snapshot.data());
@@ -142,6 +144,54 @@ export class FirestoreExecutionEvidenceRepository implements ExecutionEvidenceRe
           a.id.localeCompare(b.id),
       )
       .map(evidence);
+  }
+
+  async hasConversationToolCall({
+    agentId,
+    conversationId,
+    toolName,
+    documentId,
+  }: {
+    agentId: string;
+    conversationId: string;
+    toolName: string;
+    documentId: string;
+  }) {
+    const conversation = read<Records['conversations']>(
+      await this.store.doc('conversations', conversationId).get(),
+      conversationId,
+    );
+    if (!conversation || conversation.agentId !== agentId)
+      throw new Error('Execution evidence conversation is missing or outside the owner scope');
+
+    let callCursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+    let scanned = 0;
+    for (;;) {
+      let query = this.store
+        .collection('toolCalls')
+        .where('toolName', '==', toolName)
+        .where('args.documentId', '==', documentId)
+        .orderBy(FieldPath.documentId())
+        .limit(100);
+      if (callCursor) query = query.startAfter(callCursor);
+      const callSnapshot = await query.get();
+      scanned += callSnapshot.size;
+      if (scanned > MAX_SHARED_DOCUMENT_RECEIPT_SCAN)
+        throw new Error('Shared document receipt lookup exceeds its explicit scan limit');
+      for (const callDoc of callSnapshot.docs) {
+        const call = read<Records['toolCalls']>({
+          exists: callDoc.exists,
+          data: () => callDoc.data(),
+        });
+        if (!call || documentKey(call.id) !== callDoc.id)
+          throw new Error('Execution evidence contains a corrupt tool-call identity');
+        const taskDoc = await this.store.doc('tasks', call.taskId).get();
+        const task = read<Records['tasks']>(taskDoc, call.taskId);
+        if (task?.agentId === agentId && task.conversationId === conversationId) return true;
+      }
+      if (callSnapshot.size < 100) return false;
+      callCursor = callSnapshot.docs.at(-1);
+    }
   }
 
   async finalMessageExists({

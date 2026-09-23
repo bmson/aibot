@@ -294,6 +294,14 @@
       "collectionGroup": "toolCalls",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "toolName", "order": "ASCENDING" },
+        { "fieldPath": "args.documentId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "toolCalls",
+      "queryScope": "COLLECTION",
+      "fields": [
         {
           "fieldPath": "taskId",
           "order": "ASCENDING"

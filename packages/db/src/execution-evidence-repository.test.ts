@@ -86,6 +86,34 @@ describe('PostgreSQL execution evidence repository', () => {
       args: {},
       result: { ok: true },
     });
+    expect(
+      await repository.hasConversationToolCall({
+        agentId: ids.agent,
+        conversationId: ids.conversation,
+        toolName: 'docs.get',
+        documentId: 'doc-1',
+      }),
+    ).toBe(false);
+    await db
+      .update(toolCalls)
+      .set({ toolName: 'docs.get', args: { documentId: 'doc-1' }, status: 'failed' })
+      .where(eq(toolCalls.id, ids.call));
+    expect(
+      await repository.hasConversationToolCall({
+        agentId: ids.agent,
+        conversationId: ids.conversation,
+        toolName: 'docs.get',
+        documentId: 'doc-1',
+      }),
+    ).toBe(true);
+    expect(
+      await repository.hasConversationToolCall({
+        agentId: ids.agent,
+        conversationId: ids.conversation,
+        toolName: 'docs.get',
+        documentId: 'another-doc',
+      }),
+    ).toBe(false);
     await expect(
       repository.taskEvidence({ agentId: randomUUID(), taskId: ids.task }),
     ).resolves.toEqual([]);

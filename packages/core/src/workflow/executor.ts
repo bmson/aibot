@@ -262,7 +262,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
       : undefined;
   const documentReadIntent =
     state.step === 0 && !artifactIntent && !isKnownReply
-      ? await unreadSharedDocumentIntent(db, task, window)
+      ? await unreadSharedDocumentIntent(persistence.executionEvidence, task, window)
       : undefined;
   const browserStageSnapshots = new Map<
     string,
