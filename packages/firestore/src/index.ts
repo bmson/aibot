@@ -44,6 +44,7 @@ export {
 } from './runtime-data-preflight.js';
 export { FirestoreScheduleRepository } from './schedules.js';
 export { FirestoreSettingsRepository } from './settings.js';
+export { createFirestoreSettingsPersistence } from './settings-persistence.js';
 export { FirestoreShellStatusRepository } from './shell-status.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { createInstallationStore, InstallationStore } from './store.js';

@@ -89,6 +89,7 @@ import {
 } from '@assistant/db';
 import {
   createFirestoreExecutionPersistence,
+  createFirestoreSettingsPersistence,
   createInstallationStore,
   FirestoreApplicationChatPersistence,
   FirestoreShellStatusRepository,
@@ -363,7 +364,9 @@ function createFirestoreChatApplication() {
     createConfiguredModelProvider(config),
   );
   const chatReads = { chat, generatedCards: persistence.generatedCards };
+  const settings = createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID);
   return {
+    getWorkspaceSettings: () => getSettingsOverview(settings),
     getGeneratedCards: () => persistence.generatedCards,
     getAgentIdentity: async () => {
       const agent = await chat.resolveAgent();
@@ -410,4 +413,11 @@ export function getChatApplication() {
   return loadConfig().PERSISTENCE_DRIVER === 'firestore'
     ? getFirestoreChatApplication()
     : getApplication();
+}
+
+/** The mobile workspace settings section, backed by the configured owner in either driver. */
+export function getWorkspaceSettings() {
+  return loadConfig().PERSISTENCE_DRIVER === 'firestore'
+    ? getFirestoreChatApplication().getWorkspaceSettings()
+    : getApplication().getSettings();
 }

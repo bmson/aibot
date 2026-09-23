@@ -29,8 +29,15 @@ export function createPostgresSettingsPersistence(db: Db): SettingsPersistence {
 
 const facade = (db: Db) => createSettingsFacade(createPostgresSettingsPersistence(db));
 
-export function getSettingsOverview(db: Db) {
-  return facade(db).getOverview();
+function isSettingsPersistence(source: Db | SettingsPersistence): source is SettingsPersistence {
+  return 'kind' in source && source.kind === 'settings-persistence';
+}
+
+export function getSettingsOverview(source: Db | SettingsPersistence) {
+  const persistence = isSettingsPersistence(source)
+    ? source
+    : createPostgresSettingsPersistence(source);
+  return createSettingsFacade(persistence).getOverview();
 }
 
 export function updateNotificationPrefs(
