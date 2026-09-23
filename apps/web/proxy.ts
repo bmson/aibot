@@ -22,6 +22,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/profile-export' && request.method === 'GET') ||
     (path === '/settings' && request.method === 'GET') ||
     (path === '/import' && request.method === 'GET') ||
+    (path === '/skills' && request.method === 'GET') ||
     (chatPage && (request.method === 'GET' || request.method === 'POST')) ||
     (['/icon.svg', '/apple-icon.png', '/favicon.ico', '/manifest.webmanifest'].includes(path) &&
       request.method === 'GET') ||
