@@ -20,6 +20,11 @@ export function withPostgresSourceWriteFence<T extends object>(database: T): T {
               `${POSTGRES_SOURCE_WRITE_FENCED} Raw PostgreSQL access is unavailable.`,
             );
           return new Proxy(client as object, {
+            apply() {
+              throw new Error(
+                `${POSTGRES_SOURCE_WRITE_FENCED} Raw PostgreSQL access is unavailable.`,
+              );
+            },
             get(rawClient, rawProperty) {
               if (rawProperty !== 'end')
                 throw new Error(

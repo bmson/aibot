@@ -27,6 +27,9 @@ describe('PostgreSQL source write fence', () => {
     expect(() => db.delete(agents)).toThrow(POSTGRES_SOURCE_WRITE_FENCED);
     expect(() => db.execute(sql`select 1`)).toThrow('Use typed read queries only');
     expect(() => db.$client.reserve()).toThrow('Raw PostgreSQL access is unavailable');
+    expect(() => (db.$client as unknown as (query: string) => unknown)('select 1')).toThrow(
+      'Raw PostgreSQL access is unavailable',
+    );
     expect(() => db.select().from(agents)).not.toThrow();
   });
 
