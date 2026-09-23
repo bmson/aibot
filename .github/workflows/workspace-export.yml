@@ -1,0 +1,64 @@
+name: Export PostgreSQL workspace snapshot
+
+# A rehearsal snapshot only. The final cutover still requires a source write fence.
+on:
+  workflow_dispatch:
+    inputs:
+      source_agent_id:
+        description: PostgreSQL owner agent UUID
+        required: true
+        type: string
+      embedding_provider:
+        description: Source vector provider
+        required: true
+        type: string
+      embedding_model:
+        description: Source vector model
+        required: true
+        type: string
+      embedding_dimensions:
+        description: Source vector dimensions
+        required: true
+        type: string
+      embedding_revision:
+        description: Source vector revision
+        required: true
+        type: string
+      firestore_database_id:
+        description: Target Firestore database ID
+        required: true
+        default: (default)
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  export:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+      GCP_REGION: ${{ vars.GCP_REGION || 'us-west1' }}
+      ARTIFACT_REPOSITORY: ${{ vars.ARTIFACT_REPOSITORY || 'assistant' }}
+      EXPORT_RELEASE_SHA: ${{ github.sha }}
+      MIGRATION_SOURCE_AGENT_ID: ${{ inputs.source_agent_id }}
+      MIGRATION_EMBEDDING_PROVIDER: ${{ inputs.embedding_provider }}
+      MIGRATION_EMBEDDING_MODEL: ${{ inputs.embedding_model }}
+      MIGRATION_EMBEDDING_DIMENSIONS: ${{ inputs.embedding_dimensions }}
+      MIGRATION_EMBEDDING_REVISION: ${{ inputs.embedding_revision }}
+      FIRESTORE_TARGET_DATABASE_ID: ${{ inputs.firestore_database_id }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+          project_id: ${{ vars.GCP_PROJECT }}
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Export the snapshot inside Cloud Run
+        run: bash infra/gcp/workspace-export.sh
