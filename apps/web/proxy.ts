@@ -24,6 +24,7 @@ export function proxy(request: NextRequest) {
     ((path === '/api/chat/status' || path === '/api/mobile/v1/chat/status') &&
       request.method === 'GET') ||
     (path === '/api/card-image' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/cards' && request.method === 'GET') ||
     (path === '/api/mobile/v1/chats' && request.method === 'POST') ||
     (chatIdPath.test(path) && ['GET', 'POST'].includes(request.method)) ||
     (chatMessagePath.test(path) && request.method === 'POST')
