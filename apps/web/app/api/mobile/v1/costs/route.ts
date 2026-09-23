@@ -1,4 +1,6 @@
-import { updateBudgetCaps } from '@assistant/application/costs';
+import { updateBudgetCaps, updateBudgetCapsWithRepository } from '@assistant/application/costs';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { createInstallationStore, FirestoreBudgetCapsRepository } from '@assistant/firestore';
 import { getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -11,10 +13,28 @@ export async function PATCH(request: Request): Promise<Response> {
   if (!body || Array.isArray(body)) {
     return mobileJson({ error: 'invalid cost limits body' }, { status: 400 });
   }
-  await updateBudgetCaps(getDb(), {
+  const values = {
     task_default: typeof body.taskDefault === 'string' ? body.taskDefault : '',
     daily: typeof body.daily === 'string' ? body.daily : '',
     monthly: typeof body.monthly === 'string' ? body.monthly : '',
-  });
+  };
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    const store = createInstallationStore({
+      projectId: config.GCP_PROJECT,
+      installationId: config.ASSISTANT_WORKSPACE_ID,
+    });
+    try {
+      await updateBudgetCapsWithRepository(
+        new FirestoreBudgetCapsRepository(store),
+        config.FIRESTORE_AGENT_ID,
+        values,
+      );
+    } finally {
+      await store.db.terminate();
+    }
+  } else await updateBudgetCaps(getDb(), values);
   return mobileJson({ ok: true });
 }
