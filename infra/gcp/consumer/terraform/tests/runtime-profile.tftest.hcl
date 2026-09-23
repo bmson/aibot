@@ -163,14 +163,24 @@ run "single_image_is_rejected" {
   expect_failures = [terraform_data.runtime_input_guard["current"]]
 }
 
-run "named_database_runtime_is_rejected" {
+run "named_database_runtime_uses_selected_database" {
   command = plan
   variables {
-    firestore_database_id = "assistant-named"
-    web_image_digest      = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    agent_image_digest    = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    firestore_database_id   = "assistant-named"
+    create_default_database = false
+    web_image_digest        = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    agent_image_digest      = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   }
-  expect_failures = [terraform_data.runtime_input_guard["current"]]
+  assert {
+    condition = (
+      google_firestore_database.consumer.name == "assistant-named" &&
+      google_project_iam_member.runtime_firestore.condition[0].expression == "resource.name == \"projects/consumer-test-project/databases/assistant-named\"" &&
+      google_project_iam_member.web_firestore["current"].condition[0].expression == "resource.name == \"projects/consumer-test-project/databases/assistant-named\"" &&
+      one([for env in google_cloud_run_v2_service.agent["current"].template[0].containers[0].env : env.value if env.name == "FIRESTORE_DATABASE_ID"]) == "assistant-named" &&
+      one([for env in google_cloud_run_v2_service.web["current"].template[0].containers[0].env : env.value if env.name == "FIRESTORE_DATABASE_ID"]) == "assistant-named"
+    )
+    error_message = "Both runtime services and database-scoped IAM must use the selected named database."
+  }
 }
 
 run "missing_auth_secret_version_is_rejected" {

@@ -71,10 +71,6 @@ resource "terraform_data" "runtime_input_guard" {
       error_message = "Provide both web_image_digest and agent_image_digest to opt in to the runtime."
     }
     precondition {
-      condition     = var.firestore_database_id == "(default)"
-      error_message = "The current Firestore web and agent composition opens only the (default) database."
-    }
-    precondition {
       condition     = var.firestore_agent_id != null && var.firestore_embedding_space != null
       error_message = "Runtime requires an explicit seeded Firestore agent ID and embedding provenance."
     }

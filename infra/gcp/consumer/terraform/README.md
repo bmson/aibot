@@ -81,7 +81,7 @@ google_client_secret_version = 1
 mobile_api_token_version     = 1
 ```
 
-The digest examples are placeholders, not published images. Terraform constructs `REGION-docker.pkg.dev/PROJECT/REPOSITORY/web@sha256:...` and the matching `agent` URL, so tags and other registries cannot be selected by these inputs. Both digests must be supplied together. The current application composition opens Firestore's `(default)` database only; a named database remains available for a foundation-only apply but cannot enable this runtime. `firestore_agent_id` must identify a seeded owner agent, and embedding provenance must match the existing data. The selected Vertex model must be available in `region`; Terraform cannot prove model access or embedding compatibility.
+The digest examples are placeholders, not published images. Terraform constructs `REGION-docker.pkg.dev/PROJECT/REPOSITORY/web@sha256:...` and the matching `agent` URL, so tags and other registries cannot be selected by these inputs. Both digests must be supplied together. Both services open the selected Firestore database, whether `(default)` or a named installation database; their IAM grants are scoped to that same database. `firestore_agent_id` must identify a seeded owner agent, and embedding provenance must match the existing data. The selected Vertex model must be available in `region`; Terraform cannot prove model access or embedding compatibility.
 
 Before supplying digests, create and populate these exact secrets in the customer project, outside Terraform state:
 
