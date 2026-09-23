@@ -242,11 +242,19 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   const liveLookups = detectedLookups.flatMap((lookup): LiveLookup[] =>
     lookup.kind === 'sports' && !available('sports.scores')
       ? [{ ...lookup, kind: 'web' }]
-      : lookup.kind === 'directions' && !available('maps.directions')
+      : lookup.kind === 'directions' &&
+          (!available('maps.directions') ||
+            (lookup.destination === 'calendar' && !available('calendar.list_events')))
         ? []
         : [lookup],
   );
   const liveLookup = liveLookups.length > 0;
+  const lookupContext = { now: readReferenceAt, timeZone: agent.timezone };
+  // "How long to get to my 3pm" reads the calendar as the first step of the
+  // trip. The private-read router must not also claim it: its answer contract
+  // checks every stated time against the calendar alone, and "leave by 2:40"
+  // comes from the route.
+  const tripOwnsCalendar = liveLookups.some((lookup) => lookup.destination === 'calendar');
   const birthdaySaves = directOwner ? requestedBirthdaySaves(rc.window) : [];
   const situationRequest =
     task.trust === 'owner' && !isForwardedIngest(task) && isSituationRequest(ownerText);
@@ -258,7 +266,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // guard, a crafted message reading like "what's on my calendar tomorrow?"
   // would force a search of the owner's own accounts and override the plan.
   const readRequest =
-    task.trust === 'owner' && !isForwardedIngest(task) && !situationRequest
+    task.trust === 'owner' && !isForwardedIngest(task) && !situationRequest && !tripOwnsCalendar
       ? detectPersonalReadRequest(rc.window, {
           now: readReferenceAt,
           timeZone: agent.timezone,
@@ -496,6 +504,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         ? nextLiveLookups(
             liveLookups,
             readToolEvidence.map((row) => ({ ...row, result: row.result })),
+            lookupContext,
           )
         : undefined;
     const liveFailures =
@@ -503,6 +512,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         ? liveLookupFailures(
             liveLookups,
             readToolEvidence.map((row) => ({ ...row, result: row.result })),
+            lookupContext,
           )
         : [];
     // A compound request answers the parts it can: only when every lookup came
@@ -1371,7 +1381,11 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       // The ambient block is in the system prompt, not the window, so the
       // grounding check would read a true local aside — the weather, where the
       // owner is — as something the model made up.
-      { readRequest, groundingCorpus: state.untrustedContext ? undefined : ambientBlock },
+      {
+        readRequest,
+        groundingCorpus: state.untrustedContext ? undefined : ambientBlock,
+        lookupContext,
+      },
     );
   }
 

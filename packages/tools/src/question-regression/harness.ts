@@ -272,6 +272,31 @@ function replayRegistry(
       }),
       {},
     );
+  if (fixture.calendar)
+    add(
+      'calendar.list_events',
+      'List events in a time range across every calendar the assistant can read.',
+      z.object({ timeMin: z.string(), timeMax: z.string() }).passthrough(),
+      (args) => {
+        // Two hours into whatever window was asked for, so "my next meeting"
+        // always has one whatever clock the replay pins the task to.
+        const start = new Date(Date.parse(String(args.timeMin)) + 2 * 60 * 60 * 1000);
+        const end = new Date(start.getTime() + 60 * 60 * 1000);
+        return {
+          complete: true,
+          calendarsSearched: ['Fixture calendar'],
+          events: [
+            {
+              summary: 'Design review',
+              start: start.toISOString(),
+              end: end.toISOString(),
+              location: fixture.calendar === 'no-location' ? '' : 'Oracle Park',
+            },
+          ],
+        };
+      },
+      { confidentialRead: true, returnsUntrustedContent: true },
+    );
   if (fixture.weather)
     add(
       'weather.lookup',
