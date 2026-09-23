@@ -19,7 +19,12 @@ describe.skipIf(!localEmulator)(
   () => {
     const installationId = `mobile-memory-profile-${randomUUID()}`;
     const agentId = randomUUID();
-    const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+    const databaseId = 'assistant-voice-profile-test';
+    const store = createInstallationStore({
+      projectId: 'demo-assistant-test',
+      installationId,
+      databaseId,
+    });
     let route: typeof import('./route.js');
 
     beforeAll(async () => {
@@ -27,6 +32,7 @@ describe.skipIf(!localEmulator)(
       vi.stubEnv('DATABASE_URL', 'postgres://offline:offline@127.0.0.1:1/offline_test');
       vi.stubEnv('GCP_PROJECT', 'demo-assistant-test');
       vi.stubEnv('ASSISTANT_WORKSPACE_ID', installationId);
+      vi.stubEnv('FIRESTORE_DATABASE_ID', databaseId);
       vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
       vi.stubEnv(
         'FIRESTORE_EMBEDDING_SPACE',
@@ -51,7 +57,16 @@ describe.skipIf(!localEmulator)(
 
     const get = () => route.GET(new Request('http://localhost/api/mobile/v1/memory/profile'));
 
-    it('allows only GET through the Firestore proxy and denies POST in the route', async () => {
+    const post = (body: unknown) =>
+      route.POST(
+        new Request('http://localhost/api/mobile/v1/memory/profile', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+
+    it('allows profile edits through the proxy but keeps unsupported actions gated', async () => {
       const { proxy } = await import('../../../../../../proxy.js');
       expect(
         proxy(new NextRequest('http://localhost/api/mobile/v1/memory/profile', { method: 'GET' }))
@@ -60,15 +75,34 @@ describe.skipIf(!localEmulator)(
       expect(
         proxy(new NextRequest('http://localhost/api/mobile/v1/memory/profile', { method: 'POST' }))
           .status,
-      ).toBe(503);
+      ).toBe(200);
       auth.allowed.mockResolvedValue(true);
-      const response = await route.POST(
-        new Request('http://localhost/api/mobile/v1/memory/profile', {
-          method: 'POST',
-          body: JSON.stringify({ action: 'forget-all', confirm: 'forget-all' }),
-        }),
-      );
+      const response = await post({ action: 'forget-all', confirm: 'forget-all' });
       expect(response.status).toBe(503);
+    });
+
+    it('saves bounded voice edits from mobile arrays without PostgreSQL', async () => {
+      auth.allowed.mockResolvedValue(true);
+      const response = await post({
+        action: 'voice-profile',
+        description: '  Direct and warm  ',
+        dos: ['Lead with result', 'Name a tradeoff'],
+        donts: ['Hedge'],
+        signature: '  B  ',
+      });
+      expect(response.status).toBe(200);
+      expect((await store.doc('voiceProfile', '1').get()).data()).toMatchObject({
+        id: 1,
+        description: 'Direct and warm',
+        dos: ['Lead with result', 'Name a tradeoff'],
+        donts: ['Hedge'],
+        signature: 'B',
+      });
+      const invalid = await post({ action: 'voice-profile', description: '   ' });
+      expect(invalid.status).toBe(400);
+      expect((await store.doc('voiceProfile', '1').get()).get('description')).toBe(
+        'Direct and warm',
+      );
     });
 
     it('requires mobile authentication before reading', async () => {
@@ -108,11 +142,13 @@ describe.skipIf(!localEmulator)(
       auth.allowed.mockResolvedValue(true);
       await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
       await expect(get()).rejects.toThrow('Privacy erasure');
+      expect((await post({ action: 'voice-profile', description: 'Blocked' })).status).toBe(409);
       await store.doc('privacyErasureJobs', agentId).delete();
       const extra = randomUUID();
       await store.doc('agents', extra).set({ id: extra });
       try {
         await expect(get()).rejects.toThrow('one matching configured owner');
+        expect((await post({ action: 'voice-profile', description: 'Blocked' })).status).toBe(409);
       } finally {
         await store.doc('agents', extra).delete();
       }

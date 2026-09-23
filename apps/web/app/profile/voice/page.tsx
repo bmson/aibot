@@ -70,6 +70,7 @@ export default async function VoicePage() {
         imports={importViews}
         profile={voiceProfile}
         readOnly={readOnly}
+        profileEditable
       />
     </PageShell>
   );

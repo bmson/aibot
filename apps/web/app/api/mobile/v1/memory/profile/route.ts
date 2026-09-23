@@ -5,11 +5,12 @@ import {
   recompileProfileCard,
   updateVoiceProfile,
 } from '@assistant/application/profile';
-import { loadConfig } from '@assistant/config';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import {
   assertPrivacyErasureFenceUnchanged,
   createInstallationStore,
   FirestoreProfileVoiceOverviewRepository,
+  FirestoreVoiceProfileRepository,
   readPrivacyErasureFence,
 } from '@assistant/firestore';
 import { getApplication, getDb, getWorkspace } from '@/lib/server';
@@ -57,11 +58,6 @@ export async function GET(request: Request): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-    return mobileJson(
-      { error: 'Memory profile updates are unavailable in Firestore mode.' },
-      { status: 503 },
-    );
   const body = (await request.json().catch(() => null)) as {
     action?: unknown;
     confirm?: unknown;
@@ -80,6 +76,13 @@ export async function POST(request: Request): Promise<Response> {
    */
   const lines = (value: unknown) =>
     Array.isArray(value) ? value.map(text).join('\n') : text(value);
+  const config = loadConfig();
+  const firestore = config.PERSISTENCE_DRIVER === 'firestore';
+  if (firestore && body?.action !== 'voice-profile')
+    return mobileJson(
+      { error: 'This memory profile action is unavailable in Firestore mode.' },
+      { status: 503 },
+    );
 
   try {
     switch (body?.action) {
@@ -94,12 +97,30 @@ export async function POST(request: Request): Promise<Response> {
           ...(await purgeProfileVoiceSamples(getDb(), getWorkspace())),
         });
       case 'voice-profile': {
-        const result = await updateVoiceProfile(getDb(), {
+        const input = {
           description: text(body.description),
           dos: lines(body.dos),
           donts: lines(body.donts),
           signature: text(body.signature),
-        });
+        };
+        let result: { error?: string };
+        if (firestore) {
+          const problems = validateAgentPersistenceConfig(config);
+          if (problems.length) throw new Error(problems.join('; '));
+          const store = createInstallationStore({
+            projectId: config.GCP_PROJECT,
+            installationId: config.ASSISTANT_WORKSPACE_ID,
+            databaseId: config.FIRESTORE_DATABASE_ID,
+          });
+          try {
+            result = await new FirestoreVoiceProfileRepository(store).update(
+              config.FIRESTORE_AGENT_ID,
+              input,
+            );
+          } finally {
+            await store.db.terminate();
+          }
+        } else result = await updateVoiceProfile(getDb(), input);
         if (result.error) return mobileJson({ error: result.error }, { status: 400 });
         return mobileJson({ ok: true });
       }

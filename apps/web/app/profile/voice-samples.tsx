@@ -54,6 +54,7 @@ export function VoiceSamplesPanel({
   imports,
   profile,
   readOnly = false,
+  profileEditable = !readOnly,
 }: {
   total: number;
   auto: number;
@@ -61,6 +62,7 @@ export function VoiceSamplesPanel({
   imports: VoiceImportView[];
   profile: { description: string; dos: string[]; donts: string[]; signature: string };
   readOnly?: boolean;
+  profileEditable?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [confirming, setConfirming] = useState(false);
@@ -96,11 +98,13 @@ export function VoiceSamplesPanel({
         <div className="rounded-xl bg-sunken/55 p-3">
           <p className="text-sm font-semibold text-strong">The voice it learned</p>
           <p className="mt-1 mb-3 text-xs leading-5 text-muted">
-            {readOnly
-              ? 'What outbound drafts are rewritten to sound like.'
-              : 'What outbound drafts are rewritten to sound like. Re-ingesting samples rewrites this — make edits after an ingest.'}
+            {profileEditable
+              ? 'What outbound drafts are rewritten to sound like. Re-ingesting samples rewrites this — make edits after an ingest.'
+              : 'What outbound drafts are rewritten to sound like.'}
           </p>
-          {readOnly ? (
+          {profileEditable ? (
+            <VoiceProfileForm initial={profile} />
+          ) : (
             <dl className="grid gap-3 text-sm sm:grid-cols-2">
               <div className="sm:col-span-2">
                 <dt className="text-muted">Description</dt>
@@ -119,8 +123,6 @@ export function VoiceSamplesPanel({
                 <dd className="whitespace-pre-wrap">{profile.signature || 'None'}</dd>
               </div>
             </dl>
-          ) : (
-            <VoiceProfileForm initial={profile} />
           )}
         </div>
 

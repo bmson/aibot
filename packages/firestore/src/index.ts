@@ -73,6 +73,7 @@ export { FirestoreTaskActivityCommandRepository } from './task-activity-commands
 export { FirestoreTaskRepository } from './task-lifecycle.js';
 export { FirestoreTaskLeaseRepository } from './tasks.js';
 export { FirestoreToolExecutionRepository } from './tool-execution.js';
+export { FirestoreVoiceProfileRepository } from './voice-profile.js';
 export { FirestoreWatchRepository } from './watches.js';
 export { FirestoreWorkspaceAnomalyRepository } from './workspace-anomalies.js';
 export { FirestoreWorkspaceCapabilityRepository } from './workspace-capabilities.js';
