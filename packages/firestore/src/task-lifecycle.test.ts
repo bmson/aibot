@@ -37,6 +37,42 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect((await store.collection('outbox').get()).size).toBe(2);
       expect((await repo.findDueTasks()).map((t) => t.id)).toEqual(['task']);
     });
+    it('returns only the ten preceding owner tasks for the same conversation and type', async () => {
+      const base = new Date(Date.now() - 60_000);
+      const ids = Array.from({ length: 12 }, (_, index) => `receipt-${index}`);
+      await Promise.all(
+        ids.map((id, index) => {
+          const task = taskFixture({
+            id,
+            agentId: 'agent',
+            conversationId: 'conversation',
+            reminderId: '',
+          });
+          task.type = 'chat_turn';
+          task.createdAt = new Date(base.getTime() + index * 1000);
+          task.trigger = { payload: { text: `turn ${index}` } };
+          return store.doc('tasks', id).set(task);
+        }),
+      );
+      const unrelated = taskFixture({
+        id: 'receipt-other',
+        agentId: 'agent',
+        conversationId: 'other-conversation',
+        reminderId: '',
+      });
+      unrelated.type = 'chat_turn';
+      unrelated.createdAt = new Date(base.getTime() + 20_000);
+      await store.doc('tasks', unrelated.id).set(unrelated);
+
+      const rows = await repo.precedingOwnerTasks({
+        agentId: 'agent',
+        conversationId: 'conversation',
+        taskType: 'chat_turn',
+        createdBefore: new Date(base.getTime() + 12_000),
+        limit: 10,
+      });
+      expect(rows.map((row) => row.id)).toEqual(ids.slice(2).reverse());
+    });
     it('creates an owned tainted scheduled child with its generation-zero wake atomically', async () => {
       const runAfter = new Date(store.now().getTime() + 60_000);
       const result = await repo.createScheduledFollowUp({

@@ -1,4 +1,5 @@
-import type { Db, TaskRow } from '@assistant/db';
+import type { TaskRow } from '@assistant/db';
+import type { ExecutionPersistence } from '@assistant/persistence';
 import { describe, expect, it, vi } from 'vitest';
 import { enforceResponseContract } from './response-contract.js';
 import {
@@ -82,38 +83,29 @@ describe('saved-work receipts', () => {
   });
 
   it('does not use an unrelated older successful save for the preceding request', async () => {
-    const where = vi.fn().mockResolvedValue([]);
-    const db = {
-      select: vi
-        .fn()
-        .mockReturnValueOnce({
-          from: () => ({
-            where: () => ({
-              orderBy: () => ({
-                limit: async () => [
-                  {
-                    id: 'status',
-                    status: 'done',
-                    trigger: { payload: { text: 'Was it save to long term memory' } },
-                  },
-                  {
-                    id: 'recent',
-                    status: 'done',
-                    trigger: { payload: { text: 'Remember our new order' } },
-                  },
-                  {
-                    id: 'old',
-                    status: 'done',
-                    trigger: { payload: { text: 'Remember the old order' } },
-                  },
-                ],
-              }),
-            }),
-          }),
-        })
-        .mockReturnValueOnce({ from: () => ({ where }) }),
-    } as unknown as Db;
-    const text = await previousSaveStatus(db, {
+    const precedingOwnerTasks = vi.fn().mockResolvedValue([
+      {
+        id: 'status',
+        status: 'done',
+        trigger: { payload: { text: 'Was it save to long term memory' } },
+      },
+      {
+        id: 'recent',
+        status: 'done',
+        trigger: { payload: { text: 'Remember our new order' } },
+      },
+      {
+        id: 'old',
+        status: 'done',
+        trigger: { payload: { text: 'Remember the old order' } },
+      },
+    ]);
+    const taskEvidence = vi.fn().mockResolvedValue([]);
+    const persistence = {
+      tasks: { precedingOwnerTasks },
+      executionEvidence: { taskEvidence },
+    } as unknown as Pick<ExecutionPersistence, 'tasks' | 'executionEvidence'>;
+    const text = await previousSaveStatus(persistence, {
       id: 'current',
       agentId: 'agent',
       conversationId: 'chat',
@@ -121,8 +113,14 @@ describe('saved-work receipts', () => {
       createdAt: new Date(),
     } as TaskRow);
     expect(text).toContain('no confirmed');
-    expect(db.select).toHaveBeenCalledTimes(2);
-    expect(where).toHaveBeenCalledTimes(1);
+    expect(precedingOwnerTasks).toHaveBeenCalledWith({
+      agentId: 'agent',
+      conversationId: 'chat',
+      taskType: 'chat_turn',
+      createdBefore: expect.any(Date),
+      limit: 10,
+    });
+    expect(taskEvidence).toHaveBeenCalledWith({ agentId: 'agent', taskId: 'recent' });
   });
 
   it('does not accept a tool-less future promise or passive memory badge', () => {

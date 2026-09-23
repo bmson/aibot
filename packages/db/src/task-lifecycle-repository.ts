@@ -6,7 +6,7 @@ import type {
   TaskWake,
 } from '@assistant/persistence';
 import { newTaskRecord } from '@assistant/persistence';
-import { and, eq, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { type TaskRow, tasks } from './schema.js';
 import { createTask } from './task-creation-repository.js';
@@ -388,6 +388,23 @@ export function createPostgresTaskRepository(db: Db): TaskRepository {
       if (!taskId) return null;
       const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
       return task ?? null;
+    },
+    async precedingOwnerTasks(input) {
+      const rows = await db
+        .select({ id: tasks.id, trigger: tasks.trigger, status: tasks.status })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.agentId, input.agentId),
+            eq(tasks.conversationId, input.conversationId),
+            eq(tasks.trust, 'owner'),
+            eq(tasks.type, input.taskType),
+            lt(tasks.createdAt, input.createdBefore),
+          ),
+        )
+        .orderBy(desc(tasks.createdAt))
+        .limit(input.limit ?? 10);
+      return rows;
     },
     createTask: (input) => createTask(db, input),
     createScheduledFollowUp: (input) => createScheduledFollowUp(db, input),

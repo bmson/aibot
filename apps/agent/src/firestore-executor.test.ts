@@ -79,6 +79,54 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect(deliver).toHaveBeenCalledOnce();
     });
 
+    it('answers save-status questions from prior Firestore receipts with PostgreSQL unreachable', async () => {
+      const previous = taskFixture({
+        id: 'prior-owner-turn',
+        agentId: 'agent',
+        conversationId: 'chat',
+        reminderId: '',
+      });
+      previous.type = 'chat_turn';
+      previous.status = 'done';
+      previous.createdAt = new Date(Date.now() - 60_000);
+      previous.trigger = { payload: { text: 'Remember our new order is two cheese pupusas.' } };
+      const current = taskFixture({
+        id: 'save-status-turn',
+        agentId: 'agent',
+        conversationId: 'chat',
+        reminderId: '',
+      });
+      current.type = 'chat_turn';
+      current.createdAt = new Date();
+      current.trigger = { payload: { text: 'Was it saved to long term memory?' } };
+      current.state = {};
+      await store.doc('agents', 'agent').set({ id: 'agent', name: 'Synthetic owner' });
+      await store.doc('tasks', previous.id).set(previous);
+      await store.doc('toolCalls', 'prior-save').set({
+        id: 'prior-save',
+        createdAt: previous.createdAt,
+        status: 'succeeded',
+        taskId: previous.id,
+        startedAt: previous.createdAt,
+        step: 1,
+        toolName: 'memory.save',
+        args: { content: 'Our order is two cheese pupusas.' },
+        risk: 'low',
+        idempotencyKey: null,
+        result: { saved: true },
+        error: null,
+        approvalId: null,
+        decision: null,
+        finishedAt: previous.createdAt,
+      });
+      await store.doc('tasks', current.id).set(current);
+
+      const result = await executeTask(deps, current.id);
+      expect(result).toMatchObject({ outcome: 'done' });
+      expect(result.detail).toContain('Our order is two cheese pupusas.');
+      expect((await store.doc('tasks', current.id).get()).get('status')).toBe('done');
+    });
+
     it('reuses the persisted message after a definitive delivery rejection', async () => {
       const task = await pendingFinalTask();
       deps.deliverFinal = vi

@@ -31,6 +31,14 @@ export interface TaskWake {
 export interface TaskRepository extends TaskLeaseRepository {
   /** Installation-scoped task lookup used before choosing an execution route. */
   getTask(taskId: string): Promise<Records['tasks'] | null>;
+  /** Recent owner tasks before a chat task, used to resolve an exact prior-turn receipt check. */
+  precedingOwnerTasks(input: {
+    agentId: string;
+    conversationId: string;
+    taskType: string;
+    createdBefore: Date;
+    limit?: number;
+  }): Promise<Array<Pick<Records['tasks'], 'id' | 'trigger' | 'status'>>>;
   createTask(input: TaskCreateInput): Promise<TaskCreateResult>;
   /** Atomically create an owner-scoped scheduled child and its initial wake. */
   createScheduledFollowUp(input: ScheduledFollowUpInput): Promise<TaskCreateResult>;

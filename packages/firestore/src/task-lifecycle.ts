@@ -103,6 +103,31 @@ export class FirestoreTaskRepository
     const task = decodeRecord<Task>(snapshot.data());
     return task.id === taskId ? task : null;
   }
+  async precedingOwnerTasks(input: {
+    agentId: string;
+    conversationId: string;
+    taskType: string;
+    createdBefore: Date;
+    limit?: number;
+  }) {
+    const limit = input.limit ?? 10;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 10)
+      throw new Error('Invalid preceding owner task limit');
+    const snapshot = await this.store
+      .collection('tasks')
+      .where('agentId', '==', input.agentId)
+      .where('conversationId', '==', input.conversationId)
+      .where('trust', '==', 'owner')
+      .where('type', '==', input.taskType)
+      .where('createdAt', '<', input.createdBefore)
+      .orderBy('createdAt', 'desc')
+      .limit(limit)
+      .get();
+    return snapshot.docs.map((document) => {
+      const task = decodeRecord<Task>(document.data());
+      return { id: task.id, trigger: task.trigger, status: task.status };
+    });
+  }
   createTask(input: TaskCreateInput) {
     return createTask(this.store, input);
   }

@@ -343,7 +343,7 @@ async function runSteps(deps: ExecutorDeps, task: TaskLease): Promise<ExecuteRes
     (task.type === 'chat_turn' || task.type === 'sms_turn') &&
     isSaveStatusQuestion(latestUserText(rc.window) ?? '')
   ) {
-    const text = await previousSaveStatus(db, task);
+    const text = await previousSaveStatus(persistence, task);
     rc.window.push({ role: 'assistant', content: text });
     return stageFinalResponse(deps, lease, state, rc.window, {
       text,
