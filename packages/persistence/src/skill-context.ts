@@ -7,6 +7,24 @@ export const DEFAULT_SKILL_RECALL_LIMIT = 4;
 export const MAX_SKILL_RECALL_LIMIT = 100;
 export const MIN_SKILL_RECALL_SIMILARITY = 0.72;
 
+/** Canonical procedure text used by both SQL and Firestore skill vectors. */
+export function skillEmbeddingText(skill: {
+  name: string;
+  preconditions: string;
+  steps: string;
+  gotchas: string;
+}): string {
+  return [
+    skill.name,
+    skill.preconditions && `When: ${skill.preconditions}`,
+    skill.steps && `Steps: ${skill.steps}`,
+    skill.gotchas && `Gotchas: ${skill.gotchas}`,
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 4000);
+}
+
 export type LearnedSkill = Omit<Records['skills'], 'embedding'>;
 
 export interface SkillContextMatch {

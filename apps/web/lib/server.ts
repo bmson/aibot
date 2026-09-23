@@ -94,6 +94,7 @@ import {
   FirestoreApplicationChatPersistence,
   FirestoreShellStatusRepository,
 } from '@assistant/firestore';
+import { validateEmbedding } from '@assistant/persistence';
 import { inspectMcpConnection } from '@assistant/tools/mcp';
 import {
   GcsWorkspaceStore,
@@ -365,6 +366,7 @@ function createFirestoreChatApplication() {
     config.FIRESTORE_AGENT_ID,
     parseFirestoreEmbeddingSpace(config.FIRESTORE_EMBEDDING_SPACE),
   );
+  const embeddingSpace = parseFirestoreEmbeddingSpace(config.FIRESTORE_EMBEDDING_SPACE);
   const chat = new FirestoreApplicationChatPersistence(store, config.FIRESTORE_AGENT_ID);
   const shellStatus = new FirestoreShellStatusRepository(store, config.FIRESTORE_AGENT_ID);
   const router = new ModelRouter(
@@ -376,6 +378,14 @@ function createFirestoreChatApplication() {
   const chatReads = { chat, generatedCards: persistence.generatedCards };
   const settings = createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID);
   return {
+    embedSkillText: async (text: string): Promise<number[]> => {
+      const [vector] = await router.embed([text], {
+        expectedModelId: `${embeddingSpace.provider}/${embeddingSpace.model}`,
+      });
+      const result = vector ?? [];
+      validateEmbedding(embeddingSpace, result);
+      return result;
+    },
     getWorkspaceSettings: () => getSettingsOverview(settings),
     getGeneratedCards: () => persistence.generatedCards,
     getAgentIdentity: async () => {
@@ -417,6 +427,10 @@ const firestoreChatCache = globalThis as unknown as {
 function getFirestoreChatApplication() {
   firestoreChatCache.__assistantFirestoreChatApplication ??= createFirestoreChatApplication();
   return firestoreChatCache.__assistantFirestoreChatApplication;
+}
+
+export function embedFirestoreSkillText(text: string): Promise<number[]> {
+  return getFirestoreChatApplication().embedSkillText(text);
 }
 
 export function getChatApplication() {

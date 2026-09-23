@@ -1,4 +1,9 @@
-import type { SkillLibraryRepository, SkillMutationRepository } from '@assistant/persistence';
+import {
+  type OwnerSkillInput,
+  type SkillLibraryRepository,
+  type SkillMutationRepository,
+  skillEmbeddingText,
+} from '@assistant/persistence';
 
 /** Matches the learned-skill item returned by the mobile workspace API. */
 export type MobileWorkspaceSkill = {
@@ -50,4 +55,25 @@ export function deleteMobileSkill(
   skillId: string,
 ): Promise<void> {
   return repository.delete(agentId, skillId);
+}
+
+/** Re-embed canonical procedure text before each owner-authored write. */
+export async function writeMobileSkill(
+  repository: SkillMutationRepository,
+  embed: (text: string) => Promise<number[]>,
+  agentId: string,
+  input: OwnerSkillInput,
+  skillId?: string,
+): Promise<void> {
+  const normalized = {
+    name: input.name.trim().slice(0, 200),
+    steps: input.steps.trim(),
+    preconditions: input.preconditions.trim(),
+    gotchas: input.gotchas.trim(),
+  };
+  if (!normalized.name || !normalized.steps) throw new Error('Name and steps are required.');
+  await repository.assertOwnerWritable(agentId);
+  const vector = await embed(skillEmbeddingText(normalized));
+  if (skillId) await repository.editOwner(agentId, skillId, normalized, vector);
+  else await repository.saveOwner(agentId, normalized, vector);
 }

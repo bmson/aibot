@@ -95,6 +95,16 @@ function router(model: EmbeddingModel): ModelRouter {
   return new ModelRouter(database(), 'unused', 'off', provider(model));
 }
 
+it('rejects a changed embedding role before calling the provider', async () => {
+  const doEmbed = vi.fn(async () => ({ embeddings: [vector()] }));
+  await expect(
+    router(embeddingModel(doEmbed)).embed(['skill text'], {
+      expectedModelId: 'vertex/expected-embedding',
+    }),
+  ).rejects.toThrow('Embedding model does not match');
+  expect(doEmbed).not.toHaveBeenCalled();
+});
+
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
