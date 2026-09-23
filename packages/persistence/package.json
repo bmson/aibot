@@ -5,7 +5,11 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./situations": "./src/situations-schema.ts",
     "./testing": "./src/contract-suite.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

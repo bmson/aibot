@@ -17,6 +17,7 @@ import {
   type PackItem,
   PackItemSchema,
   type PackSnapshot,
+  type SituationPackView,
   validatePack,
 } from './situations-schema.js';
 
@@ -103,16 +104,6 @@ function currentSnapshot(item: PackItem, live: Record<string, PackSnapshot>) {
   return item.source ? (live[`${item.source.kind}:${item.source.id}`] ?? null) : null;
 }
 
-export interface SituationPackView {
-  id: string;
-  title: string;
-  version: number;
-  archived: boolean;
-  updatedAt: string;
-  data: PackData;
-  changes: { itemId: string; before: PackSnapshot | null; after: PackSnapshot | null }[];
-  affectedIds: string[];
-}
 async function project(db: Reader, row: PackRow): Promise<SituationPackView> {
   const data = PackDataSchema.parse(row.data);
   const live = await sources(db, row.agentId, data.items);
