@@ -75,6 +75,11 @@ export async function runWorkspaceExportJob(
     target: config.target,
     embeddingSpace: config.embeddingSpace,
   });
+  if (
+    bundle.manifest.coverage.complete !== true ||
+    bundle.manifest.coverage.omittedTables.length !== 0
+  )
+    throw new Error('Workspace snapshot does not cover every source table');
   const bytes = Buffer.from(JSON.stringify(bundle));
   const sha256 = createHash('sha256').update(bytes).digest('hex');
 
@@ -105,11 +110,26 @@ export async function runWorkspaceExportJob(
     signal: AbortSignal.timeout(20 * 60_000),
   });
   if (!upload.ok) throw new Error(`Workspace snapshot upload failed (${upload.status})`);
+  const stored = (await upload.json()) as {
+    name?: unknown;
+    bucket?: unknown;
+    size?: unknown;
+    generation?: unknown;
+  };
+  if (
+    stored.name !== config.objectName ||
+    stored.bucket !== config.bucket ||
+    stored.size !== String(bytes.length) ||
+    typeof stored.generation !== 'string' ||
+    !/^[1-9]\d*$/.test(stored.generation)
+  )
+    throw new Error('Workspace snapshot upload returned mismatched object metadata');
   return {
     uri: `gs://${config.bucket}/${config.objectName}`,
     records: bundle.records.length,
     bundleChecksum: bundle.manifest.bundleChecksum,
     byteLength: bytes.length,
     sha256,
+    generation: stored.generation,
   };
 }

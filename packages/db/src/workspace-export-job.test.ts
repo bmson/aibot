@@ -20,7 +20,10 @@ const env: WorkspaceExportJobEnvironment = {
 };
 
 const bundle = {
-  manifest: { bundleChecksum: 'source-checksum' },
+  manifest: {
+    bundleChecksum: 'source-checksum',
+    coverage: { complete: true, omittedTables: [] },
+  },
   records: [{ privateContent: 'never printed' }],
 } as unknown as MigrationBundle;
 
@@ -32,7 +35,12 @@ describe('Cloud Run workspace export job', () => {
       requests.push({ url: String(input), init });
       return requests.length === 1
         ? Response.json({ access_token: 'private-access-token' })
-        : Response.json({ name: 'snapshot.json' });
+        : Response.json({
+            name: new URL(String(input)).searchParams.get('name'),
+            bucket: 'customer-project-workspace',
+            size: String(Buffer.byteLength(JSON.stringify(bundle))),
+            generation: '123456789',
+          });
     }) as unknown as typeof fetch;
 
     const result = await runWorkspaceExportJob(env, fetcher, exporter);
@@ -67,6 +75,7 @@ describe('Cloud Run workspace export job', () => {
       bundleChecksum: 'source-checksum',
       byteLength: expect.any(Number),
       sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      generation: '123456789',
     });
   });
 
@@ -92,6 +101,38 @@ describe('Cloud Run workspace export job', () => {
       ) as typeof fetch;
     await expect(runWorkspaceExportJob(env, fetcher, async () => bundle)).rejects.toThrow(
       'Workspace snapshot upload failed (412)',
+    );
+  });
+
+  it('refuses an incomplete source inventory before requesting storage access', async () => {
+    const fetcher = vi.fn() as unknown as typeof fetch;
+    const incomplete = {
+      ...bundle,
+      manifest: {
+        ...bundle.manifest,
+        coverage: { complete: false, omittedTables: ['new_source_table'] },
+      },
+    } as MigrationBundle;
+    await expect(runWorkspaceExportJob(env, fetcher, async () => incomplete)).rejects.toThrow(
+      'does not cover every source table',
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('rejects mismatched upload metadata instead of reporting success', async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ access_token: 'private-access-token' }))
+      .mockResolvedValueOnce(
+        Response.json({
+          name: 'different-object',
+          bucket: 'customer-project-workspace',
+          size: '1',
+          generation: '123456789',
+        }),
+      ) as typeof fetch;
+    await expect(runWorkspaceExportJob(env, fetcher, async () => bundle)).rejects.toThrow(
+      'mismatched object metadata',
     );
   });
 });
