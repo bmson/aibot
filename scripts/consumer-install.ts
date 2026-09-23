@@ -26,7 +26,7 @@ With --apply it bootstraps customer-owned state, runs Terraform, and records res
 Supply both --images and --runtime-config to opt in to digest-pinned Cloud Run deployment after the foundation.
 Supply --seed-plan with an explicit customer runtime seed plan to create required data before Cloud Run.
 On an initialized private runtime, pass --owner-access-callback with the exact Google OAuth Web client redirect URI. Preview is read-only; --apply grants public invocation to web only after the customer has configured the OAuth client and HTTPS routing.
-On an already provisioned foundation, --build-images --runtime-config PATH --apply builds and pushes the exact source commit's web and agent images into the customer repository, then deploys those digests. Docker Buildx and Artifact Registry Docker authentication must already work.
+On an already provisioned foundation, --build-images --runtime-config PATH --apply builds and pushes the exact source commit's web and agent images into the customer repository, then deploys those digests. Docker Buildx and an active customer gcloud login are required; Docker authentication is configured for this run.
 `;
 
 type SeedSummary = {

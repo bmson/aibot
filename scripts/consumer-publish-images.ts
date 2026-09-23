@@ -27,7 +27,7 @@ export interface PublishOptions {
 export type CommandRunner = (
   command: string,
   args: readonly string[],
-  options: { cwd: string; capture?: boolean },
+  options: { cwd: string; capture?: boolean; env?: Readonly<Record<string, string>> },
 ) => Promise<string>;
 
 /** Child output is never echoed: build/auth diagnostics can contain sensitive data. */
@@ -35,6 +35,7 @@ export const systemCommand: CommandRunner = (command, args, options) =>
   new Promise((resolve, reject) => {
     const child = spawn(command, [...args], {
       cwd: options.cwd,
+      env: options.env ? { ...process.env, ...options.env } : process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const chunks: Buffer[] = [];
@@ -70,6 +71,47 @@ function validateOptions(options: PublishOptions): void {
 
 function imageRoot(options: PublishOptions): string {
   return `${options.region}-docker.pkg.dev/${options.projectId}/${options.repositoryId}`;
+}
+
+async function configureCustomerDockerAuth(
+  options: PublishOptions,
+  scratch: string,
+  runner: CommandRunner,
+  cwd: string,
+): Promise<Readonly<Record<string, string>>> {
+  const host = `${options.region}-docker.pkg.dev`;
+  const dockerConfig = path.join(scratch, 'docker-config');
+  await mkdir(dockerConfig, { mode: 0o700 });
+  const env = { DOCKER_CONFIG: dockerConfig };
+  try {
+    await runner('gcloud', ['auth', 'configure-docker', host, '--quiet'], { cwd, env });
+  } catch {
+    throw new Error(
+      `Could not configure Docker authentication for ${host} from the active customer gcloud account`,
+    );
+  }
+  let config: unknown;
+  try {
+    config = JSON.parse(await readFile(path.join(dockerConfig, 'config.json'), 'utf8'));
+  } catch {
+    throw new Error(`Docker authentication for ${host} was not configured`);
+  }
+  const configured = config as {
+    credHelpers?: Record<string, unknown>;
+    auths?: unknown;
+    credsStore?: unknown;
+  } | null;
+  if (
+    !config ||
+    typeof config !== 'object' ||
+    !configured?.credHelpers ||
+    Object.keys(configured.credHelpers).length !== 1 ||
+    configured.credHelpers[host] !== 'gcloud' ||
+    configured.auths !== undefined ||
+    configured.credsStore !== undefined
+  )
+    throw new Error(`Docker authentication for ${host} was not configured`);
+  return env;
 }
 
 function forbiddenSourcePath(relative: string): boolean {
@@ -164,6 +206,7 @@ async function publishOne(
   context: string,
   scratch: string,
   runner: CommandRunner,
+  dockerEnv: Readonly<Record<string, string>>,
 ) {
   const root = imageRoot(options);
   const tag = `${root}/${name}:${options.sourceSha}`;
@@ -186,7 +229,7 @@ async function publishOne(
       '--push',
       context,
     ],
-    { cwd: context },
+    { cwd: context, env: dockerEnv },
   );
   let metadata: unknown;
   try {
@@ -201,13 +244,17 @@ async function publishOne(
   if (typeof digest !== 'string' || !DIGEST.test(digest))
     throw new Error(`${name} build did not produce an immutable SHA-256 digest`);
   const reference = `${root}/${name}@${digest}`;
-  await runner('docker', ['pull', '--platform', 'linux/amd64', reference], { cwd: context });
+  await runner('docker', ['pull', '--platform', 'linux/amd64', reference], {
+    cwd: context,
+    env: dockerEnv,
+  });
   const rawEnv = await runner(
     'docker',
     ['image', 'inspect', '--format', '{{json .Config.Env}}', reference],
     {
       cwd: context,
       capture: true,
+      env: dockerEnv,
     },
   );
   let env: unknown;
@@ -284,8 +331,9 @@ export async function publishConsumerImages(
     };
     if (options.dryRun) return { dryRun: true as const, ...plan };
     await verifyRepository(options, runner, repoRoot);
-    const web = await publishOne('web', options, context, scratch, runner);
-    const agent = await publishOne('agent', options, context, scratch, runner);
+    const dockerEnv = await configureCustomerDockerAuth(options, scratch, runner, repoRoot);
+    const web = await publishOne('web', options, context, scratch, runner, dockerEnv);
+    const agent = await publishOne('agent', options, context, scratch, runner, dockerEnv);
     const manifest = {
       schemaVersion: 1,
       ...plan,
@@ -302,7 +350,7 @@ export async function publishConsumerImages(
 const usage = `Usage: pnpm consumer:publish-images --project PROJECT --region REGION --repository REPO --source-sha FULL_COMMIT_SHA --output PATH [--dry-run]
 
 Dry-run validates a committed source archive without Docker or Google auth and writes no output file.
-Publishing builds web and agent from that archive into the specified customer Artifact Registry repository,
+Publishing configures temporary Docker authentication from the active customer gcloud account, then builds web and agent from that archive into the specified customer Artifact Registry repository,
 verifies both remote digests embed BUILD_SHA, and writes a new digest manifest for Terraform.
 `;
 
