@@ -75,7 +75,7 @@ export function proxy(request: NextRequest) {
       request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/library' && request.method === 'GET') ||
     (path === '/api/mobile/v1/people' && request.method === 'GET') ||
-    (path === '/api/mobile/v1/memory/commitments' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/memory/commitments' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/mobile/v1/settings' && request.method === 'PATCH') ||
     (/^\/api\/mobile\/v1\/settings\/reminders\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       path,

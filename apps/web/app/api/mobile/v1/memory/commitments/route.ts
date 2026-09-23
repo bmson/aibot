@@ -1,5 +1,8 @@
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import { getFirestoreCommitmentOverview } from '@assistant/firestore';
+import {
+  FirestoreCommitmentMutationRepository,
+  getFirestoreCommitmentOverview,
+} from '@assistant/firestore';
 import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -38,11 +41,7 @@ export async function GET(request: Request): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-    return mobileJson(
-      { error: 'Commitment updates are unavailable in Firestore mode.' },
-      { status: 503 },
-    );
+  const config = loadConfig();
   const body = (await request.json().catch(() => null)) as {
     action?: unknown;
     id?: unknown;
@@ -65,25 +64,54 @@ export async function POST(request: Request): Promise<Response> {
       ? mobileJson({ ok: true })
       : mobileJson({ error: 'That loop is no longer open.' }, { status: 409 });
 
+  let firestoreMutations: FirestoreCommitmentMutationRepository | null = null;
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
+    firestoreMutations = new FirestoreCommitmentMutationRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    );
+  }
+  const firestore = firestoreMutations;
+  const operations = firestore
+    ? {
+        resolve: (commitmentId: string, resolution: string) =>
+          firestore.resolve(commitmentId, resolution),
+        snooze: (commitmentId: string, until: Date) => firestore.snooze(commitmentId, until),
+        dismiss: (commitmentId: string) => firestore.dismiss(commitmentId),
+        correct: (
+          commitmentId: string,
+          patch: { title: string; details: string; nextAction: string },
+        ) => firestore.correct(commitmentId, patch),
+      }
+    : {
+        resolve: (commitmentId: string, resolution: string) =>
+          getApplication().resolveCommitment(commitmentId, resolution),
+        snooze: (commitmentId: string, until: Date) =>
+          getApplication().snoozeCommitment(commitmentId, until),
+        dismiss: (commitmentId: string) => getApplication().dismissCommitment(commitmentId),
+        correct: (
+          commitmentId: string,
+          patch: { title: string; details: string; nextAction: string },
+        ) => getApplication().correctCommitment(commitmentId, patch),
+      };
+
   try {
     switch (body?.action) {
       case 'resolve':
-        return settled(
-          await getApplication().resolveCommitment(id, 'Owner confirmed this loop is resolved.'),
-        );
+        return settled(await operations.resolve(id, 'Owner confirmed this loop is resolved.'));
       case 'snooze':
-        return settled(
-          await getApplication().snoozeCommitment(id, new Date(Date.now() + SNOOZE_MS)),
-        );
+        return settled(await operations.snooze(id, new Date(Date.now() + SNOOZE_MS)));
       case 'dismiss':
-        return settled(await getApplication().dismissCommitment(id));
+        return settled(await operations.dismiss(id));
       case 'correct': {
         // The web form requires a title; an empty one would blank the loop's
         // only identifying text rather than correct it.
         const title = text(body.title).trim();
         if (!title) return mobileJson({ error: 'title is required' }, { status: 400 });
         return settled(
-          await getApplication().correctCommitment(id, {
+          await operations.correct(id, {
             title,
             details: text(body.details),
             nextAction: text(body.nextAction),

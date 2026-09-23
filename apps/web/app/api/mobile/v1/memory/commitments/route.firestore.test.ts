@@ -104,25 +104,13 @@ describe.skipIf(!localEmulator)('Firestore mobile commitments with PostgreSQL of
     resetConfigForTest();
   });
 
-  it('allows exact GET only through the Firestore proxy', async () => {
+  it('allows the exact commitments route through the Firestore proxy', async () => {
     const { proxy } = await import('../../../../../../proxy.js');
     const status = (path: string, method = 'GET') =>
       proxy(new NextRequest(`http://localhost${path}`, { method })).status;
     expect(status('/api/mobile/v1/memory/commitments')).toBe(200);
-    expect(status('/api/mobile/v1/memory/commitments', 'POST')).toBe(503);
+    expect(status('/api/mobile/v1/memory/commitments', 'POST')).toBe(200);
     expect(status('/api/mobile/v1/memory/commitments/other')).toBe(503);
-    const { POST } = await import('./route.js');
-    expect(
-      (
-        await POST(
-          new Request(url, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ action: 'resolve', id: 'open-later' }),
-          }),
-        )
-      ).status,
-    ).toBe(503);
   });
 
   it('preserves the exact JSON contract and active ranking without PostgreSQL', async () => {
@@ -152,8 +140,21 @@ describe.skipIf(!localEmulator)('Firestore mobile commitments with PostgreSQL of
 
   it('authenticates first and fails closed for erasure, owner mismatch, and malformed rows', async () => {
     const { GET } = await import('./route.js');
+    const { POST } = await import('./route.js');
     auth.mobile.mockResolvedValueOnce(false);
     expect((await GET(new Request(url))).status).toBe(401);
+    auth.mobile.mockResolvedValueOnce(false);
+    expect(
+      (
+        await POST(
+          new Request(url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action: 'dismiss', id: 'open-later' }),
+          }),
+        )
+      ).status,
+    ).toBe(401);
     await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
     try {
       await expect(GET(new Request(url))).rejects.toThrow('Privacy erasure is in progress');
@@ -180,6 +181,86 @@ describe.skipIf(!localEmulator)('Firestore mobile commitments with PostgreSQL of
       await expect(GET(new Request(url))).rejects.toThrow('malformed active row');
     } finally {
       await ref.update({ dueAt });
+    }
+  });
+
+  it('atomically resolves, snoozes, dismisses, and corrects only configured-owner loops', async () => {
+    const { POST } = await import('./route.js');
+    const send = (action: string, id: string, extra: Record<string, unknown> = {}) =>
+      POST(
+        new Request(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action, id, ...extra }),
+        }),
+      );
+    await Promise.all(
+      ['resolve-me', 'snooze-me', 'dismiss-me', 'correct-me'].map((id) =>
+        store.doc('commitments', id).set(row(id)),
+      ),
+    );
+
+    const resolvedResponse = await send('resolve', 'resolve-me');
+    expect(resolvedResponse.status, JSON.stringify(await resolvedResponse.clone().json())).toBe(
+      200,
+    );
+    expect((await store.doc('commitments', 'resolve-me').get()).data()).toMatchObject({
+      status: 'resolved',
+      resolution: 'Owner confirmed this loop is resolved.',
+      snoozedUntil: null,
+    });
+    expect((await send('snooze', 'snooze-me')).status).toBe(200);
+    const snoozed = await store.doc('commitments', 'snooze-me').get();
+    expect(snoozed.get('status')).toBe('snoozed');
+    expect(snoozed.get('snoozedUntil').toDate().getTime()).toBeGreaterThan(
+      Date.now() + 23 * 3600_000,
+    );
+    expect((await send('dismiss', 'dismiss-me')).status).toBe(200);
+    expect((await store.doc('commitments', 'dismiss-me').get()).data()).toMatchObject({
+      status: 'dismissed',
+      resolution: 'Dismissed by owner',
+      snoozedUntil: null,
+    });
+    expect(
+      (
+        await send('correct', 'correct-me', {
+          title: '  Send   the deck ',
+          details: '  By Friday  ',
+          nextAction: '  Email it  ',
+        })
+      ).status,
+    ).toBe(200);
+    expect((await store.doc('commitments', 'correct-me').get()).data()).toMatchObject({
+      title: 'Send the deck',
+      details: 'By Friday',
+      nextAction: 'Email it',
+      confidence: '1.00',
+    });
+
+    expect((await send('dismiss', 'other-agent')).status).toBe(409);
+    expect((await send('dismiss', 'foreign-installation')).status).toBe(409);
+    expect((await store.doc('commitments', 'other-agent').get()).get('status')).toBe('open');
+    expect(
+      (await foreignStore.doc('commitments', 'foreign-installation').get()).get('status'),
+    ).toBe('open');
+  });
+
+  it('rejects commitment writes while privacy erasure is active', async () => {
+    const { POST } = await import('./route.js');
+    await store.doc('commitments', 'erase-fenced').set(row('erase-fenced'));
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+    try {
+      const response = await POST(
+        new Request(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action: 'resolve', id: 'erase-fenced' }),
+        }),
+      );
+      expect(response.status).toBe(409);
+      expect((await store.doc('commitments', 'erase-fenced').get()).get('status')).toBe('open');
+    } finally {
+      await store.doc('privacyErasureJobs', agentId).delete();
     }
   });
 
