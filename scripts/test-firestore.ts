@@ -37,6 +37,7 @@ const child = spawn(
     'apps/web/lib/task-activity.firestore.test.ts',
     'apps/web/app/api/mobile/v1/memory/library/route.test.ts',
     'apps/web/app/api/mobile/v1/memory/profile/route.firestore.test.ts',
+    'apps/web/lib/firestore-mobile-workspace.test.ts',
     'scripts/firestore-watch-smoke.test.ts',
     'scripts/profile-library-parity.test.ts',
     'scripts/profile-people-read.test.ts',

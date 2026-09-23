@@ -148,5 +148,45 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
         spy.mockRestore();
       }
     });
+
+    it('dismisses and suspends owner anomalies transactionally with their linked policy', async () => {
+      const policyId = 'policy-to-suspend';
+      await seed('dismiss-me');
+      await seed('suspend-me', { policyId });
+      await store.doc('approvalPolicies', policyId).set({
+        id: policyId,
+        agentId,
+        enabled: true,
+        updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+      });
+
+      expect(await repository.dismiss(agentId, 'dismiss-me')).toBe(true);
+      expect((await store.doc('anomalies', 'dismiss-me').get()).get('status')).toBe('dismissed');
+      expect(await repository.suspendPolicy(agentId, 'suspend-me')).toBe(true);
+      expect((await store.doc('anomalies', 'suspend-me').get()).get('status')).toBe('suspended');
+      expect((await store.doc('approvalPolicies', policyId).get()).get('enabled')).toBe(false);
+      expect(await repository.dismiss('another-owner', 'dismiss-me')).toBe(false);
+    });
+
+    it('fences anomaly writes during privacy erasure and rejects foreign policy links', async () => {
+      const policyId = 'foreign-policy';
+      await seed('suspend-me', { policyId });
+      await store.doc('approvalPolicies', policyId).set({
+        id: policyId,
+        agentId: 'another-owner',
+        enabled: true,
+      });
+      await expect(repository.suspendPolicy(agentId, 'suspend-me')).rejects.toThrow(
+        'Anomaly policy belongs to another owner',
+      );
+      expect((await store.doc('anomalies', 'suspend-me').get()).get('status')).toBe('open');
+
+      await store.doc('approvalPolicies', policyId).update({ agentId });
+      await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+      await expect(repository.dismiss(agentId, 'suspend-me')).rejects.toThrow(
+        'Privacy erasure is in progress',
+      );
+      expect((await store.doc('anomalies', 'suspend-me').get()).get('status')).toBe('open');
+    });
   },
 );

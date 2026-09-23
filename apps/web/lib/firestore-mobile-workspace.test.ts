@@ -121,6 +121,57 @@ describe.skipIf(!localEmulator)('Firestore mobile workspace with PostgreSQL offl
     await expect(getFirestoreMobileWorkspace({ read: async () => null })).rejects.toThrow(
       'Privacy erasure is in progress',
     );
+    await store.doc('privacyErasureJobs', agentId).delete();
+  });
+
+  it('dismisses and suspends owner anomalies through the mobile route while PostgreSQL is offline', async () => {
+    const anomalyId = randomUUID();
+    const suspendId = randomUUID();
+    const policyId = randomUUID();
+    await Promise.all([
+      store.doc('anomalies', anomalyId).set({
+        id: anomalyId,
+        agentId,
+        status: 'open',
+        policyId: null,
+      }),
+      store.doc('anomalies', suspendId).set({
+        id: suspendId,
+        agentId,
+        status: 'open',
+        policyId,
+      }),
+      store.doc('approvalPolicies', policyId).set({
+        id: policyId,
+        agentId,
+        enabled: true,
+      }),
+    ]);
+
+    const { POST } = await import('../app/api/mobile/v1/anomalies/[id]/route.js');
+    const dismiss = await POST(
+      new Request(`http://localhost/api/mobile/v1/anomalies/${anomalyId}`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'dismiss' }),
+      }),
+      { params: Promise.resolve({ id: anomalyId }) },
+    );
+    expect(dismiss.status).toBe(200);
+    expect((await store.doc('anomalies', anomalyId).get()).get('status')).toBe('dismissed');
+
+    const suspend = await POST(
+      new Request(`http://localhost/api/mobile/v1/anomalies/${suspendId}`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'suspend-policy' }),
+      }),
+      { params: Promise.resolve({ id: suspendId }) },
+    );
+    expect(suspend.status).toBe(200);
+    expect((await store.doc('anomalies', suspendId).get()).get('status')).toBe('suspended');
+    expect((await store.doc('approvalPolicies', policyId).get()).get('enabled')).toBe(false);
+
+    const { getDb } = await import('./server.js');
+    expect(() => getDb()).toThrow('PostgreSQL-backed web surface is unavailable');
   });
 
   it('requires mobile owner authentication at the GET route', async () => {
