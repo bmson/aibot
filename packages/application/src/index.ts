@@ -26,4 +26,5 @@ export * from './shell.js';
 export * from './tasks.js';
 export * from './workspace.js';
 export * from './workspace-anomalies.js';
+export * from './workspace-improvements.js';
 export * from './workspace-skills.js';
