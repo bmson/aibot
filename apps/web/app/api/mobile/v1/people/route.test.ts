@@ -315,6 +315,13 @@ describe.skipIf(!localEmulator)('Firestore mobile People directory with PostgreS
       },
       { collection: 'memories', id: 'person-fact', field: 'createdAt', bad: null, original: now },
       {
+        collection: 'memories',
+        id: 'person-fact',
+        field: 'embedding',
+        bad: 'invalid',
+        original: [0.1],
+      },
+      {
         collection: 'occasions',
         id: 'anna-birthday',
         field: 'month',
