@@ -32,6 +32,7 @@ export const dynamic = 'force-dynamic';
 
 /** Soonest-first, so an upcoming birthday is visible without opening anyone. */
 const BIRTHDAY_HORIZON_DAYS = 30;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function matches(person: PersonSummary, query: string): boolean {
   if (!query) return true;
@@ -114,27 +115,39 @@ function ReadOnlyPeopleDirectory({
                   count={section.contacts.length}
                 />
                 <ul className="mt-3 flex flex-col gap-2">
-                  {section.contacts.map((contact) => (
-                    <li
-                      key={contact.id}
-                      className="flex min-w-0 items-center gap-3 rounded-xl bg-raised p-3.5 ring-1 ring-edge/60"
-                    >
-                      <PersonAvatar name={contact.name} />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex min-w-0 items-center gap-2">
-                          <span className="truncate text-sm font-medium text-strong">
-                            {contact.name}
+                  {section.contacts.map((contact) => {
+                    const content = (
+                      <>
+                        <PersonAvatar name={contact.name} />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="truncate text-sm font-medium text-strong">
+                              {contact.name}
+                            </span>
+                            {contact.trust === 'unknown' ? (
+                              <Badge tone="amber" size="xs">
+                                Unverified
+                              </Badge>
+                            ) : null}
                           </span>
-                          {contact.trust === 'unknown' ? (
-                            <Badge tone="amber" size="xs">
-                              Unverified
-                            </Badge>
-                          ) : null}
+                          <MetaLine segments={[contact.relationship || 'Relationship not set']} />
                         </span>
-                        <MetaLine segments={[contact.relationship || 'Relationship not set']} />
-                      </span>
-                    </li>
-                  ))}
+                      </>
+                    );
+                    const className =
+                      'flex min-w-0 items-center gap-3 rounded-xl bg-raised p-3.5 ring-1 ring-edge/60';
+                    return (
+                      <li key={contact.id}>
+                        {UUID_RE.test(contact.id) ? (
+                          <Link href={`/people/${contact.id}`} className={className}>
+                            {content}
+                          </Link>
+                        ) : (
+                          <div className={className}>{content}</div>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ))}
