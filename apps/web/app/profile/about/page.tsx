@@ -96,6 +96,11 @@ function ReadOnlyAbout({ overview, now }: { overview: ProfileOverview; now: Date
               No conversation summary has been prepared yet.
             </p>
           )}
+          <form action={recompileCard} className="mt-4">
+            <SubmitButton variant="outline" pendingLabel="Refreshing…">
+              Refresh summary
+            </SubmitButton>
+          </form>
         </details>
       </Panel>
 
