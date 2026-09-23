@@ -26,6 +26,7 @@ export { createPostgresOwnerContextRepository } from './owner-context-repository
 export { createPostgresPrivacyErasureRepository } from './privacy-erasure-repository.js';
 export { createPostgresPrivacyExportRepository } from './privacy-export-repository.js';
 export { createPostgresProfileLibraryRepository } from './profile-library-repository.js';
+export { createPostgresProfileMemoryHubRepository } from './profile-memory-hub-repository.js';
 export { createPostgresProfileMemoryMaintenance } from './profile-memory-maintenance-repository.js';
 export { createPostgresProfileMemoryManagementRepository } from './profile-memory-management-repository.js';
 export { createPostgresProfilePeopleReadRepository } from './profile-people-read-repository.js';

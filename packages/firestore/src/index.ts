@@ -29,6 +29,7 @@ export { FirestorePrivacyErasureRepository } from './privacy-erasure.js';
 export { FirestorePrivacyExportRepository } from './privacy-export.js';
 export { FirestoreProfileLibraryRepository } from './profile-library.js';
 export { createFirestoreProfileMemoryCommandPersistence } from './profile-memory-commands.js';
+export { FirestoreProfileMemoryHubRepository } from './profile-memory-hub.js';
 export { FirestoreProfileMemoryMaintenance } from './profile-memory-maintenance.js';
 export { FirestoreProfileMemoryManagementRepository } from './profile-memory-management.js';
 export { FirestoreProfilePeopleReadRepository } from './profile-people-read.js';
