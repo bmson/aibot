@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { provisionConsumerInstallation } from './consumer-install.js';
@@ -20,20 +20,37 @@ const requiredServiceRows = [
   'aiplatform.googleapis.com',
 ].map((name) => ({ config: { name } }));
 
-async function foundationArchive(path: string): Promise<void> {
+const archiveFiles = [
+  'infra/gcp/consumer/terraform/main.tf',
+  'infra/gcp/consumer/terraform/variables.tf',
+  'infra/gcp/consumer/terraform/outputs.tf',
+  'infra/gcp/consumer/terraform/versions.tf',
+  'infra/gcp/consumer/terraform/.terraform.lock.hcl',
+  'infra/gcp/consumer/terraform/firestore-indexes.tf',
+  'infra/gcp/firestore/firestore.indexes.json',
+] as const;
+
+async function foundationArchive(
+  path: string,
+  options: { omit?: string; replace?: { path: string; content: string } } = {},
+): Promise<void> {
+  let source = process.cwd();
+  if (options.replace) {
+    source = await mkdtemp(join(tmpdir(), 'assistant-consumer-archive-'));
+    for (const file of archiveFiles) {
+      const destination = join(source, file);
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(
+        destination,
+        file === options.replace.path
+          ? options.replace.content
+          : await readFile(resolve(process.cwd(), file)),
+      );
+    }
+  }
   await execFileAsync(
     'tar',
-    [
-      '-czf',
-      path,
-      '-C',
-      process.cwd(),
-      'infra/gcp/consumer/terraform/main.tf',
-      'infra/gcp/consumer/terraform/variables.tf',
-      'infra/gcp/consumer/terraform/outputs.tf',
-      'infra/gcp/consumer/terraform/versions.tf',
-      'infra/gcp/consumer/terraform/.terraform.lock.hcl',
-    ],
+    ['-czf', path, '-C', source, ...archiveFiles.filter((file) => file !== options.omit)],
     { env: { ...process.env, COPYFILE_DISABLE: '1' } },
   );
 }
@@ -180,8 +197,27 @@ describe('consumer installation', () => {
     const digest = await sha256File(archive);
     const log: string[] = [];
     const terraformLog: string[] = [];
+    const terraformRunner = fakeRunner(terraformLog);
+    const runTerraform = terraformRunner.run.bind(terraformRunner);
+    let verifiedIndexInputs = false;
+    terraformRunner.run = async (command, args) => {
+      if (command === 'terraform' && args.includes('apply')) {
+        const terraformDir = args[0]?.replace(/^-chdir=/, '');
+        if (!terraformDir) throw new Error('missing Terraform working directory');
+        const indexTerraform = await readFile(join(terraformDir, 'firestore-indexes.tf'));
+        const indexSpec = await readFile(
+          resolve(terraformDir, '../../firestore/firestore.indexes.json'),
+        );
+        expect(indexTerraform).toEqual(
+          await readFile('infra/gcp/consumer/terraform/firestore-indexes.tf'),
+        );
+        expect(indexSpec).toEqual(await readFile('infra/gcp/firestore/firestore.indexes.json'));
+        verifiedIndexInputs = true;
+      }
+      return runTerraform(command, args);
+    };
     const result = await provisionConsumerInstallation(
-      { runner: fakeRunner(log), terraform: fakeRunner(terraformLog) },
+      { runner: fakeRunner(log), terraform: terraformRunner },
       {
         manifest: manifest(digest),
         archivePath: archive,
@@ -205,8 +241,61 @@ describe('consumer installation', () => {
     expect(result.runtimeReady).toBe(false);
     expect(result.pending).toEqual(['initialized', 'ready']);
     expect(log.some((entry) => entry.includes('storage cp'))).toBe(true);
+    expect(
+      terraformLog.some((entry) => entry.includes('init -input=false -lockfile=readonly')),
+    ).toBe(true);
     expect(terraformLog.some((entry) => entry.includes('apply -auto-approve'))).toBe(true);
+    expect(verifiedIndexInputs).toBe(true);
     expect(JSON.parse(await readFile(state, 'utf8')).stage.current).toBe('provisioned');
+  });
+
+  it.each([
+    'infra/gcp/consumer/terraform/firestore-indexes.tf',
+    'infra/gcp/firestore/firestore.indexes.json',
+  ])('rejects an archive missing trusted index input %s before cloud access', async (missing) => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-'));
+    const archive = join(dir, 'release.tar.gz');
+    await foundationArchive(archive, { omit: missing });
+    const log: string[] = [];
+    await expect(
+      provisionConsumerInstallation(
+        { runner: fakeRunner(log) },
+        {
+          manifest: manifest(await sha256File(archive)),
+          archivePath: archive,
+          statePath: join(dir, 'state.json'),
+          terraformDir: 'infra/gcp/consumer/terraform',
+          stateBucket: 'customer-project-consumer-install-state',
+          apply: true,
+        },
+      ),
+    ).rejects.toThrow(`Installation archive is missing ${missing}`);
+    expect(log).toEqual([]);
+  });
+
+  it('rejects an altered index specification before cloud access', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-'));
+    const archive = join(dir, 'release.tar.gz');
+    await foundationArchive(archive, {
+      replace: { path: 'infra/gcp/firestore/firestore.indexes.json', content: '{}' },
+    });
+    const log: string[] = [];
+    await expect(
+      provisionConsumerInstallation(
+        { runner: fakeRunner(log) },
+        {
+          manifest: manifest(await sha256File(archive)),
+          archivePath: archive,
+          statePath: join(dir, 'state.json'),
+          terraformDir: 'infra/gcp/consumer/terraform',
+          stateBucket: 'customer-project-consumer-install-state',
+          apply: true,
+        },
+      ),
+    ).rejects.toThrow(
+      'Installation archive foundation mismatch for infra/gcp/firestore/firestore.indexes.json',
+    );
+    expect(log).toEqual([]);
   });
 
   it('fails closed when a state bucket exists', async () => {
