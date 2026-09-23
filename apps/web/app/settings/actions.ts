@@ -22,6 +22,32 @@ function revalidateSettings(): void {
   revalidatePath('/settings');
 }
 
+async function updateFirestoreSettings<T>(
+  update: (settings: ReturnType<typeof createSettingsFacade>) => Promise<T>,
+): Promise<T> {
+  const config = loadConfig();
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  const store = getFirestoreInstallationStore();
+  const assertConfiguredOwner = async () => {
+    const agents = await store.collection('agents').limit(2).get();
+    if (
+      agents.size !== 1 ||
+      agents.docs[0]?.id !== store.doc('agents', config.FIRESTORE_AGENT_ID).id ||
+      agents.docs[0]?.get('id') !== config.FIRESTORE_AGENT_ID
+    )
+      throw new Error('Settings update requires exactly one configured agent');
+  };
+  await assertConfiguredOwner();
+  const fence = await readPrivacyErasureFence(store, config.FIRESTORE_AGENT_ID);
+  const result = await update(
+    createSettingsFacade(createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID)),
+  );
+  await assertConfiguredOwner();
+  await assertPrivacyErasureFenceUnchanged(store, config.FIRESTORE_AGENT_ID, fence);
+  return result;
+}
+
 /** Editable agent identity: timezone, locale, signature. */
 export async function updateAgentSettings(input: {
   timezone: string;
@@ -30,30 +56,10 @@ export async function updateAgentSettings(input: {
 }): Promise<{ error?: string }> {
   await requireOwner();
   const config = loadConfig();
-  let result: { error?: string };
-  if (config.PERSISTENCE_DRIVER === 'firestore') {
-    const problems = validateAgentPersistenceConfig(config);
-    if (problems.length) throw new Error(problems.join('; '));
-    const store = getFirestoreInstallationStore();
-    const assertConfiguredOwner = async () => {
-      const agents = await store.collection('agents').limit(2).get();
-      if (
-        agents.size !== 1 ||
-        agents.docs[0]?.id !== store.doc('agents', config.FIRESTORE_AGENT_ID).id ||
-        agents.docs[0]?.get('id') !== config.FIRESTORE_AGENT_ID
-      )
-        throw new Error('Settings update requires exactly one configured agent');
-    };
-    await assertConfiguredOwner();
-    const fence = await readPrivacyErasureFence(store, config.FIRESTORE_AGENT_ID);
-    result = await createSettingsFacade(
-      createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID),
-    ).updateAssistantSettings(input);
-    await assertConfiguredOwner();
-    await assertPrivacyErasureFenceUnchanged(store, config.FIRESTORE_AGENT_ID, fence);
-  } else {
-    result = await getApplication().updateSettings(input);
-  }
+  const result =
+    config.PERSISTENCE_DRIVER === 'firestore'
+      ? await updateFirestoreSettings((settings) => settings.updateAssistantSettings(input))
+      : await getApplication().updateSettings(input);
   if (result.error) return result;
   revalidateSettings();
   return {};
@@ -73,7 +79,11 @@ export async function updateNotificationSettings(input: {
   ambientDailyCap: string;
 }): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await getApplication().updateNotificationPrefs(input);
+  const config = loadConfig();
+  const result =
+    config.PERSISTENCE_DRIVER === 'firestore'
+      ? await updateFirestoreSettings((settings) => settings.updateNotificationPrefs(input))
+      : await getApplication().updateNotificationPrefs(input);
   if (result.error) return result;
   revalidateSettings();
   return {};
