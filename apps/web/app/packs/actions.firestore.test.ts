@@ -50,6 +50,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
         throw new Error('PostgreSQL path reached');
       });
       mocks.getStore.mockReturnValue(store);
+      await store.doc('agents', agentId).set({ id: agentId });
       await store.doc('situationPacks', packId).set({
         id: packId,
         agentId,
@@ -70,13 +71,19 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       resetConfigForTest();
     });
 
-    it('loads owner packs while the write action remains fenced', async () => {
+    it('loads and writes owner packs while PostgreSQL is offline', async () => {
       expect((await loadPacks()).packs).toMatchObject([{ id: packId, title: 'Web plan' }]);
       expect(
-        await changePack({ action: 'create', title: 'Blocked', creationKey: 'x' }),
-      ).toMatchObject({ ok: false, error: expect.stringContaining('unavailable') });
+        await changePack({
+          action: 'item',
+          packId,
+          version: 1,
+          item: { id: 'flight', title: 'Confirm flight', dependsOn: [], source: null },
+        }),
+      ).toMatchObject({ ok: true, packId });
       expect((await store.collection('situationPacks').get()).size).toBe(1);
       expect(mocks.getDb).not.toHaveBeenCalled();
+      expect((await store.doc('situationPacks', packId).get()).get('version')).toBe(2);
     });
   },
 );

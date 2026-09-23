@@ -41,6 +41,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       vi.stubEnv('LOCATION_PING_SECRET', '');
       resetConfigForTest();
       auth.allowed.mockResolvedValue(true);
+      await store.doc('agents', agentId).set({ id: agentId });
       await store.doc('situationPacks', packId).set({
         id: packId,
         agentId,
@@ -65,7 +66,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       resetConfigForTest();
     });
 
-    it('reads the owner pack and leaves changes unavailable', async () => {
+    it('reads and writes packs while PostgreSQL is offline', async () => {
       const request = new Request('http://localhost/api/mobile/v1/packs');
       const response = await route.GET(request);
       expect(response.status, JSON.stringify(await response.clone().json())).toBe(200);
@@ -73,10 +74,20 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       const post = await route.POST(
         new Request(request.url, {
           method: 'POST',
-          body: JSON.stringify({ action: 'create', title: 'Blocked', creationKey: 'x' }),
+          body: JSON.stringify({
+            action: 'item',
+            packId,
+            version: 1,
+            item: { id: 'flight', title: 'Confirm flight', dependsOn: [], source: null },
+          }),
         }),
       );
-      expect(post.status).toBe(503);
+      expect(post.status).toBe(200);
+      expect(await post.json()).toMatchObject({ ok: true, packId });
+      expect((await store.doc('situationPacks', packId).get()).data()).toMatchObject({
+        version: 2,
+        data: { items: [{ id: 'flight', title: 'Confirm flight' }] },
+      });
       expect((await store.collection('situationPacks').get()).size).toBe(1);
     });
 
