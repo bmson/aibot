@@ -204,6 +204,17 @@ variable "google_client_secret_version" {
   }
 }
 
+variable "mobile_api_token_version" {
+  description = "Optional numbered version of <installation_id>-mobile-api-token in the customer project. Never the token value."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.mobile_api_token_version == null || (var.mobile_api_token_version >= 1 && floor(var.mobile_api_token_version) == var.mobile_api_token_version)
+    error_message = "mobile_api_token_version must be a positive integer version, not latest."
+  }
+}
+
 variable "allow_public_web_invoker" {
   description = "Explicitly grant allUsers Cloud Run invocation after owner Google OAuth and URL have been configured. Default is private."
   type        = bool

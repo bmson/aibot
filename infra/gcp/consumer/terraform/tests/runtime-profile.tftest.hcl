@@ -116,6 +116,41 @@ run "digest_pinned_private_runtime_uses_minimal_firestore_profile" {
     )
     error_message = "Web database access, agent Vertex access, and numbered auth-secret references must be scoped."
   }
+  assert {
+    condition = (
+      !contains(keys(google_secret_manager_secret_iam_member.web_auth), "MOBILE_API_TOKEN") &&
+      length([for env in google_cloud_run_v2_service.web["current"].template[0].containers[0].env : env if env.name == "MOBILE_API_TOKEN"]) == 0 &&
+      length([for env in google_cloud_run_v2_service.agent["current"].template[0].containers[0].env : env if env.name == "MOBILE_API_TOKEN"]) == 0
+    )
+    error_message = "A legacy runtime without a mobile token version must keep the binding absent."
+  }
+}
+
+run "optional_numbered_mobile_token_is_web_only" {
+  command = plan
+  variables {
+    web_image_digest         = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    agent_image_digest       = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    mobile_api_token_version = 5
+  }
+  assert {
+    condition = (
+      google_secret_manager_secret_iam_member.web_auth["MOBILE_API_TOKEN"].secret_id == "assistant-test-mobile-api-token" &&
+      google_secret_manager_secret_iam_member.web_auth["MOBILE_API_TOKEN"].role == "roles/secretmanager.secretAccessor" &&
+      google_secret_manager_secret_iam_member.web_auth["MOBILE_API_TOKEN"].member == "serviceAccount:assistant-test-web@consumer-test-project.iam.gserviceaccount.com" &&
+      one([for env in google_cloud_run_v2_service.web["current"].template[0].containers[0].env : env.value_source[0].secret_key_ref[0].version if env.name == "MOBILE_API_TOKEN"]) == "5" &&
+      length([for env in google_cloud_run_v2_service.agent["current"].template[0].containers[0].env : env if env.name == "MOBILE_API_TOKEN"]) == 0
+    )
+    error_message = "Only web may read the numbered customer mobile token secret."
+  }
+}
+
+run "mutable_mobile_token_version_is_rejected" {
+  command = plan
+  variables {
+    mobile_api_token_version = 0
+  }
+  expect_failures = [var.mobile_api_token_version]
 }
 
 run "single_image_is_rejected" {

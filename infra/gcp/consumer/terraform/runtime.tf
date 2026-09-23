@@ -52,6 +52,13 @@ locals {
       version = var.google_client_secret_version
     }
   }
+  mobile_secret = var.mobile_api_token_version == null ? {} : {
+    MOBILE_API_TOKEN = {
+      id      = "${var.installation_id}-mobile-api-token"
+      version = var.mobile_api_token_version
+    }
+  }
+  web_secrets = merge(local.web_auth_secrets, local.mobile_secret)
 }
 
 resource "terraform_data" "runtime_input_guard" {
@@ -147,7 +154,7 @@ resource "google_project_iam_member" "web_vertex" {
 }
 
 resource "google_secret_manager_secret_iam_member" "web_auth" {
-  for_each = local.runtime_enabled ? local.web_auth_secrets : {}
+  for_each = local.runtime_enabled ? local.web_secrets : {}
 
   project   = var.project_id
   secret_id = each.value.id
@@ -261,7 +268,7 @@ resource "google_cloud_run_v2_service" "web" {
       }
 
       dynamic "env" {
-        for_each = local.web_auth_secrets
+        for_each = local.web_secrets
         content {
           name = env.key
           value_source {
