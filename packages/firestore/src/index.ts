@@ -39,6 +39,7 @@ export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 export { FirestoreReminderRepository } from './reminders.js';
 export { FirestoreScheduleRepository } from './schedules.js';
 export { FirestoreSettingsRepository } from './settings.js';
+export { FirestoreShellStatusRepository } from './shell-status.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { createInstallationStore, InstallationStore } from './store.js';
 export { FirestoreTaskRepository } from './task-lifecycle.js';
