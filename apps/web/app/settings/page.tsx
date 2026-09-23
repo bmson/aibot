@@ -1,5 +1,12 @@
 import { existsSync } from 'node:fs';
+import { getSettingsOverview } from '@assistant/application/settings';
 import { envFile, loadConfig } from '@assistant/config';
+import {
+  assertPrivacyErasureFenceUnchanged,
+  createFirestoreSettingsPersistence,
+  createInstallationStore,
+  readPrivacyErasureFence,
+} from '@assistant/firestore';
 import { ArrowRight } from 'lucide-react';
 import { headers } from 'next/headers';
 import Link from 'next/link';
@@ -30,6 +37,27 @@ import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 export const metadata = { title: 'Settings' };
 
 export const dynamic = 'force-dynamic';
+
+async function getFirestorePageSettings() {
+  const config = loadConfig();
+  const store = createInstallationStore({
+    projectId: config.GCP_PROJECT,
+    installationId: config.ASSISTANT_WORKSPACE_ID,
+  });
+  try {
+    const configured = await store.collection('agents').limit(2).get();
+    if (configured.size !== 1 || configured.docs[0]?.get('id') !== config.FIRESTORE_AGENT_ID)
+      throw new Error('Settings require one matching configured owner');
+    const fence = await readPrivacyErasureFence(store, config.FIRESTORE_AGENT_ID);
+    const overview = await getSettingsOverview(
+      createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID),
+    );
+    await assertPrivacyErasureFenceUnchanged(store, config.FIRESTORE_AGENT_ID, fence);
+    return overview;
+  } finally {
+    await store.db.terminate();
+  }
+}
 
 /**
  * Every list entry on this page is the same shape: what it is, one line of
@@ -71,6 +99,7 @@ function SettingRow({
 
 export default async function SettingsPage() {
   await requireOwner();
+  const readOnly = loadConfig().PERSISTENCE_DRIVER === 'firestore';
   const now = new Date();
   const [
     {
@@ -82,11 +111,13 @@ export default async function SettingsPage() {
     },
     mcpConnections,
     proactiveHealth,
-  ] = await Promise.all([
-    getApplication().getSettings(),
-    getApplication().listMcpConnections(),
-    getApplication().getProactiveHealth(),
-  ]);
+  ] = readOnly
+    ? [await getFirestorePageSettings(), [], null]
+    : await Promise.all([
+        getApplication().getSettings(),
+        getApplication().listMcpConnections(),
+        getApplication().getProactiveHealth(),
+      ]);
 
   // Pairing values for the iOS app. The URL mirrors what the owner is
   // browsing right now — if they reached settings over a LAN IP or the
@@ -97,9 +128,9 @@ export default async function SettingsPage() {
   // bearer credential that bypasses web sign-in entirely. The full value is
   // revealed once, at rotation time, by the action that generates it.
   const config = loadConfig();
-  const requestHeaders = await headers();
-  const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host') ?? '';
-  const proto = requestHeaders.get('x-forwarded-proto') ?? 'http';
+  const requestHeaders = readOnly ? null : await headers();
+  const host = requestHeaders?.get('x-forwarded-host') ?? requestHeaders?.get('host') ?? '';
+  const proto = requestHeaders?.get('x-forwarded-proto') ?? 'http';
   const serverUrl = host ? `${proto}://${host}` : config.AUTH_URL;
   const token = config.MOBILE_API_TOKEN;
   const maskedToken = token ? `${token.slice(0, 6)}…${token.slice(-4)}` : null;
@@ -119,13 +150,30 @@ export default async function SettingsPage() {
       <section>
         <SectionHeading title="Assistant" hint={`${agent.name} · ${agent.email}`} />
         <Card className="mt-3">
-          <AgentForm
-            initial={{
-              timezone: agent.timezone,
-              locale: agent.locale,
-              signature: agent.signature,
-            }}
-          />
+          {readOnly ? (
+            <dl className="grid gap-4 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-muted">Timezone</dt>
+                <dd>{agent.timezone}</dd>
+              </div>
+              <div>
+                <dt className="text-muted">Locale</dt>
+                <dd>{agent.locale}</dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-muted">Email signature</dt>
+                <dd className="whitespace-pre-wrap">{agent.signature || 'None'}</dd>
+              </div>
+            </dl>
+          ) : (
+            <AgentForm
+              initial={{
+                timezone: agent.timezone,
+                locale: agent.locale,
+                signature: agent.signature,
+              }}
+            />
+          )}
           <p className="mt-5 border-t border-edge pt-3 text-xs leading-5 text-muted">
             {agent.phoneE164
               ? `Name, email, and phone (${agent.phoneE164}) are`
@@ -137,64 +185,72 @@ export default async function SettingsPage() {
       </section>
 
       {/* Mobile app pairing */}
-      <section>
-        <SectionHeading title="Mobile app" hint="pair the iPhone app with this server" />
-        <Card className="mt-3">
-          <MobileTokenPanel maskedToken={maskedToken} serverUrl={serverUrl} canRotate={canRotate} />
-        </Card>
-      </section>
+      {!readOnly && (
+        <section>
+          <SectionHeading title="Mobile app" hint="pair the iPhone app with this server" />
+          <Card className="mt-3">
+            <MobileTokenPanel
+              maskedToken={maskedToken}
+              serverUrl={serverUrl}
+              canRotate={canRotate}
+            />
+          </Card>
+        </section>
+      )}
 
       {/* Is the proactive machinery actually receiving anything?
           Every producer is self-silencing, so a broken mail pipeline and a
           quiet week look identical. This is the surface that tells them apart. */}
-      <section>
-        <SectionHeading
-          title="Noticing"
-          hint={
-            proactiveHealth.healthy
-              ? `${proactiveHealth.mailScored7d} message(s) scored this week`
-              : 'something is stopping the assistant from noticing things'
-          }
-        />
-        <Card className="mt-3">
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
-            <div>
-              <dt className="text-xs text-muted">Mail scored (24h)</dt>
-              <dd className="mt-0.5 font-medium">{proactiveHealth.mailScored24h}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted">Mail scored (7d)</dt>
-              <dd className="mt-0.5 font-medium">{proactiveHealth.mailScored7d}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted">Nudges sent (24h)</dt>
-              <dd className="mt-0.5 font-medium">{proactiveHealth.momentsDelivered24h}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted">Push devices</dt>
-              <dd className="mt-0.5 font-medium">{proactiveHealth.pushDevices}</dd>
-            </div>
-          </dl>
-          <p className="mt-4 border-t border-edge pt-3 text-xs leading-5 text-muted">
-            Ingest mode <span className="font-mono">{proactiveHealth.ingestMode}</span>
-            {proactiveHealth.lastMailAt
-              ? ` · last message ${relativeTime(new Date(proactiveHealth.lastMailAt))}`
-              : ' · no mail has ever been scored'}
-          </p>
-          {proactiveHealth.warnings.length > 0 && (
-            <ul className="mt-3 grid gap-2">
-              {proactiveHealth.warnings.map((warning) => (
-                <li
-                  key={warning}
-                  className="rounded-md border border-edge bg-sunken/40 px-3 py-2 text-xs leading-5"
-                >
-                  {warning}
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      </section>
+      {!readOnly && proactiveHealth && (
+        <section>
+          <SectionHeading
+            title="Noticing"
+            hint={
+              proactiveHealth.healthy
+                ? `${proactiveHealth.mailScored7d} message(s) scored this week`
+                : 'something is stopping the assistant from noticing things'
+            }
+          />
+          <Card className="mt-3">
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+              <div>
+                <dt className="text-xs text-muted">Mail scored (24h)</dt>
+                <dd className="mt-0.5 font-medium">{proactiveHealth.mailScored24h}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted">Mail scored (7d)</dt>
+                <dd className="mt-0.5 font-medium">{proactiveHealth.mailScored7d}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted">Nudges sent (24h)</dt>
+                <dd className="mt-0.5 font-medium">{proactiveHealth.momentsDelivered24h}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted">Push devices</dt>
+                <dd className="mt-0.5 font-medium">{proactiveHealth.pushDevices}</dd>
+              </div>
+            </dl>
+            <p className="mt-4 border-t border-edge pt-3 text-xs leading-5 text-muted">
+              Ingest mode <span className="font-mono">{proactiveHealth.ingestMode}</span>
+              {proactiveHealth.lastMailAt
+                ? ` · last message ${relativeTime(new Date(proactiveHealth.lastMailAt))}`
+                : ' · no mail has ever been scored'}
+            </p>
+            {proactiveHealth.warnings.length > 0 && (
+              <ul className="mt-3 grid gap-2">
+                {proactiveHealth.warnings.map((warning) => (
+                  <li
+                    key={warning}
+                    className="rounded-md border border-edge bg-sunken/40 px-3 py-2 text-xs leading-5"
+                  >
+                    {warning}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </section>
+      )}
 
       {/* Notifications — when proactive work may interrupt vs. only post to chat */}
       <section>
@@ -213,27 +269,46 @@ export default async function SettingsPage() {
           }
         />
         <Card className="mt-3">
-          <NotificationForm
-            initial={{
-              quietStart: notificationPrefs.quietStart,
-              quietEnd: notificationPrefs.quietEnd,
-              ambientDailyCap: notificationPrefs.ambientDailyCap,
-            }}
-          />
+          {readOnly ? (
+            <dl className="grid gap-4 text-sm sm:grid-cols-3">
+              <div>
+                <dt className="text-muted">Quiet from</dt>
+                <dd>{notificationPrefs.quietStart || 'Any time'}</dd>
+              </div>
+              <div>
+                <dt className="text-muted">Quiet until</dt>
+                <dd>{notificationPrefs.quietEnd || 'Any time'}</dd>
+              </div>
+              <div>
+                <dt className="text-muted">Daily ping limit</dt>
+                <dd>{notificationPrefs.ambientDailyCap || 'No limit'}</dd>
+              </div>
+            </dl>
+          ) : (
+            <NotificationForm
+              initial={{
+                quietStart: notificationPrefs.quietStart,
+                quietEnd: notificationPrefs.quietEnd,
+                ambientDailyCap: notificationPrefs.ambientDailyCap,
+              }}
+            />
+          )}
         </Card>
       </section>
 
       {/* MCP servers */}
-      <section>
-        <SectionHeading
-          title="MCP connections"
-          count={mcpConnections.length}
-          hint="remote tool servers available to this assistant"
-        />
-        <Card className="mt-3">
-          <McpConnectionsPanel connections={mcpConnections} />
-        </Card>
-      </section>
+      {!readOnly && (
+        <section>
+          <SectionHeading
+            title="MCP connections"
+            count={mcpConnections.length}
+            hint="remote tool servers available to this assistant"
+          />
+          <Card className="mt-3">
+            <McpConnectionsPanel connections={mcpConnections} />
+          </Card>
+        </section>
+      )}
 
       {/* Schedules */}
       <section>
@@ -283,14 +358,16 @@ export default async function SettingsPage() {
                   </>
                 }
                 actions={
-                  <form action={setScheduleEnabled.bind(null, s.id, !s.enabled)}>
-                    <SubmitButton
-                      variant="outline"
-                      pendingLabel={s.enabled ? 'Pausing…' : 'Resuming…'}
-                    >
-                      {s.enabled ? 'Pause' : 'Resume'}
-                    </SubmitButton>
-                  </form>
+                  readOnly ? null : (
+                    <form action={setScheduleEnabled.bind(null, s.id, !s.enabled)}>
+                      <SubmitButton
+                        variant="outline"
+                        pendingLabel={s.enabled ? 'Pausing…' : 'Resuming…'}
+                      >
+                        {s.enabled ? 'Pause' : 'Resume'}
+                      </SubmitButton>
+                    </form>
+                  )
                 }
               />
             ))}
@@ -299,24 +376,26 @@ export default async function SettingsPage() {
       </section>
 
       {/* Costs — one destination, so the whole row is the link. */}
-      <section>
-        <SectionHeading title="Spending" />
-        <Link
-          href="/costs"
-          className={`${cardShellClass} ${cardInteractiveClass} ${focusRing} mt-3 flex min-w-0 items-center justify-between gap-4 px-4 py-4 sm:px-5`}
-        >
-          <span className="min-w-0">
-            <span className={`block ${cardTitleClass}`}>Usage and limits</span>
-            <span className="mt-1 block text-sm leading-5 text-muted">
-              Today’s spend, the monthly total, and the caps that pause work.
+      {!readOnly && (
+        <section>
+          <SectionHeading title="Spending" />
+          <Link
+            href="/costs"
+            className={`${cardShellClass} ${cardInteractiveClass} ${focusRing} mt-3 flex min-w-0 items-center justify-between gap-4 px-4 py-4 sm:px-5`}
+          >
+            <span className="min-w-0">
+              <span className={`block ${cardTitleClass}`}>Usage and limits</span>
+              <span className="mt-1 block text-sm leading-5 text-muted">
+                Today’s spend, the monthly total, and the caps that pause work.
+              </span>
             </span>
-          </span>
-          <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-accent">
-            Open costs
-            <ArrowRight className="size-3.5" aria-hidden="true" />
-          </span>
-        </Link>
-      </section>
+            <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-accent">
+              Open costs
+              <ArrowRight className="size-3.5" aria-hidden="true" />
+            </span>
+          </Link>
+        </section>
+      )}
 
       {/* Approval rules */}
       <section>
@@ -350,34 +429,36 @@ export default async function SettingsPage() {
                 detailTitle={`${p.toolName} · ${p.templateKey}`}
                 detail={policyScope(p.templateKey, p.match) ?? 'Custom scope'}
                 actions={
-                  <>
-                    <form action={setPolicyEnabled.bind(null, p.id, !p.enabled)}>
-                      {p.enabled ? (
-                        <SubmitButton variant="outline" pendingLabel="Pausing…">
-                          Pause
-                        </SubmitButton>
-                      ) : (
-                        <ConfirmButton
-                          variant="outline"
-                          pendingLabel="Enabling…"
-                          confirmLabel="Confirm use rule"
-                        >
-                          Use
-                        </ConfirmButton>
-                      )}
-                    </form>
-                    {p.createdVia !== 'seed' ? (
-                      <form action={deletePolicy.bind(null, p.id)}>
-                        <ConfirmButton
-                          pendingLabel="Deleting…"
-                          confirmLabel="Confirm delete"
-                          title="Remove the rule — this tool goes back to asking for approval"
-                        >
-                          Delete
-                        </ConfirmButton>
+                  readOnly ? null : (
+                    <>
+                      <form action={setPolicyEnabled.bind(null, p.id, !p.enabled)}>
+                        {p.enabled ? (
+                          <SubmitButton variant="outline" pendingLabel="Pausing…">
+                            Pause
+                          </SubmitButton>
+                        ) : (
+                          <ConfirmButton
+                            variant="outline"
+                            pendingLabel="Enabling…"
+                            confirmLabel="Confirm use rule"
+                          >
+                            Use
+                          </ConfirmButton>
+                        )}
                       </form>
-                    ) : null}
-                  </>
+                      {p.createdVia !== 'seed' ? (
+                        <form action={deletePolicy.bind(null, p.id)}>
+                          <ConfirmButton
+                            pendingLabel="Deleting…"
+                            confirmLabel="Confirm delete"
+                            title="Remove the rule — this tool goes back to asking for approval"
+                          >
+                            Delete
+                          </ConfirmButton>
+                        </form>
+                      ) : null}
+                    </>
+                  )
                 }
               />
             ))}
