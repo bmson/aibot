@@ -4,11 +4,12 @@ import {
   CARD_AUTO_MIN_IMPORTANCE,
 } from '@assistant/core/memory/consolidation';
 import { getMemoryHealth, type MemoryHealth } from '@assistant/core/memory/health';
-import { detectOccasionInText, listOccasionsForContact } from '@assistant/core/memory/occasions';
+import { detectOccasionInText } from '@assistant/core/memory/occasions';
 import { type VoiceSampleStats, voiceSampleStats } from '@assistant/core/memory/voice-ingest';
 import {
   contacts,
   createPostgresProfileLibraryRepository,
+  createPostgresProfilePeopleReadRepository,
   type Db,
   findDuplicateContactSuggestions,
   importSources,
@@ -17,6 +18,10 @@ import {
   tasks,
   voiceProfile,
 } from '@assistant/db';
+import {
+  isProfilePeopleReadRepository,
+  type ProfilePeopleReadRepository,
+} from '@assistant/persistence';
 import { and, count, desc, eq, gt, inArray, isNull, like, ne, or, sql } from 'drizzle-orm';
 import { getRecallFeedbackSummary, type RecallFeedbackSummary } from '../recall-feedback.js';
 import {
@@ -340,26 +345,20 @@ export interface OwnerFactsView {
   cardFactIds: string[];
 }
 
-export async function getOwnerFactsView(db: Db): Promise<OwnerFactsView> {
-  const agent = await getAgent(db);
-  const active = and(
-    eq(memories.agentId, agent.id),
-    eq(memories.category, 'knowledge'),
-    eq(memories.quarantined, false),
-    or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-  );
-  const [owner] = await db.select().from(contacts).where(eq(contacts.trust, 'owner')).limit(1);
-  const [ownerFacts, [card]] = await Promise.all([
-    owner
-      ? db
-          .select()
-          .from(memories)
-          .where(and(active, eq(memories.subjectContactId, owner.id)))
-          .orderBy(desc(memories.pinned), desc(memories.importance), desc(memories.confidence))
-          .limit(PROFILE_FACT_LIMIT)
-      : Promise.resolve([]),
-    db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
-  ]);
+async function profilePeopleReads(
+  store: Db | ProfilePeopleReadRepository,
+): Promise<ProfilePeopleReadRepository> {
+  if (isProfilePeopleReadRepository(store)) return store;
+  const agent = await getAgent(store);
+  return createPostgresProfilePeopleReadRepository(store, agent.id);
+}
+
+export async function getOwnerFactsView(
+  store: Db | ProfilePeopleReadRepository,
+): Promise<OwnerFactsView> {
+  const reads = await profilePeopleReads(store);
+  const [owner, card] = await Promise.all([reads.getOwnerContact(), reads.getOwnerCard()]);
+  const ownerFacts = owner ? (await reads.getFacts(owner.id, PROFILE_FACT_LIMIT)).rows : [];
 
   return {
     ...(owner ? { owner } : {}),
@@ -458,30 +457,17 @@ export interface PersonProfile {
 }
 
 export async function getPersonProfile(
-  db: Db,
+  store: Db | ProfilePeopleReadRepository,
   contactId: string,
   factLimit = 250,
 ): Promise<PersonProfile | null> {
-  const [contact] = await db.select().from(contacts).where(eq(contacts.id, contactId)).limit(1);
+  const reads = await profilePeopleReads(store);
+  const contact = await reads.getContact(contactId);
   if (!contact || contact.trust === 'owner') return null;
-  const active = and(
-    eq(memories.category, 'knowledge'),
-    eq(memories.quarantined, false),
-    or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-  );
-  const [facts, [factCount], allContacts, occasionRows] = await Promise.all([
-    db
-      .select()
-      .from(memories)
-      .where(and(active, eq(memories.subjectContactId, contact.id)))
-      .orderBy(desc(memories.pinned), desc(memories.importance), desc(memories.confidence))
-      .limit(factLimit),
-    db
-      .select({ value: count() })
-      .from(memories)
-      .where(and(active, eq(memories.subjectContactId, contact.id))),
-    db.select().from(contacts).orderBy(contacts.name).limit(500),
-    listOccasionsForContact(db, contact.id),
+  const [{ rows: facts, total }, allContacts, occasionRows] = await Promise.all([
+    reads.getFacts(contact.id, factLimit),
+    reads.listContacts(),
+    reads.listOccasions(contact.id),
   ]);
   const existingDates = new Set(
     occasionRows.map((occasion) => `${occasion.month}-${occasion.day}`),
@@ -502,7 +488,7 @@ export async function getPersonProfile(
   return {
     contact,
     facts,
-    totalFacts: Number(factCount?.value ?? 0),
+    totalFacts: total,
     occasions: occasionRows.map((occasion) => ({
       id: occasion.id,
       kind: occasion.kind,
