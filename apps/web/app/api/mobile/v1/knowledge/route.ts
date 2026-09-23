@@ -1,5 +1,4 @@
 import {
-  addOwnerKnowledgeGraphFact,
   asGraphEntityKind,
   GRAPH_EXTRACTION_VERSION,
   getKnowledgeGraphOverview,
@@ -11,7 +10,11 @@ import {
   getFirestoreKnowledgeGraphOverview,
   getFirestoreKnowledgeGraphReviewQueue,
 } from '@assistant/firestore';
-import { getDb, getFirestoreInstallationStore, getRouter } from '@/lib/server';
+import {
+  addOwnerKnowledgeGraphFactForCurrentPersistence,
+  getDb,
+  getFirestoreInstallationStore,
+} from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -78,7 +81,7 @@ export async function POST(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) return mobileJson({ error: 'invalid connection body' }, { status: 400 });
-  const result = await addOwnerKnowledgeGraphFact(getDb(), getRouter(), {
+  const result = await addOwnerKnowledgeGraphFactForCurrentPersistence({
     subjectLabel: typeof body.subjectLabel === 'string' ? body.subjectLabel : '',
     subjectKind: typeof body.subjectKind === 'string' ? body.subjectKind : '',
     subjectId: typeof body.subjectId === 'string' ? body.subjectId : undefined,

@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { GRAPH_EXTRACTION_VERSION } from '@assistant/application/knowledge-graph';
 import { resetConfigForTest } from '@assistant/config';
-import { createInstallationStore } from '@assistant/firestore';
+import {
+  createInstallationStore,
+  embeddingSpaceKey,
+  FirestoreOwnerKnowledgeGraphFactRepository,
+} from '@assistant/firestore';
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -248,9 +252,125 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
       proxy(new NextRequest(`http://localhost${path}`, { method })).status;
     expect(status('/api/mobile/v1/knowledge')).toBe(200);
     expect(status(`/api/mobile/v1/knowledge/${subjectId}`)).toBe(200);
-    expect(status('/api/mobile/v1/knowledge', 'POST')).toBe(503);
+    expect(status('/api/mobile/v1/knowledge', 'POST')).toBe(200);
     expect(status(`/api/mobile/v1/knowledge/${subjectId}`, 'PATCH')).toBe(503);
     expect(status('/api/mobile/v1/knowledge/graph')).toBe(503);
     expect(status('/api/mobile/v1/knowledge/bad')).toBe(503);
+  });
+
+  it('atomically stores an owner-authored source, graph relation, and normalized entities', async () => {
+    const repo = new FirestoreOwnerKnowledgeGraphFactRepository(
+      store,
+      { provider: 'vertex', model: 'example-embedding', dimensions: 768, revision: 'fixture-v1' },
+      agentId,
+    );
+    const prepared = {
+      agentId,
+      content: 'Anna parent of Baldvin. Owner note: family',
+      contentHash: `owner-fact-${randomUUID()}`,
+      embedding: Array.from({ length: 768 }, (_, index) => (index === 0 ? 1 : 0)),
+      predicate: 'parent_of',
+      subjectContactId: null,
+      subject: {
+        label: 'Anna',
+        kind: 'person' as const,
+        canonicalKey: 'person:anna',
+        contactId: null,
+        authoritativeLabel: false,
+      },
+      object: {
+        label: 'Baldvin',
+        kind: 'person' as const,
+        canonicalKey: 'person:baldvin',
+        contactId: null,
+        authoritativeLabel: false,
+      },
+      createdAt: now,
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+    };
+    const result = await repo.createAtomic(prepared);
+    expect(result.error).toBeUndefined();
+    if (!result.memoryId || !result.relationId) throw new Error('expected committed graph fact');
+    const [savedMemory, savedSource, savedRelation, entities] = await Promise.all([
+      store.doc('memories', result.memoryId).get(),
+      store.doc('knowledgeGraphSources', result.memoryId).get(),
+      store.doc('knowledgeGraphRelations', result.relationId).get(),
+      store.collection('knowledgeGraphEntities').where('agentId', '==', agentId).get(),
+    ]);
+    expect(savedMemory.data()).toMatchObject({
+      agentId,
+      content: prepared.content,
+      contentHash: prepared.contentHash,
+      originTrust: 'owner',
+      ownerConfirmed: true,
+      category: 'knowledge',
+      embeddingSpace: embeddingSpaceKey({
+        provider: 'vertex',
+        model: 'example-embedding',
+        dimensions: 768,
+        revision: 'fixture-v1',
+      }),
+    });
+    expect(savedSource.data()).toMatchObject({
+      memoryId: result.memoryId,
+      agentId,
+      contentHash: prepared.contentHash,
+      status: 'ready',
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+    });
+    expect(savedRelation.data()).toMatchObject({
+      agentId,
+      sourceMemoryId: result.memoryId,
+      predicate: 'parent_of',
+      reviewStatus: 'confirmed',
+      evidenceQuote: prepared.content,
+    });
+    expect(entities.docs.map((doc) => doc.get('canonicalKey'))).toContain('person:anna');
+    expect(entities.docs.map((doc) => doc.get('canonicalKey'))).toContain('person:baldvin');
+    expect(await repo.createAtomic(prepared)).toEqual({
+      error: 'That source fact is already in the knowledge library.',
+    });
+  });
+
+  it('blocks tombstoned hashes and active privacy erasure inside the write transaction', async () => {
+    const repo = new FirestoreOwnerKnowledgeGraphFactRepository(
+      store,
+      { provider: 'vertex', model: 'example-embedding', dimensions: 768, revision: 'fixture-v1' },
+      agentId,
+    );
+    const base = {
+      agentId,
+      content: 'Anna parent of Baldvin. Owner note: family',
+      contentHash: `owner-fact-${randomUUID()}`,
+      embedding: Array.from({ length: 768 }, (_, index) => (index === 0 ? 1 : 0)),
+      predicate: 'parent_of',
+      subjectContactId: null,
+      subject: {
+        label: 'Anna',
+        kind: 'person' as const,
+        canonicalKey: 'person:anna',
+        contactId: null,
+        authoritativeLabel: false,
+      },
+      object: {
+        label: 'Baldvin',
+        kind: 'person' as const,
+        canonicalKey: 'person:baldvin',
+        contactId: null,
+        authoritativeLabel: false,
+      },
+      createdAt: now,
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+    };
+    await store.doc('memoryTombstones', base.contentHash).set({ contentHash: base.contentHash });
+    expect(await repo.createAtomic(base)).toEqual({
+      error: 'This fact was previously removed, so it was not added again.',
+    });
+    await store.doc('memoryTombstones', base.contentHash).delete();
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'running' });
+    await expect(
+      repo.createAtomic({ ...base, contentHash: `${base.contentHash}-erasure` }),
+    ).rejects.toThrow('Privacy erasure is in progress');
+    await store.doc('privacyErasureJobs', agentId).delete();
   });
 });

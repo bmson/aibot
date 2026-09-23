@@ -20,6 +20,8 @@ import {
   type KnowledgeGraphProjectionRelation,
   type KnowledgeGraphSyncRepository,
   type KnowledgeGraphSyncSource,
+  type OwnerKnowledgeGraphEntityEndpoint,
+  type OwnerKnowledgeGraphFactRepository,
 } from '@assistant/persistence';
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -1105,6 +1107,118 @@ export async function createOwnerKnowledgeGraphFact(
     }
     throw err;
   }
+}
+
+/** Shared domain preparation for non-SQL owner graph stores. The repository owns
+ * the final atomic memory/source/entity/relation transaction. */
+export async function createOwnerKnowledgeGraphFactWithRepository(
+  deps: {
+    repository: OwnerKnowledgeGraphFactRepository;
+    router: Pick<ModelRouter, 'embed'>;
+    agentId?: string;
+  },
+  input: OwnerGraphFactInput,
+): Promise<OwnerGraphFactResult> {
+  const context = await deps.repository.context(deps.agentId);
+  const anchor = new Date();
+  const resolveEndpoint = async (
+    endpoint: OwnerGraphFactInput['subject'],
+  ): Promise<OwnerKnowledgeGraphEntityEndpoint | OwnerGraphFactInput['subject'] | null> => {
+    if (!endpoint.id) return endpoint;
+    if (!/^[0-9a-f-]{36}$/i.test(endpoint.id)) return null;
+    return deps.repository.entity(context.agentId, endpoint.id);
+  };
+  const [subjectRow, objectRow] = await Promise.all([
+    resolveEndpoint(input.subject),
+    resolveEndpoint(input.object),
+  ]);
+  if (!subjectRow || !objectRow) return { error: 'One of those knowledge items no longer exists.' };
+  const subjectParsed = GraphEntitySchema.safeParse(subjectRow);
+  const objectParsed = GraphEntitySchema.safeParse(objectRow);
+  const predicate = canonicalPredicate(cleanPredicate(input.predicate)).id;
+  const note = input.note.replace(/\s+/g, ' ').trim().slice(0, 1_000);
+  if (!subjectParsed.success || !objectParsed.success || !predicate || note.length < 3)
+    return { error: 'Add both entities, a relationship, and a short source note.' };
+  const subject = { ...subjectParsed.data, label: cleanLabel(subjectParsed.data.label) };
+  const object = { ...objectParsed.data, label: cleanLabel(objectParsed.data.label) };
+  if (!subject.label || !object.label) return { error: 'Entity names cannot be empty.' };
+  const content = `${subject.label} ${predicate.replaceAll('_', ' ')} ${object.label}. Owner note: ${note}`;
+  const contentHash = createHash('sha256').update(content).digest('hex');
+  for (const [endpoint, row] of [
+    [subject, subjectRow],
+    [object, objectRow],
+  ] as const) {
+    if (endpoint.kind === 'date' && !('canonicalKey' in row)) {
+      if (!canonicalizeDateLabel(endpoint.label, anchor, context.timeZone, context.locale))
+        return {
+          error: `"${endpoint.label}" could not be read as a date. Try a day, month and year.`,
+        };
+    }
+  }
+  const [embedding] = await deps.router.embed([content]);
+  if (!embedding) return { error: 'The source could not be prepared for recall.' };
+  const pinnedContact = input.subject.contactId
+    ? context.contacts.find((row) => row.id === input.subject.contactId)
+    : undefined;
+  const subjectPeople = pinnedContact ? [pinnedContact] : context.contacts;
+  const subjectContactId =
+    'contactId' in subjectRow && subjectRow.contactId
+      ? subjectRow.contactId
+      : subject.kind === 'person'
+        ? (contactForLabel(subjectPeople, subject.label)?.id ?? null)
+        : null;
+  const prepareEntity = (
+    entity: z.infer<typeof GraphEntitySchema>,
+    row: OwnerKnowledgeGraphEntityEndpoint | OwnerGraphFactInput['subject'],
+    candidates: typeof context.contacts,
+  ): OwnerKnowledgeGraphEntityEndpoint | null => {
+    if ('canonicalKey' in row) return row;
+    if (entity.kind === 'date') {
+      const canonical = canonicalizeDateLabel(
+        entity.label,
+        anchor,
+        context.timeZone,
+        context.locale,
+      );
+      return canonical
+        ? {
+            label: canonical.label,
+            kind: entity.kind,
+            canonicalKey: `date:${canonical.key}`,
+            contactId: null,
+            authoritativeLabel: true,
+          }
+        : null;
+    }
+    const contact =
+      entity.kind === 'person' ? contactForLabel(candidates, entity.label) : undefined;
+    return {
+      label: contact?.name ?? entity.label,
+      kind: entity.kind,
+      canonicalKey: contact
+        ? `contact:${contact.id}`
+        : `${entity.kind}:${normalized(entity.label)}`,
+      contactId: contact?.id ?? null,
+      authoritativeLabel: Boolean(contact),
+      ...(contact ? { matchedContactLabel: entity.label } : {}),
+    };
+  };
+  const preparedSubject = prepareEntity(subject, subjectRow, subjectPeople);
+  const preparedObject = prepareEntity(object, objectRow, context.contacts);
+  if (!preparedSubject || !preparedObject)
+    return { error: 'One of those knowledge items could not be resolved.' };
+  return deps.repository.createAtomic({
+    agentId: context.agentId,
+    content,
+    contentHash,
+    embedding,
+    subject: preparedSubject,
+    predicate,
+    object: preparedObject,
+    subjectContactId,
+    createdAt: anchor,
+    extractionVersion: GRAPH_EXTRACTION_VERSION,
+  });
 }
 
 /**

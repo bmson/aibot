@@ -113,7 +113,7 @@ export function proxy(request: NextRequest) {
     ) &&
       request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/library' && request.method === 'GET') ||
-    (path === '/api/mobile/v1/knowledge' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/knowledge' && ['GET', 'POST'].includes(request.method)) ||
     (/^\/api\/mobile\/v1\/knowledge\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       path,
     ) &&
