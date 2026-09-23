@@ -6,6 +6,7 @@ import {
   type Records,
 } from '@assistant/persistence';
 import { createWakeIntent } from './outbox.js';
+import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
 
 const ACTIVE = [
@@ -39,8 +40,15 @@ export class FirestoreCardRefreshRepository implements CardRefreshRepository {
     return this.store.db.runTransaction(async (tx) => {
       const cardRef = this.store.doc('generatedCards', input.cardId);
       const guardRef = this.store.doc('cardRefreshKeys', input.cardId);
-      const [cardSnapshot, guardSnapshot] = await tx.getAll(cardRef, guardRef);
-      if (!cardSnapshot || !guardSnapshot) throw new Error('Card refresh transaction read failed');
+      const erasureRef = this.store.doc('privacyErasureJobs', input.agentId);
+      const [cardSnapshot, guardSnapshot, erasure] = await tx.getAll(cardRef, guardRef, erasureRef);
+      if (!cardSnapshot || !guardSnapshot || !erasure)
+        throw new Error('Card refresh transaction read failed');
+      if (
+        erasure.exists &&
+        (erasure.get('agentId') !== input.agentId || privacyErasureIsActive(erasure.get('status')))
+      )
+        return { ok: false, error: 'Card not found.', status: 404 } as const;
       if (!cardSnapshot.exists)
         return { ok: false, error: 'Card not found.', status: 404 } as const;
       const card = decodeRecord<Records['generatedCards']>(cardSnapshot.data());

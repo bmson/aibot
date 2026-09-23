@@ -25,6 +25,8 @@ export function proxy(request: NextRequest) {
     /^\/api\/mobile\/v1\/approvals\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const improvementIdPath =
     /^\/api\/mobile\/v1\/improvements\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const cardIdPath =
+    /^\/api\/mobile\/v1\/cards\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const chatMessagePath =
     /^\/api\/mobile\/v1\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (
@@ -89,6 +91,7 @@ export function proxy(request: NextRequest) {
     (personOccasionsPath.test(path) && request.method === 'POST') ||
     (path === '/api/card-image' && request.method === 'GET') ||
     (path === '/api/mobile/v1/cards' && request.method === 'GET') ||
+    (cardIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/packs' && request.method === 'GET') ||
     (/^\/api\/mobile\/v1\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       path,

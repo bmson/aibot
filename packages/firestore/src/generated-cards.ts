@@ -6,6 +6,7 @@ import type {
   GeneratedCardRepository,
   Records,
 } from '@assistant/persistence';
+import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
 
 type Card = Records['generatedCards'];
@@ -315,7 +316,16 @@ export class FirestoreGeneratedCardRepository implements GeneratedCardRepository
     if (!agentId || !cardId || !Number.isFinite(now.getTime())) return false;
     return this.store.db.runTransaction(async (tx) => {
       const ref = this.store.doc('generatedCards', cardId);
-      const snapshot = await tx.get(ref);
+      const [snapshot, erasure] = await tx.getAll(
+        ref,
+        this.store.doc('privacyErasureJobs', agentId),
+      );
+      if (!snapshot || !erasure) throw new Error('Generated card dismissal read failed');
+      if (
+        erasure?.exists &&
+        (erasure.get('agentId') !== agentId || privacyErasureIsActive(erasure.get('status')))
+      )
+        return false;
       if (!snapshot.exists) return false;
       const card = decodeCard(snapshot.data());
       if (card.agentId !== agentId) return false;

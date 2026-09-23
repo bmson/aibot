@@ -65,13 +65,13 @@ describe.skipIf(!localEmulator)('Firestore mobile saved cards with PostgreSQL of
     vi.unstubAllEnvs();
   });
 
-  it('allows only the read-only cards collection, leaving card mutations and workspace closed', async () => {
+  it('allows the owner-scoped card route while leaving other writes closed', async () => {
     const { proxy } = await import('../proxy.js');
     const status = (path: string, method = 'GET') =>
       proxy(new NextRequest(`http://localhost${path}`, { method })).status;
     expect(status('/api/mobile/v1/cards')).toBe(200);
     expect(status('/api/mobile/v1/cards', 'POST')).toBe(503);
-    expect(status(`/api/mobile/v1/cards/${randomUUID()}`, 'POST')).toBe(503);
+    expect(status(`/api/mobile/v1/cards/${randomUUID()}`, 'POST')).toBe(200);
     expect(status('/api/mobile/v1/workspace')).toBe(200);
     expect(status('/api/mobile/v1/workspace', 'POST')).toBe(503);
     expect(status('/api/card-image')).toBe(200);
@@ -118,5 +118,78 @@ describe.skipIf(!localEmulator)('Firestore mobile saved cards with PostgreSQL of
       },
       updatedAt: own.card.updatedAt.toISOString(),
     });
+  }, 30_000);
+
+  it('dismisses cards and queues refreshes through Firestore while PostgreSQL is offline', async () => {
+    const { POST } = await import('../app/api/mobile/v1/cards/[id]/route.js');
+    const { getDb } = await import('./server.js');
+    expect(() => getDb()).toThrow('PostgreSQL-backed web surface is unavailable');
+
+    const dismissId = randomUUID();
+    const dismissed = await cards.createOrRevise({
+      agentId,
+      id: dismissId,
+      revisionId: randomUUID(),
+      sourceFingerprint: randomUUID(),
+      sourceLabel: 'test',
+      spec: cardSpec('Dismiss me'),
+      expiresAt: null,
+    });
+    const post = (id: string, action: string) =>
+      POST(
+        new Request(`http://localhost/api/mobile/v1/cards/${id}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action }),
+        }),
+        { params: Promise.resolve({ id }) },
+      );
+
+    const dismissResponse = await post(dismissId, 'dismiss');
+    expect(dismissResponse.status).toBe(200);
+    expect(await dismissResponse.json()).toEqual({ ok: true });
+    expect((await store.doc('generatedCards', dismissId).get()).get('status')).toBe('dismissed');
+    expect((await post(dismissId, 'dismiss')).status).toBe(200);
+    expect(await cards.get(agentId, dismissed.card.id)).toBeNull();
+
+    const refreshId = randomUUID();
+    const refreshRevisionId = randomUUID();
+    await cards.createOrRevise({
+      agentId,
+      id: refreshId,
+      revisionId: refreshRevisionId,
+      sourceFingerprint: randomUUID(),
+      sourceLabel: 'test',
+      spec: {
+        ...cardSpec('Refresh me'),
+        _runtime: {
+          requestText: 'Where is my shipment?',
+          sources: [{ toolName: 'gmail.read_thread', args: { threadId: 'shipment-123' } }],
+        },
+      },
+      expiresAt: null,
+    });
+    const refreshResponse = await post(refreshId, 'refresh');
+    expect(refreshResponse.status).toBe(202);
+    const result = (await refreshResponse.json()) as { taskId: string; refreshState: string };
+    expect(result).toMatchObject({ refreshState: 'refreshing' });
+    expect((await store.doc('tasks', result.taskId).get()).get('agentId')).toBe(agentId);
+
+    const fencedId = randomUUID();
+    await cards.createOrRevise({
+      agentId,
+      id: fencedId,
+      revisionId: randomUUID(),
+      sourceFingerprint: randomUUID(),
+      sourceLabel: 'test',
+      spec: cardSpec('Fenced card'),
+      expiresAt: null,
+    });
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+    expect((await post(fencedId, 'dismiss')).status).toBe(404);
+    expect((await post(refreshId, 'refresh')).status).toBe(404);
+    expect((await store.doc('generatedCards', fencedId).get()).get('status')).toBe('active');
+    expect((await store.collection('tasks').where('agentId', '==', agentId).get()).size).toBe(1);
+    await store.doc('privacyErasureJobs', agentId).delete();
   }, 30_000);
 });
