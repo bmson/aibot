@@ -1,8 +1,33 @@
 import type { TaskRow } from '@assistant/db';
 import type { InstalledModuleSet, ModuleChannel } from '@assistant/modules';
-import { describe, expect, it } from 'vitest';
-import { type AgentDeps, approvalSummaryNotice, shouldMirrorIntoPrimary } from './deps.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  type AgentDeps,
+  approvalSummaryNotice,
+  pinnedMemoryEmbed,
+  shouldMirrorIntoPrimary,
+} from './deps.js';
 import { approvalNoticeEmail, executorDeps } from './executor-deps.js';
+
+describe('Firestore memory embedding provenance', () => {
+  it('refuses a changed embedding role before requesting a vector', async () => {
+    const role = vi.fn().mockResolvedValue({ primaryModel: 'openai/text-embedding-3-small' });
+    const embed = vi.fn().mockResolvedValue([[1, 0, 0]]);
+    const pinned = pinnedMemoryEmbed(
+      { provider: 'google', model: 'gemini-embedding-001', dimensions: 1536, revision: '1' },
+      { role },
+      embed,
+    );
+
+    await expect(pinned(['private fact'])).rejects.toThrow(
+      'Firestore memory embedding role must use google/gemini-embedding-001',
+    );
+    expect(embed).not.toHaveBeenCalled();
+    role.mockResolvedValue({ primaryModel: 'google/gemini-embedding-001' });
+    await expect(pinned(['private fact'])).resolves.toEqual([[1, 0, 0]]);
+    expect(embed).toHaveBeenCalledOnce();
+  });
+});
 
 describe('approvalNoticeEmail', () => {
   const notice = approvalNoticeEmail([
