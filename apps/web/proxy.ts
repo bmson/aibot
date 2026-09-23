@@ -44,6 +44,7 @@ export function proxy(request: NextRequest) {
     (path === '/settings' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/import' && request.method === 'GET') ||
     (path === '/skills' && ['GET', 'POST'].includes(request.method)) ||
+    (path === '/approvals' && ['GET', 'POST'].includes(request.method)) ||
     (chatPage && (request.method === 'GET' || request.method === 'POST')) ||
     (['/icon.svg', '/apple-icon.png', '/favicon.ico', '/manifest.webmanifest'].includes(path) &&
       request.method === 'GET') ||

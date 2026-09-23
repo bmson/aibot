@@ -7,7 +7,7 @@ import {
 } from '@assistant/application/approvals';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getDb } from '@/lib/server';
+import { withApprovalDecisionStore } from '@/lib/approval-store';
 
 function revalidateApprovalViews(): void {
   revalidatePath('/');
@@ -18,13 +18,13 @@ function revalidateApprovalViews(): void {
 
 export async function approveApproval(approvalId: string): Promise<void> {
   await requireOwner();
-  await decideApproval(getDb(), approvalId, 'approved');
+  await withApprovalDecisionStore((store) => decideApproval(store, approvalId, 'approved'));
   revalidateApprovalViews();
 }
 
 export async function denyApproval(approvalId: string): Promise<void> {
   await requireOwner();
-  await decideApproval(getDb(), approvalId, 'denied');
+  await withApprovalDecisionStore((store) => decideApproval(store, approvalId, 'denied'));
   revalidateApprovalViews();
 }
 
@@ -33,7 +33,9 @@ export async function resolveApprovalInline(
   decision: 'approved' | 'denied',
 ): Promise<{ ok: boolean; error?: string }> {
   await requireOwner();
-  const result = await decideApproval(getDb(), approvalId, decision);
+  const result = await withApprovalDecisionStore((store) =>
+    decideApproval(store, approvalId, decision),
+  );
   revalidateApprovalViews();
   return result.ok ? { ok: true } : { ok: false, error: result.reason };
 }
@@ -49,7 +51,9 @@ export async function resolveApprovalsInline(
   decision: 'approved' | 'denied',
 ): Promise<{ failures: Array<{ approvalId: string; error: string }> }> {
   await requireOwner();
-  const failures = await decideApprovals(getDb(), approvalIds, decision);
+  const failures = await withApprovalDecisionStore((store) =>
+    decideApprovals(store, approvalIds, decision),
+  );
   revalidateApprovalViews();
   return { failures };
 }
@@ -57,7 +61,7 @@ export async function resolveApprovalsInline(
 /** Approve and create the one currently supported recipient-scoped standing rule. */
 export async function approveAndRemember(approvalId: string): Promise<void> {
   await requireOwner();
-  await approveAndRememberApproval(getDb(), approvalId);
+  await withApprovalDecisionStore((store) => approveAndRememberApproval(store, approvalId));
   revalidateApprovalViews();
 }
 
@@ -87,7 +91,9 @@ export async function editAndApprove(
     return { error: 'Invalid JSON — fix the payload and submit again.', raw };
   }
 
-  const result = await decideApproval(getDb(), approvalId, 'approved', editedPayload);
+  const result = await withApprovalDecisionStore((store) =>
+    decideApproval(store, approvalId, 'approved', editedPayload),
+  );
   if (!result.ok) return { error: `Could not approve: ${result.reason}`, raw };
 
   revalidateApprovalViews();

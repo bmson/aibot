@@ -85,13 +85,13 @@ export function decideApproval(
 
 /** Resolve a bounded group while preserving a failure result for every item. */
 export async function decideApprovals(
-  db: Db,
+  store: Db | ApprovalRememberStore,
   approvalIds: readonly string[],
   decision: ApprovalDecision,
 ): Promise<Array<{ approvalId: string; error: string }>> {
   const failures: Array<{ approvalId: string; error: string }> = [];
   for (const approvalId of approvalIds.slice(0, 20)) {
-    const result = await decideApproval(db, approvalId, decision);
+    const result = await decideApproval(store, approvalId, decision);
     if (!result.ok) failures.push({ approvalId, error: result.reason });
   }
   return failures;
