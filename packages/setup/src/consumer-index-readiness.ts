@@ -141,6 +141,7 @@ export async function provisionTargetFirestoreIndexes(
       `--database=${identity.databaseId}`,
       `--project=${identity.projectId}`,
       `--query-scope=${index.queryScope === 'COLLECTION_GROUP' ? 'collection-group' : 'collection'}`,
+      '--async',
       '--quiet',
     ];
     for (const field of index.fields.filter((field) => field.fieldPath !== '__name__')) {
@@ -183,6 +184,7 @@ export async function provisionTargetFirestoreIndexes(
       `--database=${identity.databaseId}`,
       `--project=${identity.projectId}`,
       '--disable-indexes',
+      '--async',
       '--quiet',
     ]);
     if (!result.ok)
