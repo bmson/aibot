@@ -27,10 +27,13 @@ export { FirestoreOwnerCardCompilationRepository } from './owner-card-compilatio
 export { FirestoreOwnerContextRepository } from './owner-context.js';
 export { FirestorePrivacyErasureRepository } from './privacy-erasure.js';
 export { FirestorePrivacyExportRepository } from './privacy-export.js';
+export { FirestoreProfileOverviewRepository } from './profile-full-overview.js';
 export { FirestoreProfileLibraryRepository } from './profile-library.js';
 export { createFirestoreProfileMemoryCommandPersistence } from './profile-memory-commands.js';
+export { FirestoreProfileMemoryHubRepository } from './profile-memory-hub.js';
 export { FirestoreProfileMemoryMaintenance } from './profile-memory-maintenance.js';
 export { FirestoreProfileMemoryManagementRepository } from './profile-memory-management.js';
+export { FirestoreProfileVoiceOverviewRepository } from './profile-overview.js';
 export { FirestoreProfilePeopleReadRepository } from './profile-people-read.js';
 export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 export { FirestoreReminderRepository } from './reminders.js';

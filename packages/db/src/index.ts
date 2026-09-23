@@ -25,9 +25,12 @@ export { createPostgresOwnerCardCompilationRepository } from './owner-card-compi
 export { createPostgresOwnerContextRepository } from './owner-context-repository.js';
 export { createPostgresPrivacyErasureRepository } from './privacy-erasure-repository.js';
 export { createPostgresPrivacyExportRepository } from './privacy-export-repository.js';
+export { createPostgresProfileOverviewRepository } from './profile-full-overview-repository.js';
 export { createPostgresProfileLibraryRepository } from './profile-library-repository.js';
+export { createPostgresProfileMemoryHubRepository } from './profile-memory-hub-repository.js';
 export { createPostgresProfileMemoryMaintenance } from './profile-memory-maintenance-repository.js';
 export { createPostgresProfileMemoryManagementRepository } from './profile-memory-management-repository.js';
+export { createPostgresProfileVoiceOverviewRepository } from './profile-overview-repository.js';
 export { createPostgresProfilePeopleReadRepository } from './profile-people-read-repository.js';
 export { createPostgresRecallMetricsRepository } from './recall-metrics-repository.js';
 export { createPostgresReminderRepository } from './reminder-repository.js';

@@ -3,27 +3,30 @@ import {
   CARD_AUTO_FACTS_PER_DOMAIN,
   CARD_AUTO_MIN_IMPORTANCE,
 } from '@assistant/core/memory/consolidation';
-import { getMemoryHealth, type MemoryHealth } from '@assistant/core/memory/health';
+import type { MemoryHealth } from '@assistant/core/memory/health';
 import { detectOccasionInText } from '@assistant/core/memory/occasions';
-import { type VoiceSampleStats, voiceSampleStats } from '@assistant/core/memory/voice-ingest';
+import type { VoiceSampleStats } from '@assistant/core/memory/voice-ingest';
 import {
-  contacts,
   createPostgresProfileLibraryRepository,
+  createPostgresProfileMemoryHubRepository,
+  createPostgresProfileOverviewRepository,
   createPostgresProfilePeopleReadRepository,
+  createPostgresProfileVoiceOverviewRepository,
   type Db,
   findDuplicateContactSuggestions,
-  importSources,
-  memories,
-  ownerCard,
-  tasks,
-  voiceProfile,
 } from '@assistant/db';
 import {
+  isProfileMemoryHubRepository,
+  isProfileOverviewRepository,
   isProfilePeopleReadRepository,
+  isProfileVoiceOverviewRepository,
+  type ProfileMemoryHubOverview,
+  type ProfileMemoryHubRepository,
+  type ProfileOverviewRepository,
   type ProfilePeopleReadRepository,
+  type ProfileVoiceOverview,
+  type ProfileVoiceOverviewRepository,
 } from '@assistant/persistence';
-import { and, count, desc, eq, gt, inArray, isNull, like, ne, or, sql } from 'drizzle-orm';
-import { getRecallFeedbackSummary, type RecallFeedbackSummary } from '../recall-feedback.js';
 import {
   type MemoryLibraryFilters,
   type MemoryLibraryInput,
@@ -92,10 +95,7 @@ export interface ProfileOverview {
   } | null;
 }
 
-const PROFILE_CONTACT_LIMIT = 500;
 const PROFILE_FACT_LIMIT = 250;
-const QUARANTINE_LIMIT = 100;
-const VOICE_IMPORT_LIMIT = 5;
 
 const CARD_DOMAINS = [
   'identity',
@@ -127,121 +127,14 @@ function selectedCardFactIds(ownerFacts: MemorySnapshot[]): Set<string> {
 }
 
 /** Load the complete memory overview without exposing persistence to Next.js. */
-export async function getProfileOverview(db: Db): Promise<ProfileOverview> {
-  const agent = await getAgent(db);
-  const active = and(
-    eq(memories.agentId, agent.id),
-    eq(memories.category, 'knowledge'),
-    eq(memories.quarantined, false),
-    or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-  );
-  const [
-    allContacts,
-    quarantined,
-    [card],
-    voiceStats,
-    voiceImports,
-    memoryHealth,
-    latestOrganizerRows,
-    [voice],
-  ] = await Promise.all([
-    db.select().from(contacts).orderBy(contacts.name).limit(PROFILE_CONTACT_LIMIT),
-    db
-      .select()
-      .from(memories)
-      .where(
-        and(
-          eq(memories.agentId, agent.id),
-          eq(memories.category, 'knowledge'),
-          eq(memories.quarantined, true),
-          or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-        ),
-      )
-      .orderBy(desc(memories.createdAt))
-      .limit(QUARANTINE_LIMIT),
-    db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
-    voiceSampleStats(db),
-    db
-      .select()
-      .from(importSources)
-      .where(like(importSources.source, 'voice-samples%'))
-      .orderBy(desc(importSources.updatedAt))
-      .limit(VOICE_IMPORT_LIMIT),
-    getMemoryHealth(db, agent.id),
-    db
-      .select({
-        id: tasks.id,
-        status: tasks.status,
-        progress: tasks.progress,
-        updatedAt: tasks.updatedAt,
-      })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          sql`${tasks.trigger} #>> '{payload,job}' = 'memory.consolidate'`,
-        ),
-      )
-      .orderBy(desc(tasks.createdAt))
-      .limit(1),
-    db.select().from(voiceProfile).where(eq(voiceProfile.id, 1)).limit(1),
-  ]);
-
-  const owner = allContacts.find((contact) => contact.trust === 'owner');
-  const contactIds = allContacts.map((contact) => contact.id);
-  const [ownerFacts, factCountRows] = await Promise.all([
-    owner
-      ? db
-          .select()
-          .from(memories)
-          .where(and(active, eq(memories.subjectContactId, owner.id)))
-          .orderBy(desc(memories.pinned), desc(memories.importance), desc(memories.confidence))
-          .limit(PROFILE_FACT_LIMIT)
-      : Promise.resolve([]),
-    contactIds.length > 0
-      ? db
-          .select({ contactId: memories.subjectContactId, value: count() })
-          .from(memories)
-          .where(and(active, inArray(memories.subjectContactId, contactIds)))
-          .groupBy(memories.subjectContactId)
-      : Promise.resolve([]),
-  ]);
-  const factCounts = new Map(factCountRows.map((row) => [row.contactId ?? '', Number(row.value)]));
-
-  const cardFactIds = selectedCardFactIds(ownerFacts);
-
-  return {
-    ...(owner ? { owner } : {}),
-    people: allContacts
-      .filter((contact) => contact.trust !== 'owner')
-      .map((contact) => ({ contact, factCount: factCounts.get(contact.id) ?? 0 })),
-    ownerFacts,
-    quarantined,
-    card: card ? { content: card.content, compiledAt: card.compiledAt } : null,
-    cardFactIds: [...cardFactIds],
-    voiceStats,
-    voiceProfile: {
-      description: voice?.description ?? '',
-      dos: Array.isArray(voice?.dos)
-        ? voice.dos.filter((d): d is string => typeof d === 'string')
-        : [],
-      donts: Array.isArray(voice?.donts)
-        ? voice.donts.filter((d): d is string => typeof d === 'string')
-        : [],
-      signature: voice?.signature ?? '',
-    },
-    voiceImports: voiceImports.map((row) => ({
-      source: row.source,
-      status: row.status,
-      itemsTotal: row.itemsTotal,
-      itemsProcessed: row.itemsProcessed,
-      memoriesSaved: row.memoriesSaved,
-      taskId: row.taskId,
-      error: row.error,
-    })),
-    memoryHealth,
-    latestOrganizer: latestOrganizerRows[0] ?? null,
-  };
+export async function getProfileOverview(
+  source: Db | ProfileOverviewRepository,
+): Promise<ProfileOverview> {
+  const repository = isProfileOverviewRepository(source)
+    ? source
+    : createPostgresProfileOverviewRepository(source);
+  const overview = await repository.load();
+  return { ...overview, cardFactIds: [...selectedCardFactIds(overview.ownerFacts)] };
 }
 
 /**
@@ -253,88 +146,15 @@ export async function getProfileOverview(db: Db): Promise<ProfileOverview> {
  * only shows health, the review inbox, and counts to route by, and loading six
  * unused result sets to render four numbers is a cost paid on every visit.
  */
-export interface MemoryHubOverview {
-  owner?: ContactSnapshot;
-  quarantined: MemorySnapshot[];
-  memoryHealth: MemoryHealth;
-  /** What the owner's own thumbs say about recall lately. */
-  recallFeedback: RecallFeedbackSummary;
-  latestOrganizer: { id: string; status: string; progress: string; updatedAt: Date } | null;
-  card: { compiledAt: Date; empty: boolean } | null;
-  ownerFactCount: number;
-  peopleCount: number;
-}
+export type MemoryHubOverview = ProfileMemoryHubOverview;
 
-export async function getMemoryHubOverview(db: Db): Promise<MemoryHubOverview> {
-  const agent = await getAgent(db);
-  const active = and(
-    eq(memories.agentId, agent.id),
-    eq(memories.category, 'knowledge'),
-    eq(memories.quarantined, false),
-    or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-  );
-  const [owner] = await db.select().from(contacts).where(eq(contacts.trust, 'owner')).limit(1);
-
-  const [
-    quarantined,
-    [card],
-    memoryHealth,
-    recallFeedback,
-    latestOrganizerRows,
-    [ownerFactRow],
-    [peopleRow],
-  ] = await Promise.all([
-    db
-      .select()
-      .from(memories)
-      .where(
-        and(
-          eq(memories.agentId, agent.id),
-          eq(memories.category, 'knowledge'),
-          eq(memories.quarantined, true),
-          or(isNull(memories.expiresAt), gt(memories.expiresAt, sql`now()`)),
-        ),
-      )
-      .orderBy(desc(memories.createdAt))
-      .limit(QUARANTINE_LIMIT),
-    db.select().from(ownerCard).where(eq(ownerCard.id, 1)).limit(1),
-    getMemoryHealth(db, agent.id),
-    getRecallFeedbackSummary(db, agent.id),
-    db
-      .select({
-        id: tasks.id,
-        status: tasks.status,
-        progress: tasks.progress,
-        updatedAt: tasks.updatedAt,
-      })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agent.id),
-          sql`${tasks.trigger} #>> '{payload,job}' = 'memory.consolidate'`,
-        ),
-      )
-      .orderBy(desc(tasks.createdAt))
-      .limit(1),
-    owner
-      ? db
-          .select({ value: count() })
-          .from(memories)
-          .where(and(active, eq(memories.subjectContactId, owner.id)))
-      : Promise.resolve([{ value: 0 }]),
-    db.select({ value: count() }).from(contacts).where(ne(contacts.trust, 'owner')),
-  ]);
-
-  return {
-    ...(owner ? { owner } : {}),
-    quarantined,
-    memoryHealth,
-    recallFeedback,
-    latestOrganizer: latestOrganizerRows[0] ?? null,
-    card: card ? { compiledAt: card.compiledAt, empty: card.content.trim() === '' } : null,
-    ownerFactCount: Number(ownerFactRow?.value ?? 0),
-    peopleCount: Number(peopleRow?.value ?? 0),
-  };
+export async function getMemoryHubOverview(
+  source: Db | ProfileMemoryHubRepository,
+): Promise<MemoryHubOverview> {
+  const repository = isProfileMemoryHubRepository(source)
+    ? source
+    : createPostgresProfileMemoryHubRepository(source);
+  return repository.load();
 }
 
 /** Everything `/profile/about` renders: the owner's facts and the compiled card. */
@@ -369,45 +189,15 @@ export async function getOwnerFactsView(
 }
 
 /** Everything `/profile/voice` renders. */
-export interface VoiceOverview {
-  voiceStats: VoiceSampleStats;
-  voiceProfile: ProfileOverview['voiceProfile'];
-  voiceImports: ProfileOverview['voiceImports'];
-}
+export type VoiceOverview = ProfileVoiceOverview;
 
-export async function getVoiceOverview(db: Db): Promise<VoiceOverview> {
-  const [voiceStats, voiceImports, [voice]] = await Promise.all([
-    voiceSampleStats(db),
-    db
-      .select()
-      .from(importSources)
-      .where(like(importSources.source, 'voice-samples%'))
-      .orderBy(desc(importSources.updatedAt))
-      .limit(VOICE_IMPORT_LIMIT),
-    db.select().from(voiceProfile).where(eq(voiceProfile.id, 1)).limit(1),
-  ]);
-  return {
-    voiceStats,
-    voiceProfile: {
-      description: voice?.description ?? '',
-      dos: Array.isArray(voice?.dos)
-        ? voice.dos.filter((d): d is string => typeof d === 'string')
-        : [],
-      donts: Array.isArray(voice?.donts)
-        ? voice.donts.filter((d): d is string => typeof d === 'string')
-        : [],
-      signature: voice?.signature ?? '',
-    },
-    voiceImports: voiceImports.map((row) => ({
-      source: row.source,
-      status: row.status,
-      itemsTotal: row.itemsTotal,
-      itemsProcessed: row.itemsProcessed,
-      memoriesSaved: row.memoriesSaved,
-      taskId: row.taskId,
-      error: row.error,
-    })),
-  };
+export async function getVoiceOverview(
+  source: Db | ProfileVoiceOverviewRepository,
+): Promise<VoiceOverview> {
+  const repository = isProfileVoiceOverviewRepository(source)
+    ? source
+    : createPostgresProfileVoiceOverviewRepository(source);
+  return repository.load();
 }
 
 export interface MemoryLibrary {
