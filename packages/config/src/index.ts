@@ -68,6 +68,8 @@ const ConfigSchema = z.object({
     }),
 
   DATABASE_URL: z.string().default('postgres://assistant:assistant@localhost:5432/assistant'),
+  /** Process-level Drizzle write fence for a controlled PostgreSQL cutover window. */
+  POSTGRES_SOURCE_WRITES_FENCED: booleanString,
   /** PostgreSQL remains the default; Firestore is an explicit agent-only preview profile. */
   PERSISTENCE_DRIVER: z.enum(['postgres', 'firestore']).default('postgres'),
   /** Named customer database; local emulator fixtures may use (default). */

@@ -1,6 +1,14 @@
 # PostgreSQL source write fence
 
-This procedure is a **go/no-go checklist**, not an automated fence. The current deployment has no application maintenance/write-freeze switch and no database-provider control in this repository that can revoke writes or terminate existing PostgreSQL sessions. Do not treat paused queues, a read-only export transaction, a Cloud Run traffic change, or a quiet `pg_stat_activity` sample as proof that the source is fenced.
+This procedure is a **go/no-go checklist**, not an automated provider fence. The repository now has an opt-in process-level Drizzle write gate, but it is not enabled in any live service and does not revoke PostgreSQL privileges or terminate existing sessions. Do not treat this gate, paused queues, a read-only export transaction, a Cloud Run traffic change, or a quiet `pg_stat_activity` sample as proof that the source is fenced.
+
+## Application maintenance gate
+
+`POSTGRES_SOURCE_WRITES_FENCED=true` opts the web and agent PostgreSQL composition roots into a fail-closed Drizzle guard. It blocks `insert`, `update`, and `delete` builders, blocks raw `execute`/`batch`, and hides the raw postgres.js client. Typed Drizzle reads continue to work. Invalid values fail configuration parsing. The default is `false`, so deploying the code alone does not change runtime behavior.
+
+Web actions and mobile handlers that use the web application database, plus agent webhooks, internal callbacks, Cloud Tasks execution, local scheduling, and agent maintenance steps, share these guarded connections. For a rehearsal, set the flag only on isolated test services/jobs and confirm a representative mutation is rejected while a typed read succeeds.
+
+This is a per-process guard, not an authoritative database fence. It does not affect an already-running old revision until that process is stopped, and it cannot account for an in-flight write that was already issued. Scripts that construct `postgres()` directly (including the standalone schema repair utility), external clients, operators, and any unreviewed process that does not use `createDb()` bypass it. The workspace exporter has its own read-only transaction, which is unrelated to this application setting. Keep the provider-side fence below as a required cutover gate.
 
 The production database URL is held in Secret Manager as `database-url` and is injected into both `assistant-web` and `assistant-agent`. The migration and workspace-export Cloud Run Jobs also receive that URL. The export job makes its own transaction read-only, but that limits only that export transaction. The agent accepts direct webhooks and internal work, and Cloud Tasks, Cloud Scheduler, and the Gmail Pub/Sub push subscription can all deliver more work. Local operator scripts and any other database clients are outside those Cloud Run controls.
 

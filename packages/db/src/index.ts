@@ -42,3 +42,4 @@ export { createPostgresTaskLeaseRepository } from './task-lease-repository.js';
 export { createPostgresTaskRepository } from './task-lifecycle-repository.js';
 export { createPostgresToolExecutionRepository } from './tool-execution-repository.js';
 export { createPostgresWatchRepository } from './watch-repository.js';
+export * from './write-fence.js';
