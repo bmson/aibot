@@ -74,6 +74,15 @@ export function restoreActivityWithRepository(
   return repository.restore(agentId, taskId);
 }
 
+/** Archives old terminal activity through the configured persistence adapter. */
+export function archiveOldActivityWithRepository(
+  repository: TaskActivityCommandRepository,
+  agentId: string,
+  olderThanDays = 30,
+): Promise<void> {
+  return repository.archiveOld(agentId, olderThanDays);
+}
+
 export async function archiveActivity(db: Db, taskId: string): Promise<void> {
   const agent = await getAgent(db);
   const [task] = await db

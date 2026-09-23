@@ -1,8 +1,49 @@
 import type { TaskActivityCommandRepository } from '@assistant/persistence';
-import { privacyErasureIsActive } from './privacy-erasure.js';
+import {
+  type DocumentSnapshot,
+  FieldPath,
+  type QueryDocumentSnapshot,
+} from '@google-cloud/firestore';
+import {
+  assertPrivacyErasureFenceUnchanged,
+  privacyErasureIsActive,
+  readPrivacyErasureFence,
+} from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const TERMINAL = new Set(['done', 'failed', 'cancelled']);
+const PAGE_SIZE = 250;
+const MAX_OWNER_TASKS = 25_000;
+const MAX_ARCHIVE_OLD_WRITES = 400;
+
+function isTerminalArchiveCandidate(
+  document: DocumentSnapshot | QueryDocumentSnapshot,
+  agentId: string,
+  cutoff: Date,
+): boolean {
+  const data = document.data();
+  if (!document.exists || !data) return false;
+  const task = decodeRecord<Record<string, unknown>>(data);
+  if (
+    task.agentId !== agentId ||
+    typeof task.id !== 'string' ||
+    task.id !== document.id ||
+    documentKey(task.id) !== document.id ||
+    typeof task.status !== 'string' ||
+    !(
+      task.archivedAt === null ||
+      (task.archivedAt instanceof Date && Number.isFinite(task.archivedAt.getTime()))
+    ) ||
+    !(task.updatedAt instanceof Date) ||
+    !Number.isFinite(task.updatedAt.getTime())
+  )
+    throw new Error('Invalid owner activity task');
+  return (
+    task.archivedAt === null &&
+    TERMINAL.has(task.status) &&
+    task.updatedAt.getTime() < cutoff.getTime()
+  );
+}
 
 /** Archives or restores one owned task in the same transaction as its safety checks. */
 export class FirestoreTaskActivityCommandRepository implements TaskActivityCommandRepository {
@@ -16,6 +57,80 @@ export class FirestoreTaskActivityCommandRepository implements TaskActivityComma
 
   restore(agentId: string, taskId: string): Promise<void> {
     return this.change(agentId, taskId, 'restore');
+  }
+
+  async archiveOld(agentId: string, olderThanDays = 30): Promise<void> {
+    if (!agentId || !Number.isFinite(olderThanDays) || olderThanDays <= 0)
+      throw new Error('Invalid archive-old activity request');
+    const cutoff = new Date(this.store.now().getTime() - olderThanDays * 24 * 60 * 60 * 1000);
+    const agents = await this.store.collection('agents').limit(2).get();
+    const agent = agents.docs[0];
+    if (
+      agents.size !== 1 ||
+      !agent ||
+      agent.id !== documentKey(agentId) ||
+      agent.get('id') !== agentId
+    )
+      throw new Error('Activity requires one matching configured agent');
+    const fence = await readPrivacyErasureFence(this.store, agentId);
+
+    const candidates: QueryDocumentSnapshot[] = [];
+    let scanned = 0;
+    let cursor: QueryDocumentSnapshot | undefined;
+    for (;;) {
+      let query = this.store
+        .collection('tasks')
+        .where('agentId', '==', agentId)
+        .select('id', 'agentId', 'status', 'archivedAt', 'updatedAt')
+        .orderBy(FieldPath.documentId())
+        .limit(PAGE_SIZE);
+      if (cursor) query = query.startAfter(cursor);
+      const page = await query.get();
+      scanned += page.size;
+      if (scanned > MAX_OWNER_TASKS)
+        throw new Error('Owner activity exceeds the bounded task scan');
+      for (const document of page.docs) {
+        if (isTerminalArchiveCandidate(document, agentId, cutoff)) candidates.push(document);
+      }
+      if (candidates.length > MAX_ARCHIVE_OLD_WRITES)
+        throw new Error('Archive-old activity exceeds the bounded write limit');
+      if (page.size < PAGE_SIZE) break;
+      cursor = page.docs.at(-1);
+    }
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    if (candidates.length === 0) return;
+
+    const now = this.store.now();
+    await this.store.db.runTransaction(async (tx) => {
+      const ownerQuery = await tx.get(this.store.collection('agents').limit(2));
+      const owner = ownerQuery.docs[0];
+      if (
+        ownerQuery.size !== 1 ||
+        !owner ||
+        owner.id !== documentKey(agentId) ||
+        owner.get('id') !== agentId
+      )
+        throw new Error('Activity requires one matching configured agent');
+      const erasure = await tx.get(this.store.doc('privacyErasureJobs', agentId));
+      if (
+        erasure.exists &&
+        (erasure.get('agentId') !== agentId ||
+          privacyErasureIsActive(erasure.get('status')) ||
+          !erasure.updateTime)
+      )
+        throw new Error('Privacy erasure is in progress');
+      const current = await Promise.all(
+        candidates.map((document) => tx.get(this.store.doc('tasks', document.id))),
+      );
+      for (let index = 0; index < current.length; index += 1) {
+        const snapshot = current[index];
+        const candidate = candidates[index];
+        if (!snapshot?.exists || !candidate) continue;
+        if (isTerminalArchiveCandidate(snapshot, agentId, cutoff)) {
+          tx.update(snapshot.ref, { archivedAt: now, updatedAt: now });
+        }
+      }
+    });
   }
 
   private async change(

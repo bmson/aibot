@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { listActivityWithRepository } from '@assistant/application/tasks';
 import { resetConfigForTest } from '@assistant/config';
-import { createInstallationStore, FirestoreTaskActivityRepository } from '@assistant/firestore';
+import {
+  createInstallationStore,
+  FirestoreTaskActivityCommandRepository,
+  FirestoreTaskActivityRepository,
+} from '@assistant/firestore';
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -116,7 +120,7 @@ describe.skipIf(!localEmulator)('Firestore mobile Activity GET with PostgreSQL o
     expect(proxy(new NextRequest('http://localhost/api/mobile/v1/activity')).status).toBe(200);
     expect(
       proxy(new NextRequest('http://localhost/api/mobile/v1/activity', { method: 'POST' })).status,
-    ).toBe(503);
+    ).toBe(200);
     expect(proxy(new NextRequest('http://localhost/api/mobile/v1/activity/123')).status).toBe(503);
     const response = await get();
     expect(response.status).toBe(200);
@@ -144,13 +148,107 @@ describe.skipIf(!localEmulator)('Firestore mobile Activity GET with PostgreSQL o
     expect(working.items.map((item) => item.id)).toEqual(['running']);
   });
 
-  it('requires auth and refuses Firestore writes', async () => {
+  it('archives only old terminal owner tasks and is idempotent', async () => {
+    const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    await Promise.all([
+      store.doc('tasks', 'old-done').set(task('old-done', { status: 'done', updatedAt: old })),
+      store
+        .doc('tasks', 'old-failed')
+        .set(task('old-failed', { status: 'failed', updatedAt: old })),
+      store
+        .doc('tasks', 'old-cancelled')
+        .set(task('old-cancelled', { status: 'cancelled', updatedAt: old })),
+      store.doc('tasks', 'old-running').set(task('old-running', { updatedAt: old })),
+      store.doc('tasks', 'old-archived').set(
+        task('old-archived', {
+          status: 'done',
+          archivedAt: new Date('2026-09-01T12:00:00Z'),
+          updatedAt: old,
+        }),
+      ),
+      store
+        .doc('tasks', 'old-foreign')
+        .set(task('old-foreign', { status: 'done', agentId: foreignAgentId, updatedAt: old })),
+      store
+        .doc('tasks', 'recent-done')
+        .set(task('recent-done', { status: 'done', updatedAt: new Date() })),
+    ]);
+    const response = await route.POST(
+      new Request('http://localhost/api/mobile/v1/activity', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'archive-old' }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    const archived = await Promise.all(
+      ['old-done', 'old-failed', 'old-cancelled'].map((id) => store.doc('tasks', id).get()),
+    );
+    for (const taskSnapshot of archived) {
+      expect(taskSnapshot.get('archivedAt')).toBeInstanceOf(Date);
+      expect(taskSnapshot.get('updatedAt').toDate().getTime()).toBe(
+        taskSnapshot.get('archivedAt').toDate().getTime(),
+      );
+    }
+    for (const id of ['old-running', 'recent-done', 'old-foreign']) {
+      expect((await store.doc('tasks', id).get()).get('archivedAt')).toBeNull();
+    }
+    const existingArchived = await store.doc('tasks', 'old-archived').get();
+    const preArchived = existingArchived.get('archivedAt').toDate();
+    const preArchiveUpdatedAt = existingArchived.get('updatedAt').toDate();
+    const second = await route.POST(
+      new Request('http://localhost/api/mobile/v1/activity', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'archive-old' }),
+      }),
+    );
+    expect(second.status).toBe(200);
+    const stillArchived = await store.doc('tasks', 'old-archived').get();
+    expect(stillArchived.get('archivedAt').toDate()).toEqual(preArchived);
+    expect(stillArchived.get('updatedAt').toDate()).toEqual(preArchiveUpdatedAt);
+  });
+
+  it('requires auth and keeps unsupported Firestore writes unavailable', async () => {
     auth.allowed.mockResolvedValueOnce(false);
     expect((await get()).status).toBe(401);
     const post = await route.POST(
       new Request('http://localhost/api/mobile/v1/activity', { method: 'POST' }),
     );
     expect(post.status).toBe(503);
+  });
+
+  it('blocks archive-old while privacy erasure is active', async () => {
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+    try {
+      await expect(
+        route.POST(
+          new Request('http://localhost/api/mobile/v1/activity', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action: 'archive-old' }),
+          }),
+        ),
+      ).rejects.toThrow('Privacy erasure is in progress');
+    } finally {
+      await store.doc('privacyErasureJobs', agentId).delete();
+    }
+  });
+
+  it('fails before writes when the terminal archive set exceeds the atomic-write cap', async () => {
+    const batch = store.db.batch();
+    const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    for (let index = 0; index < 401; index += 1) {
+      const id = `bulk-${index.toString().padStart(3, '0')}`;
+      batch.set(store.doc('tasks', id), task(id, { status: 'done', updatedAt: old }));
+    }
+    await batch.commit();
+
+    await expect(
+      new FirestoreTaskActivityCommandRepository(store).archiveOld(agentId),
+    ).rejects.toThrow('Archive-old activity exceeds the bounded write limit');
+    expect((await store.doc('tasks', 'bulk-000').get()).get('archivedAt')).toBeNull();
+    expect((await store.doc('tasks', 'bulk-400').get()).get('archivedAt')).toBeNull();
   });
 
   it('fails closed during erasure and when the configured agent is missing', async () => {

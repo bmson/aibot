@@ -3,4 +3,5 @@ export interface TaskActivityCommandRepository {
   readonly kind: 'task-activity-command-repository';
   archive(agentId: string, taskId: string): Promise<void>;
   restore(agentId: string, taskId: string): Promise<void>;
+  archiveOld(agentId: string, olderThanDays?: number): Promise<void>;
 }

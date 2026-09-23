@@ -96,7 +96,7 @@ describe.skipIf(!localEmulator)(
       expect(
         proxy(new NextRequest('http://localhost/api/mobile/v1/activity', { method: 'POST' }))
           .status,
-      ).toBe(503);
+      ).toBe(200);
       expect(
         proxy(
           new NextRequest('http://localhost/api/mobile/v1/activity/not-a-uuid', { method: 'POST' }),
