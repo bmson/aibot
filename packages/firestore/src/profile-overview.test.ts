@@ -76,7 +76,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore profile voice o
     }
   });
 
-  it('fails closed when a legacy sample has no owner identity', async () => {
+  it('attributes legacy ownerless PostgreSQL samples only in a single-agent installation', async () => {
     const store = emulatorStore();
     const agentId = randomUUID();
     const sampleId = randomUUID();
@@ -86,6 +86,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore profile voice o
         id: sampleId,
         context: 'upload:legacy',
       });
+      expect(
+        (await new FirestoreProfileVoiceOverviewRepository(store, agentId).load()).voiceStats,
+      ).toEqual({ total: 1, auto: 0, uploaded: 1 });
+      const secondAgentId = randomUUID();
+      await store.doc('agents', secondAgentId).set({ id: secondAgentId });
       await expect(
         new FirestoreProfileVoiceOverviewRepository(store, agentId).load(),
       ).rejects.toThrow('Malformed writing sample record');

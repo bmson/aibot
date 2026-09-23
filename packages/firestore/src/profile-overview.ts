@@ -37,16 +37,26 @@ export class FirestoreProfileVoiceOverviewRepository implements ProfileVoiceOver
       this.store.collection('importSources').where('agentId', '==', agentId).get(),
       this.store.doc('voiceProfile', '1').get(),
     ]);
+    // PostgreSQL's writing_samples table predates agent ownership. A complete
+    // single-agent snapshot therefore contains valid rows without agentId.
+    // Attribute those rows only when this installation still has one agent;
+    // never guess which owner they belong to in a multi-agent installation.
+    const hasLegacySamples = samples.docs.some((doc) => doc.get('agentId') === undefined);
+    const legacyAgents = hasLegacySamples
+      ? await this.store.collection('agents').limit(2).get()
+      : null;
+    const legacyOwnerId =
+      legacyAgents?.size === 1 && legacyAgents.docs[0]?.id === agent.id ? agentId : null;
     const contexts = samples.docs.flatMap((doc) => {
       const row = decodeRecord<Records['writingSamples'] & { agentId?: unknown }>(doc.data());
       if (
         !row.id ||
         documentKey(row.id) !== doc.id ||
-        typeof row.agentId !== 'string' ||
-        !row.agentId
+        (row.agentId === undefined && legacyOwnerId === null) ||
+        (row.agentId !== undefined && (typeof row.agentId !== 'string' || !row.agentId))
       )
         throw new Error('Malformed writing sample record');
-      return row.agentId === agentId ? [row.context] : [];
+      return (row.agentId ?? legacyOwnerId) === agentId ? [row.context] : [];
     });
     const voice = profile.exists ? decodeRecord<Records['voiceProfile']>(profile.data()) : null;
     if (voice && voice.id !== 1) throw new Error('Malformed voice profile record');
