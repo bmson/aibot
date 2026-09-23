@@ -53,6 +53,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/shell/status' && request.method === 'GET') ||
     (path === '/api/mobile/v1/bootstrap' && request.method === 'GET') ||
     (path === '/api/mobile/v1/activity' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/activity' && request.method === 'POST') ||
     (path === '/api/mobile/v1/activity/foreground' && request.method === 'POST') ||
     (path === '/api/mobile/v1/goals' && request.method === 'GET') ||
     (path === '/api/mobile/v1/mcp' && request.method === 'GET') ||
