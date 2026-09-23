@@ -1374,11 +1374,13 @@ export class ModelRouter {
   /** Embeddings via the embed role. */
   async embed(
     values: string[],
-    opts: { taskId?: string; abortSignal?: AbortSignal } = {},
+    opts: { taskId?: string; abortSignal?: AbortSignal; expectedModelId?: string } = {},
   ): Promise<number[][]> {
     if (values.length > 0 && opts.taskId) await this.persistence.taskBudget(opts.taskId);
     const roleRow = await this.persistence.role('embed');
     if (!roleRow) throw new Error('no model_roles row for role: embed');
+    if (opts.expectedModelId && roleRow.primaryModel !== opts.expectedModelId)
+      throw new Error('Embedding model does not match the configured embedding space');
     if (values.length === 0) return [];
     if (values.length > 100) throw new Error('embedding batch exceeds 100 values');
     const modelRow = await this.persistence.model(roleRow.primaryModel);

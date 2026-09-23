@@ -1,10 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import { resetConfigForTest } from '@assistant/config';
-import { createInstallationStore } from '@assistant/firestore';
+import {
+  createInstallationStore,
+  embeddingSpaceKey,
+  FirestoreSkillContextRepository,
+} from '@assistant/firestore';
+import { FieldValue } from '@google-cloud/firestore';
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const auth = vi.hoisted(() => ({ allowed: vi.fn() }));
+const auth = vi.hoisted(() => ({ allowed: vi.fn(), embed: vi.fn() }));
+vi.mock('@/lib/server', () => ({
+  embedFirestoreSkillText: auth.embed,
+  getApplication: vi.fn(),
+}));
 vi.mock('@/mobile-auth', () => ({
   isMobileAuthed: auth.allowed,
   mobileJson: (value: unknown, init?: ResponseInit) => Response.json(value, init),
@@ -33,7 +42,7 @@ describe.skipIf(!localEmulator)('Firestore mobile skill mutations with PostgreSQ
     vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
     vi.stubEnv(
       'FIRESTORE_EMBEDDING_SPACE',
-      '{"provider":"vertex","model":"fixture","dimensions":768,"revision":"1"}',
+      '{"provider":"vertex","model":"fixture","dimensions":1536,"revision":"1"}',
     );
     vi.stubEnv('LLM_PROVIDER', 'vertex');
     vi.stubEnv('ASSISTANT_MODULES', 'minimal');
@@ -47,6 +56,7 @@ describe.skipIf(!localEmulator)('Firestore mobile skill mutations with PostgreSQ
 
   beforeEach(async () => {
     auth.allowed.mockResolvedValue(true);
+    auth.embed.mockReset().mockResolvedValue([1, ...new Array(1535).fill(0)]);
     await store.db.recursiveDelete(store.root);
     await store.doc('agents', agentId).set({ id: agentId });
     const skill = (id: string, owner: string) => ({
@@ -97,21 +107,21 @@ describe.skipIf(!localEmulator)('Firestore mobile skill mutations with PostgreSQ
       context(id),
     );
 
-  it('exposes only item deprecation and deletion through the Firestore proxy', async () => {
+  it('exposes create, edit, deprecation, and deletion through the Firestore proxy', async () => {
     const { proxy } = await import('../../../../../../proxy.js');
-    for (const method of ['POST', 'DELETE'])
+    for (const method of ['POST', 'PATCH', 'DELETE'])
       expect(
         proxy(new NextRequest(`http://localhost/api/mobile/v1/skills/${skillId}`, { method }))
           .status,
       ).toBe(200);
-    for (const method of ['PATCH', 'GET'])
+    for (const method of ['GET'])
       expect(
         proxy(new NextRequest(`http://localhost/api/mobile/v1/skills/${skillId}`, { method }))
           .status,
       ).toBe(503);
     expect(
       proxy(new NextRequest('http://localhost/api/mobile/v1/skills', { method: 'POST' })).status,
-    ).toBe(503);
+    ).toBe(200);
     expect(
       proxy(
         new NextRequest('http://localhost/api/mobile/v1/skills/not-a-uuid', { method: 'DELETE' }),
@@ -153,15 +163,106 @@ describe.skipIf(!localEmulator)('Firestore mobile skill mutations with PostgreSQ
     expect((await remove(skillId)).status).toBe(401);
   });
 
-  it('blocks direct create and edit route calls without PostgreSQL', async () => {
-    const create = await collectionRoute.POST(
-      new Request('http://localhost/api/mobile/v1/skills', { method: 'POST' }),
+  const body = (name: string, steps = 'Steps') =>
+    JSON.stringify({ name, steps, preconditions: 'When', gotchas: 'Beware' });
+  const create = (name: string, steps?: string) =>
+    collectionRoute.POST(
+      new Request('http://localhost/api/mobile/v1/skills', {
+        method: 'POST',
+        body: body(name, steps),
+        headers: { 'content-type': 'application/json' },
+      }),
     );
-    expect(create.status).toBe(503);
-    const edit = await route.PATCH(
-      new Request(`http://localhost/api/mobile/v1/skills/${skillId}`, { method: 'PATCH' }),
-      context(skillId),
+  const edit = (id: string, name: string) =>
+    route.PATCH(
+      new Request(`http://localhost/api/mobile/v1/skills/${id}`, {
+        method: 'PATCH',
+        body: body(name),
+        headers: { 'content-type': 'application/json' },
+      }),
+      context(id),
     );
-    expect(edit.status).toBe(503);
+
+  it('creates a recall-compatible owner skill and upserts by name', async () => {
+    expect((await create('  New skill  ')).status).toBe(201);
+    expect(auth.embed).toHaveBeenCalledWith('New skill\nWhen: When\nSteps: Steps\nGotchas: Beware');
+    const query = await store.collection('skills').where('agentId', '==', agentId).get();
+    const newSkill = query.docs.find((doc) => doc.get('name') === 'New skill');
+    expect(newSkill).toBeDefined();
+    expect(newSkill?.get('embedding').toArray()).toHaveLength(1536);
+    expect(newSkill?.get('embeddingSpace')).toBe(
+      embeddingSpaceKey({ provider: 'vertex', model: 'fixture', dimensions: 1536, revision: '1' }),
+    );
+    expect(newSkill?.get('originTrust')).toBe('owner');
+    expect(newSkill?.get('ownerAuthored')).toBe(true);
+    expect(newSkill?.get('retrievalRevision')).toEqual(expect.any(String));
+    const recall = await new FirestoreSkillContextRepository(store, {
+      provider: 'vertex',
+      model: 'fixture',
+      dimensions: 1536,
+      revision: '1',
+    }).recall({ agentId, embedding: [1, ...new Array(1535).fill(0)], minSimilarity: 0.7 });
+    expect(recall.some((match) => match.skill.id === newSkill?.get('id'))).toBe(true);
+    expect((await create('New skill', 'Revised')).status).toBe(201);
+    const again = await store.collection('skills').where('agentId', '==', agentId).get();
+    expect(again.size).toBe(2);
+    expect((await newSkill?.ref.get())?.get('steps')).toBe('Revised');
+  });
+
+  it('edits only the existing owner skill with a fresh vector and revision', async () => {
+    await store.doc('skills', skillId).update({ deprecated: true, ownerAuthored: false });
+    expect((await edit(skillId, 'Revised skill')).status).toBe(200);
+    const skill = await store.doc('skills', skillId).get();
+    expect(skill.get('name')).toBe('Revised skill');
+    expect(skill.get('embedding').toArray()).toHaveLength(1536);
+    expect(skill.get('embeddingSpace')).toEqual(expect.any(String));
+    expect(skill.get('retrievalRevision')).toEqual(expect.any(String));
+    expect(skill.get('deprecated')).toBe(false);
+    expect(skill.get('ownerAuthored')).toBe(true);
+    expect((await edit(otherSkillId, 'Foreign')).status).toBe(409);
+    expect((await edit(randomUUID(), 'Missing')).status).toBe(409);
+  });
+
+  it('rejects bad vectors, duplicate names, erasure, and ambiguous agents without writes', async () => {
+    auth.embed.mockResolvedValueOnce([1, 2]);
+    expect((await create('Bad vector')).status).toBe(409);
+    expect((await store.collection('skills').where('name', '==', 'Bad vector').get()).size).toBe(0);
+    expect((await create('Other')).status).toBe(201);
+    expect((await edit(skillId, 'Other')).status).toBe(409);
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+    auth.embed.mockClear();
+    expect((await create('Blocked')).status).toBe(409);
+    expect(auth.embed).not.toHaveBeenCalled();
+    await store.doc('privacyErasureJobs', agentId).delete();
+    await store.doc('agents', otherAgentId).set({ id: otherAgentId });
+    auth.embed.mockClear();
+    expect((await edit(skillId, 'Blocked')).status).toBe(409);
+    expect(auth.embed).not.toHaveBeenCalled();
+    expect((await store.doc('skills', skillId).get()).get('name')).toBe('Test');
+  });
+
+  it('rejects provider errors and malformed migrated matches without stale-vector writes', async () => {
+    auth.embed.mockRejectedValueOnce(new Error('Vertex unavailable'));
+    expect((await edit(skillId, 'Changed')).status).toBe(409);
+    expect((await store.doc('skills', skillId).get()).get('name')).toBe('Test');
+    await store.doc('skills', skillId).update({ originTrust: 'untrusted' });
+    expect((await create('Test')).status).toBe(409);
+    expect((await store.doc('skills', skillId).get()).get('steps')).toBe('Do it');
+  });
+
+  it('rejects migrated vectors without provenance instead of overwriting them', async () => {
+    await store
+      .doc('skills', skillId)
+      .update({ embedding: FieldValue.vector([1, ...new Array(1535).fill(0)]) });
+    expect((await edit(skillId, 'Revised')).status).toBe(409);
+    expect((await store.doc('skills', skillId).get()).get('name')).toBe('Test');
+  });
+
+  it('requires authentication and valid input before embedding', async () => {
+    auth.allowed.mockResolvedValueOnce(false);
+    expect((await create('No auth')).status).toBe(401);
+    expect(auth.embed).not.toHaveBeenCalled();
+    expect((await create('', 'Steps')).status).toBe(400);
+    expect(auth.embed).not.toHaveBeenCalled();
   });
 });

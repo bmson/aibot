@@ -4,6 +4,7 @@ import {
   type LearnedSkill,
   MIN_SKILL_RECALL_SIMILARITY,
   type SkillContextRepository,
+  skillEmbeddingText,
   skillRecallBounds,
   validateSkillEmbedding,
 } from '@assistant/persistence';
@@ -17,24 +18,7 @@ import type { ModelRouter } from '../model-router/router.js';
  * surfaces facts and vice-versa. Only owner/assistant provenance may write one.
  */
 
-const MAX_SKILL_CHARS = 4000;
-/** The text a skill is embedded on — the whole procedure, so recall matches intent. */
-function skillText(s: {
-  name: string;
-  preconditions: string;
-  steps: string;
-  gotchas: string;
-}): string {
-  return [
-    s.name,
-    s.preconditions && `When: ${s.preconditions}`,
-    s.steps && `Steps: ${s.steps}`,
-    s.gotchas && `Gotchas: ${s.gotchas}`,
-  ]
-    .filter(Boolean)
-    .join('\n')
-    .slice(0, MAX_SKILL_CHARS);
-}
+const skillText = skillEmbeddingText;
 
 export interface SaveSkillInput {
   agentId: string;

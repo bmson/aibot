@@ -4,6 +4,7 @@ import {
 } from '@assistant/application/workspace-skills';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import { createInstallationStore, FirestoreSkillMutationRepository } from '@assistant/firestore';
+import { writeFirestoreMobileSkill } from '@/lib/mobile-skill-write';
 import { getApplication } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -55,15 +56,21 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-    return mobileJson(
-      { error: 'Skill editing is unavailable in Firestore mode.' },
-      { status: 503 },
-    );
   const { id } = await params;
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid skill id' }, { status: 400 });
   const input = skillInput(await request.json().catch(() => null));
   if ('error' in input) return mobileJson({ error: input.error }, { status: 400 });
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    try {
+      await writeFirestoreMobileSkill(input, id);
+      return mobileJson({ ok: true });
+    } catch (error) {
+      return mobileJson(
+        { error: error instanceof Error ? error.message : 'Skill could not be updated.' },
+        { status: 409 },
+      );
+    }
+  }
   const result = await getApplication().editSkill(id, input);
   return result.error
     ? mobileJson({ error: result.error }, { status: 409 })
