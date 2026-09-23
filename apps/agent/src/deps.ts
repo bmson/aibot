@@ -21,6 +21,7 @@ import { createDb, createPostgresExecutionPersistence, type Db } from '@assistan
 import {
   createFirestoreExecutionPersistence,
   createInstallationStore,
+  FirestoreGoalProgressRepository,
   FirestoreOwnerNoticeRepository,
   FirestoreReminderRepository,
   FirestoreScheduleRepository,
@@ -49,6 +50,7 @@ import {
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
 import {
   registerBuiltinTools,
+  registerPortableGoalProgressTool,
   registerPortableMemoryTools,
   registerPortableTaskTools,
 } from '@assistant/tools/builtin';
@@ -352,25 +354,28 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     config.FILES_DRIVER === 'gcs'
       ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, workspacePrefix)
       : new LocalWorkspaceStore(workspaceRoot);
-  // Memory save/recall and future-self scheduling use portable repositories.
+  // Memory, future-self scheduling, and goal progress use portable repositories.
   // Other built-ins still depend on SQL and remain unavailable in this profile.
-  const registry = registerPortableTaskTools(
-    registerPortableMemoryTools(new ToolRegistry(), {
-      memory: persistence.memory,
-      embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
-        router.embed(texts),
-      ),
-      supersede: (input) =>
-        supersedeContradictedFacts(
-          {
-            memory: persistence.memorySupersede,
-            router,
-            onRetired: () => compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
-          },
-          input,
+  const registry = registerPortableGoalProgressTool(
+    registerPortableTaskTools(
+      registerPortableMemoryTools(new ToolRegistry(), {
+        memory: persistence.memory,
+        embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
+          router.embed(texts),
         ),
-    }),
-    { tasks: persistence.tasks },
+        supersede: (input) =>
+          supersedeContradictedFacts(
+            {
+              memory: persistence.memorySupersede,
+              router,
+              onRetired: () => compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
+            },
+            input,
+          ),
+      }),
+      { tasks: persistence.tasks },
+    ),
+    new FirestoreGoalProgressRepository(store, config.FIRESTORE_AGENT_ID),
   );
   const modules = installModules(composition.modules, {
     config,
