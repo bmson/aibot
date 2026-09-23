@@ -130,6 +130,9 @@ function fakeRunner(
       if (command === 'terraform' && args[0] === 'version') {
         return { ok: true, stdout: '{"terraform_version":"1.14.5"}', stderr: '' };
       }
+      if (command === 'gcloud' && args[0] === 'auth' && args[1] === 'print-access-token') {
+        return { ok: true, stdout: 'test-access-token', stderr: '' };
+      }
       if (command === 'gcloud' && args[0] === 'projects') {
         return {
           ok: true,
@@ -519,7 +522,49 @@ describe('consumer installation', () => {
       images: runtimeImages,
       config: { ...runtimeConfig, mobileApiTokenVersion: 4 },
     };
-    const result = await provisionConsumerInstallation({ runner }, { ...options, runtime });
+    const beforeIamGate = logs.length;
+    await expect(
+      provisionConsumerInstallation(
+        {
+          runner,
+          fetcher: async () =>
+            new Response(JSON.stringify({ permissions: [] }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+        },
+        { ...options, runtime },
+      ),
+    ).rejects.toThrow(
+      'Cloud Run deployer lacks iam.serviceAccounts.actAs on consumer-install-runtime@customer-project.iam.gserviceaccount.com; grant roles/iam.serviceAccountUser on this service account, then retry',
+    );
+    expect(
+      logs
+        .slice(beforeIamGate)
+        .some((entry) => entry.includes('-target=google_service_account.web')),
+    ).toBe(true);
+    expect(
+      logs
+        .slice(beforeIamGate)
+        .some(
+          (entry) =>
+            entry.includes('apply') &&
+            entry.includes('web_image_digest=') &&
+            !entry.includes('-target=google_service_account.web'),
+        ),
+    ).toBe(false);
+    const iamChecks: string[] = [];
+    const fetcher: typeof fetch = async (input, init) => {
+      iamChecks.push(`${String(input)} ${new Headers(init?.headers).get('authorization')}`);
+      return new Response(JSON.stringify({ permissions: ['iam.serviceAccounts.actAs'] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const result = await provisionConsumerInstallation(
+      { runner, fetcher },
+      { ...options, runtime },
+    );
     expect(result.manifest.stage.current).toBe('initialized');
     expect(result.runtimeReady).toBe(false);
     expect(result.pending).toEqual(['ready']);
@@ -531,7 +576,27 @@ describe('consumer installation', () => {
     expect(logs.some((entry) => entry.includes('mobile_api_token_version=4'))).toBe(true);
     expect(
       logs.filter((entry) => entry.includes('terraform') && entry.includes('apply')).length,
-    ).toBe(2);
+    ).toBe(4);
+    expect(iamChecks).toEqual([
+      expect.stringContaining(
+        'consumer-install-runtime%40customer-project.iam.gserviceaccount.com:testIamPermissions Bearer test-access-token',
+      ),
+      expect.stringContaining(
+        'consumer-install-web%40customer-project.iam.gserviceaccount.com:testIamPermissions Bearer test-access-token',
+      ),
+    ]);
+    const targetApplyIndex = logs.findIndex((entry) =>
+      entry.includes('-target=google_service_account.web'),
+    );
+    expect(targetApplyIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      logs.findIndex(
+        (entry, index) =>
+          index > targetApplyIndex &&
+          entry.includes('web_image_digest=') &&
+          entry.includes('apply'),
+      ),
+    ).toBeGreaterThan(targetApplyIndex);
     const callback = 'https://assistant.example.com/api/auth/callback/google';
     secretEnabled = false;
     await expect(
@@ -643,7 +708,7 @@ describe('consumer installation', () => {
     expect(resumed.manifest.stage.current).toBe('initialized');
     expect(
       logs.filter((entry) => entry.includes('terraform') && entry.includes('apply')).length,
-    ).toBe(3);
+    ).toBe(5);
     await expect(
       provisionConsumerInstallation(
         { runner },
@@ -755,7 +820,14 @@ describe('consumer installation', () => {
     await provisionConsumerInstallation({ runner }, options);
     await expect(
       provisionConsumerInstallation(
-        { runner },
+        {
+          runner,
+          fetcher: async () =>
+            new Response(JSON.stringify({ permissions: ['iam.serviceAccounts.actAs'] }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+        },
         { ...options, runtime: { images: runtimeImages, config: runtimeConfig } },
       ),
     ).rejects.toThrow('not serving the expected ready digest');
