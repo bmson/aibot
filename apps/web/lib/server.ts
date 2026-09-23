@@ -3,6 +3,8 @@
 import path from 'node:path';
 import {
   addAssistantSkill,
+  addOwnerKnowledgeGraphFact,
+  addOwnerKnowledgeGraphFactFromRepository,
   applyImprovementProposal,
   archiveChatConversation,
   archiveInactiveChats,
@@ -103,6 +105,7 @@ import {
   FirestoreApplicationChatPersistence,
   FirestoreGoalMutationRepository,
   FirestoreMcpConnectionMutationRepository,
+  FirestoreOwnerKnowledgeGraphFactRepository,
   FirestoreShellStatusRepository,
   FirestoreSkillMutationRepository,
 } from '@assistant/firestore';
@@ -504,6 +507,15 @@ function createFirestoreChatApplication() {
     config.LLM_AUDIT_CAPTURE,
     createConfiguredModelProvider(config),
   );
+  const ownerGraphFacts = new FirestoreOwnerKnowledgeGraphFactRepository(
+    store,
+    embeddingSpace,
+    config.FIRESTORE_AGENT_ID,
+  );
+  const ownerGraphEmbedding = {
+    embed: (texts: string[]) =>
+      router.embed(texts, { expectedModelId: embeddingModelId(embeddingSpace) }),
+  };
   const chatReads = { chat, generatedCards: persistence.generatedCards };
   const settings = createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID);
   const skillMutations = new FirestoreSkillMutationRepository(store, embeddingSpace);
@@ -539,6 +551,17 @@ function createFirestoreChatApplication() {
     return embedSkillText(skillEmbeddingText(input));
   };
   return {
+    addOwnerKnowledgeGraphFact: (input: {
+      subjectLabel: string;
+      subjectKind: string;
+      subjectId?: string;
+      subjectContactId?: string;
+      predicate: string;
+      objectLabel: string;
+      objectKind: string;
+      objectId?: string;
+      note: string;
+    }) => addOwnerKnowledgeGraphFactFromRepository(ownerGraphFacts, ownerGraphEmbedding, input),
     embedSkillText,
     getWorkspaceSettings: () => getSettingsOverview(settings),
     addSkill: async (input: {
@@ -637,6 +660,23 @@ export function getChatApplication() {
   return loadConfig().PERSISTENCE_DRIVER === 'firestore'
     ? getFirestoreChatApplication()
     : getApplication();
+}
+
+/** Owner graph writes use the selected driver's atomic persistence boundary. */
+export function addOwnerKnowledgeGraphFactForCurrentPersistence(input: {
+  subjectLabel: string;
+  subjectKind: string;
+  subjectId?: string;
+  subjectContactId?: string;
+  predicate: string;
+  objectLabel: string;
+  objectKind: string;
+  objectId?: string;
+  note: string;
+}) {
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
+    return getFirestoreChatApplication().addOwnerKnowledgeGraphFact(input);
+  return addOwnerKnowledgeGraphFact(getDb(), getRouter(), input);
 }
 
 /** The mobile workspace settings section, backed by the configured owner in either driver. */

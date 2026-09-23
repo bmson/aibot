@@ -1,20 +1,33 @@
 import { randomUUID } from 'node:crypto';
 import { GRAPH_EXTRACTION_VERSION } from '@assistant/application/knowledge-graph';
 import { resetConfigForTest } from '@assistant/config';
-import { createInstallationStore } from '@assistant/firestore';
+import {
+  createInstallationStore,
+  embeddingSpaceKey,
+  FirestoreOwnerKnowledgeGraphFactRepository,
+} from '@assistant/firestore';
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ mobile: vi.fn() }));
+const routerFixture = vi.hoisted(() => ({ embed: vi.fn() }));
 vi.mock('@/mobile-auth', () => ({
   isMobileAuthed: auth.mobile,
   mobileJson: (body: unknown, init?: ResponseInit) => Response.json(body, init),
   mobileUnauthorized: () => Response.json({ error: 'unauthorized' }, { status: 401 }),
 }));
+vi.mock('@assistant/core/model-router', () => ({
+  ModelRouter: class {
+    embed(...args: unknown[]) {
+      return routerFixture.embed(...args);
+    }
+  },
+  createConfiguredModelProvider: vi.fn(),
+}));
 
 import { proxy } from '@/proxy';
 import { GET as detail } from './[id]/route';
-import { GET as list } from './route';
+import { POST as create, GET as list } from './route';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
 const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
@@ -84,7 +97,7 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
     vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
     vi.stubEnv(
       'FIRESTORE_EMBEDDING_SPACE',
-      '{"provider":"vertex","model":"example-embedding","dimensions":768,"revision":"fixture-v1"}',
+      '{"provider":"vertex","model":"example-embedding","dimensions":1536,"revision":"fixture-v1"}',
     );
     vi.stubEnv('LLM_PROVIDER', 'vertex');
     vi.stubEnv('ASSISTANT_MODULES', 'minimal');
@@ -93,6 +106,9 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
     vi.stubEnv('LOCATION_PING_SECRET', '');
     resetConfigForTest();
     auth.mobile.mockResolvedValue(true);
+    routerFixture.embed.mockImplementation(async (texts: string[]) =>
+      texts.map(() => Array.from({ length: 1536 }, (_, index) => (index === 0 ? 1 : 0))),
+    );
     await Promise.all([
       store.doc('agents', agentId).set({ id: agentId }),
       store.doc('knowledgeGraphEntities', subjectId).set(entity(subjectId, agentId, 'Anna')),
@@ -243,14 +259,152 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
     }
   });
 
-  it('allows only exact GET routes through the Firestore proxy', () => {
+  it('allows exact knowledge browse/create proxy routes and blocks unsupported paths', () => {
     const status = (path: string, method = 'GET') =>
       proxy(new NextRequest(`http://localhost${path}`, { method })).status;
     expect(status('/api/mobile/v1/knowledge')).toBe(200);
     expect(status(`/api/mobile/v1/knowledge/${subjectId}`)).toBe(200);
-    expect(status('/api/mobile/v1/knowledge', 'POST')).toBe(503);
+    expect(status('/api/mobile/v1/knowledge', 'POST')).toBe(200);
     expect(status(`/api/mobile/v1/knowledge/${subjectId}`, 'PATCH')).toBe(503);
     expect(status('/api/mobile/v1/knowledge/graph')).toBe(503);
     expect(status('/api/mobile/v1/knowledge/bad')).toBe(503);
+  });
+
+  it('atomically stores an owner-authored source, graph relation, and normalized entities', async () => {
+    const repo = new FirestoreOwnerKnowledgeGraphFactRepository(
+      store,
+      { provider: 'vertex', model: 'example-embedding', dimensions: 1536, revision: 'fixture-v1' },
+      agentId,
+    );
+    const prepared = {
+      agentId,
+      content: 'Anna parent of Baldvin. Owner note: family',
+      contentHash: `owner-fact-${randomUUID()}`,
+      embedding: Array.from({ length: 1536 }, (_, index) => (index === 0 ? 1 : 0)),
+      predicate: 'parent_of',
+      subjectContactId: null,
+      subject: {
+        label: 'Anna',
+        kind: 'person' as const,
+        canonicalKey: 'person:anna',
+        contactId: null,
+        authoritativeLabel: false,
+      },
+      object: {
+        label: 'Baldvin',
+        kind: 'person' as const,
+        canonicalKey: 'person:baldvin',
+        contactId: null,
+        authoritativeLabel: false,
+      },
+      createdAt: now,
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+    };
+    const result = await repo.createAtomic(prepared);
+    expect(result.error).toBeUndefined();
+    if (!result.memoryId || !result.relationId) throw new Error('expected committed graph fact');
+    const [savedMemory, savedSource, savedRelation, entities] = await Promise.all([
+      store.doc('memories', result.memoryId).get(),
+      store.doc('knowledgeGraphSources', result.memoryId).get(),
+      store.doc('knowledgeGraphRelations', result.relationId).get(),
+      store.collection('knowledgeGraphEntities').where('agentId', '==', agentId).get(),
+    ]);
+    expect(savedMemory.data()).toMatchObject({
+      agentId,
+      content: prepared.content,
+      contentHash: prepared.contentHash,
+      originTrust: 'owner',
+      ownerConfirmed: true,
+      category: 'knowledge',
+      embeddingSpace: embeddingSpaceKey({
+        provider: 'vertex',
+        model: 'example-embedding',
+        dimensions: 1536,
+        revision: 'fixture-v1',
+      }),
+    });
+    expect(savedSource.data()).toMatchObject({
+      memoryId: result.memoryId,
+      agentId,
+      contentHash: prepared.contentHash,
+      status: 'ready',
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+    });
+    expect(savedRelation.data()).toMatchObject({
+      agentId,
+      sourceMemoryId: result.memoryId,
+      predicate: 'parent_of',
+      reviewStatus: 'confirmed',
+      evidenceQuote: prepared.content,
+    });
+    expect(entities.docs.map((doc) => doc.get('canonicalKey'))).toContain('person:anna');
+    expect(entities.docs.map((doc) => doc.get('canonicalKey'))).toContain('person:baldvin');
+    expect(await repo.createAtomic(prepared)).toEqual({
+      error: 'That source fact is already in the knowledge library.',
+    });
+  });
+
+  it('routes authenticated mobile fact creation through the Firestore owner boundary', async () => {
+    const response = await create(
+      new Request('http://localhost/api/mobile/v1/knowledge', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          subjectLabel: 'Anna',
+          subjectKind: 'person',
+          predicate: 'parent of',
+          objectLabel: 'Baldvin',
+          objectKind: 'person',
+          note: 'Family connection confirmed by the owner',
+        }),
+      }),
+    );
+    expect(response.status).toBe(201);
+    const result = await response.json();
+    expect(result.memoryId).toBeTruthy();
+    expect(result.relationId).toBeTruthy();
+    expect(auth.mobile).toHaveBeenCalled();
+  });
+
+  it('blocks tombstoned hashes and active privacy erasure inside the write transaction', async () => {
+    const repo = new FirestoreOwnerKnowledgeGraphFactRepository(
+      store,
+      { provider: 'vertex', model: 'example-embedding', dimensions: 1536, revision: 'fixture-v1' },
+      agentId,
+    );
+    const base = {
+      agentId,
+      content: 'Anna parent of Baldvin. Owner note: family',
+      contentHash: `owner-fact-${randomUUID()}`,
+      embedding: Array.from({ length: 1536 }, (_, index) => (index === 0 ? 1 : 0)),
+      predicate: 'parent_of',
+      subjectContactId: null,
+      subject: {
+        label: 'Anna',
+        kind: 'person' as const,
+        canonicalKey: 'person:anna',
+        contactId: null,
+        authoritativeLabel: false,
+      },
+      object: {
+        label: 'Baldvin',
+        kind: 'person' as const,
+        canonicalKey: 'person:baldvin',
+        contactId: null,
+        authoritativeLabel: false,
+      },
+      createdAt: now,
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+    };
+    await store.doc('memoryTombstones', base.contentHash).set({ contentHash: base.contentHash });
+    expect(await repo.createAtomic(base)).toEqual({
+      error: 'This fact was previously removed, so it was not added again.',
+    });
+    await store.doc('memoryTombstones', base.contentHash).delete();
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'running' });
+    await expect(
+      repo.createAtomic({ ...base, contentHash: `${base.contentHash}-erasure` }),
+    ).rejects.toThrow('Privacy erasure is in progress');
+    await store.doc('privacyErasureJobs', agentId).delete();
   });
 });

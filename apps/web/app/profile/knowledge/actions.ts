@@ -1,7 +1,6 @@
 'use server';
 
 import {
-  addOwnerKnowledgeGraphFact,
   cleanKnowledgeProjectionOrphans,
   correctKnowledgeGraphRelation,
   getKnowledgeGraphNeighborhood,
@@ -21,7 +20,13 @@ import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import { FirestoreKnowledgeGraphRelationMutationRepository } from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getApplication, getDb, getFirestoreInstallationStore, getRouter } from '@/lib/server';
+import {
+  addOwnerKnowledgeGraphFactForCurrentPersistence,
+  getApplication,
+  getDb,
+  getFirestoreInstallationStore,
+  getRouter,
+} from '@/lib/server';
 
 /**
  * Saving a connection has to embed its source note first, so an unreachable
@@ -180,7 +185,7 @@ export async function addKnowledgeRelation(
   const subjectId = String(formData.get('subjectId') ?? '');
   const objectId = String(formData.get('objectId') ?? '');
   const result = await reportable(() =>
-    addOwnerKnowledgeGraphFact(getDb(), getRouter(), {
+    addOwnerKnowledgeGraphFactForCurrentPersistence({
       subjectLabel: String(formData.get('subjectLabel') ?? ''),
       subjectKind: String(formData.get('subjectKind') ?? ''),
       subjectId: subjectId || undefined,

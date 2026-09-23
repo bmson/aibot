@@ -3,6 +3,7 @@ import { getAgent } from '@assistant/core/chat';
 import {
   countRelativeDateSources,
   createOwnerKnowledgeGraphFact,
+  createOwnerKnowledgeGraphFactWithRepository,
   GRAPH_ENTITY_KINDS,
   GRAPH_EXTRACTION_VERSION,
   type GraphEntityKind,
@@ -12,6 +13,7 @@ import {
   retryQuarantinedKnowledgeGraphSources as retryQuarantinedSources,
   retypeGraphEntity,
 } from '@assistant/core/memory/knowledge-graph';
+import type { OwnerKnowledgeGraphFactRepository } from '@assistant/persistence';
 
 export { GRAPH_EXTRACTION_VERSION } from '@assistant/core/memory/knowledge-graph';
 
@@ -1230,6 +1232,47 @@ export async function addOwnerKnowledgeGraphFact(
   }
   return createOwnerKnowledgeGraphFact(
     { db, router },
+    {
+      subject: {
+        label: input.subjectLabel,
+        kind: isKind(input.subjectKind) ? input.subjectKind : 'topic',
+        id: input.subjectId,
+        contactId: input.subjectContactId,
+      },
+      predicate: input.predicate,
+      object: {
+        label: input.objectLabel,
+        kind: isKind(input.objectKind) ? input.objectKind : 'topic',
+        id: input.objectId,
+      },
+      note: input.note,
+    },
+  );
+}
+
+/** Same owner-fact use case for non-SQL stores; persistence owns only reads and atomic writes. */
+export async function addOwnerKnowledgeGraphFactFromRepository(
+  repository: OwnerKnowledgeGraphFactRepository,
+  router: EmbeddingPort,
+  input: {
+    subjectLabel: string;
+    subjectKind: string;
+    subjectId?: string;
+    subjectContactId?: string;
+    predicate: string;
+    objectLabel: string;
+    objectKind: string;
+    objectId?: string;
+    note: string;
+  },
+): Promise<{ error?: string; relationId?: string; memoryId?: string }> {
+  const isKind = (value: string): value is GraphEntityKind =>
+    (GRAPH_ENTITY_KINDS as readonly string[]).includes(value);
+  if (!input.subjectId && !isKind(input.subjectKind))
+    return { error: 'Choose a valid source type.' };
+  if (!input.objectId && !isKind(input.objectKind)) return { error: 'Choose a valid target type.' };
+  return createOwnerKnowledgeGraphFactWithRepository(
+    { repository, router },
     {
       subject: {
         label: input.subjectLabel,

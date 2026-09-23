@@ -48,6 +48,7 @@ export {
 } from './outbox.js';
 export { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 export { FirestoreOwnerContextRepository } from './owner-context.js';
+export { FirestoreOwnerKnowledgeGraphFactRepository } from './owner-knowledge-graph-fact.js';
 export { FirestoreOwnerNoticeRepository } from './owner-notices.js';
 export {
   getFirestoreMobilePeopleDirectory,
