@@ -37,6 +37,11 @@ export { FirestoreProfileVoiceOverviewRepository } from './profile-overview.js';
 export { FirestoreProfilePeopleReadRepository } from './profile-people-read.js';
 export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 export { FirestoreReminderRepository } from './reminders.js';
+export {
+  checkFirestoreRuntimeData,
+  type RuntimeDataIssue,
+  type RuntimeDataPreflight,
+} from './runtime-data-preflight.js';
 export { FirestoreScheduleRepository } from './schedules.js';
 export { FirestoreSettingsRepository } from './settings.js';
 export { FirestoreShellStatusRepository } from './shell-status.js';
