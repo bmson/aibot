@@ -52,8 +52,9 @@ function ranked<K extends string>(values: Map<K, { micros: number; count: number
 }
 
 /** Owner-scoped presentation read for the mobile workspace cost section. */
-export async function getFirestoreMobileCosts(store: InstallationStore) {
-  const owner = await new FirestoreSettingsRepository(store).getOwner();
+export async function getFirestoreMobileCosts(store: InstallationStore, agentId: string) {
+  if (!agentId) throw new Error('Cost dashboard requires a configured agent');
+  const owner = await new FirestoreSettingsRepository(store, agentId).getOwner();
   if (!owner) throw new Error('Cost dashboard owner is missing');
   const fence = await readPrivacyErasureFence(store, owner.id);
   const since = monthStart(store.now());

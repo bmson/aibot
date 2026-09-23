@@ -68,7 +68,7 @@ describe.skipIf(!localEmulator)('Firestore mobile chat routes with PostgreSQL of
       proxy(new NextRequest(`http://localhost${path}`, { method })).status;
     const id = randomUUID();
     const messageId = randomUUID();
-    expect(status('/api/mobile/v1/bootstrap')).toBe(503);
+    expect(status('/api/mobile/v1/bootstrap')).toBe(200);
     expect(status('/api/mobile/v1/chats')).toBe(503);
     expect(status('/api/mobile/v1/chats', 'POST')).toBe(200);
     expect(status(`/api/mobile/v1/chats/${id}`)).toBe(200);
@@ -77,7 +77,8 @@ describe.skipIf(!localEmulator)('Firestore mobile chat routes with PostgreSQL of
     expect(status(`/api/mobile/v1/chats/${id}/messages/${messageId}`, 'POST')).toBe(200);
     expect(status(`/api/mobile/v1/chats/${id}/messages/${messageId}`)).toBe(503);
     expect(status('/api/mobile/v1/chats/not-a-uuid', 'POST')).toBe(503);
-    expect(status('/api/mobile/v1/workspace')).toBe(503);
+    expect(status('/api/mobile/v1/workspace')).toBe(200);
+    expect(status('/api/mobile/v1/workspace', 'POST')).toBe(503);
   });
 
   it('creates, reads, changes, archives, restores, and hides owned chat messages without SQL', async () => {

@@ -17,7 +17,16 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore mobile cost das
         id: 'owner',
         name: 'Owner',
         timezone: 'America/Los_Angeles',
+        locale: 'en-US',
+        signature: '',
         createdAt: new Date('2026-01-01T00:00:00Z'),
+        updatedAt: new Date('2026-01-01T00:00:00Z'),
+      }),
+      store.doc('agents', 'foreign').set({
+        id: 'foreign',
+        name: 'Foreign',
+        timezone: 'Europe/London',
+        createdAt: new Date('2025-01-01T00:00:00Z'),
       }),
       store
         .doc('tasks', 'task-a')
@@ -74,7 +83,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore mobile cost das
     await batchOne.commit();
     await batchTwo.commit();
 
-    const dashboard = await getFirestoreMobileCosts(store);
+    const dashboard = await getFirestoreMobileCosts(store, 'owner');
     expect(dashboard.timezone).toBe('America/Los_Angeles');
     expect(dashboard.totals).toMatchObject({ monthlySpentUsd: 0.0502, heldUsd: 0.02 });
     expect(dashboard.bySource).toEqual([
@@ -95,6 +104,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore mobile cost das
 
   it('refuses a dashboard read while owner privacy erasure is active', async () => {
     await store.doc('privacyErasureJobs', 'owner').set({ agentId: 'owner', status: 'active' });
-    await expect(getFirestoreMobileCosts(store)).rejects.toThrow('Privacy erasure is in progress');
+    await expect(getFirestoreMobileCosts(store, 'owner')).rejects.toThrow(
+      'Privacy erasure is in progress',
+    );
+    await expect(getFirestoreMobileCosts(store, 'missing')).rejects.toThrow(
+      'Cost dashboard owner is missing',
+    );
   });
 });
