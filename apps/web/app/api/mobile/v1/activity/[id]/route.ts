@@ -2,11 +2,13 @@ import {
   archiveActivity,
   archiveActivityWithRepository,
   cancelActivity,
+  cancelActivityWithRepository,
   raiseTaskBudget,
   raiseTaskBudgetWithRepository,
   restoreActivity,
   restoreActivityWithRepository,
   retryActivity,
+  retryActivityWithRepository,
   revokeTaskAutonomy,
   revokeTaskAutonomyWithRepository,
 } from '@assistant/application/tasks';
@@ -22,7 +24,7 @@ export const dynamic = 'force-dynamic';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Archive and restore use the same non-destructive activity commands as the web UI. */
+/** Apply owner-scoped task activity commands through the configured persistence driver. */
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -40,6 +42,8 @@ export async function POST(
       if (
         body?.action !== 'archive' &&
         body?.action !== 'restore' &&
+        body?.action !== 'retry' &&
+        body?.action !== 'cancel' &&
         body?.action !== 'revoke-autonomy' &&
         body?.action !== 'raise-budget'
       )
@@ -60,6 +64,10 @@ export async function POST(
           await archiveActivityWithRepository(repository, config.FIRESTORE_AGENT_ID, id);
         else if (body.action === 'restore')
           await restoreActivityWithRepository(repository, config.FIRESTORE_AGENT_ID, id);
+        else if (body.action === 'retry')
+          await retryActivityWithRepository(repository, config.FIRESTORE_AGENT_ID, id);
+        else if (body.action === 'cancel')
+          await cancelActivityWithRepository(repository, config.FIRESTORE_AGENT_ID, id);
         else if (body.action === 'revoke-autonomy')
           await revokeTaskAutonomyWithRepository(repository, config.FIRESTORE_AGENT_ID, id);
         else
