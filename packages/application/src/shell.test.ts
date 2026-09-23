@@ -1,10 +1,11 @@
 import type {
   ApplicationChatPersistence,
+  ShellPresenceRepository,
   ShellStatusProjection,
   ShellStatusRepository,
 } from '@assistant/persistence';
 import { describe, expect, it, vi } from 'vitest';
-import { getPrimaryConversationId, getShellStatus } from './shell.js';
+import { getPrimaryConversationId, getShellPresence, getShellStatus } from './shell.js';
 
 describe('application shell chat bootstrap', () => {
   it('uses the supplied chat persistence without opening PostgreSQL', async () => {
@@ -36,6 +37,17 @@ describe('application shell chat bootstrap', () => {
     };
 
     await expect(getShellStatus(repository, 'agent-1')).resolves.toEqual(projection);
+    expect(repository.load).toHaveBeenCalledOnce();
+    expect(repository.load).toHaveBeenCalledWith('agent-1');
+  });
+
+  it('loads narrow shell presence from the supplied repository without opening PostgreSQL', async () => {
+    const repository: ShellPresenceRepository = {
+      kind: 'shell-presence-repository',
+      load: vi.fn().mockResolvedValue('attention'),
+    };
+
+    await expect(getShellPresence(repository, 'agent-1')).resolves.toBe('attention');
     expect(repository.load).toHaveBeenCalledOnce();
     expect(repository.load).toHaveBeenCalledWith('agent-1');
   });
