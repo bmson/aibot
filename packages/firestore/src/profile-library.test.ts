@@ -9,6 +9,112 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
     const stores: ReturnType<typeof emulatorStore>[] = [];
     afterEach(async () => Promise.all(stores.splice(0).map(disposeStore)));
 
+    it('shares the memory scan and loads graph metadata only for the visible page at scale', async () => {
+      const store = emulatorStore();
+      stores.push(store);
+      const agentId = 'profile-library-scale-owner';
+      const count = 900;
+      const batchSize = 450;
+      const createdAt = (index: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, index));
+      for (let start = 0; start < count; start += batchSize) {
+        const batch = store.db.batch();
+        for (let index = start; index < Math.min(count, start + batchSize); index += 1) {
+          const id = `scale-memory-${String(index).padStart(4, '0')}`;
+          batch.set(store.doc('memories', id), {
+            id,
+            agentId,
+            category: 'knowledge',
+            content: `Scale fact ${index}`,
+            contentHash: `scale-hash-${index}`,
+            domain: 'general',
+            source: index % 2 === 0 ? 'scale-a' : 'scale-b',
+            createdAt: createdAt(index),
+            expiresAt: null,
+            lastConsolidatedAt: null,
+            subjectContactId: null,
+            quarantined: false,
+            ownerConfirmed: true,
+            pinned: false,
+            importance: 3,
+            originTrust: 'owner',
+            embedding: index === count - 1 ? [0.1, 0.2] : null,
+          });
+        }
+        await batch.commit();
+      }
+      const pageMemoryId = `scale-memory-${String(count - 1).padStart(4, '0')}`;
+      await Promise.all([
+        store.doc('knowledgeGraphSources', pageMemoryId).set({
+          memoryId: pageMemoryId,
+          status: 'ready',
+          contentHash: `scale-hash-${count - 1}`,
+          extractionVersion: 99,
+        }),
+        store.doc('knowledgeGraphRelations', 'scale-page-relation').set({
+          id: 'scale-page-relation',
+          agentId,
+          sourceMemoryId: pageMemoryId,
+          subjectEntityId: 'scale-subject',
+          objectEntityId: 'scale-object',
+          predicate: 'knows',
+          reviewStatus: 'pending',
+          evidenceQuote: 'Scale fact 899',
+        }),
+        store.doc('knowledgeGraphRelations', 'scale-off-page-relation').set({
+          id: 'scale-off-page-relation',
+          agentId,
+          sourceMemoryId: 'memory-not-on-page',
+          subjectEntityId: 'scale-subject',
+          objectEntityId: 'scale-object',
+          predicate: 'knows',
+          reviewStatus: 'pending',
+          evidenceQuote: 'off-page fact',
+        }),
+      ]);
+
+      const repository = new FirestoreProfileLibraryRepository(store);
+      const internals = repository as unknown as {
+        readMemories: (id: string) => Promise<unknown>;
+      };
+      const physicalScans = vi.spyOn(internals, 'readMemories');
+      const input = {
+        state: 'in-use' as const,
+        filter: 'all' as const,
+        query: '',
+        page: 1,
+        pageSize: 60,
+        now: new Date(Date.UTC(2027, 0, 1)),
+        extractionVersion: 2,
+      };
+
+      const [page, filters, connected, unconnected] = await Promise.all([
+        repository.list(agentId, input),
+        repository.listFilters(agentId),
+        repository.list(agentId, { ...input, connectivity: 'connected' }),
+        repository.list(agentId, { ...input, connectivity: 'unconnected' }),
+      ]);
+      expect(physicalScans).toHaveBeenCalledTimes(1);
+      expect(page).toMatchObject({ total: count, page: 1, totalPages: 15 });
+      expect(page.rows).toHaveLength(60);
+      expect(page.rows[0]).toMatchObject({
+        memory: { id: pageMemoryId },
+        connectionCount: 1,
+        source: { status: 'ready' },
+      });
+      expect(page.rows.map((row) => row.memory.id)).toEqual(
+        Array.from(
+          { length: 60 },
+          (_, index) => `scale-memory-${String(count - 1 - index).padStart(4, '0')}`,
+        ),
+      );
+      expect(connected).toMatchObject({ total: 1, rows: [{ memory: { id: pageMemoryId } }] });
+      expect(unconnected).toMatchObject({ total: count - 1 });
+      expect(unconnected.rows[0]?.memory.id).toBe(
+        `scale-memory-${String(count - 2).padStart(4, '0')}`,
+      );
+      expect(filters).toEqual({ subjects: [], sources: ['scale-a', 'scale-b'] });
+    });
+
     it('blocks lists and filters during active or malformed erasure, then allows a completed job', async () => {
       const store = emulatorStore();
       stores.push(store);

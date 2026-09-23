@@ -36,14 +36,56 @@ async function getRecords<T>(
 ): Promise<Map<string, T>> {
   const rows = new Map<string, T>();
   const unique = [...new Set(ids)];
+  const batches: string[][] = [];
   for (let offset = 0; offset < unique.length; offset += 300) {
-    const batch = unique.slice(offset, offset + 300);
-    const docs = await store.db.getAll(...batch.map((id) => store.doc(collection, id)));
-    for (const doc of docs) {
-      if (!doc.exists) continue;
-      const row = decodeRecord<T>(doc.data());
-      const id = identity(row);
-      if (documentKey(id) === doc.id) rows.set(id, row);
+    batches.push(unique.slice(offset, offset + 300));
+  }
+  // Keep Firestore RPCs parallel without flooding a large installation with
+  // hundreds of simultaneous getAll calls.
+  let nextBatch = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(8, batches.length) }, async () => {
+      for (;;) {
+        const index = nextBatch++;
+        const batch = batches[index];
+        if (!batch) return;
+        const docs = await store.db.getAll(...batch.map((id) => store.doc(collection, id)));
+        for (const doc of docs) {
+          if (!doc.exists) continue;
+          const row = decodeRecord<T>(doc.data());
+          const id = identity(row);
+          if (documentKey(id) === doc.id) rows.set(id, row);
+        }
+      }
+    }),
+  );
+  return rows;
+}
+
+async function relationsForMemories(
+  store: InstallationStore,
+  agentId: string,
+  memoryIds: readonly string[],
+): Promise<Records['knowledgeGraphRelations'][]> {
+  const ids = [...new Set(memoryIds)];
+  const batches: string[][] = [];
+  for (let offset = 0; offset < ids.length; offset += 30) {
+    batches.push(ids.slice(offset, offset + 30));
+  }
+  const pages = await Promise.all(
+    batches.map((batch) =>
+      store
+        .collection('knowledgeGraphRelations')
+        .where('agentId', '==', agentId)
+        .where('sourceMemoryId', 'in', batch)
+        .get(),
+    ),
+  );
+  const rows: Records['knowledgeGraphRelations'][] = [];
+  for (const page of pages) {
+    for (const doc of page.docs) {
+      const row = decodeRecord<Records['knowledgeGraphRelations']>(doc.data());
+      if (row.agentId === agentId && documentKey(row.id) === doc.id) rows.push(row);
     }
   }
   return rows;
@@ -94,9 +136,21 @@ function matches(row: MemoryRow, input: ProfileLibraryInput) {
 
 export class FirestoreProfileLibraryRepository implements ProfileLibraryRepository {
   readonly kind = 'profile-library-repository' as const;
+  private readonly memoryReads = new Map<string, Promise<MemoryRow[]>>();
+
   constructor(readonly store: InstallationStore) {}
 
-  private async memories(agentId: string): Promise<MemoryRow[]> {
+  private memories(agentId: string): Promise<MemoryRow[]> {
+    const existing = this.memoryReads.get(agentId);
+    if (existing) return existing;
+    const read = this.readMemories(agentId).finally(() => {
+      if (this.memoryReads.get(agentId) === read) this.memoryReads.delete(agentId);
+    });
+    this.memoryReads.set(agentId, read);
+    return read;
+  }
+
+  private async readMemories(agentId: string): Promise<MemoryRow[]> {
     const rows: MemoryRow[] = [];
     let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
     for (;;) {
@@ -163,46 +217,84 @@ export class FirestoreProfileLibraryRepository implements ProfileLibraryReposito
 
   async list(agentId: string, input: ProfileLibraryInput) {
     const fence = await readPrivacyErasureFence(this.store, agentId);
+    const connectivity = input.connectivity ?? 'all';
     let candidates = (await this.memories(agentId)).filter((row) => matches(row, input));
-    const sources = await getRecords<Records['knowledgeGraphSources']>(
-      this.store,
-      'knowledgeGraphSources',
-      candidates.map((row) => row.memory.id),
-      (row) => row.memoryId,
-    );
-    const relations = await allByAgent<Records['knowledgeGraphRelations']>(
-      this.store,
-      'knowledgeGraphRelations',
-      agentId,
-    );
-    const candidatesById = new Map(candidates.map((row) => [row.memory.id, row.memory]));
     const activeCounts = new Map<string, number>();
-    for (const relation of relations) {
-      const memory = candidatesById.get(relation.sourceMemoryId);
-      const source = sources.get(relation.sourceMemoryId);
-      if (
-        memory &&
-        !memory.quarantined &&
-        memory.embedding &&
-        source?.status === 'ready' &&
-        source.contentHash === memory.contentHash &&
-        source.extractionVersion >= input.extractionVersion &&
-        relation.reviewStatus !== 'rejected' &&
-        relation.evidenceQuote != null
-      ) {
-        activeCounts.set(memory.id, (activeCounts.get(memory.id) ?? 0) + 1);
+    let sources: Map<string, Records['knowledgeGraphSources']>;
+    if (connectivity !== 'all') {
+      // Connectivity changes filtering and totals, so all candidate records
+      // are needed. Keep the complete path for those less common filters.
+      sources = await getRecords<Records['knowledgeGraphSources']>(
+        this.store,
+        'knowledgeGraphSources',
+        candidates.map((row) => row.memory.id),
+        (row) => row.memoryId,
+      );
+      const relations = await allByAgent<Records['knowledgeGraphRelations']>(
+        this.store,
+        'knowledgeGraphRelations',
+        agentId,
+      );
+      const candidatesById = new Map(candidates.map((row) => [row.memory.id, row.memory]));
+      for (const relation of relations) {
+        const memory = candidatesById.get(relation.sourceMemoryId);
+        const source = sources.get(relation.sourceMemoryId);
+        if (
+          memory &&
+          !memory.quarantined &&
+          memory.embedding &&
+          source?.status === 'ready' &&
+          source.contentHash === memory.contentHash &&
+          source.extractionVersion >= input.extractionVersion &&
+          relation.reviewStatus !== 'rejected' &&
+          relation.evidenceQuote != null
+        ) {
+          activeCounts.set(memory.id, (activeCounts.get(memory.id) ?? 0) + 1);
+        }
       }
-    }
-    if (input.connectivity === 'connected') {
-      candidates = candidates.filter((row) => (activeCounts.get(row.memory.id) ?? 0) > 0);
-    } else if (input.connectivity === 'unconnected') {
-      candidates = candidates.filter((row) => (activeCounts.get(row.memory.id) ?? 0) === 0);
+      if (connectivity === 'connected') {
+        candidates = candidates.filter((row) => (activeCounts.get(row.memory.id) ?? 0) > 0);
+      } else {
+        candidates = candidates.filter((row) => (activeCounts.get(row.memory.id) ?? 0) === 0);
+      }
     }
     candidates.sort(compareMemory);
     const total = candidates.length;
     const totalPages = Math.max(1, Math.ceil(total / input.pageSize));
     const page = Math.min(Math.max(1, input.page), totalPages);
     const pageRows = candidates.slice((page - 1) * input.pageSize, page * input.pageSize);
+    if (connectivity === 'all') {
+      // The usual library view only needs graph status for the visible page.
+      // Fetching every candidate's source and scanning every graph relation
+      // made a normal page read proportional to the entire graph.
+      sources = await getRecords<Records['knowledgeGraphSources']>(
+        this.store,
+        'knowledgeGraphSources',
+        pageRows.map((row) => row.memory.id),
+        (row) => row.memoryId,
+      );
+      const relations = await relationsForMemories(
+        this.store,
+        agentId,
+        pageRows.map((row) => row.memory.id),
+      );
+      const pageMemories = new Map(pageRows.map((row) => [row.memory.id, row.memory]));
+      for (const relation of relations) {
+        const memory = pageMemories.get(relation.sourceMemoryId);
+        const source = sources.get(relation.sourceMemoryId);
+        if (
+          memory?.embedding &&
+          !memory.quarantined &&
+          source?.status === 'ready' &&
+          source.contentHash === memory.contentHash &&
+          source.extractionVersion >= input.extractionVersion &&
+          relation.reviewStatus !== 'rejected' &&
+          relation.evidenceQuote != null
+        ) {
+          activeCounts.set(memory.id, (activeCounts.get(memory.id) ?? 0) + 1);
+        }
+      }
+    }
     const contacts = await getRecords<Records['contacts']>(
       this.store,
       'contacts',

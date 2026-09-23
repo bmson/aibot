@@ -31,6 +31,7 @@ const child = spawn(
     'apps/agent/src/firestore-reminders.test.ts',
     'apps/web/app/costs/page.test.tsx',
     'apps/web/app/settings/page.test.tsx',
+    'apps/web/app/api/mobile/v1/memory/library/route.test.ts',
     'scripts/firestore-watch-smoke.test.ts',
     'scripts/profile-library-parity.test.ts',
     'scripts/profile-people-read.test.ts',
