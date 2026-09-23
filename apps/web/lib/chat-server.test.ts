@@ -1,10 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import { createInstallationStore, FirestoreTaskRepository } from '@assistant/firestore';
+import { taskFixture } from '@assistant/persistence/testing';
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ web: vi.fn(), mobile: vi.fn(), owner: vi.fn() }));
-vi.mock('@/auth', () => ({ isAuthed: auth.web, requireOwner: auth.owner }));
+vi.mock('next/cache', () => ({ unstable_cache: (callback: () => unknown) => callback }));
+vi.mock('@/auth', () => ({
+  auth: vi.fn(),
+  authMode: 'dev-bypass',
+  isAuthed: auth.web,
+  requireOwner: auth.owner,
+}));
+vi.mock('next/font/google', () => ({ JetBrains_Mono: () => ({ variable: '--test-mono' }) }));
+vi.mock('next/script', () => ({ default: () => null }));
 vi.mock('@/mobile-auth', () => ({
   isMobileAuthed: auth.mobile,
   mobileJson: (body: unknown, init?: ResponseInit) => Response.json(body, init),
@@ -60,6 +69,29 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
       name: 'Other assistant',
       timezone: 'UTC',
       createdAt: new Date(0),
+    });
+    const foreignTask = taskFixture({
+      id: 'foreign-attention-task',
+      agentId: otherAgentId,
+      conversationId: randomUUID(),
+      reminderId: '',
+    });
+    foreignTask.status = 'needs_attention';
+    await store.doc('tasks', foreignTask.id).set(foreignTask);
+    await store.doc('approvals', 'foreign-pending-approval').set({
+      id: 'foreign-pending-approval',
+      taskId: foreignTask.id,
+      status: 'pending',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await store.doc('memories', 'foreign-memory').set({
+      id: 'foreign-memory',
+      agentId: otherAgentId,
+      category: 'knowledge',
+      quarantined: false,
+      expiresAt: null,
+      lastConsolidatedAt: null,
+      ownerConfirmed: true,
     });
   });
 
@@ -170,7 +202,9 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
     const { proxy } = await import('../proxy.js');
     const request = (path: string, method = 'GET') =>
       new NextRequest(`http://localhost${path}`, { method });
-    expect(proxy(request('/api/mobile/v1/bootstrap')).status).toBe(503);
+    expect(proxy(request('/api/mobile/v1/bootstrap')).status).toBe(200);
+    expect(proxy(request('/api/mobile/v1/bootstrap', 'POST')).status).toBe(503);
+    expect(proxy(request('/api/shell/status')).status).toBe(503);
     expect(proxy(request('/chat')).status).toBe(200);
     expect(proxy(request(`/chat/${randomUUID()}`)).status).toBe(200);
     expect(proxy(request('/chat/all')).status).toBe(200);
@@ -189,10 +223,47 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
 
   it('bootstraps and renders the primary chat and history without PostgreSQL', async () => {
     const { getChatApplication, getAgentIdentity } = await import('./server.js');
+    const { GET: bootstrap } = await import('../app/api/mobile/v1/bootstrap/route.js');
     const application = getChatApplication();
     const primaryId = await application.getPrimaryConversationId();
     expect(await application.getPrimaryConversationId()).toBe(primaryId);
     expect(await getAgentIdentity()).toMatchObject({ id: agentId, name: 'Assistant' });
+
+    const bootstrapResponse = await bootstrap(
+      new Request('http://localhost/api/mobile/v1/bootstrap'),
+    );
+    expect(bootstrapResponse.status).toBe(200);
+    expect(await bootstrapResponse.json()).toMatchObject({
+      identity: { id: agentId, name: 'Assistant' },
+      shell: {
+        dashboard: { pendingApprovals: 0, needsAttention: 0, presence: 'idle' },
+        memoryHealth: {
+          totalUsable: 0,
+          notYetOrganized: 0,
+          awaitingReview: 0,
+          ownerConfirmed: 0,
+          lastOrganizedAt: null,
+        },
+      },
+      conversation: { conversation: { id: primaryId } },
+    });
+
+    const { default: RootLayout } = await import('../app/layout.js');
+    const { NotchCompanion } = await import('../app/notch-companion.js');
+    const layout = await RootLayout({ children: null });
+    const [head, body] = (layout.props as { children: unknown[] }).children as [
+      unknown,
+      { props: { children: unknown[] } },
+    ];
+    void head;
+    const notch = body.props.children.find(
+      (child): child is { type: typeof NotchCompanion; props: { pollShellStatus?: boolean } } =>
+        typeof child === 'object' &&
+        child !== null &&
+        'type' in child &&
+        child.type === NotchCompanion,
+    );
+    expect(notch?.props.pollShellStatus).toBe(false);
 
     const ChatIndexPage = (await import('../app/chat/page.js')).default;
     const index = await ChatIndexPage({ searchParams: Promise.resolve({}) });

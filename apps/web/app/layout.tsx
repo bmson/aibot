@@ -5,7 +5,7 @@ import { JetBrains_Mono } from 'next/font/google';
 import Script from 'next/script';
 import type { CSSProperties, ReactNode } from 'react';
 import { auth, authMode } from '@/auth';
-import { getAgentIdentity, getApplication } from '@/lib/server';
+import { getAgentIdentity, getChatApplication } from '@/lib/server';
 import { NavCommandsProvider, type NavDestination } from './nav-commands';
 import { NotchCompanion } from './notch-companion';
 import './globals.css';
@@ -230,14 +230,17 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   );
   const identity = await getAgentIdentity();
   const [shell, session] = await Promise.all([
-    identity.id && config.PERSISTENCE_DRIVER !== 'firestore'
-      ? getApplication()
+    identity.id
+      ? getChatApplication()
           .getShellStatus(identity.id)
           .catch((error) => {
             console.error('[layout] failed to load shell status', error);
+            if (config.PERSISTENCE_DRIVER === 'firestore') throw error;
             return emptyShellStatus();
           })
-      : Promise.resolve(emptyShellStatus()),
+      : config.PERSISTENCE_DRIVER === 'firestore'
+        ? Promise.reject(new Error('Configured Firestore agent identity is unavailable'))
+        : Promise.resolve(emptyShellStatus()),
     (async () => {
       if (authMode !== 'google') return null;
       try {
@@ -284,8 +287,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         {/* No navigation chrome in the shell — the destinations ride down to the
             chat composer's "/" palette, and every other surface carries a back
             link. `main` is the whole app column. */}
-        {/* Firestore has no portable app-wide shell projection yet. Its idle
-            baseline stays invisible; chat can still publish real local work. */}
+        {/* Firestore's shell projection includes a bounded memory-health scan,
+            so it is not exposed at the fresh-poll status route. */}
         <NotchCompanion
           presence={dashboard.presence}
           pollShellStatus={config.PERSISTENCE_DRIVER !== 'firestore'}
