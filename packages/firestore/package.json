@@ -10,10 +10,14 @@
     "./workspace-migration": "./src/workspace-migration.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "workspace-import-job": "tsx src/workspace-import-job-cli.ts"
   },
   "dependencies": {
     "@assistant/persistence": "workspace:*",
     "@google-cloud/firestore": "^9.2.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.13"
   }
 }

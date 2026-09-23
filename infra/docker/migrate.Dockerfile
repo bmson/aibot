@@ -12,12 +12,14 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/config/package.json ./packages/config/
 COPY packages/persistence/package.json ./packages/persistence/
 COPY packages/db/package.json ./packages/db/
+COPY packages/firestore/package.json ./packages/firestore/
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --filter @assistant/db...
+    pnpm install --frozen-lockfile --filter @assistant/db... --filter @assistant/firestore...
 
 COPY packages/config ./packages/config
 COPY packages/persistence ./packages/persistence
 COPY packages/db ./packages/db
+COPY packages/firestore ./packages/firestore
 COPY infra/docker/database-admin.sh ./infra/docker/database-admin.sh
 RUN chown -R node:node /app
 # Runtime uses pnpm via corepack, never npm. Strip the base image's bundled npm
