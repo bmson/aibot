@@ -1,4 +1,5 @@
 import type { ProfileVoiceOverviewRepository, Records } from '@assistant/persistence';
+import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const VOICE_IMPORT_LIMIT = 5;
@@ -17,6 +18,7 @@ export class FirestoreProfileVoiceOverviewRepository implements ProfileVoiceOver
     const agentId = agent.get('id');
     if (typeof agentId !== 'string' || documentKey(agentId) !== agent.id)
       throw new Error('Configured agent record is malformed');
+    const fence = await readPrivacyErasureFence(this.store, agentId);
 
     const [samples, imports, profile] = await Promise.all([
       this.store.collection('writingSamples').select('id', 'context').get(),
@@ -45,7 +47,7 @@ export class FirestoreProfileVoiceOverviewRepository implements ProfileVoiceOver
       )
       .slice(0, VOICE_IMPORT_LIMIT);
 
-    return {
+    const result = {
       voiceStats: {
         total: contexts.length,
         auto: contexts.filter((context) => context.startsWith('auto:')).length,
@@ -71,5 +73,7 @@ export class FirestoreProfileVoiceOverviewRepository implements ProfileVoiceOver
         error: row.error,
       })),
     };
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    return result;
   }
 }

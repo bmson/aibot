@@ -1,4 +1,5 @@
 import type { ProfileOverviewRepository } from '@assistant/persistence';
+import { assertPrivacyErasureFenceUnchanged } from './privacy-erasure.js';
 import { loadProfileHubSource, profileMemoryHubFromSource } from './profile-memory-hub.js';
 import { FirestoreProfileVoiceOverviewRepository } from './profile-overview.js';
 import type { InstallationStore } from './store.js';
@@ -13,10 +14,10 @@ export class FirestoreProfileOverviewRepository implements ProfileOverviewReposi
   constructor(readonly store: InstallationStore) {}
 
   async load() {
-    const [source, voice] = await Promise.all([
-      loadProfileHubSource(this.store),
-      new FirestoreProfileVoiceOverviewRepository(this.store).load(),
-    ]);
+    // Keep the source fence open across the voice read so an erasure between
+    // those two complete reads cannot return a mixed pre/post-erasure profile.
+    const source = await loadProfileHubSource(this.store);
+    const voice = await new FirestoreProfileVoiceOverviewRepository(this.store).load();
     const hub = profileMemoryHubFromSource(source);
     if (source.contacts.length > PROFILE_CONTACT_LIMIT)
       throw new Error('Profile contact count exceeds the view limit');
@@ -47,7 +48,7 @@ export class FirestoreProfileOverviewRepository implements ProfileOverviewReposi
       if (row.subjectContactId)
         factCounts.set(row.subjectContactId, (factCounts.get(row.subjectContactId) ?? 0) + 1);
     }
-    return {
+    const result = {
       ...(owner ? { owner } : {}),
       people: allContacts
         .filter((contact) => contact.trust !== 'owner')
@@ -61,5 +62,7 @@ export class FirestoreProfileOverviewRepository implements ProfileOverviewReposi
       memoryHealth: hub.memoryHealth,
       latestOrganizer: hub.latestOrganizer,
     };
+    await assertPrivacyErasureFenceUnchanged(this.store, source.agentId, source.fence);
+    return result;
   }
 }

@@ -4,6 +4,7 @@ import type {
   Records,
 } from '@assistant/persistence';
 import { FieldPath, type Query, type QueryDocumentSnapshot } from '@google-cloud/firestore';
+import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const PAGE_SIZE = 500;
@@ -45,6 +46,7 @@ export interface ProfileHubSource {
   feedback: Records['recallFeedback'][];
   tasks: Records['tasks'][];
   card: { content: string; compiledAt: Date } | null;
+  fence: Awaited<ReturnType<typeof readPrivacyErasureFence>>;
 }
 
 export async function loadProfileHubSource(store: InstallationStore): Promise<ProfileHubSource> {
@@ -55,6 +57,7 @@ export async function loadProfileHubSource(store: InstallationStore): Promise<Pr
   const agentId = agentDoc.get('id');
   if (typeof agentId !== 'string' || documentKey(agentId) !== agentDoc.id)
     throw new Error('Configured agent record is malformed');
+  const fence = await readPrivacyErasureFence(store, agentId);
 
   const [contactDocs, memoryDocs, feedbackDocs, taskDocs, cardDoc] = await Promise.all([
     scanProfileCollection(store.collection('contacts')),
@@ -83,7 +86,7 @@ export async function loadProfileHubSource(store: InstallationStore): Promise<Pr
       !(rawCard.compiledAt instanceof Date))
   )
     throw new Error('Malformed Memory hub owner card');
-  return {
+  const source = {
     agentId,
     now: store.now(),
     contacts,
@@ -93,7 +96,10 @@ export async function loadProfileHubSource(store: InstallationStore): Promise<Pr
     card: rawCard
       ? { content: rawCard.content as string, compiledAt: rawCard.compiledAt as Date }
       : null,
+    fence,
   };
+  await assertPrivacyErasureFenceUnchanged(store, agentId, fence);
+  return source;
 }
 
 export function profileMemoryHubFromSource(source: ProfileHubSource): ProfileMemoryHubOverview {
