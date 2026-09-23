@@ -1,5 +1,15 @@
-import { createHash } from 'node:crypto';
-import { type Db, documentChunks, documents, files, type TaskRow, tasks } from '@assistant/db';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  type Db,
+  type DocumentRow,
+  documentChunks,
+  documents,
+  type FileRow,
+  files,
+  type TaskRow,
+  tasks,
+} from '@assistant/db';
+import type { DocumentExtractionFence, DocumentExtractionRepository } from '@assistant/persistence';
 import { and, eq, sql } from 'drizzle-orm';
 import { BudgetReservationError } from '../cost.js';
 import type { ModelRouter } from '../model-router/router.js';
@@ -129,6 +139,11 @@ export interface DocumentExtractOutcome {
   summary: string;
 }
 
+function requireDocumentDb(db: Db | undefined): Db {
+  if (!db) throw new Error('PostgreSQL document persistence is unavailable');
+  return db;
+}
+
 /**
  * Code job: extract, chunk, and embed one document. Resumable — the chunk
  * cursor checkpoints into tasks.state after every batch, the text re-chunks
@@ -137,14 +152,29 @@ export interface DocumentExtractOutcome {
  */
 export async function runDocumentExtraction(
   deps: {
-    db: Db;
+    db?: Db;
     router: ModelRouter;
     workspace?: WorkspaceReader;
     heartbeat?: () => Promise<void>;
+    /** Optional portable repository for owner-fenced source reads and durable extraction state. */
+    documentExtraction?: {
+      repository: DocumentExtractionRepository;
+      /** Supply a getter when lease renewal can rotate the token during provider work. */
+      fence: DocumentExtractionFence | (() => DocumentExtractionFence);
+    };
   },
   task: TaskRow,
 ): Promise<DocumentExtractOutcome> {
   const { db, router, workspace } = deps;
+  const lifecycle = deps.documentExtraction;
+  const getFence = (): DocumentExtractionFence | undefined =>
+    typeof lifecycle?.fence === 'function' ? lifecycle.fence() : lifecycle?.fence;
+  const requireFence = (): DocumentExtractionFence => {
+    const current = getFence();
+    if (!current) throw new Error('Document extraction persistence fence is unavailable');
+    return current;
+  };
+  if (!lifecycle && !db) throw new Error('document extraction needs a persistence repository');
   if (!workspace?.readBytes) {
     throw new Error('document extraction needs a workspace store with binary reads');
   }
@@ -153,14 +183,44 @@ export async function runDocumentExtraction(
 
   return withSpan('documents.extract', { documentId }, async () => {
     await deps.heartbeat?.();
-    const [doc] = await db.select().from(documents).where(eq(documents.id, documentId));
+    let doc: DocumentRow | undefined;
+    let file: FileRow | null | undefined;
+    const initialFence = getFence();
+    if (
+      lifecycle &&
+      (!initialFence || initialFence.documentId !== documentId || initialFence.taskId !== task.id)
+    )
+      throw new Error('Document extraction persistence fence does not match the task payload');
+    if (lifecycle) {
+      const loaded = await lifecycle.repository.load(requireFence());
+      if (!loaded)
+        return {
+          done: true,
+          summary: `document ${documentId}: extraction lease or owner fence lost`,
+        };
+      doc = loaded.document;
+      file = loaded.file;
+    } else {
+      const postgresDb = requireDocumentDb(db);
+      [doc] = await postgresDb.select().from(documents).where(eq(documents.id, documentId));
+      if (doc) [file] = await postgresDb.select().from(files).where(eq(files.id, doc.fileId));
+    }
     if (!doc) return { done: true, summary: `document ${documentId}: gone — nothing to do` };
     if (doc.status === 'ready') {
       return { done: true, summary: `document ${doc.title}: already extracted` };
     }
-    const [file] = await db.select().from(files).where(eq(files.id, doc.fileId));
     if (!file) {
-      await failDocument(db, documentId, 'backing file missing');
+      if (lifecycle) {
+        const saved = await lifecycle.repository.fail({
+          fence: requireFence(),
+          error: 'backing file missing',
+        });
+        if (!saved)
+          return {
+            done: true,
+            summary: `document ${doc.title}: extraction lease or owner fence lost`,
+          };
+      } else await failDocument(requireDocumentDb(db), documentId, 'backing file missing');
       return { done: true, summary: `document ${doc.title}: backing file missing` };
     }
 
@@ -179,14 +239,34 @@ export async function runDocumentExtraction(
       await deps.heartbeat?.();
       fullText = textBytes.toString('utf8').trim();
     } else if (extractor === 'unsupported') {
-      await db
-        .update(documents)
-        .set({ status: 'unsupported', extractor, updatedAt: sql`now()` })
-        .where(eq(documents.id, documentId));
+      if (lifecycle) {
+        const saved = await lifecycle.repository.markPending({
+          fence: requireFence(),
+          status: 'unsupported',
+          extractor,
+        });
+        if (!saved)
+          return {
+            done: true,
+            summary: `document ${doc.title}: extraction lease or owner fence lost`,
+          };
+      } else
+        await requireDocumentDb(db)
+          .update(documents)
+          .set({ status: 'unsupported', extractor, updatedAt: sql`now()` })
+          .where(eq(documents.id, documentId));
       return { done: true, summary: `document ${doc.title}: unsupported` };
     } else {
       if ((file.bytes ?? 0) > MAX_EXTRACT_BYTES) {
-        await failDocument(db, documentId, `too large to extract in-process (${file.bytes} bytes)`);
+        const message = `too large to extract in-process (${file.bytes} bytes)`;
+        if (lifecycle) {
+          const saved = await lifecycle.repository.fail({ fence: requireFence(), error: message });
+          if (!saved)
+            return {
+              done: true,
+              summary: `document ${doc.title}: extraction lease or owner fence lost`,
+            };
+        } else await failDocument(requireDocumentDb(db), documentId, message);
         return { done: true, summary: `document ${doc.title}: too large` };
       }
       const bytes = await readBytes(file.workspacePath);
@@ -196,18 +276,30 @@ export async function runDocumentExtraction(
       // A PDF with (almost) no text layer is a scan → hand it to the OCR-capable
       // document processor (Phase 14) instead of storing an empty document.
       if (extractor === 'pdf' && fullText.length < MIN_PDF_TEXT_CHARS) {
-        await db
-          .update(documents)
-          .set({ status: 'pending', extractor: 'pending_processor', updatedAt: sql`now()` })
-          .where(eq(documents.id, documentId));
+        if (lifecycle) {
+          const saved = await lifecycle.repository.markPending({
+            fence: requireFence(),
+            status: 'pending',
+            extractor: 'pending_processor',
+          });
+          if (!saved)
+            return {
+              done: true,
+              summary: `document ${doc.title}: extraction lease or owner fence lost`,
+            };
+        } else
+          await requireDocumentDb(db)
+            .update(documents)
+            .set({ status: 'pending', extractor: 'pending_processor', updatedAt: sql`now()` })
+            .where(eq(documents.id, documentId));
         return { done: true, summary: `document ${doc.title}: no text layer — queued for OCR` };
       }
     }
 
     const chunks = chunkText(fullText);
     const charCount = fullText.length;
-    if (chunks.length === 0) {
-      await db
+    if (chunks.length === 0 && !lifecycle) {
+      await requireDocumentDb(db)
         .update(documents)
         .set({
           status: 'ready',
@@ -220,7 +312,6 @@ export async function runDocumentExtraction(
         .where(eq(documents.id, documentId));
       return { done: true, summary: `document ${doc.title}: empty` };
     }
-
     const state = (task.state ?? {}) as Record<string, unknown>;
     const plannerState = (state.plannerState ?? {}) as Record<string, unknown>;
     const cursor: DocumentExtractCursor = {
@@ -229,32 +320,83 @@ export async function runDocumentExtraction(
       ...((plannerState.documentExtract as Partial<DocumentExtractCursor>) ?? {}),
     };
 
-    // First lease claims the document and clears any stale chunks so a re-run
-    // (e.g. after an edit) never leaves orphaned chunks behind.
+    // First lease claims a clean document. Firestore deliberately rejects a
+    // restart with existing chunks because unbounded cleanup cannot be safely
+    // mixed with the bounded extraction transaction.
     if (cursor.index === 0) {
-      await db.delete(documentChunks).where(eq(documentChunks.documentId, documentId));
-      await db
-        .update(documents)
-        .set({ status: 'extracting', extractor, error: null, updatedAt: sql`now()` })
-        .where(eq(documents.id, documentId));
+      if (lifecycle) {
+        const claimed = await lifecycle.repository.begin({
+          fence: requireFence(),
+          extractor,
+          cursor,
+        });
+        if (!claimed)
+          return {
+            done: true,
+            summary: `document ${doc.title}: extraction lease or owner fence lost`,
+          };
+      } else {
+        await requireDocumentDb(db)
+          .delete(documentChunks)
+          .where(eq(documentChunks.documentId, documentId));
+        await requireDocumentDb(db)
+          .update(documents)
+          .set({ status: 'extracting', extractor, error: null, updatedAt: sql`now()` })
+          .where(eq(documents.id, documentId));
+      }
+    }
+
+    if (chunks.length === 0) {
+      const state = (task.state ?? {}) as Record<string, unknown>;
+      const plannerState = (state.plannerState ?? {}) as Record<string, unknown>;
+      plannerState.documentExtract = cursor;
+      state.plannerState = plannerState;
+      if (lifecycle) {
+        const saved = await lifecycle.repository.finalize({
+          fence: requireFence(),
+          extractor,
+          chunkCount: 0,
+          charCount,
+          state,
+        });
+        if (!saved)
+          return {
+            done: true,
+            summary: `document ${doc.title}: extraction lease or owner fence lost`,
+          };
+      } else {
+        await requireDocumentDb(db)
+          .update(documents)
+          .set({
+            status: 'ready',
+            extractor,
+            chunkCount: 0,
+            charCount,
+            error: null,
+            updatedAt: sql`now()`,
+          })
+          .where(eq(documents.id, documentId));
+      }
+      return { done: true, summary: `document ${doc.title}: empty` };
     }
 
     const checkpoint = async () => {
       await deps.heartbeat?.();
       plannerState.documentExtract = cursor;
       state.plannerState = plannerState;
-      await db
-        .update(tasks)
-        .set({
-          state,
-          progress: `extract ${doc.title}: ${cursor.index}/${cursor.total} chunks`,
-          progressPercent: cursor.total
-            ? Math.min(100, Math.round((cursor.index / cursor.total) * 100))
-            : 100,
-          reclaimCount: 0,
-          updatedAt: sql`now()`,
-        })
-        .where(eq(tasks.id, task.id));
+      if (!lifecycle)
+        await requireDocumentDb(db)
+          .update(tasks)
+          .set({
+            state,
+            progress: `extract ${doc.title}: ${cursor.index}/${cursor.total} chunks`,
+            progressPercent: cursor.total
+              ? Math.min(100, Math.round((cursor.index / cursor.total) * 100))
+              : 100,
+            reclaimCount: 0,
+            updatedAt: sql`now()`,
+          })
+          .where(eq(tasks.id, task.id));
     };
 
     const stopAt = Math.min(cursor.index + CHUNKS_PER_RUN, chunks.length);
@@ -266,43 +408,96 @@ export async function runDocumentExtraction(
         embeddings = await router.embed(batch, { taskId: task.id });
       } catch (err) {
         if (err instanceof BudgetReservationError) {
-          await checkpoint();
-          await failDocument(db, documentId, err.message.slice(0, 2000), { keepStatus: true });
+          if (lifecycle)
+            await lifecycle.repository.fail({
+              fence: requireFence(),
+              error: err.message,
+              keepStatus: true,
+            });
+          else {
+            await checkpoint();
+            await failDocument(requireDocumentDb(db), documentId, err.message.slice(0, 2000), {
+              keepStatus: true,
+            });
+          }
         }
         throw err;
       }
       await deps.heartbeat?.();
-      await db
-        .insert(documentChunks)
-        .values(
-          batch.map((text, i) => ({
+      cursor.index = stopAt;
+      if (lifecycle) {
+        const nextState = { ...state, plannerState: { ...plannerState, documentExtract: cursor } };
+        const saved = await lifecycle.repository.persistBatch({
+          fence: requireFence(),
+          chunks: batch.map((text, i) => ({
+            id: randomUUID(),
+            createdAt: new Date(),
             documentId,
             agentId: doc.agentId,
             chunkIndex: start + i,
             text,
             charCount: text.length,
-            embedding: embeddings[i],
+            embedding: embeddings[i] ?? null,
           })),
-        )
-        .onConflictDoNothing({
-          target: [documentChunks.documentId, documentChunks.chunkIndex],
+          cursor,
+          state: nextState,
+          progress: `extract ${doc.title}: ${cursor.index}/${cursor.total} chunks`,
+          progressPercent: cursor.total
+            ? Math.min(100, Math.round((cursor.index / cursor.total) * 100))
+            : 100,
         });
-      cursor.index = stopAt;
-      await checkpoint();
+        if (!saved)
+          return {
+            done: true,
+            summary: `document ${doc.title}: extraction lease or owner fence lost`,
+          };
+        Object.assign(state, nextState);
+      } else {
+        await requireDocumentDb(db)
+          .insert(documentChunks)
+          .values(
+            batch.map((text, i) => ({
+              documentId,
+              agentId: doc.agentId,
+              chunkIndex: start + i,
+              text,
+              charCount: text.length,
+              embedding: embeddings[i],
+            })),
+          )
+          .onConflictDoNothing({
+            target: [documentChunks.documentId, documentChunks.chunkIndex],
+          });
+        await checkpoint();
+      }
     }
 
     if (cursor.index >= chunks.length) {
-      await db
-        .update(documents)
-        .set({
-          status: 'ready',
+      if (lifecycle) {
+        const finalized = await lifecycle.repository.finalize({
+          fence: requireFence(),
           extractor,
           chunkCount: chunks.length,
           charCount,
-          error: null,
-          updatedAt: sql`now()`,
-        })
-        .where(eq(documents.id, documentId));
+          state,
+        });
+        if (!finalized)
+          return {
+            done: true,
+            summary: `document ${doc.title}: extraction lease or owner fence lost`,
+          };
+      } else
+        await requireDocumentDb(db)
+          .update(documents)
+          .set({
+            status: 'ready',
+            extractor,
+            chunkCount: chunks.length,
+            charCount,
+            error: null,
+            updatedAt: sql`now()`,
+          })
+          .where(eq(documents.id, documentId));
       return {
         done: true,
         summary: `document ${doc.title}: extracted ${chunks.length} chunks (${charCount} chars)`,

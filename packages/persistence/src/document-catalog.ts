@@ -50,3 +50,57 @@ export interface DocumentCatalogRepository {
     task: { id: string; queueGeneration: number } | null;
   }>;
 }
+
+/** Lease fence required for every durable extraction lifecycle mutation. */
+export type DocumentExtractionFence = {
+  agentId: string;
+  documentId: string;
+  taskId: string;
+  queueGeneration: number;
+  leaseToken: string;
+};
+
+export type DocumentExtractionCursor = { index: number; total: number };
+
+/**
+ * Persistence boundary used by the document extractor. A chunk batch and its
+ * task cursor must commit atomically; implementations must reject stale task
+ * generations/leases, foreign owners, and active privacy erasures.
+ */
+export interface DocumentExtractionRepository {
+  readonly kind: 'document-extraction-repository';
+  load(fence: DocumentExtractionFence): Promise<{
+    document: Records['documents'];
+    file: Records['files'] | null;
+  } | null>;
+  begin(input: {
+    fence: DocumentExtractionFence;
+    extractor: string;
+    cursor: DocumentExtractionCursor;
+  }): Promise<boolean>;
+  markPending(input: {
+    fence: DocumentExtractionFence;
+    status: 'pending' | 'unsupported';
+    extractor: string;
+  }): Promise<boolean>;
+  persistBatch(input: {
+    fence: DocumentExtractionFence;
+    chunks: Records['documentChunks'][];
+    cursor: DocumentExtractionCursor;
+    state: unknown;
+    progress: string;
+    progressPercent: number;
+  }): Promise<boolean>;
+  finalize(input: {
+    fence: DocumentExtractionFence;
+    extractor: string;
+    chunkCount: number;
+    charCount: number;
+    state: unknown;
+  }): Promise<boolean>;
+  fail(input: {
+    fence: DocumentExtractionFence;
+    error: string;
+    keepStatus?: boolean;
+  }): Promise<boolean>;
+}
