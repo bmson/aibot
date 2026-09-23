@@ -1,6 +1,6 @@
-import { getDashboardPresence } from '@assistant/application/dashboard';
 import { isAuthed } from '@/auth';
-import { getAgentIdentity, getDb } from '@/lib/server';
+import { getAgentIdentity } from '@/lib/server';
+import { getWebShellPresence } from '@/lib/shell-presence';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,9 +19,6 @@ export async function GET(): Promise<Response> {
   const identity = await getAgentIdentity();
   if (!identity.id) return Response.json({ error: 'assistant not configured' }, { status: 503 });
 
-  const dashboard = await getDashboardPresence(getDb(), identity.id);
-  return Response.json(
-    { presence: dashboard.presence },
-    { headers: { 'cache-control': 'no-store' } },
-  );
+  const presence = await getWebShellPresence(identity.id);
+  return Response.json({ presence }, { headers: { 'cache-control': 'no-store' } });
 }
