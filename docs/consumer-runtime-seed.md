@@ -1,6 +1,6 @@
 # Minimal Firestore runtime data seed
 
-`pnpm consumer:seed-runtime` prepares the data checked by `pnpm firestore:runtime-data-preflight` for a **fresh, customer-owned** Firestore installation. It writes one configured agent, a budget policy and zero counters, eight model-role assignments, and the enabled Vertex model catalog those assignments reference. This is a standalone create-only step; the foundation installer does not run it or mark the runtime ready.
+`pnpm consumer:seed-runtime` prepares the data checked by `pnpm firestore:runtime-data-preflight` for a **fresh, customer-owned** Firestore installation. It writes one configured agent, a budget policy and zero counters, eight model-role assignments, and the enabled Vertex model catalog those assignments reference. It is create-only and does not mark the runtime ready. `pnpm consumer:install --seed-plan /private/path/runtime-seed.json` can run the same seed after foundation provisioning and before optional Cloud Run deployment.
 
 Create a private JSON plan with these required fields:
 
