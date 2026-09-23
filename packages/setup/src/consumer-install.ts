@@ -173,6 +173,7 @@ function hasDatabase(databases: unknown, databaseId: string): boolean {
 
 const requiredApis = (provider: InstallationManifest['selection']['modelProvider']): string[] => [
   'artifactregistry.googleapis.com',
+  'cloudresourcemanager.googleapis.com',
   'firestore.googleapis.com',
   'iam.googleapis.com',
   'iamcredentials.googleapis.com',
