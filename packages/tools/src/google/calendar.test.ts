@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry } from '../registry.js';
 import { ownerVisibleOnlyFor } from '../types.js';
-import { registerCalendarTools } from './calendar.js';
+import { registerCalendarReadTools, registerCalendarTools } from './calendar.js';
 import type { GoogleClient } from './client.js';
 
 /** `risk` may be a tier or a per-call function; tests care about the tier. */
@@ -243,6 +243,24 @@ describe('calendar.list_events', () => {
       confidentialRead: true,
       returnsUntrustedContent: true,
     });
+  });
+});
+
+describe('portable calendar read surface', () => {
+  it('registers availability and event reads while excluding every mutation', () => {
+    const registry = new ToolRegistry();
+    registerCalendarReadTools(registry, {
+      client: { api: vi.fn() } as unknown as GoogleClient,
+      botEmail: 'bot@example.com',
+      ownerEmail: 'owner@example.com',
+    });
+
+    expect(
+      registry
+        .all()
+        .map(({ tool }) => tool.name)
+        .sort(),
+    ).toEqual(['calendar.availability', 'calendar.list_calendars', 'calendar.list_events']);
   });
 });
 

@@ -9,6 +9,7 @@ import { z } from 'zod';
  */
 export const assistantModuleNames = [
   'browser',
+  'calendar',
   'code',
   'documents',
   'google',

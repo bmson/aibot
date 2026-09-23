@@ -23,6 +23,7 @@ export {
   executeApplicationConfirmationTask,
   processApplicationConfirmation,
 } from './google/application-confirmations.js';
+export { calendarModule } from './google/calendar-module.js';
 export { type EmailSyncDeps, processMessage } from './google/email-sync.js';
 export { googleModule } from './google/module.js';
 export { emailIngestForwarded, gmailSyncEnabled } from './google/runtime.js';

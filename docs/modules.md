@@ -8,7 +8,7 @@ Set optional capabilities once in `.env`:
 ```dotenv
 ASSISTANT_MODULES=minimal
 ASSISTANT_MODULES=all
-ASSISTANT_MODULES=google,reminders,search
+ASSISTANT_MODULES=calendar,google,reminders,search
 ```
 
 Run `pnpm config:check` after any change.
@@ -16,6 +16,7 @@ Run `pnpm config:check` after any change.
 | Module | Adds | Required settings | Extra runtime |
 | --- | --- | --- | --- |
 | `browser` | Planned web interaction and browser execution | `PROFILE_ENC_KEY` only for a saved profile | Playwright locally or a Cloud Run Job |
+| `calendar` | Read-only Google Calendar availability, calendars, and events (Firestore portable) | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `BOT_GOOGLE_REFRESH_TOKEN` | none |
 | `code` | Sandboxed code execution | none | local child process or a Cloud Run Job |
 | `documents` | Office/PDF ingestion pipeline | none | document processor locally or a Cloud Run Job |
 | `google` | Gmail, Calendar, Drive, Docs, Sheets, Slides, job confirmations, forwarded-mail ingest | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `BOT_GOOGLE_REFRESH_TOKEN`; `EMAIL_INGEST_MODE` for forwarded-mail ingest, with `EMAIL_INGEST_IMPORTANCE_THRESHOLD`, `EMAIL_INGEST_MAX_TRIAGE_PER_DAY` and `EMAIL_OUTBOUND_DOMAINS` | Gmail Pub/Sub and Scheduler in production |
@@ -58,8 +59,16 @@ Minimal private chat:
 ASSISTANT_MODULES=minimal
 ```
 
-Firestore agent mode also permits `ASSISTANT_MODULES=reminders`; its reminder tools use Firestore
-schedule storage. Other optional modules still require persistence ports that have not migrated.
+Firestore assistant with portable reminders and Calendar reads:
+
+```dotenv
+PERSISTENCE_DRIVER=firestore
+ASSISTANT_MODULES=calendar,reminders
+```
+
+Calendar event creation, updates, cancellations, Gmail, and the other Workspace tools remain in
+the SQL-backed `google` module. Reminder schedules use Firestore storage. Other optional modules
+still require persistence ports that have not migrated.
 
 Productivity assistant without isolated workers:
 

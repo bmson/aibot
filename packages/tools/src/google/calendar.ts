@@ -357,6 +357,7 @@ export async function listEventsInWindow(
 export function registerCalendarTools(
   registry: ToolRegistry,
   deps: CalendarToolDeps,
+  options: { readOnly?: boolean } = {},
 ): ToolRegistry {
   register(
     registry,
@@ -506,6 +507,12 @@ export function registerCalendarTools(
     },
     { confidentialRead: true, returnsUntrustedContent: true },
   );
+
+  // Firestore deployments may enable the independent calendar module without
+  // installing the SQL-backed Google Workspace module. Keep that surface
+  // strictly read-only until event mutations have their own portable approval
+  // and audit path.
+  if (options.readOnly) return registry;
 
   const createSchema = z.object({
     summary: z.string().min(1).max(200),
@@ -864,4 +871,12 @@ export function registerCalendarTools(
   );
 
   return registry;
+}
+
+/** Register the portable read-only calendar surface for Firestore agents. */
+export function registerCalendarReadTools(
+  registry: ToolRegistry,
+  deps: CalendarToolDeps,
+): ToolRegistry {
+  return registerCalendarTools(registry, deps, { readOnly: true });
 }
