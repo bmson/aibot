@@ -5,7 +5,7 @@ import { FirestoreMemoryRepository } from './memory.js';
 import { FirestorePrivacyErasureRepository } from './privacy-erasure.js';
 import { disposeStore, emulatorStore } from './test-store.js';
 
-describe('Firestore privacy erasure', () => {
+describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore privacy erasure', () => {
   const stores: ReturnType<typeof emulatorStore>[] = [];
   afterEach(async () => Promise.all(stores.splice(0).map(disposeStore)));
 
