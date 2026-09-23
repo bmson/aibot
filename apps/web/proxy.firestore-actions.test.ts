@@ -8,29 +8,38 @@ vi.mock('@assistant/config', () => ({
 
 import { proxy } from './proxy.js';
 
-describe('Firestore mutation ingress', () => {
-  it('passes supported Pack and anomaly writes to their authenticated handlers', () => {
-    for (const path of [
+const status = (path: string, method: string) =>
+  proxy(new NextRequest(`http://localhost${path}`, { method })).status;
+
+describe('Firestore mobile and web ingress', () => {
+  it('passes supported Pack, anomaly, and suggestion writes to authenticated handlers', () => {
+    const paths = [
       '/packs',
       '/api/mobile/v1/packs',
       `/api/mobile/v1/anomalies/${randomUUID()}`,
-    ]) {
-      expect(proxy(new NextRequest(`http://localhost${path}`, { method: 'POST' })).status).toBe(
-        200,
-      );
-      expect(proxy(new NextRequest(`http://localhost${path}`, { method: 'DELETE' })).status).toBe(
-        503,
-      );
+      `/api/mobile/v1/suggestions/${randomUUID()}`,
+    ];
+    for (const path of paths) {
+      expect(status(path, 'POST')).toBe(200);
+      expect(status(path, 'DELETE')).toBe(503);
     }
   });
 
-  it('keeps invalid anomaly IDs blocked at the proxy', () => {
-    expect(
-      proxy(
-        new NextRequest('http://localhost/api/mobile/v1/anomalies/not-a-uuid', {
-          method: 'POST',
-        }),
-      ).status,
-    ).toBe(503);
+  it('passes portable mobile overview and document reads', () => {
+    const documentId = randomUUID();
+    expect(status('/api/mobile/v1/overview', 'GET')).toBe(200);
+    expect(status('/api/mobile/v1/documents', 'GET')).toBe(200);
+    expect(status(`/api/mobile/v1/documents/${documentId}`, 'GET')).toBe(200);
+    // These handlers explicitly return 501 until document processing is portable.
+    expect(status('/api/mobile/v1/documents', 'POST')).toBe(200);
+    expect(status(`/api/mobile/v1/documents/${documentId}`, 'DELETE')).toBe(200);
+  });
+
+  it('keeps malformed IDs, unsupported methods, and SQL-only routes blocked', () => {
+    expect(status('/api/mobile/v1/anomalies/not-a-uuid', 'POST')).toBe(503);
+    expect(status('/api/mobile/v1/suggestions/not-a-uuid', 'POST')).toBe(503);
+    expect(status('/api/mobile/v1/documents/not-a-uuid', 'GET')).toBe(503);
+    expect(status('/api/mobile/v1/overview', 'POST')).toBe(503);
+    expect(status('/api/mobile/v1/knowledge/graph', 'GET')).toBe(503);
   });
 });
