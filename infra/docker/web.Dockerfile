@@ -1,4 +1,4 @@
-FROM node:22-slim AS build
+FROM node:25-slim AS build
 WORKDIR /src
 RUN corepack enable
 
@@ -22,7 +22,7 @@ ARG GIT_SHA=unknown
 ENV BUILD_SHA=${GIT_SHA}
 RUN pnpm --filter @assistant/web build
 
-FROM node:22-slim AS runtime
+FROM node:25-slim AS runtime
 # Apply the Debian PCRE2 security update even when the base image layer is older.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 \
