@@ -150,6 +150,9 @@ export function getGeneratedCards() {
 }
 
 export function getCardRefresh() {
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    return getFirestoreChatApplication().getCardRefresh();
+  }
   return createPostgresCardRefreshRepository(getDb());
 }
 
@@ -170,6 +173,13 @@ export function getRouter(): ModelRouter {
  * Falls back to UTC if the agent can't be read.
  */
 export const getAgentTimezone = cache(async (): Promise<string> => {
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    try {
+      return await getFirestoreChatApplication().getAgentTimezone();
+    } catch {
+      return 'UTC';
+    }
+  }
   return getAssistantTimezone(getDb());
 });
 
@@ -459,10 +469,12 @@ function createFirestoreChatApplication() {
     setSkillDeprecated: (id: string, deprecated: boolean) =>
       skillMutations.setDeprecated(config.FIRESTORE_AGENT_ID, id, deprecated),
     getGeneratedCards: () => persistence.generatedCards,
+    getCardRefresh: () => persistence.cardRefresh,
     getAgentIdentity: async () => {
       const agent = await chat.resolveAgent();
       return { id: agent.id, name: agent.name || 'Assistant', avatarUrl: agent.avatarUrl ?? null };
     },
+    getAgentTimezone: async () => (await chat.resolveAgent()).timezone || 'UTC',
     getShellStatus: (agentId: string) =>
       unstable_cache(
         () => getShellStatus(shellStatus, agentId),
