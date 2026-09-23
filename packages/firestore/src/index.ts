@@ -33,6 +33,7 @@ export {
   getFirestorePeopleDirectory,
   getFirestorePersonDetail,
 } from './people-directory.js';
+export { getFirestorePersonTemporalDetails } from './person-temporal-details.js';
 export {
   assertPrivacyErasureFenceUnchanged,
   FirestorePrivacyErasureRepository,
