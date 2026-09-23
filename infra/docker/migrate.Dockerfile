@@ -1,6 +1,7 @@
 FROM node:22-slim
 ENV NODE_ENV=development
 ENV ASSISTANT_REPO_ROOT=/app
+ENV COREPACK_HOME=/opt/corepack
 WORKDIR /app
 RUN corepack enable \
   && apt-get update \
@@ -21,14 +22,16 @@ COPY packages/persistence ./packages/persistence
 COPY packages/db ./packages/db
 COPY packages/firestore ./packages/firestore
 COPY infra/docker/database-admin.sh ./infra/docker/database-admin.sh
-RUN chown -R node:node /app
-# Runtime uses pnpm via corepack, never npm. Strip the base image's bundled npm
-# so its vendored deps (tar/sigstore/brace-expansion/picomatch, all HIGH/
-# CRITICAL) don't ship or fail the deploy vulnerability scan. Also strip the
-# corepack download cache the root-run install left under /root: the runtime
-# user can't read /root (mode 700) — corepack resolves its own per-user cache —
-# so the copy is dead weight that only feeds pnpm advisories to the scan.
+RUN chown -R node:node /app /opt/corepack
+# Runtime uses the pnpm version cached during the build. The migration job has
+# no reason to download a package manager when it starts, and its short task
+# timeout must not be spent waiting for registry access.
+ENV COREPACK_ENABLE_NETWORK=0
+# Strip the base image's bundled npm so its vendored dependencies do not ship
+# or fail the deploy vulnerability scan. Corepack's shared cache remains under
+# /opt/corepack, readable by the runtime user.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
   /root/.cache/node
 USER node
+RUN pnpm --version
 CMD ["pnpm", "--filter", "@assistant/db", "reconcile"]
