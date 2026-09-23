@@ -122,6 +122,7 @@ describe.skipIf(!localEmulator)('Firestore mobile People directory with PostgreS
         contactId: personId,
         kind: 'person',
         label: 'Anna',
+        preferredLabel: null,
       }),
       store.doc('knowledgeGraphEntities', 'reykjavik-entity').set({
         id: 'reykjavik-entity',
@@ -279,6 +280,77 @@ describe.skipIf(!localEmulator)('Firestore mobile People directory with PostgreS
       await expect(GET(new Request(url))).rejects.toThrow('exactly one configured agent');
     } finally {
       await store.doc('agents', foreignAgentId).delete();
+    }
+  });
+
+  it('fails closed when migrated projection fields are malformed', async () => {
+    const { GET } = await import('./route.js');
+    const corruptions: Array<{
+      collection: string;
+      id: string;
+      field: string;
+      bad: unknown;
+      original: unknown;
+    }> = [
+      {
+        collection: 'memories',
+        id: 'person-fact',
+        field: 'quarantined',
+        bad: null,
+        original: false,
+      },
+      {
+        collection: 'memories',
+        id: 'person-fact',
+        field: 'expiresAt',
+        bad: 'invalid',
+        original: null,
+      },
+      {
+        collection: 'memories',
+        id: 'person-fact',
+        field: 'category',
+        bad: null,
+        original: 'knowledge',
+      },
+      { collection: 'memories', id: 'person-fact', field: 'createdAt', bad: null, original: now },
+      {
+        collection: 'occasions',
+        id: 'anna-birthday',
+        field: 'month',
+        bad: null,
+        original: birthday.getUTCMonth() + 1,
+      },
+      {
+        collection: 'knowledgeGraphEntities',
+        id: 'reykjavik-entity',
+        field: 'label',
+        bad: null,
+        original: 'Reykjavík',
+      },
+      {
+        collection: 'knowledgeGraphRelations',
+        id: 'location-relation',
+        field: 'reviewStatus',
+        bad: null,
+        original: 'confirmed',
+      },
+      {
+        collection: 'knowledgeGraphSources',
+        id: 'person-fact',
+        field: 'extractionVersion',
+        bad: null,
+        original: GRAPH_EXTRACTION_VERSION,
+      },
+    ];
+    for (const { collection, id, field, bad, original } of corruptions) {
+      const ref = store.doc(collection, id);
+      await ref.update({ [field]: bad });
+      try {
+        await expect(GET(new Request(url))).rejects.toThrow(/malformed/);
+      } finally {
+        await ref.update({ [field]: original });
+      }
     }
   });
 });

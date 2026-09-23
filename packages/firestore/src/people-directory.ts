@@ -42,6 +42,65 @@ export interface FirestorePersonDirectoryRow {
   location: string | null;
 }
 
+const date = (value: unknown): value is Date =>
+  value instanceof Date && Number.isFinite(value.getTime());
+const nullableDate = (value: unknown): value is Date | null => value === null || date(value);
+const nullableString = (value: unknown): value is string | null =>
+  value === null || typeof value === 'string';
+
+function validateProjectionRows(
+  memories: Records['memories'][],
+  occasions: Records['occasions'][],
+  entities: Records['knowledgeGraphEntities'][],
+  relations: Records['knowledgeGraphRelations'][],
+): void {
+  if (
+    memories.some(
+      (row) =>
+        !nullableString(row.subjectContactId) ||
+        typeof row.category !== 'string' ||
+        typeof row.quarantined !== 'boolean' ||
+        !nullableDate(row.expiresAt) ||
+        !date(row.createdAt) ||
+        !nullableDate(row.validFrom) ||
+        typeof row.contentHash !== 'string' ||
+        (row.embedding !== null &&
+          (!Array.isArray(row.embedding) ||
+            row.embedding.some((value) => typeof value !== 'number' || !Number.isFinite(value)))),
+    ) ||
+    occasions.some(
+      (row) =>
+        typeof row.contactId !== 'string' ||
+        typeof row.kind !== 'string' ||
+        typeof row.quarantined !== 'boolean' ||
+        !Number.isInteger(row.month) ||
+        row.month < 1 ||
+        row.month > 12 ||
+        !Number.isInteger(row.day) ||
+        row.day < 1 ||
+        row.day > 31 ||
+        (row.year !== null && !Number.isInteger(row.year)),
+    ) ||
+    entities.some(
+      (row) =>
+        !nullableString(row.contactId) ||
+        typeof row.label !== 'string' ||
+        !nullableString(row.preferredLabel),
+    ) ||
+    relations.some(
+      (row) =>
+        typeof row.subjectEntityId !== 'string' ||
+        typeof row.objectEntityId !== 'string' ||
+        typeof row.sourceMemoryId !== 'string' ||
+        typeof row.predicate !== 'string' ||
+        !nullableString(row.validUntil) ||
+        typeof row.reviewStatus !== 'string' ||
+        !nullableString(row.evidenceQuote),
+    )
+  )
+    throw new Error('People directory contains a malformed projection record');
+}
+
 async function assertConfiguredOwner(store: InstallationStore, agentId: string): Promise<void> {
   const agents = await store.collection('agents').limit(2).get();
   const owner = agents.docs[0];
@@ -126,6 +185,7 @@ export async function getFirestoreMobilePeopleDirectory(
       configuredAgentId,
     ),
   ]);
+  validateProjectionRows(memories, occasions, entities, relations);
   const active = (memory: Records['memories']) =>
     memory.quarantined === false &&
     (memory.expiresAt === null || (memory.expiresAt instanceof Date && memory.expiresAt > now));
@@ -177,7 +237,13 @@ export async function getFirestoreMobilePeopleDirectory(
     for (const doc of docs) {
       if (!doc.exists) continue;
       const source = decodeRecord<Records['knowledgeGraphSources']>(doc.data());
-      if (source.memoryId !== sourceIdByDocument.get(doc.id))
+      if (
+        source.memoryId !== sourceIdByDocument.get(doc.id) ||
+        typeof source.status !== 'string' ||
+        typeof source.contentHash !== 'string' ||
+        !Number.isSafeInteger(source.extractionVersion) ||
+        source.extractionVersion < 0
+      )
         throw new Error('People directory has a malformed graph source');
       sources.set(source.memoryId, source);
     }
