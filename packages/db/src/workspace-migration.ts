@@ -32,6 +32,20 @@ function identifiers(table: MigrationTable) {
 
 const TIMESTAMP_PREFIX = '__assistant_timestamp__';
 
+// PostgreSQL column names do not always encode the TypeScript field's acronym
+// spelling. Firestore records must use the same keys as the live repositories.
+const FIELD_NAME_OVERRIDES: Partial<Record<MigrationTable, Record<string, string>>> = {
+  calendar_event_snapshots: { ical_uid: 'iCalUID' },
+  models: {
+    prompt_cost_per_mtok: 'promptCostPerMTok',
+    completion_cost_per_mtok: 'completionCostPerMTok',
+  },
+};
+
+export function migrationColumnFieldName(table: MigrationTable, column: string): string {
+  return FIELD_NAME_OVERRIDES[table]?.[column] ?? snakeToCamel(column);
+}
+
 function quoteIdentifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
 }
@@ -196,23 +210,32 @@ export async function exportWorkspaceSnapshot(
               .map(([key, value]) => {
                 const timestamp = row[`${TIMESTAMP_PREFIX}${key}`];
                 if (typeof timestamp === 'string')
-                  return [snakeToCamel(key), serializeMigrationTimestamp(timestamp)];
+                  return [
+                    migrationColumnFieldName(table, key),
+                    serializeMigrationTimestamp(timestamp),
+                  ];
                 if (
                   key === 'embedding' &&
                   Array.isArray(value) &&
                   value.every((item) => typeof item === 'number')
                 )
-                  return [snakeToCamel(key), serializeMigrationVector(value)];
+                  return [migrationColumnFieldName(table, key), serializeMigrationVector(value)];
                 if (key === 'embedding' && typeof value === 'string') {
                   try {
                     const vector = JSON.parse(value) as unknown;
                     if (Array.isArray(vector) && vector.every((item) => typeof item === 'number'))
-                      return [snakeToCamel(key), serializeMigrationVector(vector)];
+                      return [
+                        migrationColumnFieldName(table, key),
+                        serializeMigrationVector(vector),
+                      ];
                   } catch {
                     // Keep malformed vectors visible to validation rather than silently changing them.
                   }
                 }
-                return [snakeToCamel(key), serializeTypedColumn(table, key, value)];
+                return [
+                  migrationColumnFieldName(table, key),
+                  serializeTypedColumn(table, key, value),
+                ];
               }),
           );
           const singletonByAgent = table === 'owner_card' || table === 'ambient_snapshots';

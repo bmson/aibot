@@ -37,10 +37,11 @@ import {
   type SmsChannelDeps,
   smsModule,
 } from '@assistant/modules';
-import type {
-  EmbeddingSpace,
-  ExecutionPersistence,
-  ModelRoutingRepository,
+import {
+  type EmbeddingSpace,
+  type ExecutionPersistence,
+  embeddingModelId,
+  type ModelRoutingRepository,
 } from '@assistant/persistence';
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
 import { registerBuiltinTools, registerPortableMemoryTools } from '@assistant/tools/builtin';
@@ -273,7 +274,7 @@ export function pinnedMemoryEmbed(
 ): (texts: string[]) => Promise<number[][]> {
   return async (texts) => {
     const selected = await routing.role('embed');
-    const expected = `${space.provider}/${space.model}`;
+    const expected = embeddingModelId(space);
     if (selected?.primaryModel !== expected) {
       throw new Error(`Firestore memory embedding role must use ${expected}`);
     }

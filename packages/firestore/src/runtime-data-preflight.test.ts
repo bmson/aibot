@@ -67,6 +67,38 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore runtime data pr
     expect(await checkFirestoreRuntimeData(store, input)).toEqual({ ready: true, issues: [] });
   });
 
+  it('accepts vendor-qualified OpenRouter embedding model IDs', async () => {
+    await seed();
+    await Promise.all([
+      ...roles.map((role) =>
+        store.doc('modelRoles', role).update({
+          primaryModel: role === 'embed' ? 'openai/text-embedding-3-small' : 'openai/gpt-oss-120b',
+          fallbackModel: role === 'embed' ? 'openai/text-embedding-3-small' : 'openai/gpt-oss-120b',
+        }),
+      ),
+      ...['openai/text-embedding-3-small', 'openai/gpt-oss-120b'].map((id) =>
+        store.doc('models', id).set({
+          id,
+          enabled: true,
+          promptCostPerMTok: '0.02',
+          completionCostPerMTok: '0',
+        }),
+      ),
+    ]);
+    expect(
+      await checkFirestoreRuntimeData(store, {
+        agentId,
+        provider: 'openrouter',
+        embeddingSpace: {
+          provider: 'openrouter',
+          model: 'openai/text-embedding-3-small',
+          dimensions: 1536,
+          revision: 'legacy-postgres-text-embedding-3-small-1536',
+        },
+      }),
+    ).toEqual({ ready: true, issues: [] });
+  });
+
   it('fails closed on incompatible embedding provenance', async () => {
     await seed();
     expect(

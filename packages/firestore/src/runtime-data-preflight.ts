@@ -1,4 +1,4 @@
-import type { EmbeddingSpace } from '@assistant/persistence';
+import { type EmbeddingSpace, embeddingModelId } from '@assistant/persistence';
 import type { InstallationStore } from './store.js';
 
 const REQUIRED_ROLES = [
@@ -138,10 +138,7 @@ export async function checkFirestoreRuntimeData(
     }
     modelIds.add(primary);
     modelIds.add(fallback);
-    if (
-      role === 'embed' &&
-      primary !== `${input.embeddingSpace.provider}/${input.embeddingSpace.model}`
-    ) {
+    if (role === 'embed' && primary !== embeddingModelId(input.embeddingSpace)) {
       add('embedding_mismatch', 'embed');
     }
   }
