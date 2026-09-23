@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const findDueTasks = vi.hoisted(() => vi.fn());
 const executeAgentTask = vi.hoisted(() => vi.fn());
 const sweepStep = vi.hoisted(() => vi.fn());
+const firestoreOwnerReady = vi.hoisted(() => vi.fn());
 
 vi.mock('@assistant/core', () => ({
   findDueTasks,
@@ -24,7 +25,7 @@ vi.mock('./task-runner.js', () => ({ executeAgentTask }));
 vi.mock('./executor-deps.js', () => ({
   executorDeps: () => ({ notifyApproval: vi.fn(), notifyOwner: vi.fn() }),
 }));
-vi.mock('./deps.js', () => ({ agentServices: () => ({}), firestoreOwnerReady: vi.fn() }));
+vi.mock('./deps.js', () => ({ agentServices: () => ({}), firestoreOwnerReady }));
 
 const { startPoller } = await import('./poller.js');
 
@@ -49,8 +50,10 @@ beforeEach(() => {
   vi.useFakeTimers();
   findDueTasks.mockReset();
   executeAgentTask.mockReset();
+  firestoreOwnerReady.mockReset();
   findDueTasks.mockResolvedValue([]);
   executeAgentTask.mockResolvedValue({ outcome: 'done' });
+  firestoreOwnerReady.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -121,6 +124,32 @@ describe('startPoller', () => {
     await vi.advanceTimersByTimeAsync(62_000);
     expect(sweepStep).toHaveBeenCalled();
     for (const release of releases) release();
+    stop();
+  });
+
+  it('runs Firestore approval maintenance without entering PostgreSQL sweeps', async () => {
+    const expireStale = vi.fn(async () => []);
+    const resumeResolved = vi.fn(async () => []);
+    const expireWatches = vi.fn(async () => 0);
+    const firestoreDeps = {
+      config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: 'owner-agent' },
+      db: {},
+      router: {},
+      modules: { sweepSteps: [], ticks: [] },
+      persistence: {
+        approvals: { expireStale, resumeResolved },
+        watches: { expire: expireWatches },
+      },
+    } as never;
+
+    const stop = startPoller(firestoreDeps);
+    await vi.advanceTimersByTimeAsync(62_000);
+
+    expect(firestoreOwnerReady).toHaveBeenCalled();
+    expect(expireStale).toHaveBeenCalled();
+    expect(resumeResolved).toHaveBeenCalled();
+    expect(expireWatches).toHaveBeenCalledWith('owner-agent', expect.any(Date));
+    expect(sweepStep).not.toHaveBeenCalled();
     stop();
   });
 });

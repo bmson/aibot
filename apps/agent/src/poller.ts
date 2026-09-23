@@ -49,7 +49,6 @@ export function startPoller(deps: AgentDeps): () => void {
 
   /** One maintenance pass, guarded so a slow sweep never overlaps itself. */
   const sweep = async () => {
-    if (deps.config.PERSISTENCE_DRIVER === 'firestore') return;
     if (sweeping) return;
     sweeping = true;
     // Each maintenance step is independent; guard each so one failure can't
@@ -62,6 +61,24 @@ export function startPoller(deps: AgentDeps): () => void {
       }
     };
     try {
+      if (deps.config.PERSISTENCE_DRIVER === 'firestore') {
+        // Keep Firestore approval lifecycles alive in the local queue runtime.
+        // These repository operations atomically update approvals and their
+        // parked task checkpoints; invoking SQL maintenance here would hit the
+        // Firestore mode's deliberate PostgreSQL tripwire.
+        if (!(await firestoreOwnerReady(deps))) return;
+        const approvals = deps.persistence?.approvals;
+        if (!approvals) throw new Error('Firestore approval persistence is unavailable');
+        await runStep('expireStaleApprovals', () => approvals.expireStale());
+        await runStep('resumeResolvedApprovalTasks', () => approvals.resumeResolved());
+        const watches = deps.persistence?.watches;
+        if (watches) {
+          await runStep('expireWatches', () =>
+            watches.expire(deps.config.FIRESTORE_AGENT_ID, new Date()),
+          );
+        }
+        return;
+      }
       await runStep('expireStaleApprovals', async () => {
         const woken = await expireStaleApprovals(deps.db);
         if (woken.length) console.log(`sweep: expired approvals woke ${woken.length} task(s)`);
