@@ -8,7 +8,7 @@ const QUARANTINE_LIMIT = 100;
 const RECALL_FEEDBACK_WINDOW_DAYS = 90;
 
 /** Read every page or fail explicitly; overview counts must never be silently truncated. */
-async function scan(query: Query): Promise<QueryDocumentSnapshot[]> {
+export async function scanProfileCollection(query: Query): Promise<QueryDocumentSnapshot[]> {
   const rows: QueryDocumentSnapshot[] = [];
   let cursor: QueryDocumentSnapshot | undefined;
   while (true) {
@@ -22,7 +22,7 @@ async function scan(query: Query): Promise<QueryDocumentSnapshot[]> {
   }
 }
 
-function ownedRow<T extends { id: string; agentId: string }>(
+export function ownedProfileRow<T extends { id: string; agentId: string }>(
   doc: QueryDocumentSnapshot,
   agentId: string,
 ): T {
@@ -47,10 +47,12 @@ export class FirestoreProfileMemoryHubRepository implements ProfileMemoryHubRepo
       throw new Error('Configured agent record is malformed');
 
     const [contactDocs, memoryDocs, feedbackDocs, taskDocs, cardDoc] = await Promise.all([
-      scan(this.store.collection('contacts')),
-      scan(this.store.collection('memories').where('agentId', '==', agentId)),
-      scan(this.store.collection('recallFeedback').where('agentId', '==', agentId)),
-      scan(this.store.collection('tasks').where('agentId', '==', agentId)),
+      scanProfileCollection(this.store.collection('contacts')),
+      scanProfileCollection(this.store.collection('memories').where('agentId', '==', agentId)),
+      scanProfileCollection(
+        this.store.collection('recallFeedback').where('agentId', '==', agentId),
+      ),
+      scanProfileCollection(this.store.collection('tasks').where('agentId', '==', agentId)),
       this.store.doc('ownerCards', agentId).get(),
     ]);
     const contacts = contactDocs.map((doc) => {
@@ -62,7 +64,7 @@ export class FirestoreProfileMemoryHubRepository implements ProfileMemoryHubRepo
     const owner = contacts.find((row) => row.trust === 'owner');
     const now = this.store.now();
     const knowledge = memoryDocs
-      .map((doc) => ownedRow<Records['memories']>(doc, agentId))
+      .map((doc) => ownedProfileRow<Records['memories']>(doc, agentId))
       .filter((row) => row.category === 'knowledge');
     const unexpired = knowledge.filter((row) => !row.expiresAt || row.expiresAt > now);
     const usable = unexpired.filter((row) => !row.quarantined);
@@ -76,11 +78,11 @@ export class FirestoreProfileMemoryHubRepository implements ProfileMemoryHubRepo
       .slice(0, QUARANTINE_LIMIT);
     const feedbackSince = new Date(now.getTime() - RECALL_FEEDBACK_WINDOW_DAYS * 86_400_000);
     const feedback = feedbackDocs
-      .map((doc) => ownedRow<Records['recallFeedback']>(doc, agentId))
+      .map((doc) => ownedProfileRow<Records['recallFeedback']>(doc, agentId))
       .filter((row) => row.createdAt >= feedbackSince);
     const rated = feedback.map((row) => row.createdAt).sort((a, b) => b.getTime() - a.getTime());
     const latestOrganizer = taskDocs
-      .map((doc) => ownedRow<Records['tasks']>(doc, agentId))
+      .map((doc) => ownedProfileRow<Records['tasks']>(doc, agentId))
       .filter((row) => {
         const trigger = row.trigger as { payload?: { job?: unknown } } | null;
         return trigger?.payload?.job === 'memory.consolidate';

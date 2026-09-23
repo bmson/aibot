@@ -84,3 +84,32 @@ export function isProfileMemoryHubRepository(value: unknown): value is ProfileMe
     typeof value.load === 'function'
   );
 }
+
+export type ProfileOverviewRead = Pick<
+  ProfileMemoryHubOverview,
+  'owner' | 'quarantined' | 'memoryHealth' | 'latestOrganizer'
+> &
+  ProfileVoiceOverview & {
+    people: Array<{
+      contact: NonNullable<ProfileMemoryHubOverview['owner']>;
+      factCount: number;
+    }>;
+    ownerFacts: ProfileMemoryHubOverview['quarantined'];
+    card: { content: string; compiledAt: Date } | null;
+  };
+
+export interface ProfileOverviewRepository {
+  readonly kind: 'profile-overview-repository';
+  load(): Promise<ProfileOverviewRead>;
+}
+
+export function isProfileOverviewRepository(value: unknown): value is ProfileOverviewRepository {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'kind' in value &&
+    value.kind === 'profile-overview-repository' &&
+    'load' in value &&
+    typeof value.load === 'function'
+  );
+}

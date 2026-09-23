@@ -28,6 +28,7 @@ export { FirestoreOwnerContextRepository } from './owner-context.js';
 export { FirestorePrivacyErasureRepository } from './privacy-erasure.js';
 export { FirestorePrivacyExportRepository } from './privacy-export.js';
 export { FirestoreProfileLibraryRepository } from './profile-library.js';
+export { FirestoreProfileOverviewRepository } from './profile-full-overview.js';
 export { createFirestoreProfileMemoryCommandPersistence } from './profile-memory-commands.js';
 export { FirestoreProfileMemoryHubRepository } from './profile-memory-hub.js';
 export { FirestoreProfileMemoryMaintenance } from './profile-memory-maintenance.js';
