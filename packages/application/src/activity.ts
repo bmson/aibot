@@ -1,6 +1,7 @@
 import { getAgent } from '@assistant/core/chat';
 import { maybeFireWakeBrief } from '@assistant/core/workflow/schedules';
 import type { Db } from '@assistant/db';
+import type { ScheduleRepository } from '@assistant/persistence';
 
 export type ForegroundActivityResult = { ok: true; wakeBriefFired: boolean };
 
@@ -14,6 +15,19 @@ export async function recordOwnerForeground(db: Db): Promise<ForegroundActivityR
   const agent = await getAgent(db);
   const fired = await maybeFireWakeBrief(db, agent).catch((err) => {
     console.error('activity: wake brief trigger failed', err);
+    return false;
+  });
+  return { ok: true, wakeBriefFired: fired };
+}
+
+/** Fire the same deduplicated wake brief through a portable schedule repository. */
+export async function recordOwnerForegroundWithRepository(
+  repository: ScheduleRepository,
+  agent: { id: string; timezone: string },
+  now = new Date(),
+): Promise<ForegroundActivityResult> {
+  const fired = await maybeFireWakeBrief(repository, agent, now).catch((error) => {
+    console.error('activity: wake brief trigger failed', error);
     return false;
   });
   return { ok: true, wakeBriefFired: fired };
