@@ -335,6 +335,9 @@ importers:
       '@google-cloud/firestore':
         specifier: ^9.2.0
         version: 9.2.0
+      google-auth-library:
+        specifier: 10.9.1
+        version: 10.9.1
     devDependencies:
       tsx:
         specifier: ^4.23.13

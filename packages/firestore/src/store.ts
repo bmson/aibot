@@ -8,6 +8,7 @@ import {
   Timestamp,
   VectorValue,
 } from '@google-cloud/firestore';
+import type { AuthClient } from 'google-auth-library';
 
 const CODEC_TAG = 'assistantFirestoreCodecV1';
 const CODEC_MARKER = Buffer.from('assistant-firestore-codec-v1', 'utf8');
@@ -148,15 +149,15 @@ export function createInstallationStore(input: {
   projectId: string;
   installationId: string;
   databaseId?: string;
-  /** Optional development auth client for local operator tools. */
-  authClient?: object;
+  /** Optional operator auth client, forwarded through Firestore's GAPIC settings. */
+  authClient?: AuthClient;
 }): InstallationStore {
   if (!input.projectId) throw new Error('Firestore requires a project ID');
   const settings = {
     projectId: input.projectId,
     databaseId: input.databaseId ?? '(default)',
-    ...(input.authClient ? { authClient: input.authClient } : {}),
-  } as ConstructorParameters<typeof Firestore>[0] & { authClient?: object };
+    ...(input.authClient ? { authClient: input.authClient, preferRest: true } : {}),
+  } as ConstructorParameters<typeof Firestore>[0] & { authClient?: AuthClient };
   return new InstallationStore(
     new Firestore(settings),
     input.installationId,

@@ -31,6 +31,18 @@ pnpm consumer:seed-runtime --input /private/path/runtime-seed.json --apply \
   --project CUSTOMER_PROJECT --installation CUSTOMER_INSTALLATION --database CUSTOMER_DATABASE
 ```
 
+If the active gcloud login works but ADC is unavailable, add `--gcloud-auth`. The helper keeps the OAuth client and short-lived access tokens in process memory, requests tokens from `gcloud` as needed, and never prints or writes tokens. Without that flag, the command uses ADC. The same option is available on `consumer:install` when `--seed-plan` is supplied; it only authenticates the Firestore seed. Terraform can use the active gcloud login's short-lived token through its `GOOGLE_OAUTH_ACCESS_TOKEN` environment variable, for example:
+
+```sh
+GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)" pnpm consumer:install \
+  --manifest /private/path/manifest.json --archive /private/path/source.tar.gz \
+  --state /private/path/state.json --state-bucket CUSTOMER_BUCKET \
+  --terraform-dir infra/gcp/consumer/terraform \
+  --seed-plan /private/path/runtime-seed.json --gcloud-auth --apply
+```
+
+The access token stays out of the command line and files, but is present in the installer/Terraform process environment and expires; start the command with a fresh token and rerun with a fresh one if the token expires before Terraform finishes. Firestore 9.2 does not expose `authClient` in its public `Settings` type. This path explicitly selects Firestore's REST fallback, whose google-gax client accepts `authClient`, and a compatibility test verifies that the client reaches google-gax. Recheck this path when upgrading Firestore or google-gax; it is not a universal authentication guarantee.
+
 The apply requires the configured installation's known runtime collections to be empty before creating a seed marker. It never overwrites existing records. An interrupted apply can resume only with the identical plan hash and unchanged records; a foreign record, changed value, or changed plan stops it. A completed rerun performs the read-only preflight and reports `already_seeded` without rewriting records. Do not edit an incomplete seed manually or use this command to migrate an existing installation. The initial zero day/month counters are for `seedAt`; later periods are created on demand by the budget repository.
 
 After apply, run the read-only preflight with `GCP_PROJECT`, `ASSISTANT_WORKSPACE_ID`, `FIRESTORE_DATABASE_ID`, `FIRESTORE_AGENT_ID`, `FIRESTORE_EMBEDDING_SPACE`, and `LLM_PROVIDER=vertex` matching the plan and installation. A passing data preflight proves internal configuration consistency only. Customer authentication, Cloud Run wiring, live Vertex model/IAM checks, Firestore indexes, public ingress, and application smoke remain separate gates. This command does not set `runtimeReady`, start containers, merge an installer stage, or deploy anything.

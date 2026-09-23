@@ -14,6 +14,7 @@ import {
   provisionConsumerInstallationWithPublishedImages,
   provisionConsumerInstallationWithSeed,
 } from './consumer-install.js';
+import { createGcloudAuthClient } from './gcloud-auth.js';
 
 const seedAt = '2026-09-22T12:00:00.000Z';
 const agentId = '8202725c-1311-4eec-bddc-698c92db37d4';
@@ -206,6 +207,23 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
         { apply: false, runtime: false },
         { apply: true, runtime: false },
       ]);
+      expect((await store.doc('coordination', 'runtime-seed').get()).get('status')).toBe(
+        'complete',
+      );
+    });
+
+    it('uses the explicitly supplied gcloud auth client for the integrated Firestore seed', async () => {
+      const { store, options, input } = setup();
+      const stub = installer(input);
+      const authClient = await createGcloudAuthClient(async (args) =>
+        args[1] === 'list' ? 'operator@example.test\n' : `ya29.${'a'.repeat(40)}\n`,
+      );
+      const result = await provisionConsumerInstallationWithSeed(
+        dependencies,
+        { ...options, seedAuthClient: authClient },
+        stub.provision,
+      );
+      expect(result.seed?.status).toBe('seeded');
       expect((await store.doc('coordination', 'runtime-seed').get()).get('status')).toBe(
         'complete',
       );

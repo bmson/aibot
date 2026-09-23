@@ -12,19 +12,22 @@ import {
   systemRunner,
   validateInstallationManifest,
 } from '@assistant/setup/installation';
+import type { AuthClient } from 'google-auth-library';
 import { publishConsumerImages } from './consumer-publish-images.js';
 import {
   applyConsumerRuntimeSeed,
   type ConsumerRuntimeSeedPlan,
   planConsumerRuntimeSeed,
 } from './consumer-runtime-seed.js';
+import { createGcloudAuthClient } from './gcloud-auth.js';
 
-const usage = `Usage: pnpm consumer:install --manifest PATH --archive PATH --state PATH --state-bucket NAME --terraform-dir PATH [--seed-plan PATH] [--images PATH --runtime-config PATH] [--owner-access-callback HTTPS_URL] [--apply]
+const usage = `Usage: pnpm consumer:install --manifest PATH --archive PATH --state PATH --state-bucket NAME --terraform-dir PATH [--seed-plan PATH] [--gcloud-auth] [--images PATH --runtime-config PATH] [--owner-access-callback HTTPS_URL] [--apply]
 
 Without --apply this verifies the release archive, customer project billing, and selected Firestore database absence.
 With --apply it bootstraps customer-owned state, runs Terraform, and records resumable foundation stages.
 Supply both --images and --runtime-config to opt in to digest-pinned Cloud Run deployment after the foundation.
 Supply --seed-plan with an explicit customer runtime seed plan to create required data before Cloud Run.
+With --seed-plan, --gcloud-auth uses the active gcloud account in memory for the Firestore seed when ADC is unavailable. Terraform can use a short-lived GOOGLE_OAUTH_ACCESS_TOKEN from the active gcloud login.
 On an initialized private runtime, pass --owner-access-callback with the exact Google OAuth Web client redirect URI. Preview is read-only; --apply grants public invocation to web only after the customer has configured the OAuth client and HTTPS routing.
 On an already provisioned foundation, --build-images --runtime-config PATH --apply builds and pushes the exact source commit's web and agent images into the customer repository, then deploys those digests. Docker Buildx and an active customer gcloud login are required; Docker authentication is configured for this run.
 `;
@@ -69,12 +72,13 @@ function validateSeedScope(plan: ConsumerRuntimeSeedPlan, options: ConsumerInsta
 /** Keep the create-only seed outside the setup package and before runtime deployment. */
 export async function provisionConsumerInstallationWithSeed(
   dependencies: ConsumerInstallDependencies,
-  options: ConsumerInstallOptions & { seedInput?: unknown },
+  options: ConsumerInstallOptions & { seedInput?: unknown; seedAuthClient?: AuthClient },
   provision: typeof provisionConsumerInstallation = provisionConsumerInstallation,
 ): Promise<ConsumerInstallResult & { seed?: SeedSummary }> {
-  if (options.seedInput === undefined) return provision(dependencies, options);
-  const plan = planConsumerRuntimeSeed(options.seedInput);
-  validateSeedScope(plan, options);
+  const { seedInput, seedAuthClient, ...installOptions } = options;
+  if (seedInput === undefined) return provision(dependencies, installOptions);
+  const plan = planConsumerRuntimeSeed(seedInput);
+  validateSeedScope(plan, installOptions);
   const summary = {
     planHash: plan.planHash,
     recordCount: plan.records.length,
@@ -82,15 +86,15 @@ export async function provisionConsumerInstallationWithSeed(
   };
   // This verifies the archive, runtime config, and current installation stage
   // before the foundation or seed changes customer resources.
-  const preview = await provision(dependencies, { ...options, apply: false });
-  if (!options.apply) return { ...preview, seed: { status: 'planned', ...summary } };
+  const preview = await provision(dependencies, { ...installOptions, apply: false });
+  if (!installOptions.apply) return { ...preview, seed: { status: 'planned', ...summary } };
 
   const initialized = preview.manifest.stage.current === 'initialized';
   if (preview.manifest.stage.current === 'ready')
     throw new Error('Runtime seed cannot be added after the installation is ready');
   const foundation = initialized
     ? preview
-    : await provision(dependencies, { ...options, runtime: undefined });
+    : await provision(dependencies, { ...installOptions, runtime: undefined });
   if (foundation.manifest.stage.current !== 'provisioned' && !initialized)
     throw new Error('Runtime seed requires a provisioned customer foundation');
 
@@ -98,6 +102,7 @@ export async function provisionConsumerInstallationWithSeed(
     projectId: plan.input.projectId,
     installationId: plan.input.installationId,
     databaseId: preview.manifest.identity.databaseId,
+    ...(seedAuthClient ? { authClient: seedAuthClient } : {}),
   });
   let status: 'seeded' | 'already_seeded';
   try {
@@ -113,28 +118,35 @@ export async function provisionConsumerInstallationWithSeed(
   } finally {
     await store.db.terminate();
   }
-  const result = options.runtime ? await provision(dependencies, options) : foundation;
+  const result = installOptions.runtime
+    ? await provision(dependencies, installOptions)
+    : foundation;
   return { ...result, seed: { status, ...summary } };
 }
 
 /** Build customer-owned runtime images after the foundation has passed its read-only checks. */
 export async function provisionConsumerInstallationWithPublishedImages(
   dependencies: ConsumerInstallDependencies,
-  options: ConsumerInstallOptions & { seedInput?: unknown; runtimeConfig: unknown },
+  options: ConsumerInstallOptions & {
+    seedInput?: unknown;
+    seedAuthClient?: AuthClient;
+    runtimeConfig: unknown;
+  },
   provision: typeof provisionConsumerInstallation = provisionConsumerInstallation,
   publish: typeof publishConsumerImages = publishConsumerImages,
 ): Promise<ConsumerInstallResult & { imagePublish: unknown; seed?: SeedSummary }> {
-  if (options.runtime) throw new Error('Use either --images or --build-images, not both');
-  if (options.manifest.selection.modelProvider !== 'google')
+  const { seedInput, seedAuthClient, ...installOptions } = options;
+  if (installOptions.runtime) throw new Error('Use either --images or --build-images, not both');
+  if (installOptions.manifest.selection.modelProvider !== 'google')
     throw new Error('Building the customer runtime requires the Google model provider');
-  if (options.seedInput !== undefined) {
-    validateSeedScope(planConsumerRuntimeSeed(options.seedInput), {
-      ...options,
+  if (seedInput !== undefined) {
+    validateSeedScope(planConsumerRuntimeSeed(seedInput), {
+      ...installOptions,
       runtime: { images: {}, config: options.runtimeConfig },
     });
   }
 
-  const sourceSha = options.manifest.identity.release.commitSha;
+  const sourceSha = installOptions.manifest.identity.release.commitSha;
   const checkout = await dependencies.runner.run('git', ['rev-parse', '--verify', 'HEAD^{commit}']);
   if (!checkout.ok || checkout.stdout !== sourceSha)
     throw new Error(
@@ -149,7 +161,7 @@ export async function provisionConsumerInstallationWithPublishedImages(
   if (changes.stdout.length > 0)
     throw new Error('--build-images requires a clean tracked working tree');
 
-  const foundation = await provision(dependencies, { ...options, apply: false });
+  const foundation = await provision(dependencies, { ...installOptions, apply: false });
   if (foundation.manifest.stage.current !== 'provisioned')
     throw new Error('--build-images requires an already provisioned customer foundation');
 
@@ -157,19 +169,24 @@ export async function provisionConsumerInstallationWithPublishedImages(
   const outputPath = path.join(scratch, 'image-manifest.json');
   try {
     const publishResult = await publish({
-      projectId: options.manifest.identity.projectId,
-      region: options.manifest.identity.region,
-      repositoryId: options.manifest.identity.installationId,
+      projectId: installOptions.manifest.identity.projectId,
+      region: installOptions.manifest.identity.region,
+      repositoryId: installOptions.manifest.identity.installationId,
       sourceSha,
-      dryRun: !options.apply,
-      ...(options.apply ? { outputPath } : {}),
+      dryRun: !installOptions.apply,
+      ...(installOptions.apply ? { outputPath } : {}),
     });
-    if (!options.apply) return { ...foundation, imagePublish: publishResult };
+    if (!installOptions.apply) return { ...foundation, imagePublish: publishResult };
 
     const images = JSON.parse(await readFile(outputPath, 'utf8')) as unknown;
     const result = await provisionConsumerInstallationWithSeed(
       dependencies,
-      { ...options, runtime: { images, config: options.runtimeConfig } },
+      {
+        ...installOptions,
+        seedInput,
+        seedAuthClient,
+        runtime: { images, config: options.runtimeConfig },
+      },
       provision,
     );
     return {
@@ -203,6 +220,7 @@ async function main(): Promise<void> {
       images: { type: 'string' },
       'runtime-config': { type: 'string' },
       'seed-plan': { type: 'string' },
+      'gcloud-auth': { type: 'boolean', default: false },
       'owner-access-callback': { type: 'string' },
       state: { type: 'string' },
       'state-bucket': { type: 'string' },
@@ -245,9 +263,15 @@ async function main(): Promise<void> {
     ownerAccessCallback: values['owner-access-callback'],
   };
   const installDependencies = { runner: systemRunner };
+  if (values['gcloud-auth'] && !values['seed-plan'])
+    throw new Error('--gcloud-auth is only available with --seed-plan');
+  const seedInput = values['seed-plan'] ? await json(values['seed-plan']) : undefined;
+  const seedAuthClient =
+    values.apply && values['gcloud-auth'] ? await createGcloudAuthClient() : undefined;
   const installOptions = {
     ...options,
-    seedInput: values['seed-plan'] ? await json(values['seed-plan']) : undefined,
+    seedInput,
+    seedAuthClient,
   };
   const result = values['build-images']
     ? await provisionConsumerInstallationWithPublishedImages(installDependencies, {

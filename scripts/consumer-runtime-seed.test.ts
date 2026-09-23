@@ -3,7 +3,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInstallationStore, FirestoreCostRepository } from '@assistant/firestore';
-import { afterEach, describe, expect, it } from 'vitest';
+import { OAuth2Client } from 'google-auth-library';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyConsumerRuntimeSeed,
   planConsumerRuntimeSeed,
@@ -147,6 +148,47 @@ describe('consumer runtime seed plan', () => {
     } finally {
       if (previousCredentials === undefined) delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
       else process.env.GOOGLE_APPLICATION_CREDENTIALS = previousCredentials;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('uses active gcloud auth only for an explicitly applied seed and forwards it to Firestore', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'consumer-seed-auth-'));
+    const file = path.join(directory, 'plan.json');
+    try {
+      const input = fixture();
+      await writeFile(file, JSON.stringify(input), 'utf8');
+      const authClient = new OAuth2Client();
+      const createAuthClient = vi.fn(async () => authClient);
+      const createStore = vi.fn(() => {
+        throw new Error('stop after verifying Firestore client configuration');
+      });
+      await expect(
+        runConsumerRuntimeSeedCli(
+          [
+            '--input',
+            file,
+            '--apply',
+            '--project',
+            input.projectId,
+            '--installation',
+            input.installationId,
+            '--database',
+            '(default)',
+            '--gcloud-auth',
+          ],
+          { createAuthClient, createStore },
+        ),
+      ).rejects.toThrow('stop after verifying');
+      expect(createAuthClient).toHaveBeenCalledOnce();
+      expect(createStore).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: input.projectId,
+          databaseId: '(default)',
+          authClient,
+        }),
+      );
+    } finally {
       await rm(directory, { recursive: true, force: true });
     }
   });
