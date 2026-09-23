@@ -19,6 +19,8 @@ export function proxy(request: NextRequest) {
     (path === '/' && request.method === 'GET') ||
     (path === '/profile/memories' && request.method === 'GET') ||
     (path === '/people' && request.method === 'GET') ||
+    (/^\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path) &&
+      request.method === 'GET') ||
     (path === '/profile/data' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/profile-export' && request.method === 'GET') ||
     (path === '/capabilities' && request.method === 'GET') ||

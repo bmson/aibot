@@ -41,3 +41,28 @@ export async function getFirestorePeopleDirectory(
   await assertPrivacyErasureFenceUnchanged(store, configuredAgentId, fence);
   return contacts.filter((contact) => contact.trust !== 'owner');
 }
+
+/** One saved contact; SQL graph, events, and mutation controls are not available here. */
+export async function getFirestorePersonDetail(
+  store: InstallationStore,
+  configuredAgentId: string,
+  contactId: string,
+): Promise<ProfileContact | null> {
+  await assertConfiguredOwner(store, configuredAgentId);
+  const fence = await readPrivacyErasureFence(store, configuredAgentId);
+  const contact = await new FirestoreProfilePeopleReadRepository(
+    store,
+    configuredAgentId,
+  ).getContact(contactId);
+  if (
+    contact &&
+    (!contact.id ||
+      typeof contact.name !== 'string' ||
+      typeof contact.relationship !== 'string' ||
+      typeof contact.trust !== 'string')
+  )
+    throw new Error('People detail contains a malformed contact');
+  await assertConfiguredOwner(store, configuredAgentId);
+  await assertPrivacyErasureFenceUnchanged(store, configuredAgentId, fence);
+  return contact?.trust === 'owner' ? null : contact;
+}

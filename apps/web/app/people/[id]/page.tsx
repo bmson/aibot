@@ -6,6 +6,9 @@ import {
   PERSON_GROUP_LABELS,
 } from '@assistant/application/people-presentation';
 import type { MemorySnapshot } from '@assistant/application/profile';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { createInstallationStore, getFirestorePersonDetail } from '@assistant/firestore';
+import type { ProfileContact } from '@assistant/persistence';
 import { Handshake, MapPin, Sparkles } from 'lucide-react';
 import { notFound } from 'next/navigation';
 import { MergeControl } from '@/app/people/merge-control';
@@ -37,6 +40,54 @@ export const dynamic = 'force-dynamic';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FACT_LIMIT = 250;
+
+function ReadOnlyPersonDetail({ contact }: { contact: ProfileContact }) {
+  const aliases = Array.isArray(contact.aliases)
+    ? contact.aliases.filter((value): value is string => typeof value === 'string')
+    : [];
+  const emails = Array.isArray(contact.emails)
+    ? contact.emails.filter((value): value is string => typeof value === 'string')
+    : [];
+  const phones = Array.isArray(contact.phones)
+    ? contact.phones.filter((value): value is string => typeof value === 'string')
+    : [];
+  return (
+    <PageShell size="reading">
+      <PageHeader back={{ href: '/people', label: 'People' }} title={contact.name} />
+      <div className="mt-4 flex min-w-0 items-start gap-4">
+        <PersonAvatar name={contact.name} size="lg" />
+        <div className="min-w-0 flex-1">
+          <MetaLine
+            segments={[contact.relationship || 'Relationship not set']}
+            className="text-sm"
+          />
+          {contact.trust === 'unknown' ? (
+            <Badge tone="amber" size="xs">
+              Unverified
+            </Badge>
+          ) : null}
+        </div>
+      </div>
+      {aliases.length ||
+      emails.length ||
+      phones.length ||
+      (typeof contact.notes === 'string' && contact.notes) ? (
+        <Panel className="mt-6">
+          <InfoGrid columns={1}>
+            {aliases.length ? (
+              <InfoItem label="Also known as">{aliases.join(', ')}</InfoItem>
+            ) : null}
+            {emails.length ? <InfoItem label="Email">{emails.join(', ')}</InfoItem> : null}
+            {phones.length ? <InfoItem label="Phone">{phones.join(', ')}</InfoItem> : null}
+            {typeof contact.notes === 'string' && contact.notes ? (
+              <InfoItem label="Notes">{contact.notes}</InfoItem>
+            ) : null}
+          </InfoGrid>
+        </Panel>
+      ) : null}
+    </PageShell>
+  );
+}
 
 function toFactView(memory: MemorySnapshot, now: Date, subjectLabel: string): FactView {
   const from = memory.validFrom?.toISOString().slice(0, 10);
@@ -71,6 +122,23 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
   await requireOwner();
   const { id } = await params;
   if (!UUID_RE.test(id)) notFound();
+
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    const store = createInstallationStore({
+      projectId: config.GCP_PROJECT,
+      installationId: config.ASSISTANT_WORKSPACE_ID,
+    });
+    try {
+      const contact = await getFirestorePersonDetail(store, config.FIRESTORE_AGENT_ID, id);
+      if (!contact) notFound();
+      return <ReadOnlyPersonDetail contact={contact} />;
+    } finally {
+      await store.db.terminate();
+    }
+  }
 
   const db = getDb();
   const now = new Date();
