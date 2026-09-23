@@ -5,6 +5,7 @@ import type {
   Records,
 } from '@assistant/persistence';
 import { Timestamp } from '@google-cloud/firestore';
+import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 async function allByAgent<T extends { id: string; agentId: string }>(
@@ -134,6 +135,7 @@ export class FirestoreProfileLibraryRepository implements ProfileLibraryReposito
   }
 
   async listFilters(agentId: string) {
+    const fence = await readPrivacyErasureFence(this.store, agentId);
     const memories = (await this.memories(agentId))
       .map((row) => row.memory)
       .filter((row) => row.category === 'knowledge');
@@ -146,7 +148,7 @@ export class FirestoreProfileLibraryRepository implements ProfileLibraryReposito
     const subjectIds = new Set(
       memories.flatMap((row) => (row.subjectContactId ? [row.subjectContactId] : [])),
     );
-    return {
+    const result = {
       subjects: [...subjectIds]
         .flatMap((id) => {
           const contact = contacts.get(id);
@@ -155,9 +157,12 @@ export class FirestoreProfileLibraryRepository implements ProfileLibraryReposito
         .sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id)),
       sources: [...new Set(memories.flatMap((row) => (row.source ? [row.source] : [])))].sort(),
     };
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    return result;
   }
 
   async list(agentId: string, input: ProfileLibraryInput) {
+    const fence = await readPrivacyErasureFence(this.store, agentId);
     let candidates = (await this.memories(agentId)).filter((row) => matches(row, input));
     const sources = await getRecords<Records['knowledgeGraphSources']>(
       this.store,
@@ -220,6 +225,7 @@ export class FirestoreProfileLibraryRepository implements ProfileLibraryReposito
           : null,
       };
     });
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
     return { rows, total, page, totalPages };
   }
 }

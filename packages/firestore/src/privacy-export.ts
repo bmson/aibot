@@ -4,6 +4,7 @@ import type {
   Records,
 } from '@assistant/persistence';
 import { FieldPath, type Query } from '@google-cloud/firestore';
+import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const PAGE_SIZE = 200;
@@ -46,6 +47,7 @@ export class FirestorePrivacyExportRepository implements PrivacyExportRepository
     )
       throw new Error('Privacy export requires exactly one configured agent');
     const agentId = agent.id;
+    const fence = await readPrivacyErasureFence(this.store, agentId);
     const owned = (collection: string) =>
       allRows<Record<string, unknown>>(
         this.store.collection(collection).where('agentId', '==', agentId),
@@ -85,7 +87,7 @@ export class FirestorePrivacyExportRepository implements PrivacyExportRepository
     const cardRow = card.exists
       ? decodeRecord<{ agentId?: unknown; content?: unknown; compiledAt?: unknown }>(card.data())
       : null;
-    return {
+    const result: LongTermMemoryExportData = {
       memories: activeMemories.map((row) =>
         pick(row, [
           'id',
@@ -183,5 +185,7 @@ export class FirestorePrivacyExportRepository implements PrivacyExportRepository
         ]),
       ) as Records['situationPacks'][],
     };
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    return result;
   }
 }

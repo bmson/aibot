@@ -23,6 +23,7 @@ export * from './model-config.js';
 export { createPostgresModelRoutingRepository } from './model-routing-repository.js';
 export { createPostgresOwnerCardCompilationRepository } from './owner-card-compilation-repository.js';
 export { createPostgresOwnerContextRepository } from './owner-context-repository.js';
+export { createPostgresPrivacyErasureRepository } from './privacy-erasure-repository.js';
 export { createPostgresPrivacyExportRepository } from './privacy-export-repository.js';
 export { createPostgresProfileLibraryRepository } from './profile-library-repository.js';
 export { createPostgresProfileMemoryMaintenance } from './profile-memory-maintenance-repository.js';

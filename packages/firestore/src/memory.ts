@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { type EmbeddingSpace, type Records, validateEmbedding } from '@assistant/persistence';
 import { FieldValue } from '@google-cloud/firestore';
+import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
 
 export function embeddingSpaceKey(space: EmbeddingSpace): string {
@@ -24,7 +25,14 @@ export class FirestoreMemoryRepository {
     const hashRef = this.store.doc('memoryContentHashes', memory.contentHash);
     const tombstoneRef = this.store.doc('memoryTombstones', memory.contentHash);
     return this.store.db.runTransaction(async (tx) => {
-      const [existing, hash, tombstone] = await tx.getAll(ref, hashRef, tombstoneRef);
+      const [existing, hash, tombstone, erasure] = await tx.getAll(
+        ref,
+        hashRef,
+        tombstoneRef,
+        this.store.doc('privacyErasureJobs', memory.agentId),
+      );
+      if (erasure?.exists && privacyErasureIsActive(erasure.get('status')))
+        throw new Error('Privacy erasure is in progress');
       if (tombstone?.exists) return false;
       if (existing?.exists || hash?.exists) return false;
       tx.create(
@@ -94,6 +102,9 @@ export class FirestoreMemoryRepository {
     // cached vector hit after erasure or a changed privacy/trust state.
     return this.store.db.runTransaction(
       async (tx) => {
+        const erasure = await tx.get(this.store.doc('privacyErasureJobs', input.agentId));
+        if (erasure.exists && privacyErasureIsActive(erasure.get('status')))
+          return { memories: [], candidateLimitReached: false };
         const refs = candidates.docs.flatMap((doc) => [
           doc.ref,
           this.store.doc('memoryTombstones', doc.get('contentHash')),

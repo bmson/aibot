@@ -10,6 +10,7 @@ import {
   type Query,
   type QueryDocumentSnapshot,
 } from '@google-cloud/firestore';
+import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 const PAGE_SIZE = 500;
@@ -61,6 +62,8 @@ export class FirestoreOwnerCardCompilationRepository implements OwnerCardCompila
     const cardRef = this.store.doc('ownerCards', input.agentId);
     return this.store.db.runTransaction(async (tx) => {
       await tx.get(cardRef);
+      const erasure = await tx.get(this.store.doc('privacyErasureJobs', input.agentId));
+      if (erasure.exists && privacyErasureIsActive(erasure.get('status'))) return '';
       const readBounded = async (base: Query, maximum: number, label: string) => {
         const docs: QueryDocumentSnapshot[] = [];
         let cursor: QueryDocumentSnapshot | undefined;
