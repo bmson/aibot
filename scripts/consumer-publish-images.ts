@@ -30,6 +30,11 @@ export type CommandRunner = (
   options: { cwd: string; capture?: boolean; env?: Readonly<Record<string, string>> },
 ) => Promise<string>;
 
+/** Fixed phase text only; never forward Docker or credential-helper output. */
+export function reportImagePublishProgress(message: string): void {
+  process.stderr.write(`consumer:images: ${message}\n`);
+}
+
 async function exposeUserBuildxPlugin(userDockerConfig: string, isolatedDockerConfig: string) {
   const plugin = path.join(userDockerConfig, 'cli-plugins', 'docker-buildx');
   try {
@@ -300,7 +305,12 @@ async function writeNewManifest(outputPath: string, value: unknown): Promise<voi
 /** Dry-run validates the exact Git archive and needs neither Docker nor Google auth. */
 export async function publishConsumerImages(
   options: PublishOptions,
-  dependencies: { repoRoot?: string; runner?: CommandRunner; userDockerConfig?: string } = {},
+  dependencies: {
+    repoRoot?: string;
+    runner?: CommandRunner;
+    userDockerConfig?: string;
+    onProgress?: (message: string) => void;
+  } = {},
 ) {
   validateOptions(options);
   const repoRoot = dependencies.repoRoot ?? defaultRepoRoot;
@@ -334,6 +344,7 @@ export async function publishConsumerImages(
     await runner('tar', ['-xf', archivePath, '-C', context], { cwd: repoRoot });
     await inspectArchiveContext(context);
     const sourceArchiveDigest = await sha256File(archivePath);
+    dependencies.onProgress?.('Verified committed source archive.');
     const root = imageRoot(options);
     const plan = {
       sourceSha: options.sourceSha,
@@ -347,9 +358,11 @@ export async function publishConsumerImages(
       },
     };
     if (options.dryRun) return { dryRun: true as const, ...plan };
+    dependencies.onProgress?.('Checking customer image repository.');
     await verifyRepository(options, runner, repoRoot);
     const userDockerConfig =
       dependencies.userDockerConfig ?? process.env.DOCKER_CONFIG ?? path.join(homedir(), '.docker');
+    dependencies.onProgress?.('Configuring temporary Docker authentication.');
     const dockerEnv = await configureCustomerDockerAuth(
       options,
       scratch,
@@ -357,8 +370,12 @@ export async function publishConsumerImages(
       repoRoot,
       path.resolve(userDockerConfig),
     );
+    dependencies.onProgress?.('Building and publishing web image.');
     const web = await publishOne('web', options, context, scratch, runner, dockerEnv);
+    dependencies.onProgress?.('Verified web image digest.');
+    dependencies.onProgress?.('Building and publishing agent image.');
     const agent = await publishOne('agent', options, context, scratch, runner, dockerEnv);
+    dependencies.onProgress?.('Verified agent image digest.');
     const manifest = {
       schemaVersion: 1,
       ...plan,
@@ -366,6 +383,7 @@ export async function publishConsumerImages(
       terraform: { web_image_digest: web.digest, agent_image_digest: agent.digest },
     };
     await writeNewManifest(options.outputPath as string, manifest);
+    dependencies.onProgress?.('Saved verified image manifest.');
     return manifest;
   } finally {
     await rm(scratch, { recursive: true, force: true });
@@ -405,14 +423,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   ] as const;
   const missing = required.find(([, value]) => !value)?.[0];
   if (missing) throw new Error(`missing ${missing}\n\n${usage.trim()}`);
-  const result = await publishConsumerImages({
-    projectId: values.project as string,
-    region: values.region as string,
-    repositoryId: values.repository as string,
-    sourceSha: values['source-sha'] as string,
-    dryRun: values['dry-run'] === true,
-    outputPath: values.output ? path.resolve(values.output) : undefined,
-  });
+  const result = await publishConsumerImages(
+    {
+      projectId: values.project as string,
+      region: values.region as string,
+      repositoryId: values.repository as string,
+      sourceSha: values['source-sha'] as string,
+      dryRun: values['dry-run'] === true,
+      outputPath: values.output ? path.resolve(values.output) : undefined,
+    },
+    { onProgress: reportImagePublishProgress },
+  );
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 

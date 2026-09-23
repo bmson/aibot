@@ -13,7 +13,7 @@ import {
   validateInstallationManifest,
 } from '@assistant/setup/installation';
 import type { AuthClient } from 'google-auth-library';
-import { publishConsumerImages } from './consumer-publish-images.js';
+import { publishConsumerImages, reportImagePublishProgress } from './consumer-publish-images.js';
 import {
   applyConsumerRuntimeSeed,
   type ConsumerRuntimeSeedPlan,
@@ -168,14 +168,17 @@ export async function provisionConsumerInstallationWithPublishedImages(
   const scratch = await mkdtemp(path.join(tmpdir(), 'assistant-consumer-install-'));
   const outputPath = path.join(scratch, 'image-manifest.json');
   try {
-    const publishResult = await publish({
-      projectId: installOptions.manifest.identity.projectId,
-      region: installOptions.manifest.identity.region,
-      repositoryId: installOptions.manifest.identity.installationId,
-      sourceSha,
-      dryRun: !installOptions.apply,
-      ...(installOptions.apply ? { outputPath } : {}),
-    });
+    const publishResult = await publish(
+      {
+        projectId: installOptions.manifest.identity.projectId,
+        region: installOptions.manifest.identity.region,
+        repositoryId: installOptions.manifest.identity.installationId,
+        sourceSha,
+        dryRun: !installOptions.apply,
+        ...(installOptions.apply ? { outputPath } : {}),
+      },
+      { onProgress: reportImagePublishProgress },
+    );
     if (!installOptions.apply) return { ...foundation, imagePublish: publishResult };
 
     const images = JSON.parse(await readFile(outputPath, 'utf8')) as unknown;
