@@ -1,3 +1,9 @@
+import type {
+  DocumentCatalogOverview,
+  DocumentCatalogReadRepository,
+  DocumentCatalogView,
+  DocumentChunkView,
+} from '@assistant/persistence';
 import { FieldPath } from '@google-cloud/firestore';
 import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
@@ -7,22 +13,8 @@ const MAX_DOCUMENTS = 5_000;
 const DOCUMENT_LIST_LIMIT = 200;
 const MAX_DETAIL_CHUNKS = 1_000;
 
-export type FirestoreDocumentView = {
-  id: string;
-  title: string;
-  mime: string;
-  source: string;
-  trust: string;
-  status: string;
-  extractor: string;
-  chunkCount: number;
-  charCount: number;
-  bytes: number;
-  error: string | null;
-  createdAt: Date;
-};
-
-export type FirestoreDocumentChunkView = { chunkIndex: number; text: string; charCount: number };
+export type FirestoreDocumentView = DocumentCatalogView;
+export type FirestoreDocumentChunkView = DocumentChunkView;
 
 type DocumentRow = FirestoreDocumentView & { agentId: string; fileId: string };
 type FileRow = { id: string; agentId: string; bytes?: number | null };
@@ -57,17 +49,15 @@ function owned<T extends { id: string; agentId: string }>(
 }
 
 /** SQL-free Documents reads scoped to the configured installation owner. */
-export class FirestoreDocumentReadRepository {
+export class FirestoreDocumentReadRepository implements DocumentCatalogReadRepository {
+  readonly kind = 'document-catalog-read-repository' as const;
+
   constructor(
     readonly store: InstallationStore,
     readonly configuredAgentId: string,
   ) {}
 
-  async list(agentId: string): Promise<{
-    documents: FirestoreDocumentView[];
-    stats: { total: number; ready: number; pending: number; chunks: number };
-    primaryConversationId: string | null;
-  }> {
+  async list(agentId: string): Promise<DocumentCatalogOverview> {
     if (!agentId || agentId !== this.configuredAgentId)
       throw new Error('Document read is outside the configured installation');
     await assertConfiguredOwner(this.store, agentId);
@@ -147,10 +137,7 @@ export class FirestoreDocumentReadRepository {
   async get(
     agentId: string,
     id: string,
-  ): Promise<{
-    document: FirestoreDocumentView;
-    chunks: FirestoreDocumentChunkView[];
-  } | null> {
+  ): Promise<{ document: FirestoreDocumentView; chunks: FirestoreDocumentChunkView[] } | null> {
     if (!agentId || agentId !== this.configuredAgentId)
       throw new Error('Document read is outside the configured installation');
     await assertConfiguredOwner(this.store, agentId);
