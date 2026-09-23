@@ -257,7 +257,10 @@ export class FirestoreProfileMemoryHubRepository implements ProfileMemoryHubRepo
     );
     const feedbackSince = new Date(now.getTime() - RECALL_FEEDBACK_WINDOW_DAYS * 86_400_000);
     await visitProfileCollection(
-      this.store.collection('recallFeedback').where('agentId', '==', agentId) as Query,
+      this.store
+        .collection('recallFeedback')
+        .where('agentId', '==', agentId)
+        .select('id', 'agentId', 'verdict', 'createdAt') as Query,
       (doc) => {
         const feedback = ownedProfileRow<Records['recallFeedback']>(doc, agentId);
         if (feedback.createdAt < feedbackSince) return;
@@ -268,7 +271,18 @@ export class FirestoreProfileMemoryHubRepository implements ProfileMemoryHubRepo
       },
     );
     await visitProfileCollection(
-      this.store.collection('tasks').where('agentId', '==', agentId) as Query,
+      this.store
+        .collection('tasks')
+        .where('agentId', '==', agentId)
+        .select(
+          'id',
+          'agentId',
+          'status',
+          'progress',
+          'trigger',
+          'createdAt',
+          'updatedAt',
+        ) as Query,
       (doc) => {
         const task = ownedProfileRow<Records['tasks']>(doc, agentId);
         const trigger = task.trigger as { payload?: { job?: unknown } } | null;
