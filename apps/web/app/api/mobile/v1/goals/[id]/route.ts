@@ -3,16 +3,41 @@ import {
   changeGoalAutonomy,
   changeGoalStatus,
   type GoalInput,
+  getGoalRecord,
   restoreGoalRecord,
   startExistingGoalWork,
   updateGoalSettings,
 } from '@assistant/application/goals';
-import { getDb } from '@/lib/server';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { FirestoreGoalReadRepository } from '@assistant/firestore';
+import { getDb, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+): Promise<Response> {
+  if (!(await isMobileAuthed(request))) return mobileUnauthorized();
+  const { id } = await params;
+  if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid goal id' }, { status: 400 });
+  const config = loadConfig();
+  let goal: Awaited<ReturnType<FirestoreGoalReadRepository['get']>> = null;
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
+    goal = await new FirestoreGoalReadRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    ).get(config.FIRESTORE_AGENT_ID, id);
+  } else {
+    goal = await getGoalRecord(getDb(), id);
+  }
+  return goal ? mobileJson({ goal }) : mobileJson({ error: 'goal not found' }, { status: 404 });
+}
 
 function goalInput(body: unknown): GoalInput | { error: string } {
   if (!body || typeof body !== 'object' || Array.isArray(body))
