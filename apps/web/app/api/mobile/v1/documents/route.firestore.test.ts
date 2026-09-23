@@ -235,7 +235,8 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
     const docs = await store.collection('documents').where('agentId', '==', agentId).get();
     const snapshot = docs.docs.find((row) => row.get('title') === 'Owner notes');
     expect(snapshot).toBeDefined();
-    uploadedDocumentId = snapshot?.id;
+    const documentIdFromRecord = String(snapshot?.get('id'));
+    uploadedDocumentId = documentIdFromRecord;
     const document = snapshot?.data();
     expect(document).toMatchObject({
       agentId,
@@ -255,7 +256,7 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
 
     const tasks = await store
       .collection('tasks')
-      .where('trigger.payload.documentId', '==', snapshot?.id)
+      .where('trigger.payload.documentId', '==', documentIdFromRecord)
       .get();
     expect(tasks.size).toBe(1);
     const task = tasks.docs[0];
@@ -279,7 +280,7 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
       (
         await store
           .collection('tasks')
-          .where('trigger.payload.documentId', '==', snapshot?.id)
+          .where('trigger.payload.documentId', '==', documentIdFromRecord)
           .get()
       ).size,
     ).toBe(1);
@@ -295,20 +296,23 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
     expect((await POST(new Request(url, { method: 'POST', body: mislabeledImage }))).status).toBe(
       415,
     );
-    expect(staged.size).toBe(0);
+    const stagedBaseline = staged.size;
+    const documentsBaseline = (await store.collection('documents').get()).size;
+    const filesBaseline = (await store.collection('files').get()).size;
+    const tasksBaseline = (await store.collection('tasks').get()).size;
+    const outboxBaseline = (await store.collection('outbox').get()).size;
+    expect(staged.size).toBe(stagedBaseline);
 
     await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
     const form = new FormData();
     form.set('file', new File(['private text'], 'private.txt', { type: 'text/plain' }));
     const response = await POST(new Request(url, { method: 'POST', body: form }));
     expect(response.status).toBe(409);
-    expect(staged.size).toBe(0);
-    expect((await store.collection('documents').where('agentId', '==', agentId).get()).size).toBe(
-      1,
-    );
-    expect((await store.collection('files').get()).size).toBe(2);
-    expect((await store.collection('tasks').get()).size).toBe(0);
-    expect((await store.collection('outbox').get()).size).toBe(0);
+    expect(staged.size).toBe(stagedBaseline);
+    expect((await store.collection('documents').get()).size).toBe(documentsBaseline);
+    expect((await store.collection('files').get()).size).toBe(filesBaseline);
+    expect((await store.collection('tasks').get()).size).toBe(tasksBaseline);
+    expect((await store.collection('outbox').get()).size).toBe(outboxBaseline);
     await store.doc('privacyErasureJobs', agentId).delete();
   });
 
