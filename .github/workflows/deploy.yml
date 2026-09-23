@@ -177,13 +177,11 @@ jobs:
       # device" on browser:TAG while an otherwise-identical run the day before
       # squeaked through. One image per runner is far more headroom than that
       # ever had, but the chromium-carrying browser image is big enough that
-      # this stays — and running in parallel it costs the release nothing but
-      # the slowest job's copy of it.
+      # this stays for the Chromium-carrying browser image only. Other images
+      # have enough headroom on their separate runners, while disk cleanup has
+      # repeatedly delayed even the small backup and ordinary web image jobs.
       - name: Reclaim runner disk for the image build
-        # The PostgreSQL backup image is small. On two releases its runner
-        # remained in this cleanup step for several minutes before any image
-        # work began, blocking the entire deploy matrix.
-        if: matrix.entry.name != 'backup'
+        if: matrix.entry.name == 'browser'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker image prune --all --force
