@@ -22,6 +22,7 @@ import {
   createFirestoreExecutionPersistence,
   createInstallationStore,
   FirestoreGoalProgressRepository,
+  FirestoreMcpConnectionReadRepository,
   FirestoreOwnerNoticeRepository,
   FirestoreReminderRepository,
   FirestoreScheduleRepository,
@@ -100,6 +101,22 @@ export async function firestoreOwnerReady(deps: AgentDeps): Promise<boolean> {
 /** Maintenance stays fenced while an imported workspace awaits explicit activation. */
 export async function firestoreMaintenanceReady(deps: AgentDeps): Promise<boolean> {
   return checkFirestoreMaintenanceReady(deps.firestoreStore, deps.config.FIRESTORE_AGENT_ID);
+}
+
+/** Firestore MCP tools are opt-in outside production until runtime validation matures. */
+export function registerFirestoreMcpTools(
+  registry: ToolRegistry,
+  store: InstallationStore,
+  agentId: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): ToolRegistry {
+  if (environment.NODE_ENV === 'production' || environment.FIRESTORE_MCP_TOOLS_ENABLED !== 'true')
+    return registry;
+  const connections = new FirestoreMcpConnectionReadRepository(store, agentId);
+  return registerMcpTools(registry, {
+    list: (ownerId) => connections.list(ownerId),
+    get: (ownerId, connectionId) => connections.getForTools(ownerId, connectionId),
+  });
 }
 
 /**
@@ -356,37 +373,42 @@ function buildFirestoreDeps(config: Config): AgentDeps {
       ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, workspacePrefix)
       : new LocalWorkspaceStore(workspaceRoot);
   // Memory, scheduling, goal progress, and owner notices use portable repositories.
-  // Other built-ins still depend on SQL and remain unavailable in this profile.
+  // MCP tools can use their Firestore adapter, but remain explicitly opt-in here.
   const notices = new FirestoreOwnerNoticeRepository(store, config.FIRESTORE_AGENT_ID);
-  const registry = registerPortableOwnerNotifyTool(
-    registerPortableGoalProgressTool(
-      registerPortableTaskTools(
-        registerPortableMemoryTools(new ToolRegistry(), {
-          memory: persistence.memory,
-          embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
-            router.embed(texts),
-          ),
-          supersede: (input) =>
-            supersedeContradictedFacts(
-              {
-                memory: persistence.memorySupersede,
-                router,
-                onRetired: () => compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
-              },
-              input,
+  const registry = registerFirestoreMcpTools(
+    registerPortableOwnerNotifyTool(
+      registerPortableGoalProgressTool(
+        registerPortableTaskTools(
+          registerPortableMemoryTools(new ToolRegistry(), {
+            memory: persistence.memory,
+            embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
+              router.embed(texts),
             ),
-        }),
-        { tasks: persistence.tasks },
+            supersede: (input) =>
+              supersedeContradictedFacts(
+                {
+                  memory: persistence.memorySupersede,
+                  router,
+                  onRetired: () =>
+                    compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
+                },
+                input,
+              ),
+          }),
+          { tasks: persistence.tasks },
+        ),
+        new FirestoreGoalProgressRepository(store, config.FIRESTORE_AGENT_ID),
       ),
-      new FirestoreGoalProgressRepository(store, config.FIRESTORE_AGENT_ID),
-    ),
-    {
-      post: (input) => {
-        if (input.agentId !== config.FIRESTORE_AGENT_ID)
-          throw new Error('Owner notice is outside the configured Firestore agent');
-        return notices.postToolNotice(input);
+      {
+        post: (input) => {
+          if (input.agentId !== config.FIRESTORE_AGENT_ID)
+            throw new Error('Owner notice is outside the configured Firestore agent');
+          return notices.postToolNotice(input);
+        },
       },
-    },
+    ),
+    store,
+    config.FIRESTORE_AGENT_ID,
   );
   const modules = installModules(composition.modules, {
     config,
