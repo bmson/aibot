@@ -5,6 +5,13 @@ import {
   recompileProfileCard,
   updateVoiceProfile,
 } from '@assistant/application/profile';
+import { loadConfig } from '@assistant/config';
+import {
+  assertPrivacyErasureFenceUnchanged,
+  createInstallationStore,
+  FirestoreProfileVoiceOverviewRepository,
+  readPrivacyErasureFence,
+} from '@assistant/firestore';
 import { getApplication, getDb, getWorkspace } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -15,12 +22,45 @@ const ACTIONS = 'organize, recompile, purge-voice, voice-profile, or forget-all'
 /** The distilled writing voice, so the phone can edit the same profile the web does. */
 export async function GET(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const store = createInstallationStore({
+      projectId: config.GCP_PROJECT,
+      installationId: config.ASSISTANT_WORKSPACE_ID,
+    });
+    try {
+      const assertConfiguredOwner = async () => {
+        const agents = await store.collection('agents').limit(2).get();
+        if (
+          agents.size !== 1 ||
+          agents.docs[0]?.id !== store.doc('agents', config.FIRESTORE_AGENT_ID).id ||
+          agents.docs[0]?.get('id') !== config.FIRESTORE_AGENT_ID
+        )
+          throw new Error('Voice overview requires one matching configured owner');
+      };
+      await assertConfiguredOwner();
+      const fence = await readPrivacyErasureFence(store, config.FIRESTORE_AGENT_ID);
+      const { voiceStats, voiceProfile } = await getVoiceOverview(
+        new FirestoreProfileVoiceOverviewRepository(store, config.FIRESTORE_AGENT_ID),
+      );
+      await assertConfiguredOwner();
+      await assertPrivacyErasureFenceUnchanged(store, config.FIRESTORE_AGENT_ID, fence);
+      return mobileJson({ voiceStats, voiceProfile });
+    } finally {
+      await store.db.terminate();
+    }
+  }
   const { voiceStats, voiceProfile } = await getVoiceOverview(getDb());
   return mobileJson({ voiceStats, voiceProfile });
 }
 
 export async function POST(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
+    return mobileJson(
+      { error: 'Memory profile updates are unavailable in Firestore mode.' },
+      { status: 503 },
+    );
   const body = (await request.json().catch(() => null)) as {
     action?: unknown;
     confirm?: unknown;
