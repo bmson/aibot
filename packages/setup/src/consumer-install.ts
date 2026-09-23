@@ -48,6 +48,8 @@ export interface ConsumerInstallResult {
 export interface ConsumerInstallDependencies {
   runner: CommandRunner;
   terraform?: CommandRunner;
+  /** Injectable IAM API transport for tests; defaults to the Node fetch implementation. */
+  fetcher?: typeof fetch;
 }
 
 function commandFailed(command: string, result: CommandResult): Error {
@@ -103,6 +105,56 @@ async function verifyTerraformVersion(runner: CommandRunner): Promise<void> {
   if (tooOld)
     throw new Error(
       `Terraform ${version} is too old; this installer requires Terraform 1.6.0 or newer.`,
+    );
+}
+
+async function verifyCloudRunActAs(
+  runner: CommandRunner,
+  fetcher: typeof fetch,
+  project: string,
+  serviceAccountEmail: string,
+): Promise<void> {
+  const token = await runner.run('gcloud', ['auth', 'print-access-token']);
+  if (!token.ok || !token.stdout.trim())
+    throw new Error(
+      'Cannot verify Cloud Run service-account access; refresh the active gcloud login and retry',
+    );
+
+  let response: Response;
+  try {
+    response = await fetcher(
+      `https://iam.googleapis.com/v1/projects/${encodeURIComponent(project)}/serviceAccounts/${encodeURIComponent(serviceAccountEmail)}:testIamPermissions`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token.stdout.trim()}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ permissions: ['iam.serviceAccounts.actAs'] }),
+      },
+    );
+  } catch {
+    throw new Error(
+      `Cannot check Cloud Run attachment access on ${serviceAccountEmail}; verify IAM API access and retry`,
+    );
+  }
+  if (!response.ok)
+    throw new Error(
+      `Cannot check Cloud Run attachment access on ${serviceAccountEmail}; verify IAM API access and retry`,
+    );
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error(`IAM permission check returned invalid data for ${serviceAccountEmail}`);
+  }
+  const permissions =
+    body && typeof body === 'object' && 'permissions' in body
+      ? (body as { permissions?: unknown }).permissions
+      : undefined;
+  if (!Array.isArray(permissions) || !permissions.includes('iam.serviceAccounts.actAs'))
+    throw new Error(
+      `Cloud Run deployer lacks iam.serviceAccounts.actAs on ${serviceAccountEmail}; grant roles/iam.serviceAccountUser on this service account, then retry`,
     );
 }
 
@@ -1119,13 +1171,34 @@ export async function provisionConsumerInstallation(
     ]);
     if (!initialized.ok)
       throw new Error('Runtime Terraform init failed; check state bucket access and retry');
+    const runtimeVarsForApply = [
+      ...terraformVars(current, options.stateBucket),
+      ...runtimeVars(runtime),
+    ];
+    const identities = await terraformRunner.run('terraform', [
+      `-chdir=${workspace.terraformDir}`,
+      'apply',
+      '-input=false',
+      '-auto-approve',
+      '-target=google_service_account.web',
+      ...runtimeVarsForApply,
+    ]);
+    if (!identities.ok)
+      throw new Error(
+        'Could not prepare the Cloud Run service identities for IAM preflight; retry the runtime install',
+      );
+    const fetcher = dependencies.fetcher ?? globalThis.fetch;
+    for (const identity of [
+      `${current.identity.installationId}-runtime@${current.identity.projectId}.iam.gserviceaccount.com`,
+      `${current.identity.installationId}-web@${current.identity.projectId}.iam.gserviceaccount.com`,
+    ])
+      await verifyCloudRunActAs(dependencies.runner, fetcher, current.identity.projectId, identity);
     const applied = await terraformRunner.run('terraform', [
       `-chdir=${workspace.terraformDir}`,
       'apply',
       '-input=false',
       '-auto-approve',
-      ...terraformVars(current, options.stateBucket),
-      ...runtimeVars(runtime),
+      ...runtimeVarsForApply,
     ]);
     if (!applied.ok)
       throw new Error(
