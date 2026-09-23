@@ -1,10 +1,12 @@
-import type { Records } from '@assistant/persistence';
+import { createHash, randomUUID } from 'node:crypto';
+import { newTaskRecord, type Records, type TaskCreateInput } from '@assistant/persistence';
 import type {
   DocumentSnapshot,
   QueryDocumentSnapshot,
   QuerySnapshot,
   Transaction,
 } from '@google-cloud/firestore';
+import { createWakeIntent } from './outbox.js';
 import { privacyErasureIsActive, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
@@ -25,6 +27,28 @@ const MAX_GOAL_TASKS = 200;
 
 function goalName(id: string) {
   return `goal:${id}`;
+}
+
+function scheduleNameKey(agentId: string, name: string) {
+  return createHash('sha256')
+    .update(JSON.stringify([agentId, name]))
+    .digest('hex');
+}
+
+function openingWorkMessage(goal: Pick<Goal, 'title' | 'description' | 'targetDate'>) {
+  return [
+    `Start working on my goal: ${goal.title}`,
+    goal.description ? `Context: ${goal.description}` : '',
+    goal.targetDate ? `Target date: ${goal.targetDate.toISOString().slice(0, 10)}` : '',
+    'Take one useful, concrete step now. This goal will keep running on its automation cadence; use this chat to guide the work. If you need information or approval, say exactly what you need. Do not create an additional mission or schedule.',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function conciseTaskTitle(value: string) {
+  const title = value.replace(/\s+/g, ' ').trim();
+  return title.length > 80 ? `${title.slice(0, 79)}…` : title;
 }
 
 function identity<T extends { id: string; agentId: string }>(
@@ -70,6 +94,212 @@ export class FirestoreGoalMutationRepository {
     readonly store: InstallationStore,
     readonly configuredAgentId: string,
   ) {}
+
+  private async createWork(
+    goalId: string,
+    input: GoalSettings | null,
+    automationFor: (goal: Goal) => {
+      cron: string;
+      instruction: string;
+      nextRunAt: (timezone: string) => Date;
+    },
+  ) {
+    if (!this.configuredAgentId) throw new Error('Goal mutation requires the configured owner');
+    const fence = await readPrivacyErasureFence(this.store, this.configuredAgentId);
+    const conversationId = randomUUID();
+    const taskId = randomUUID();
+    const scheduleId = randomUUID();
+    return this.store.db.runTransaction(async (tx) => {
+      const owners = await tx.get(this.store.collection('agents').limit(2));
+      const owner = owners.docs[0];
+      if (
+        owners.size !== 1 ||
+        !owner ||
+        owner.get('id') !== this.configuredAgentId ||
+        documentKey(this.configuredAgentId) !== owner.id
+      )
+        throw new Error('Goals require exactly one configured owner');
+      const now = this.store.now();
+      const goalRef = this.store.doc('goals', goalId);
+      const erasureRef = this.store.doc('privacyErasureJobs', this.configuredAgentId);
+      const [goalDoc, erasure] = await tx.getAll(goalRef, erasureRef);
+      if (!goalDoc || !erasure) throw new Error('Goal creation state is unavailable');
+      if (erasure?.exists) {
+        if (
+          erasure.get('agentId') !== this.configuredAgentId ||
+          privacyErasureIsActive(erasure.get('status')) ||
+          !erasure.updateTime ||
+          (fence && !erasure.updateTime.isEqual(fence)) ||
+          (!fence && erasure.exists)
+        )
+          throw new Error('Privacy erasure is in progress');
+      } else if (fence) {
+        throw new Error('Privacy erasure changed during goal mutation');
+      }
+
+      let goal: Goal;
+      if (input) {
+        if (goalDoc.exists) throw new Error('goal ID collision');
+        if (
+          !input.title.trim() ||
+          !Number.isInteger(input.priority) ||
+          input.priority < 1 ||
+          input.priority > 5
+        )
+          throw new Error('invalid goal input');
+        goal = {
+          id: goalId,
+          agentId: this.configuredAgentId,
+          createdAt: now,
+          updatedAt: now,
+          title: input.title,
+          description: input.description,
+          status: 'active',
+          priority: input.priority,
+          progress: 'First task queued.',
+          nextAction: 'Check the work chat for the first update.',
+          targetDate: input.targetDate,
+          mirrorToPrimary: input.mirrorToPrimary,
+          taintedOrigin: false,
+          autonomy: false,
+          archivedAt: null,
+        };
+      } else {
+        if (!goalDoc.exists) throw new Error('goal not found');
+        goal = decodeGoal(goalDoc, goalId, this.configuredAgentId);
+        if (goal.archivedAt) throw new Error('goal not found or is archived');
+      }
+      const active = goal.status === 'active' && !goal.archivedAt;
+      const automation = active ? automationFor(goal) : null;
+
+      const name = goalName(goalId);
+      const nameKey = scheduleNameKey(this.configuredAgentId, name);
+      const keyRef = this.store.doc('scheduleNames', nameKey);
+      const matches = await tx.get(ownerScheduleQuery(this.store, this.configuredAgentId, name));
+      if (matches.size > 1) throw new Error('Ambiguous goal automation');
+      const existing = decodeGoalSchedules(matches, this.configuredAgentId, name)[0];
+      const key = await tx.get(keyRef);
+      if (
+        key.exists &&
+        (key.get('agentId') !== this.configuredAgentId ||
+          key.get('name') !== name ||
+          typeof key.get('scheduleId') !== 'string' ||
+          (existing && key.get('scheduleId') !== existing.row.id))
+      )
+        throw new Error('Goal automation name key is malformed');
+      if (key.exists && !existing) {
+        const pointed = await tx.get(this.store.doc('schedules', String(key.get('scheduleId'))));
+        if (pointed.exists) throw new Error('Goal automation name key points outside its query');
+      }
+      const message = openingWorkMessage(goal);
+      const event = {
+        source: 'chat',
+        agentId: this.configuredAgentId,
+        conversationId,
+        trust: 'owner',
+        payload: { text: message, goalId, createdFrom: 'goal' },
+      } satisfies TaskCreateInput['trigger'];
+      const task = newTaskRecord(
+        {
+          agentId: this.configuredAgentId,
+          conversationId,
+          type: 'chat_turn',
+          trust: 'owner',
+          trigger: event,
+          title: conciseTaskTitle(message),
+          goalId,
+          budgetUsdLimit: '0.50',
+        },
+        taskId,
+        now,
+      );
+      let scheduleRow: Schedule | null = null;
+      if (automation) {
+        const timezone = owner.get('timezone');
+        if (typeof timezone !== 'string' || !timezone.trim())
+          throw new Error('Configured owner timezone is unavailable');
+        scheduleRow = {
+          ...(existing?.row ?? {
+            id: scheduleId,
+            name,
+            createdAt: now,
+            agentId: this.configuredAgentId,
+            lastRunAt: null,
+          }),
+          cron: automation.cron,
+          taskTemplate: {
+            type: 'scheduled',
+            goalId,
+            conversationId,
+            budgetUsdLimit: '0.75',
+            maxSteps: 16,
+            instruction: automation.instruction,
+            ...(goal.taintedOrigin ? { taintedOrigin: true } : {}),
+          },
+          enabled: true,
+          nextRunAt: automation.nextRunAt(timezone),
+          updatedAt: now,
+        };
+      }
+      tx.create(this.store.doc('conversations', conversationId), {
+        id: conversationId,
+        agentId: this.configuredAgentId,
+        createdAt: now,
+        updatedAt: now,
+        channel: 'chat',
+        trust: 'owner',
+        title: `Work: ${goal.title}`.slice(0, 120),
+        metadata: { goalId },
+        archivedAt: null,
+        modelOverride: null,
+        isPrimary: false,
+        lastReadAt: null,
+      });
+      if (input) tx.create(goalRef, encodeRecord(goal));
+      tx.create(this.store.doc('tasks', taskId), encodeRecord(task));
+      createWakeIntent(tx, this.store, { taskId, generation: 0, availableAt: now });
+      if (scheduleRow) {
+        if (existing) tx.update(existing.doc.ref, encodeRecord(scheduleRow));
+        else tx.create(this.store.doc('schedules', scheduleId), encodeRecord(scheduleRow));
+        tx.set(keyRef, {
+          agentId: this.configuredAgentId,
+          name,
+          scheduleId: scheduleRow.id,
+          createdAt: key.exists ? (key.get('createdAt') ?? now) : now,
+        });
+      } else if (existing?.row.enabled) {
+        tx.update(existing.doc.ref, { enabled: false, updatedAt: now });
+      }
+      return {
+        conversationId,
+        taskId,
+        taskGeneration: task.queueGeneration,
+        taskCreatedAt: task.createdAt,
+      };
+    });
+  }
+
+  createWithWork(
+    input: GoalSettings,
+    automationFor: (goal: Goal) => {
+      cron: string;
+      instruction: string;
+      nextRunAt: (timezone: string) => Date;
+    },
+  ) {
+    return this.createWork(randomUUID(), input, automationFor);
+  }
+
+  startWork(
+    id: string,
+    automationFor: (goal: Goal) => {
+      cron: string;
+      instruction: string;
+      nextRunAt: (timezone: string) => Date;
+    },
+  ) {
+    return this.createWork(id, null, automationFor);
+  }
 
   private async mutate<T>(
     id: string,
@@ -241,5 +471,52 @@ export class FirestoreGoalMutationRepository {
         throw new Error('a goal created from external content cannot be given free-range autonomy');
       tx.update(goalDoc.ref, encodeRecord({ autonomy: enabled, updatedAt: now }));
     });
+  }
+
+  async archiveInactive(olderThanDays = 30): Promise<void> {
+    if (!Number.isFinite(olderThanDays) || olderThanDays < 0 || olderThanDays > 3650)
+      throw new Error('Invalid goal archive age');
+    const cutoff = new Date(this.store.now().getTime() - olderThanDays * 24 * 60 * 60 * 1000);
+    const candidates = await this.store
+      .collection('goals')
+      .where('agentId', '==', this.configuredAgentId)
+      .where('status', 'in', ['done', 'abandoned'])
+      .where('archivedAt', '==', null)
+      .where('updatedAt', '<', cutoff)
+      .orderBy('updatedAt')
+      .limit(100)
+      .get();
+    for (const candidate of candidates.docs) {
+      const row = decodeRecord<Goal>(candidate.data());
+      identity(candidate, row, row.id, this.configuredAgentId);
+      await this.mutate(row.id, async ({ tx, goalDoc, goal, schedule, now }) => {
+        if (
+          goal.archivedAt ||
+          !['done', 'abandoned'].includes(goal.status) ||
+          goal.updatedAt >= cutoff
+        )
+          return;
+        const tasks = await tx.get(
+          this.store
+            .collection('tasks')
+            .where('goalId', '==', goal.id)
+            .limit(MAX_GOAL_TASKS + 1),
+        );
+        if (tasks.size > MAX_GOAL_TASKS) return;
+        for (const task of tasks.docs) {
+          const taskRow = decodeRecord<Records['tasks']>(task.data());
+          if (!taskRow.id || documentKey(taskRow.id) !== task.id)
+            throw new Error('Goal task identity mismatch');
+          if (
+            taskRow.agentId === this.configuredAgentId &&
+            taskRow.goalId === goal.id &&
+            !TERMINAL_TASKS.has(taskRow.status)
+          )
+            return;
+        }
+        tx.update(goalDoc.ref, encodeRecord({ archivedAt: now, updatedAt: now }));
+        if (schedule) tx.update(schedule.doc.ref, { enabled: false, updatedAt: now });
+      });
+    }
   }
 }

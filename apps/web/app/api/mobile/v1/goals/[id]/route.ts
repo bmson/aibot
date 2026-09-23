@@ -10,7 +10,12 @@ import {
 } from '@assistant/application/goals';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import { FirestoreGoalMutationRepository, FirestoreGoalReadRepository } from '@assistant/firestore';
-import { getDb, getFirestoreGoalScheduleUpdate, getFirestoreInstallationStore } from '@/lib/server';
+import {
+  getDb,
+  getFirestoreGoalScheduleUpdate,
+  getFirestoreInstallationStore,
+  startFirestoreGoalWork,
+} from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -125,10 +130,7 @@ export async function POST(
     );
     try {
       if (body?.action === 'start')
-        return mobileJson(
-          { error: 'starting goal work is unavailable with Firestore persistence.' },
-          { status: 503 },
-        );
+        return mobileJson({ ok: true, ...(await startFirestoreGoalWork(id)) });
       if (body?.action === 'delete' || body?.action === 'archive') await mutations.archive(id);
       else if (body?.action === 'restore') await mutations.restore(id);
       else if (body?.action === 'status') {

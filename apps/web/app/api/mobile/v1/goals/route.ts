@@ -5,8 +5,13 @@ import {
   listGoalsDashboardWithRepository,
 } from '@assistant/application/goals';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import { FirestoreGoalReadRepository } from '@assistant/firestore';
-import { getApplication, getDb, getFirestoreInstallationStore } from '@/lib/server';
+import { FirestoreGoalMutationRepository, FirestoreGoalReadRepository } from '@assistant/firestore';
+import {
+  createFirestoreGoalWithWork,
+  getApplication,
+  getDb,
+  getFirestoreInstallationStore,
+} from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -67,29 +72,44 @@ export async function GET(request: Request): Promise<Response> {
 export async function POST(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const body = await request.json().catch(() => null);
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
-    const message =
-      body &&
-      typeof body === 'object' &&
-      !Array.isArray(body) &&
-      (body as { action?: unknown }).action === 'archive-inactive'
-        ? 'archive-inactive is unavailable with Firestore persistence.'
-        : 'goal creation is unavailable with Firestore persistence.';
-    return mobileJson({ error: message }, { status: 503 });
-  }
+  const config = loadConfig();
   if (
     body &&
     typeof body === 'object' &&
     !Array.isArray(body) &&
     (body as { action?: unknown }).action === 'archive-inactive'
   ) {
+    if (config.PERSISTENCE_DRIVER === 'firestore') {
+      const problems = validateAgentPersistenceConfig(config);
+      if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
+      try {
+        await new FirestoreGoalMutationRepository(
+          getFirestoreInstallationStore(),
+          config.FIRESTORE_AGENT_ID,
+        ).archiveInactive();
+        return mobileJson({ ok: true });
+      } catch (error) {
+        return mobileJson(
+          { error: error instanceof Error ? error.message : 'Goals could not be archived.' },
+          { status: 409 },
+        );
+      }
+    }
     await archiveInactiveGoalRecords(getDb());
     return mobileJson({ ok: true });
   }
   const input = goalInput(body);
   if ('error' in input) return mobileJson({ error: input.error }, { status: 400 });
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
+  }
   try {
-    return mobileJson(await createGoalWithWork(getDb(), input), { status: 201 });
+    const result =
+      config.PERSISTENCE_DRIVER === 'firestore'
+        ? await createFirestoreGoalWithWork(input)
+        : await createGoalWithWork(getDb(), input);
+    return mobileJson(result, { status: 201 });
   } catch (error) {
     return mobileJson(
       { error: error instanceof Error ? error.message : 'Goal could not be created.' },
