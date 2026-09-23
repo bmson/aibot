@@ -241,8 +241,10 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore watches', () =>
       const results = await Promise.all([
         repository.commitSuggestion(input),
         repository.commitSuggestion(input),
+        repository.commitSuggestion(input),
       ]);
       expect(results[0]?.suggestion.id).toBe(results[1]?.suggestion.id);
+      expect(results[1]?.suggestion.id).toBe(results[2]?.suggestion.id);
       expect(results[0]?.conversationId).not.toBe('foreign');
       const destination = await store.doc('conversations', results[0]?.conversationId ?? '').get();
       expect(destination.get('agentId')).toBe('agent-a');
@@ -250,6 +252,136 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore watches', () =>
       expect(
         (await store.collection('suggestions').where('agentId', '==', 'agent-a').get()).size,
       ).toBe(1);
+      expect(
+        (await store.collection('conversations').where('title', '==', 'Notifications').get()).size,
+      ).toBe(1);
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('reuses imported random IDs and repairs a foreign suggestion conversation', async () => {
+    const store = emulatorStore();
+    try {
+      const repository = new FirestoreWatchRepository(store);
+      const now = new Date('2026-09-19T12:00:00Z');
+      const watch = await repository.create({
+        agentId: 'agent-a',
+        kind: 'email',
+        tier: 'suggest',
+        name: 'Imported suggestion',
+        match: {},
+        maxFires: null,
+        expiresAt: new Date('2026-09-20T12:00:00Z'),
+      });
+      await store.doc('conversations', 'foreign').set({
+        id: 'foreign',
+        agentId: 'agent-b',
+        title: 'Foreign',
+      });
+      await store.doc('watches', watch.id).update({ conversationId: 'foreign' });
+      await repository.recordFire({
+        watchId: watch.id,
+        agentId: 'agent-a',
+        triggerRef: 'gmail:imported',
+        summary: 'imported',
+        excerpt: '',
+        now,
+      });
+      await store.doc('conversations', 'imported-notifications').set({
+        id: 'imported-notifications',
+        agentId: 'agent-a',
+        title: 'Notifications',
+      });
+      await store.doc('suggestions', 'imported-suggestion').set({
+        id: 'imported-suggestion',
+        agentId: 'agent-a',
+        conversationId: 'foreign',
+        sourceRef: `watch:${watch.id}:gmail:imported`,
+        status: 'pending',
+      });
+      const input = {
+        agentId: 'agent-a',
+        watchId: watch.id,
+        triggerRef: 'gmail:imported',
+        summary: 'Imported',
+        proposedAction: 'Act',
+        now,
+      };
+      const results = await Promise.all([
+        repository.commitSuggestion(input),
+        repository.commitSuggestion(input),
+      ]);
+      expect(results.map((result) => result?.suggestion.id)).toEqual([
+        'imported-suggestion',
+        'imported-suggestion',
+      ]);
+      expect(results.map((result) => result?.conversationId)).toEqual([
+        'imported-notifications',
+        'imported-notifications',
+      ]);
+      expect(
+        (await store.doc('suggestions', 'imported-suggestion').get()).get('conversationId'),
+      ).toBe('imported-notifications');
+      expect((await store.collection('suggestions').get()).size).toBe(1);
+      expect(
+        (await store.collection('conversations').where('title', '==', 'Notifications').get()).size,
+      ).toBe(1);
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('repairs a commit interrupted between conversation and suggestion writes', async () => {
+    const store = emulatorStore();
+    try {
+      const repository = new FirestoreWatchRepository(store);
+      const now = new Date('2026-09-19T12:00:00Z');
+      const watch = await repository.create({
+        agentId: 'agent-a',
+        kind: 'email',
+        tier: 'suggest',
+        name: 'Recovery',
+        match: {},
+        maxFires: null,
+        expiresAt: new Date('2026-09-20T12:00:00Z'),
+      });
+      if (!watch.conversationId) throw new Error('missing watch conversation');
+      await store.doc('conversations', watch.conversationId).delete();
+      await repository.recordFire({
+        watchId: watch.id,
+        agentId: 'agent-a',
+        triggerRef: 'gmail:recovery',
+        summary: 'recovery',
+        excerpt: '',
+        now,
+      });
+      const input = {
+        agentId: 'agent-a',
+        watchId: watch.id,
+        triggerRef: 'gmail:recovery',
+        summary: 'Recover',
+        proposedAction: 'Act',
+        now,
+      };
+      const first = await repository.commitSuggestion(input);
+      if (!first) throw new Error('missing first suggestion');
+      await store.doc('suggestions', first.suggestion.id).delete();
+      const recovered = await repository.commitSuggestion(input);
+      expect(recovered?.suggestion.id).toBe(first.suggestion.id);
+      expect(recovered?.conversationId).toBe(first.conversationId);
+      expect((await store.collection('suggestions').get()).size).toBe(1);
+      expect(
+        (await store.collection('conversations').where('title', '==', 'Notifications').get()).size,
+      ).toBe(1);
+
+      await store.doc('conversations', first.conversationId).delete();
+      const recreated = await repository.commitSuggestion(input);
+      expect(recreated?.conversationId).toBe(first.conversationId);
+      expect(recreated?.suggestion.conversationId).toBe(first.conversationId);
+      expect((await store.doc('conversations', first.conversationId).get()).get('agentId')).toBe(
+        'agent-a',
+      );
     } finally {
       await disposeStore(store);
     }
