@@ -44,5 +44,9 @@ export interface DocumentCatalogRepository {
   createDocumentCatalog(input: {
     file: Records['files'];
     document: Records['documents'];
-  }): Promise<{ document: Records['documents']; duplicate: boolean }>;
+  }): Promise<{
+    document: Records['documents'];
+    duplicate: boolean;
+    task: { id: string; queueGeneration: number } | null;
+  }>;
 }
