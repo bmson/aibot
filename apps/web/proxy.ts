@@ -13,6 +13,8 @@ export function proxy(request: NextRequest) {
     /^\/api\/mobile\/v1\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const activityIdPath =
     /^\/api\/mobile\/v1\/activity\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const anomalyIdPath =
+    /^\/api\/mobile\/v1\/anomalies\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const skillIdPath =
     /^\/api\/mobile\/v1\/skills\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const personOccasionsPath =
@@ -78,6 +80,7 @@ export function proxy(request: NextRequest) {
     ) &&
       ['GET', 'PATCH', 'POST'].includes(request.method)) ||
     (activityIdPath.test(path) && request.method === 'POST') ||
+    (anomalyIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/skills' && request.method === 'POST') ||
     (skillIdPath.test(path) && ['POST', 'PATCH', 'DELETE'].includes(request.method)) ||
     (path === '/api/mobile/v1/workspace' && request.method === 'GET') ||
