@@ -47,10 +47,15 @@ async function countPendingApprovals(
 export class FirestoreShellStatusRepository implements ShellStatusRepository {
   readonly kind = 'shell-status-repository' as const;
 
-  constructor(readonly store: InstallationStore) {}
+  constructor(
+    readonly store: InstallationStore,
+    readonly configuredAgentId?: string,
+  ) {}
 
   async load(agentId: string): Promise<ShellStatusProjection> {
-    const source = await loadProfileHubSource(this.store);
+    if (this.configuredAgentId && this.configuredAgentId !== agentId)
+      throw new Error('Shell status agent is outside the configured installation');
+    const source = await loadProfileHubSource(this.store, this.configuredAgentId);
     if (source.agentId !== agentId)
       throw new Error('Shell status agent is outside the configured installation');
 
