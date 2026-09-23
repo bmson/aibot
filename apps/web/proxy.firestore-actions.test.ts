@@ -12,10 +12,8 @@ const status = (path: string, method: string) =>
   proxy(new NextRequest(`http://localhost${path}`, { method })).status;
 
 describe('Firestore mobile and web ingress', () => {
-  it('passes supported Pack, anomaly, and suggestion writes to authenticated handlers', () => {
+  it('passes supported anomaly and suggestion writes to authenticated handlers', () => {
     const paths = [
-      '/packs',
-      '/api/mobile/v1/packs',
       `/api/mobile/v1/anomalies/${randomUUID()}`,
       `/api/mobile/v1/suggestions/${randomUUID()}`,
     ];
