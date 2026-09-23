@@ -59,6 +59,7 @@ async function seededStore() {
     }),
     store.doc('writingSamples', sampleId).set({
       id: sampleId,
+      agentId,
       text: 'Private owner writing',
       context: 'upload:archive',
     }),

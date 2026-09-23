@@ -22,6 +22,33 @@ async function allRows<T>(query: Query): Promise<T[]> {
   }
 }
 
+async function ownerWritingSamples(store: InstallationStore, agentId: string) {
+  const rows: Records['writingSamples'][] = [];
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+  for (;;) {
+    let query: Query = store
+      .collection('writingSamples')
+      .orderBy(FieldPath.documentId())
+      .limit(PAGE_SIZE);
+    if (cursor) query = query.startAfter(cursor);
+    const page = await query.get();
+    for (const doc of page.docs) {
+      const row = decodeRecord<Records['writingSamples'] & { agentId?: unknown }>(doc.data());
+      if (
+        typeof row.id !== 'string' ||
+        !row.id ||
+        documentKey(row.id) !== doc.id ||
+        typeof row.agentId !== 'string' ||
+        !row.agentId
+      )
+        throw new Error('Privacy export found a writing sample without valid owner identity');
+      if (row.agentId === agentId) rows.push(row);
+    }
+    if (page.size < PAGE_SIZE) return rows;
+    cursor = page.docs.at(-1);
+  }
+}
+
 function pick<T extends object, K extends keyof T>(row: T, keys: readonly K[]): Pick<T, K> {
   return Object.fromEntries(keys.map((key) => [key, row[key]])) as Pick<T, K>;
 }
@@ -74,7 +101,7 @@ export class FirestorePrivacyExportRepository implements PrivacyExportRepository
       owned('knowledgeGraphEntityAliases'),
       owned('knowledgeGraphRelations'),
       allRows<Records['contacts']>(this.store.collection('contacts')),
-      allRows<Records['writingSamples']>(this.store.collection('writingSamples')),
+      ownerWritingSamples(this.store, agentId),
       allRows<Records['voiceProfile']>(this.store.collection('voiceProfile')),
       this.store.doc('ownerCards', agentId).get(),
       owned('situationPacks'),

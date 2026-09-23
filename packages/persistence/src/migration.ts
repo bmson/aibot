@@ -581,6 +581,7 @@ export function validateMigrationReferences(
     'tasks',
     'watch_fires',
     'watches',
+    'writing_samples',
   ]);
   for (const record of records) {
     if (

@@ -359,8 +359,31 @@ export class FirestorePrivacyErasureRepository implements PrivacyErasureReposito
     }
   }
 
+  private async assertWritingSamplesOwned(agentId: string): Promise<void> {
+    let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+    for (;;) {
+      let query: Query = this.store
+        .collection('writingSamples')
+        .orderBy(FieldPath.documentId())
+        .limit(PAGE_SIZE);
+      if (cursor) query = query.startAfter(cursor);
+      const page = await query.get();
+      for (const doc of page.docs) {
+        const id = doc.get('id');
+        if (doc.get('agentId') !== agentId || typeof id !== 'string' || documentKey(id) !== doc.id)
+          throw new Error('Writing sample ownership or identity mismatch');
+      }
+      if (page.size < PAGE_SIZE) return;
+      cursor = page.docs.at(-1);
+    }
+  }
+
   async erase(): Promise<PrivacyErasureCounts> {
     const agentId = await this.soleOwner();
+    // Do not begin the durable erase fence until every sample has explicit,
+    // matching ownership. Legacy installation-wide rows need a verified
+    // owner backfill before any owner-scoped destructive operation can run.
+    await this.assertWritingSamplesOwned(agentId);
     const job = await this.begin(agentId);
     await this.eraseVoiceImports(agentId, job.generation);
     await this.eraseSituationPacks(agentId, job.generation);
@@ -371,10 +394,16 @@ export class FirestorePrivacyErasureRepository implements PrivacyErasureReposito
     for (;;) {
       const removed = await this.store.db.runTransaction(async (tx) => {
         const jobRef = await this.activeJob(tx, agentId, job.generation);
-        const page = await tx.get(this.store.collection('writingSamples').limit(PAGE_SIZE));
+        const page = await tx.get(
+          this.store.collection('writingSamples').where('agentId', '==', agentId).limit(PAGE_SIZE),
+        );
         for (const doc of page.docs) {
-          if (typeof doc.get('id') !== 'string' || documentKey(doc.get('id')) !== doc.id)
-            throw new Error('Writing sample identity mismatch');
+          if (
+            doc.get('agentId') !== agentId ||
+            typeof doc.get('id') !== 'string' ||
+            documentKey(doc.get('id')) !== doc.id
+          )
+            throw new Error('Writing sample ownership or identity mismatch');
           tx.delete(doc.ref);
         }
         if (page.size)

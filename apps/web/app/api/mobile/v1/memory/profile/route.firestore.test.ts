@@ -152,8 +152,10 @@ describe.skipIf(!localEmulator)(
       const autoId = randomUUID();
       const uploadId = randomUUID();
       await Promise.all([
-        store.doc('writingSamples', autoId).set({ id: autoId, context: 'auto:mail' }),
-        store.doc('writingSamples', uploadId).set({ id: uploadId, context: 'upload:takeout' }),
+        store.doc('writingSamples', autoId).set({ id: autoId, agentId, context: 'auto:mail' }),
+        store
+          .doc('writingSamples', uploadId)
+          .set({ id: uploadId, agentId, context: 'upload:takeout' }),
         store.doc('voiceProfile', '1').set({
           id: 1,
           description: 'Direct',

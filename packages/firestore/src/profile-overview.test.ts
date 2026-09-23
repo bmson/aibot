@@ -14,9 +14,16 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore profile voice o
         const id = randomUUID();
         batch.set(store.doc('writingSamples', id), {
           id,
+          agentId,
           context: index < 40 ? 'auto:mail' : index < 90 ? 'upload:takeout' : 'seed',
         });
       }
+      const foreignSampleId = randomUUID();
+      batch.set(store.doc('writingSamples', foreignSampleId), {
+        id: foreignSampleId,
+        agentId: 'another-owner',
+        context: 'auto:private',
+      });
       for (let index = 0; index < 8; index++) {
         const id = randomUUID();
         batch.set(store.doc('importSources', id), {
@@ -64,6 +71,24 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore profile voice o
         'voice-samples-3',
       ]);
       expect(result.voiceImports[0]).toMatchObject({ itemsTotal: 20, itemsProcessed: 7 });
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
+  it('fails closed when a legacy sample has no owner identity', async () => {
+    const store = emulatorStore();
+    const agentId = randomUUID();
+    const sampleId = randomUUID();
+    try {
+      await store.doc('agents', agentId).set({ id: agentId });
+      await store.doc('writingSamples', sampleId).set({
+        id: sampleId,
+        context: 'upload:legacy',
+      });
+      await expect(
+        new FirestoreProfileVoiceOverviewRepository(store, agentId).load(),
+      ).rejects.toThrow('Malformed writing sample record');
     } finally {
       await disposeStore(store);
     }

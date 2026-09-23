@@ -44,10 +44,12 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
     const now = new Date();
     await Promise.all([
       store.doc('agents', agentId).set({ id: agentId }),
-      store.doc('writingSamples', 'sample-auto').set({ id: 'sample-auto', context: 'auto:mail' }),
+      store
+        .doc('writingSamples', 'sample-auto')
+        .set({ id: 'sample-auto', agentId, context: 'auto:mail' }),
       store
         .doc('writingSamples', 'sample-upload')
-        .set({ id: 'sample-upload', context: 'upload:email' }),
+        .set({ id: 'sample-upload', agentId, context: 'upload:email' }),
       store.doc('voiceProfile', '1').set({
         id: 1,
         description: 'Warm and direct',

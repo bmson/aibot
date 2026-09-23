@@ -43,6 +43,9 @@ export interface WorkspaceStore {
   list(relPath: string): Promise<Array<{ name: string; dir: boolean }>>;
   /** Remove a file. Missing files are a no-op, not an error. */
   delete(relPath: string): Promise<void>;
+  /** GCS-only version fencing for durable asset cleanup intents. */
+  objectGeneration?(relPath: string): Promise<string | null>;
+  deleteGeneration?(relPath: string, generation: string): Promise<void>;
 }
 
 /** Reject traversal; normalize to forward slashes. */
@@ -236,6 +239,41 @@ export class GcsWorkspaceStore implements WorkspaceStore {
     if (!res.ok && res.status !== 404) {
       throw new Error(`gcs delete failed: ${res.status}`);
     }
+  }
+
+  /** Read the exact live generation so callers can persist it with a cleanup intent. */
+  async objectGeneration(rel: string): Promise<string | null> {
+    const token = await this.token();
+    const res = await fetch(
+      `https://storage.googleapis.com/storage/v1/b/${this.bucket}/o/${encodeURIComponent(this.object(rel))}`,
+      {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
+      },
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`gcs metadata read failed: ${res.status}`);
+    const metadata = (await res.json()) as { generation?: unknown };
+    if (typeof metadata.generation !== 'string' || !/^[1-9]\d*$/.test(metadata.generation))
+      throw new Error('gcs metadata returned an invalid object generation');
+    return metadata.generation;
+  }
+
+  /** Delete only the generation captured in the durable cleanup intent. */
+  async deleteGeneration(rel: string, generation: string): Promise<void> {
+    if (!/^[1-9]\d*$/.test(generation)) throw new Error('invalid GCS object generation');
+    const token = await this.token();
+    const url = new URL(
+      `https://storage.googleapis.com/storage/v1/b/${this.bucket}/o/${encodeURIComponent(this.object(rel))}`,
+    );
+    url.searchParams.set('ifGenerationMatch', generation);
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
+    });
+    if (!res.ok && res.status !== 404)
+      throw new Error(`gcs generation-scoped delete failed: ${res.status}`);
   }
 
   async list(rel: string): Promise<Array<{ name: string; dir: boolean }>> {

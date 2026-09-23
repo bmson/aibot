@@ -48,7 +48,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore privacy erasure
         taskId,
       }),
       store.doc('tasks', taskId).set({ id: taskId, agentId, status: 'running' }),
-      store.doc('writingSamples', sampleId).set({ id: sampleId, text: 'private' }),
+      store.doc('writingSamples', sampleId).set({ id: sampleId, agentId, text: 'private' }),
       store.doc('voiceProfile', '1').set({ id: 1, description: 'private', signature: 'private' }),
       store.doc('ownerCards', agentId).set({ agentId, content: 'private', compiledAt: now }),
       store.doc('knowledgeGraphRelations', foreignId).set({ id: foreignId, agentId: foreignId }),
@@ -57,25 +57,14 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore privacy erasure
         .set({ id: foreignId, agentId: foreignId, contentHash: 'foreign' }),
     ]);
     const repository = new FirestorePrivacyErasureRepository(store);
-    // A malformed sample interrupts the final phase after memory and graph removal.
+    // Ownership/identity validation must finish before any erase side effect.
     await store.doc('writingSamples', sampleId).update({ id: 'forged' });
-    await expect(repository.erase()).rejects.toThrow('Writing sample identity mismatch');
-    expect((await store.doc('privacyErasureJobs', agentId).get()).get('status')).toBe('active');
-    expect((await store.doc('memoryTombstones', hash).get()).get('reason')).toBe('owner_forget');
-    expect((await store.doc('memories', memoryId).get()).exists).toBe(false);
-    await expect(
-      new FirestoreMemoryRepository(store, {
-        provider: 'test',
-        model: 'unit',
-        dimensions: 3,
-        revision: '1',
-      }).save({
-        id: randomUUID(),
-        agentId,
-        contentHash: `new-${randomUUID()}`,
-        embedding: [1, 0, 0],
-      } as Records['memories']),
-    ).rejects.toThrow('Privacy erasure is in progress');
+    await expect(repository.erase()).rejects.toThrow(
+      'Writing sample ownership or identity mismatch',
+    );
+    expect((await store.doc('privacyErasureJobs', agentId).get()).exists).toBe(false);
+    expect((await store.doc('memoryTombstones', hash).get()).exists).toBe(false);
+    expect((await store.doc('memories', memoryId).get()).exists).toBe(true);
     await store.doc('writingSamples', sampleId).update({ id: sampleId });
     await expect(repository.erase()).resolves.toEqual({
       memories: 1,
@@ -121,6 +110,34 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore privacy erasure
       'exactly one configured owner',
     );
     expect((await store.collection('privacyErasureJobs').get()).empty).toBe(true);
+  });
+
+  it('refuses to start erasure when a writing sample belongs to another owner', async () => {
+    const store = emulatorStore();
+    stores.push(store);
+    const agentId = randomUUID();
+    const ownerSampleId = randomUUID();
+    const foreignSampleId = randomUUID();
+    await Promise.all([
+      store.doc('agents', agentId).set({ id: agentId }),
+      store.doc('writingSamples', ownerSampleId).set({
+        id: ownerSampleId,
+        agentId,
+        context: 'upload:owner',
+      }),
+      store.doc('writingSamples', foreignSampleId).set({
+        id: foreignSampleId,
+        agentId: randomUUID(),
+        context: 'upload:foreign',
+      }),
+    ]);
+
+    await expect(new FirestorePrivacyErasureRepository(store).erase()).rejects.toThrow(
+      'Writing sample ownership or identity mismatch',
+    );
+    expect((await store.doc('privacyErasureJobs', agentId).get()).exists).toBe(false);
+    expect((await store.doc('writingSamples', ownerSampleId).get()).exists).toBe(true);
+    expect((await store.doc('writingSamples', foreignSampleId).get()).exists).toBe(true);
   });
 
   it('drains more than one transaction page without losing tombstones or counts', async () => {

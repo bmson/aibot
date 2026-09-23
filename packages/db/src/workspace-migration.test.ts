@@ -14,6 +14,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
     file: randomUUID(),
     message: randomUUID(),
     message2: randomUUID(),
+    sample: randomUUID(),
     mailbox: `migration-${randomUUID()}@example.test`,
   };
   let sql: postgres.Sql;
@@ -24,6 +25,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
     await sql`delete from files where id = ${ids.file}`;
     await sql`delete from messages where id = ${ids.message}`;
     await sql`delete from messages where id = ${ids.message2}`;
+    await sql`delete from writing_samples where id = ${ids.sample}`;
     await sql`delete from tasks where id = ${ids.task}`;
     await sql`delete from conversations where id = ${ids.conversation}`;
     await sql`delete from agents where id = ${ids.agent}`;
@@ -90,6 +92,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
     const [owner] = await sql<{ id: string }[]>`select id from agents`;
     if (!owner) throw new Error('seeded owner missing');
     await sql`insert into gmail_sync_state (mailbox, last_history_id) values (${ids.mailbox}, 9223372036854775807)`;
+    await sql`insert into writing_samples (id, register, text, context) values (${ids.sample}, 'email_casual', 'Owner voice sample for migration ownership', 'upload:test')`;
     const complete = await exportWorkspaceSnapshot({
       databaseUrl,
       agentId: owner.id,
@@ -120,6 +123,11 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
         (record) => record.table === 'gmail_sync_state' && record.id === ids.mailbox,
       )?.data.lastHistoryId,
     ).toEqual({ $assistantMigration: ['bigint', '9223372036854775807'] });
+    expect(
+      complete.records.find(
+        (record) => record.table === 'writing_samples' && record.id === ids.sample,
+      )?.data.agentId,
+    ).toBe(owner.id);
   });
 
   it('rejects installation-wide export when PostgreSQL has multiple agents', async () => {
