@@ -41,7 +41,6 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
     await sql`insert into tasks (id, agent_id, type, status, conversation_id, trust) values (${ids.task}, ${ids.agent}, 'adhoc', 'waiting_event', ${ids.conversation}, 'owner')`;
     await sql`insert into messages (id, conversation_id, task_id, role, parts, text, origin, created_at) values (${ids.message}, ${ids.conversation}, ${ids.task}, 'assistant', ${sql.json([])}, 'snapshot message', 'assistant', '2026-09-19 12:34:56.123456+00'::timestamptz), (${ids.message2}, ${ids.conversation}, ${ids.task}, 'assistant', ${sql.json([])}, 'snapshot message 2', 'assistant', '2026-09-19 12:34:56.123789+00'::timestamptz)`;
     await sql`insert into files (id, agent_id, workspace_path, bytes) values (${ids.file}, ${ids.agent}, 'migration/precision.bin', ${Number.MAX_SAFE_INTEGER})`;
-    await sql`insert into writing_samples (id, register, text, context) values (${ids.sample}, 'email_casual', 'Owner voice sample for migration ownership', 'upload:test')`;
 
     const bundle = await exportWorkspaceSnapshot({
       databaseUrl,
@@ -51,7 +50,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
         databaseId: '(default)',
         installationId: 'migration-test',
       },
-      tables: ['agents', 'conversations', 'files', 'messages', 'tasks', 'writing_samples'],
+      tables: ['agents', 'conversations', 'files', 'messages', 'tasks'],
     });
 
     expect(bundle.manifest.source.kind).toBe('postgresql');
@@ -64,7 +63,6 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
         `messages/${ids.message}`,
         `messages/${ids.message2}`,
         `tasks/${ids.task}`,
-        `writing_samples/${ids.sample}`,
       ].sort(),
     );
     expect(bundle.records.find((record) => record.id === ids.message)?.data.text).toBe(
@@ -84,10 +82,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
     expect(bundle.records.find((record) => record.id === ids.file)?.data.bytes).toBe(
       Number.MAX_SAFE_INTEGER,
     );
-    expect(bundle.records.find((record) => record.table === 'writing_samples')?.data.agentId).toBe(
-      ids.agent,
-    );
-    expect(bundle.manifest.recordCount).toBe(7);
+    expect(bundle.manifest.recordCount).toBe(6);
     expect(bundle.manifest.bundleChecksum).toMatch(/^[a-f0-9]{64}$/);
   });
 
@@ -97,6 +92,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
     const [owner] = await sql<{ id: string }[]>`select id from agents`;
     if (!owner) throw new Error('seeded owner missing');
     await sql`insert into gmail_sync_state (mailbox, last_history_id) values (${ids.mailbox}, 9223372036854775807)`;
+    await sql`insert into writing_samples (id, register, text, context) values (${ids.sample}, 'email_casual', 'Owner voice sample for migration ownership', 'upload:test')`;
     const complete = await exportWorkspaceSnapshot({
       databaseUrl,
       agentId: owner.id,
@@ -127,6 +123,11 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
         (record) => record.table === 'gmail_sync_state' && record.id === ids.mailbox,
       )?.data.lastHistoryId,
     ).toEqual({ $assistantMigration: ['bigint', '9223372036854775807'] });
+    expect(
+      complete.records.find(
+        (record) => record.table === 'writing_samples' && record.id === ids.sample,
+      )?.data.agentId,
+    ).toBe(owner.id);
   });
 
   it('rejects installation-wide export when PostgreSQL has multiple agents', async () => {
