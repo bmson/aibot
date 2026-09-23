@@ -408,3 +408,66 @@ export async function getFirestoreKnowledgeGraphReviewQueue(
   await assertConfiguredOwner(store, agentId);
   return result;
 }
+
+/** Resolve one owner's evidence row independently of browse and review page caps. */
+export async function getFirestoreKnowledgeGraphRelation(
+  store: InstallationStore,
+  agentId: string,
+  extractionVersion: number,
+  relationId: string,
+  now: Date = store.now(),
+) {
+  await assertConfiguredOwner(store, agentId);
+  const fence = await readPrivacyErasureFence(store, agentId);
+  const relationDoc = await store.doc('knowledgeGraphRelations', relationId).get();
+  if (!relationDoc.exists) return null;
+  const relation = decodeRecord<Relation>(relationDoc.data());
+  if (
+    relation.id !== relationId ||
+    documentKey(relation.id) !== relationDoc.id ||
+    relation.agentId !== agentId
+  )
+    return null;
+  const [subjectDoc, objectDoc, memoryDoc, sourceDoc] = await store.db.getAll(
+    store.doc('knowledgeGraphEntities', relation.subjectEntityId),
+    store.doc('knowledgeGraphEntities', relation.objectEntityId),
+    store.doc('memories', relation.sourceMemoryId),
+    store.doc('knowledgeGraphSources', relation.sourceMemoryId),
+  );
+  const subject = subjectDoc?.exists ? decodeRecord<Entity>(subjectDoc.data()) : null;
+  const object = objectDoc?.exists ? decodeRecord<Entity>(objectDoc.data()) : null;
+  const memory = memoryDoc?.exists ? decodeRecord<Memory>(memoryDoc.data()) : null;
+  const source = sourceDoc?.exists ? decodeRecord<Source>(sourceDoc.data()) : null;
+  const ownedSource =
+    source?.memoryId === relation.sourceMemoryId &&
+    sourceDoc?.id === documentKey(relation.sourceMemoryId)
+      ? source
+      : undefined;
+  const valid =
+    subject &&
+    object &&
+    memory &&
+    subject.id === relation.subjectEntityId &&
+    object.id === relation.objectEntityId &&
+    memory.id === relation.sourceMemoryId &&
+    subject.agentId === agentId &&
+    object.agentId === agentId &&
+    memory.agentId === agentId &&
+    subjectDoc?.id === documentKey(subject.id) &&
+    objectDoc?.id === documentKey(object.id) &&
+    memoryDoc?.id === documentKey(memory.id) &&
+    validEntity(subject) &&
+    validEntity(object);
+  const result = valid
+    ? relationView(
+        relation,
+        subject,
+        object,
+        memory,
+        active(relation, memory, ownedSource, extractionVersion, now),
+      )
+    : null;
+  await assertPrivacyErasureFenceUnchanged(store, agentId, fence);
+  await assertConfiguredOwner(store, agentId);
+  return result;
+}
