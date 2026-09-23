@@ -12,6 +12,7 @@ export { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 export { FirestoreExecutionJobRepository } from './execution-jobs.js';
 export { FirestoreGeneratedCardRepository } from './generated-cards.js';
 export { FirestoreGoalMutationRepository } from './goal-mutations.js';
+export { FirestoreGoalProgressRepository } from './goal-progress.js';
 export { FirestoreGoalReadRepository } from './goals.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
