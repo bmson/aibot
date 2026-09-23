@@ -65,6 +65,18 @@ function fakeLists(indexes: unknown, fields: unknown, calls: string[]): CommandR
 }
 
 describe('consumer Firestore index readiness', () => {
+  it('declares the exact person experience scan index in the shared manifest', () => {
+    expect(spec.indexes).toContainEqual({
+      collectionGroup: 'memories',
+      queryScope: 'COLLECTION',
+      fields: [
+        { fieldPath: 'agentId', order: 'ASCENDING' },
+        { fieldPath: 'subjectContactId', order: 'ASCENDING' },
+        { fieldPath: 'category', order: 'ASCENDING' },
+      ],
+    });
+  });
+
   it('accepts exactly the trusted READY indexes and active field exemptions', async () => {
     const calls: string[] = [];
     await verifyConsumerIndexReadiness(
