@@ -78,7 +78,11 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/activity' && request.method === 'POST') ||
     (path === '/api/mobile/v1/activity/foreground' && request.method === 'POST') ||
     (path === '/api/mobile/v1/goals' && ['GET', 'POST'].includes(request.method)) ||
-    (path === '/api/mobile/v1/mcp' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/mcp' && ['GET', 'POST'].includes(request.method)) ||
+    (/^\/api\/mobile\/v1\/mcp\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      ['POST', 'DELETE'].includes(request.method)) ||
     (/^\/api\/mobile\/v1\/goals\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       path,
     ) &&
