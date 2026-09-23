@@ -224,7 +224,9 @@ function sameJson(left: unknown, right: unknown): boolean {
   );
 }
 
-function goalInstruction(goal: GoalRow): string {
+export function goalAutomationInstruction(
+  goal: Pick<GoalRow, 'id' | 'title' | 'description' | 'progress' | 'nextAction' | 'targetDate'>,
+): string {
   const carried = [
     goal.progress ? `Verified progress from the last session: ${goal.progress}` : '',
     goal.nextAction ? `Previously suggested next action: ${goal.nextAction}` : '',
@@ -373,7 +375,7 @@ export async function ensureGoalAutomation(
     // Raised from 12: a browse-and-act session (plan → execute → extract →
     // update progress) can spend several steps before real work begins.
     maxSteps: 16,
-    instruction: goalInstruction(goal),
+    instruction: goalAutomationInstruction(goal),
     // Carry the goal's provenance into every automation firing: a goal created
     // from a tainted session must run its sessions taint-gated, never with
     // autonomous egress (defends the goal-automation laundering channel).

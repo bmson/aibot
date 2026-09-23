@@ -67,6 +67,16 @@ export async function GET(request: Request): Promise<Response> {
 export async function POST(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const body = await request.json().catch(() => null);
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    const message =
+      body &&
+      typeof body === 'object' &&
+      !Array.isArray(body) &&
+      (body as { action?: unknown }).action === 'archive-inactive'
+        ? 'archive-inactive is unavailable with Firestore persistence.'
+        : 'goal creation is unavailable with Firestore persistence.';
+    return mobileJson({ error: message }, { status: 503 });
+  }
   if (
     body &&
     typeof body === 'object' &&

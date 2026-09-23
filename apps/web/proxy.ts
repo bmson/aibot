@@ -60,7 +60,7 @@ export function proxy(request: NextRequest) {
     (/^\/api\/mobile\/v1\/goals\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       path,
     ) &&
-      request.method === 'GET') ||
+      ['GET', 'PATCH', 'POST'].includes(request.method)) ||
     (activityIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/skills' && request.method === 'POST') ||
     (skillIdPath.test(path) && ['POST', 'PATCH', 'DELETE'].includes(request.method)) ||

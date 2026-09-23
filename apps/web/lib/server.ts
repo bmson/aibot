@@ -70,6 +70,7 @@ import {
   uploadImport,
   waitForChatUpdates,
 } from '@assistant/application';
+import type { GoalInput } from '@assistant/application/goals';
 import {
   type ProfileMemoryCommandPersistence,
   profileMemoryCommands,
@@ -81,6 +82,10 @@ import {
   validateAgentPersistenceConfig,
 } from '@assistant/config';
 import { createConfiguredModelProvider, ModelRouter } from '@assistant/core/model-router';
+import {
+  goalAutomationCadence,
+  goalAutomationInstruction,
+} from '@assistant/core/workflow/schedules';
 import {
   createDb,
   createPostgresCardRefreshRepository,
@@ -124,6 +129,20 @@ export function getFirestoreInstallationStore() {
     databaseId: config.FIRESTORE_DATABASE_ID,
   });
   return globalCache.__assistantFirestoreStore;
+}
+
+export function getFirestoreGoalScheduleUpdate(id: string, input: GoalInput) {
+  return {
+    cron: goalAutomationCadence(input).cron,
+    instruction: goalAutomationInstruction({
+      id,
+      title: input.title,
+      description: input.description,
+      progress: input.progress,
+      nextAction: input.nextAction,
+      targetDate: input.targetDate,
+    }),
+  };
 }
 
 export function getDb(): Db {
