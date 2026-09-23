@@ -32,3 +32,5 @@ The manual [Cloud Run source snapshot workflow](firestore-production-export.md) 
 The matching [Cloud Run import workflow](firestore-production-import.md) pins a private snapshot by object generation and SHA-256, previews all target writes, imports only into an empty installation, and verifies document checksums and collection counts. These are manual rehearsal capabilities; runtime activation and database retirement still require every acceptance gate above.
 
 The [PostgreSQL source write-fence procedure](firestore-source-write-fence.md) records the current gap: this repository has no write-freeze switch or provider-side session control. A final export remains a rehearsal until a provider-level fence and drained-session evidence are available.
+
+The [September 23 production-data rehearsal](firestore-rehearsal-2026-09-23.md) records a pinned 70,372-record source export, full Firestore import/independent verification, ready indexes and data preflight, a private PostgreSQL-free agent boot, and a managed target backup. It also records the 17 source-missing object references and the remaining runtime and final-cutover gates. PostgreSQL remains authoritative.
