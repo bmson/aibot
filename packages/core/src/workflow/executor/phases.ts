@@ -109,7 +109,6 @@ export async function runCodeJobPhase(
     const outcome = await runCodeJob(
       {
         db,
-        persistence: deps.persistence,
         router,
         workspace: deps.workspace,
         documentProcessor: deps.documentProcessor,

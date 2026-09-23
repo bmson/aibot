@@ -120,7 +120,6 @@ export function codeJobName(task: TaskRow): CodeJobName | null {
 export async function runCodeJob(
   deps: {
     db: Db;
-    persistence?: ExecutionPersistence;
     router: ModelRouter;
     workspace?: WorkspaceReader;
     documentProcessor?: DocumentProcessorConfig;
