@@ -23,6 +23,18 @@ function isPreconditionFailed(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 9;
 }
 
+function isEmulatorClosedTransaction(error: unknown): boolean {
+  return (
+    Boolean(process.env.FIRESTORE_EMULATOR_HOST) &&
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 3 &&
+    'details' in error &&
+    error.details === 'Transaction is invalid or closed.'
+  );
+}
+
 function watchRecord(
   input: WatchCreateInput,
   id: string,
@@ -209,57 +221,67 @@ export class FirestoreWatchRepository implements WatchRepository {
 
   async recordFire(input: Parameters<WatchRepository['recordFire']>[0]) {
     const watchRef = this.store.doc('watches', input.watchId);
-    return this.store.db.runTransaction(async (tx) => {
-      const watchSnapshot = await tx.get(watchRef);
-      if (!watchSnapshot.exists) return { recorded: false, watch: null };
-      const watch = decodeRecord<Watch>(watchSnapshot.data());
-      if (watch.agentId !== input.agentId || documentKey(watch.id) !== watchSnapshot.id)
-        return { recorded: false, watch: null };
-      if (
-        watch.status !== 'active' ||
-        watch.expiresAt <= input.now ||
-        (input.expectedNextPollAt &&
-          watch.nextPollAt?.getTime() !== input.expectedNextPollAt.getTime()) ||
-        (watch.maxFires != null && watch.fireCount >= watch.maxFires)
-      )
-        return { recorded: false, watch };
-      const duplicate = await tx.get(
-        this.store
-          .collection('watchFires')
-          .where('watchId', '==', watch.id)
-          .where('triggerRef', '==', input.triggerRef)
-          .limit(1),
-      );
-      if (!duplicate.empty) {
-        if (input.state !== undefined)
-          tx.update(watchRef, encodeRecord({ state: input.state, updatedAt: input.now }));
-        return { recorded: false, watch };
+    // The emulator occasionally reports a contended transaction as code 3
+    // instead of retryable ABORTED. The operation is idempotent by triggerRef,
+    // so retry that emulator-only response after the competing commit settles.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.store.db.runTransaction(async (tx) => {
+          const watchSnapshot = await tx.get(watchRef);
+          if (!watchSnapshot.exists) return { recorded: false, watch: null };
+          const watch = decodeRecord<Watch>(watchSnapshot.data());
+          if (watch.agentId !== input.agentId || documentKey(watch.id) !== watchSnapshot.id)
+            return { recorded: false, watch: null };
+          if (
+            watch.status !== 'active' ||
+            watch.expiresAt <= input.now ||
+            (input.expectedNextPollAt &&
+              watch.nextPollAt?.getTime() !== input.expectedNextPollAt.getTime()) ||
+            (watch.maxFires != null && watch.fireCount >= watch.maxFires)
+          )
+            return { recorded: false, watch };
+          const duplicate = await tx.get(
+            this.store
+              .collection('watchFires')
+              .where('watchId', '==', watch.id)
+              .where('triggerRef', '==', input.triggerRef)
+              .limit(1),
+          );
+          if (!duplicate.empty) {
+            if (input.state !== undefined)
+              tx.update(watchRef, encodeRecord({ state: input.state, updatedAt: input.now }));
+            return { recorded: false, watch };
+          }
+          const fireCount = watch.fireCount + 1;
+          const updated: Watch = {
+            ...watch,
+            fireCount,
+            lastFiredAt: input.now,
+            updatedAt: input.now,
+            state: input.state ?? watch.state,
+            status: watch.maxFires != null && fireCount >= watch.maxFires ? 'fired' : 'active',
+          };
+          const fireId = randomUUID();
+          tx.create(
+            this.store.doc('watchFires', fireId),
+            encodeRecord({
+              id: fireId,
+              watchId: watch.id,
+              agentId: input.agentId,
+              triggerRef: input.triggerRef,
+              summary: input.summary,
+              excerpt: input.excerpt.slice(0, 2048),
+              createdAt: input.now,
+            }),
+          );
+          tx.set(watchRef, encodeRecord(updated));
+          return { recorded: true, watch: updated };
+        });
+      } catch (error) {
+        if (!isEmulatorClosedTransaction(error) || attempt >= 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
       }
-      const fireCount = watch.fireCount + 1;
-      const updated: Watch = {
-        ...watch,
-        fireCount,
-        lastFiredAt: input.now,
-        updatedAt: input.now,
-        state: input.state ?? watch.state,
-        status: watch.maxFires != null && fireCount >= watch.maxFires ? 'fired' : 'active',
-      };
-      const fireId = randomUUID();
-      tx.create(
-        this.store.doc('watchFires', fireId),
-        encodeRecord({
-          id: fireId,
-          watchId: watch.id,
-          agentId: input.agentId,
-          triggerRef: input.triggerRef,
-          summary: input.summary,
-          excerpt: input.excerpt.slice(0, 2048),
-          createdAt: input.now,
-        }),
-      );
-      tx.set(watchRef, encodeRecord(updated));
-      return { recorded: true, watch: updated };
-    });
+    }
   }
 
   async getSuggestionContext(input: Parameters<WatchRepository['getSuggestionContext']>[0]) {
