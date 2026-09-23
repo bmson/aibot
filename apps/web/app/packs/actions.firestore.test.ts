@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resetConfigForTest } from '@assistant/config';
 import { createInstallationStore } from '@assistant/firestore';
+import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ owner: vi.fn(), getDb: vi.fn(), getStore: vi.fn() }));
@@ -14,6 +15,7 @@ vi.mock('@/lib/server', () => ({
 }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
+import { proxy } from '../../proxy.js';
 import { changePack, loadPacks } from './actions.js';
 
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
@@ -72,6 +74,14 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
     });
 
     it('loads and writes owner packs while PostgreSQL is offline', async () => {
+      for (const path of ['/packs', '/api/mobile/v1/packs']) {
+        expect(proxy(new NextRequest(`http://localhost${path}`, { method: 'POST' })).status).toBe(
+          200,
+        );
+        expect(proxy(new NextRequest(`http://localhost${path}`, { method: 'DELETE' })).status).toBe(
+          503,
+        );
+      }
       expect((await loadPacks()).packs).toMatchObject([{ id: packId, title: 'Web plan' }]);
       expect(
         await changePack({

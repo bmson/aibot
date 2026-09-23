@@ -47,7 +47,7 @@ export function proxy(request: NextRequest) {
     (path === '/profile/voice' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/profile/about' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/cards' && ['GET', 'POST'].includes(request.method)) ||
-    (path === '/packs' && request.method === 'GET') ||
+    (path === '/packs' && ['GET', 'POST'].includes(request.method)) ||
     // Settings Server Actions recheck owner auth; Firestore supports the
     // assistant identity and notification preference updates.
     (path === '/settings' && ['GET', 'POST'].includes(request.method)) ||
@@ -92,7 +92,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/card-image' && request.method === 'GET') ||
     (path === '/api/mobile/v1/cards' && request.method === 'GET') ||
     (cardIdPath.test(path) && request.method === 'POST') ||
-    (path === '/api/mobile/v1/packs' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/packs' && ['GET', 'POST'].includes(request.method)) ||
     (/^\/api\/mobile\/v1\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       path,
     ) &&
