@@ -31,6 +31,7 @@ import { lookupWeather } from './weather.js';
 import { extractWebText, fetchPublicWebPage, looksLikeBotChallenge } from './web-fetch.js';
 
 export { registerPortableGoalProgressTool } from './goal-progress.js';
+export { registerPortableOwnerNotifyTool } from './owner-notify.js';
 export { registerPortableTaskTools } from './task-schedule.js';
 export * from './weather.js';
 // The `web.fetch` machinery lives in web-fetch.ts; re-exported here so the

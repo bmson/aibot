@@ -189,4 +189,76 @@ export class FirestoreOwnerNoticeRepository {
       return { conversationId: destination.row.id };
     });
   }
+
+  /** The owner.notify tool writes to its task chat, or to Notifications without one. */
+  async postToolNotice(input: {
+    text: string;
+    taskId: string;
+    conversationId?: string | null;
+  }): Promise<{ conversationId: string }> {
+    if (!input.text || !input.taskId) throw new Error('Owner tool notice requires text and task');
+    const fence = await readPrivacyErasureFence(this.store, this.agentId);
+    return this.store.db.runTransaction(async (tx) => {
+      await this.owner(tx);
+      const [erasure, task] = await tx.getAll(
+        this.store.doc('privacyErasureJobs', this.agentId),
+        this.store.doc('tasks', input.taskId),
+      );
+      if (!erasure || !task) throw new Error('Owner tool notice state is unavailable');
+      if (erasure.exists) {
+        if (
+          erasure.get('agentId') !== this.agentId ||
+          privacyErasureIsActive(erasure.get('status')) ||
+          !erasure.updateTime ||
+          !fence?.isEqual(erasure.updateTime)
+        )
+          throw new Error('Privacy erasure changed during owner tool notice');
+      } else if (fence) {
+        throw new Error('Privacy erasure changed during owner tool notice');
+      }
+      if (!task.exists || task.get('id') !== input.taskId || task.get('agentId') !== this.agentId)
+        throw new Error('Owner tool notice task is outside the configured installation');
+      if (
+        input.conversationId &&
+        task.get('conversationId') &&
+        task.get('conversationId') !== input.conversationId
+      )
+        throw new Error('Owner tool notice conversation does not match its task');
+      const destination = input.conversationId
+        ? {
+            row: ownedConversation(
+              await tx.get(this.store.doc('conversations', input.conversationId)),
+              this.agentId,
+            ),
+            created: false,
+          }
+        : await this.notifications(tx);
+      const now = this.store.now();
+      const message = messageRecord(
+        {
+          conversationId: destination.row.id,
+          taskId: input.taskId,
+          role: 'assistant',
+          origin: 'assistant',
+          parts: [{ type: 'text', text: input.text }],
+          text: input.text,
+        },
+        randomUUID(),
+        now,
+      );
+      const conversationRef = this.store.doc('conversations', destination.row.id);
+      if (destination.created)
+        tx.create(
+          conversationRef,
+          encodeRecord({ ...destination.row, updatedAt: now, archived: false }),
+        );
+      else
+        tx.update(conversationRef, {
+          updatedAt: now,
+          ...(destination.row.archivedAt ? { archivedAt: null, archived: false } : {}),
+        });
+      tx.create(this.store.doc('messages', message.id), encodeRecord(message));
+      return { conversationId: destination.row.id };
+    });
+  }
 }

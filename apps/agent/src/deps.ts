@@ -52,6 +52,7 @@ import {
   registerBuiltinTools,
   registerPortableGoalProgressTool,
   registerPortableMemoryTools,
+  registerPortableOwnerNotifyTool,
   registerPortableTaskTools,
 } from '@assistant/tools/builtin';
 import { ToolDispatcher } from '@assistant/tools/dispatcher';
@@ -354,28 +355,38 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     config.FILES_DRIVER === 'gcs'
       ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, workspacePrefix)
       : new LocalWorkspaceStore(workspaceRoot);
-  // Memory, future-self scheduling, and goal progress use portable repositories.
+  // Memory, scheduling, goal progress, and owner notices use portable repositories.
   // Other built-ins still depend on SQL and remain unavailable in this profile.
-  const registry = registerPortableGoalProgressTool(
-    registerPortableTaskTools(
-      registerPortableMemoryTools(new ToolRegistry(), {
-        memory: persistence.memory,
-        embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
-          router.embed(texts),
-        ),
-        supersede: (input) =>
-          supersedeContradictedFacts(
-            {
-              memory: persistence.memorySupersede,
-              router,
-              onRetired: () => compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
-            },
-            input,
+  const notices = new FirestoreOwnerNoticeRepository(store, config.FIRESTORE_AGENT_ID);
+  const registry = registerPortableOwnerNotifyTool(
+    registerPortableGoalProgressTool(
+      registerPortableTaskTools(
+        registerPortableMemoryTools(new ToolRegistry(), {
+          memory: persistence.memory,
+          embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
+            router.embed(texts),
           ),
-      }),
-      { tasks: persistence.tasks },
+          supersede: (input) =>
+            supersedeContradictedFacts(
+              {
+                memory: persistence.memorySupersede,
+                router,
+                onRetired: () => compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
+              },
+              input,
+            ),
+        }),
+        { tasks: persistence.tasks },
+      ),
+      new FirestoreGoalProgressRepository(store, config.FIRESTORE_AGENT_ID),
     ),
-    new FirestoreGoalProgressRepository(store, config.FIRESTORE_AGENT_ID),
+    {
+      post: (input) => {
+        if (input.agentId !== config.FIRESTORE_AGENT_ID)
+          throw new Error('Owner notice is outside the configured Firestore agent');
+        return notices.postToolNotice(input);
+      },
+    },
   );
   const modules = installModules(composition.modules, {
     config,
