@@ -23,6 +23,7 @@ export function proxy(request: NextRequest) {
     (path === '/capabilities' && request.method === 'GET') ||
     (path === '/costs' && request.method === 'GET') ||
     (path === '/profile/voice' && request.method === 'GET') ||
+    (path === '/profile/about' && request.method === 'GET') ||
     (path === '/settings' && request.method === 'GET') ||
     (path === '/import' && request.method === 'GET') ||
     (path === '/skills' && request.method === 'GET') ||
