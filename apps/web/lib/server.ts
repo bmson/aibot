@@ -125,6 +125,9 @@ export function getDb(): Db {
 }
 
 export function getGeneratedCards() {
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    return getFirestoreChatApplication().getGeneratedCards();
+  }
   return createPostgresGeneratedCardRepository(getDb());
 }
 
@@ -359,6 +362,7 @@ function createFirestoreChatApplication() {
   );
   const chatReads = { chat, generatedCards: persistence.generatedCards };
   return {
+    getGeneratedCards: () => persistence.generatedCards,
     getAgentIdentity: async () => {
       const agent = await chat.resolveAgent();
       return { id: agent.id, name: agent.name || 'Assistant', avatarUrl: agent.avatarUrl ?? null };
