@@ -10,15 +10,24 @@ import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ mobile: vi.fn() }));
+const routerFixture = vi.hoisted(() => ({ embed: vi.fn() }));
 vi.mock('@/mobile-auth', () => ({
   isMobileAuthed: auth.mobile,
   mobileJson: (body: unknown, init?: ResponseInit) => Response.json(body, init),
   mobileUnauthorized: () => Response.json({ error: 'unauthorized' }, { status: 401 }),
 }));
+vi.mock('@assistant/core/model-router', () => ({
+  ModelRouter: class {
+    embed(...args: unknown[]) {
+      return routerFixture.embed(...args);
+    }
+  },
+  createConfiguredModelProvider: vi.fn(),
+}));
 
 import { proxy } from '@/proxy';
 import { GET as detail } from './[id]/route';
-import { GET as list } from './route';
+import { POST as create, GET as list } from './route';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
 const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
@@ -97,6 +106,9 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
     vi.stubEnv('LOCATION_PING_SECRET', '');
     resetConfigForTest();
     auth.mobile.mockResolvedValue(true);
+    routerFixture.embed.mockImplementation(async (texts: string[]) =>
+      texts.map(() => Array.from({ length: 768 }, (_, index) => (index === 0 ? 1 : 0))),
+    );
     await Promise.all([
       store.doc('agents', agentId).set({ id: agentId }),
       store.doc('knowledgeGraphEntities', subjectId).set(entity(subjectId, agentId, 'Anna')),
@@ -330,6 +342,28 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
     expect(await repo.createAtomic(prepared)).toEqual({
       error: 'That source fact is already in the knowledge library.',
     });
+  });
+
+  it('routes authenticated mobile fact creation through the Firestore owner boundary', async () => {
+    const response = await create(
+      new Request('http://localhost/api/mobile/v1/knowledge', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          subjectLabel: 'Anna',
+          subjectKind: 'person',
+          predicate: 'parent of',
+          objectLabel: 'Baldvin',
+          objectKind: 'person',
+          note: 'Family connection confirmed by the owner',
+        }),
+      }),
+    );
+    expect(response.status).toBe(201);
+    const result = await response.json();
+    expect(result.memoryId).toBeTruthy();
+    expect(result.relationId).toBeTruthy();
+    expect(auth.mobile).toHaveBeenCalled();
   });
 
   it('blocks tombstoned hashes and active privacy erasure inside the write transaction', async () => {
