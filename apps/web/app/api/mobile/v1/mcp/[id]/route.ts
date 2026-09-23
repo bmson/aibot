@@ -1,9 +1,6 @@
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import {
-  createInstallationStore,
-  FirestoreMcpConnectionMutationRepository,
-} from '@assistant/firestore';
-import { getApplication } from '@/lib/server';
+import { FirestoreMcpConnectionMutationRepository } from '@assistant/firestore';
+import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -29,11 +26,7 @@ export async function POST(
       return mobileJson({ error: 'action must be refresh, enable, or disable' }, { status: 400 });
     const problems = validateAgentPersistenceConfig(config);
     if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
-    const store = createInstallationStore({
-      projectId: config.GCP_PROJECT,
-      installationId: config.ASSISTANT_WORKSPACE_ID,
-      databaseId: config.FIRESTORE_DATABASE_ID,
-    });
+    const store = getFirestoreInstallationStore();
     try {
       const result = await new FirestoreMcpConnectionMutationRepository(
         store,
@@ -47,8 +40,6 @@ export async function POST(
         { error: error instanceof Error ? error.message : 'MCP connection could not be updated.' },
         { status: 409 },
       );
-    } finally {
-      await store.db.terminate();
     }
   }
   const application = getApplication();
@@ -78,11 +69,7 @@ export async function DELETE(
   if (config.PERSISTENCE_DRIVER === 'firestore') {
     const problems = validateAgentPersistenceConfig(config);
     if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
-    const store = createInstallationStore({
-      projectId: config.GCP_PROJECT,
-      installationId: config.ASSISTANT_WORKSPACE_ID,
-      databaseId: config.FIRESTORE_DATABASE_ID,
-    });
+    const store = getFirestoreInstallationStore();
     try {
       const deleted = await new FirestoreMcpConnectionMutationRepository(
         store,
@@ -96,8 +83,6 @@ export async function DELETE(
         { error: error instanceof Error ? error.message : 'MCP connection could not be deleted.' },
         { status: 409 },
       );
-    } finally {
-      await store.db.terminate();
     }
   }
   const deleted = await getApplication().deleteMcpConnection(id);

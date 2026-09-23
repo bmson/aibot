@@ -9,7 +9,13 @@ import {
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const auth = vi.hoisted(() => ({ allowed: vi.fn() }));
+const auth = vi.hoisted(() => ({ allowed: vi.fn(), store: null as unknown }));
+vi.mock('@/lib/server', () => ({
+  getFirestoreInstallationStore: () => auth.store,
+  getApplication: () => {
+    throw new Error('PostgreSQL-backed application access is unavailable in this test');
+  },
+}));
 vi.mock('@/mobile-auth', () => ({
   isMobileAuthed: auth.allowed,
   mobileJson: (value: unknown, init?: ResponseInit) =>
@@ -74,6 +80,7 @@ describe.skipIf(!localEmulator)(
       vi.stubEnv('LOCATION_PING_SECRET', '');
       resetConfigForTest();
       auth.allowed.mockResolvedValue(true);
+      auth.store = store;
       route = await import('./route.js');
       itemRoute = await import('./[id]/route.js');
       const alphaId = randomUUID();

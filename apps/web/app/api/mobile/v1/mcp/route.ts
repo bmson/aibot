@@ -1,7 +1,6 @@
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import { encryptMcpBearerToken } from '@assistant/core/mcp-secrets';
 import {
-  createInstallationStore,
   FirestoreMcpConnectionMutationRepository,
   FirestoreMcpConnectionReadRepository,
 } from '@assistant/firestore';
@@ -63,31 +62,22 @@ export async function POST(request: Request): Promise<Response> {
         { status: 503 },
       );
     }
-    const store = createInstallationStore({
-      projectId: config.GCP_PROJECT,
-      installationId: config.ASSISTANT_WORKSPACE_ID,
-      databaseId: config.FIRESTORE_DATABASE_ID,
-    });
-    try {
-      const result = await new FirestoreMcpConnectionMutationRepository(
-        store,
-        config.FIRESTORE_AGENT_ID,
-      ).create({ name: body.name, endpoint: body.endpoint, bearerTokenEncrypted });
-      return 'error' in result
-        ? mobileJson(
-            { error: result.error },
-            {
-              status:
-                result.error === 'Give this MCP connection a name.' ||
-                result.error === 'Enter an HTTP or HTTPS MCP endpoint without embedded credentials.'
-                  ? 400
-                  : 409,
-            },
-          )
-        : mobileJson(result, { status: 201 });
-    } finally {
-      await store.db.terminate();
-    }
+    const result = await new FirestoreMcpConnectionMutationRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    ).create({ name: body.name, endpoint: body.endpoint, bearerTokenEncrypted });
+    return 'error' in result
+      ? mobileJson(
+          { error: result.error },
+          {
+            status:
+              result.error === 'Give this MCP connection a name.' ||
+              result.error === 'Enter an HTTP or HTTPS MCP endpoint without embedded credentials.'
+                ? 400
+                : 409,
+          },
+        )
+      : mobileJson(result, { status: 201 });
   }
   const result = await getApplication().addMcpConnection({
     name: body.name,
