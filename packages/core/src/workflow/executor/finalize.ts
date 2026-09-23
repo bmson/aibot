@@ -38,7 +38,7 @@ import { remainingBirthdaySaves, requestedBirthdaySaves } from '../birthday-impo
 import { CARD_NOT_BUILT, requestedCardIntent } from '../card-intent.js';
 import { responseCardSteps } from '../card-steps.js';
 import { isGoalWorkEvidence } from '../goal-evidence.js';
-import { detectLiveLookup, liveLookupFailure, ungroundedLiveFigure } from '../live-lookup.js';
+import { detectLiveLookups, liveLookupFailures, ungroundedLiveFigure } from '../live-lookup.js';
 import {
   checkpointTask,
   completeTask,
@@ -399,17 +399,24 @@ export async function stageModelFinalResponse(
     0,
     window.findLastIndex((message) => message.role === 'user') + 1,
   );
-  const liveLookup =
-    task.trust === 'owner' && !isForwardedIngest(task)
-      ? detectLiveLookup(currentRequest)
-      : undefined;
+  const liveLookups =
+    task.trust === 'owner' && !isForwardedIngest(task) ? detectLiveLookups(currentRequest) : [];
   // A lookup that succeeded is not the same as an answer that matches it. The
   // failure check proves retrieval happened; the figure check proves the draft
   // reported what was retrieved, which is the half that let a stale score
-  // through over a successful fetch that said otherwise.
-  const liveFailure = liveLookup
-    ? (liveLookupFailure(liveLookup, rows) ?? ungroundedLiveFigure(liveLookup, pending.text, rows))
-    : undefined;
+  // through over a successful fetch that said otherwise. A compound request
+  // may lose some parts — the draft then reports those gaps itself — but an
+  // answer with nothing retrieved, or a figure no source stated, still stops.
+  const liveFailures = liveLookupFailures(liveLookups, rows);
+  const answered = liveLookups.filter(
+    (lookup) => !liveFailures.some((entry) => entry.lookup === lookup),
+  );
+  const liveFailure =
+    liveLookups.length === 0
+      ? undefined
+      : liveFailures.length === liveLookups.length
+        ? [...new Set(liveFailures.map((entry) => entry.failure))].join(' ')
+        : answered.map((lookup) => ungroundedLiveFigure(lookup, pending.text, rows)).find(Boolean);
   const birthdays =
     task.trust === 'owner' && !isForwardedIngest(task)
       ? requestedBirthdaySaves(currentRequest)
@@ -510,6 +517,7 @@ export async function stageModelFinalResponse(
     readRequest: contractOptions.readRequest,
     ambient: readContext?.groundingCorpus,
     requestText: latestUserText(window),
+    lookupOrder: liveLookups.map((lookup) => lookup.kind),
   });
   // An explicit "make that into a card" must reach the grounded compiler even
   // when a handwritten card already matched this turn. Without this, the

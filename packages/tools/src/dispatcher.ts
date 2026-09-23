@@ -8,7 +8,7 @@ import {
   withSpan,
 } from '@assistant/core';
 import { createApproval } from '@assistant/core/workflow/approvals';
-import { detectLiveLookup } from '@assistant/core/workflow/live-lookup';
+import { detectLiveLookups } from '@assistant/core/workflow/live-lookup';
 import {
   createPostgresApprovalPolicyRepository,
   createPostgresApprovalRepository,
@@ -64,8 +64,8 @@ async function authorizedPublicSourceRead(
     typeof args.url !== 'string'
   )
     return false;
-  let lookup = detectLiveLookup([{ role: 'user', content: trigger.payload.text }]);
-  if (!lookup && input.task.conversationId) {
+  let lookups = detectLiveLookups([{ role: 'user', content: trigger.payload.text }]);
+  if (lookups.length === 0 && input.task.conversationId) {
     // A terse retry may refer to an earlier owner question. Resolve only
     // persisted owner words from this chat before this task was created.
     const owners = await repository.ownerMessageHistory(
@@ -76,10 +76,11 @@ async function authorizedPublicSourceRead(
     const history = owners.map((text) => ({ role: 'user' as const, content: text }));
     if (history.at(-1)?.content !== trigger.payload.text)
       history.push({ role: 'user', content: trigger.payload.text });
-    lookup = detectLiveLookup(history);
+    lookups = detectLiveLookups(history);
   }
   // A sports lookup falls back to search-then-fetch for an uncovered league.
-  if (lookup?.kind !== 'web' && lookup?.kind !== 'sports') return false;
+  // Any part of a compound question may be the one that searched.
+  if (!lookups.some((lookup) => lookup.kind === 'web' || lookup.kind === 'sports')) return false;
   const searches = await repository.searchResults(input.task.id);
   return searches.some((result) => {
     const value = result as { results?: Array<{ url?: unknown }>; error?: unknown } | null;

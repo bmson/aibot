@@ -455,6 +455,7 @@ struct MessageBubble: View {
         // An answer card avoids a duplicate answer. Raw lookup results never
         // replace the explanation, and neither does a card read off the reply.
         guard message.role == .assistant, !message.hasSupportingResultCards else { return false }
+        if MessageResponseCard.allSitUnderProse(message.parts) { return false }
         return MessageResponseCard.replacesProse(responseCards + message.suggestionParts.compactMap(\.suggestionContext))
     }
 
@@ -1674,6 +1675,17 @@ enum MessageResponseCard: Identifiable {
     /// is different: it redraws part of an answer that also explains the
     /// route, the caveats, and when to leave. It summarizes the reply, and
     /// replacing the reply with it would delete the rest of the answer.
+    /// Whether the server marked every card on the message to sit under the
+    /// reply — each card of a multi-part answer, where one card alone cannot
+    /// speak for the rest. Honoured for any kind, as the web does.
+    static func allSitUnderProse(_ parts: [MessagePart]) -> Bool {
+        let cardParts = parts.filter { $0.type == "data-card" }
+        return !cardParts.isEmpty && cardParts.allSatisfy { part in
+            guard case let .object(data)? = part.data else { return false }
+            return data["accompaniesProse"] == .bool(true)
+        }
+    }
+
     static func replacesProse(_ cards: [Self]) -> Bool {
         guard !cards.isEmpty else { return false }
         return !cards.allSatisfy(\.summarizesAnswer)

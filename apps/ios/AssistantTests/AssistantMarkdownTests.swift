@@ -361,6 +361,31 @@ final class AssistantMarkdownTests: XCTestCase {
         }
     }
 
+    /// A multi-part answer marks every card to sit under the reply. A weather
+    /// card alone replaces its prose; beside a scoreboard it must not, or the
+    /// words answering the other part disappear.
+    func testMultiPartCardsKeepTheReply() throws {
+        let data = Data(#"""
+        {"id":"multi","role":"assistant","parts":[
+          {"type":"text","text":"The Giants won 5-2. It is 18°C and foggy in San Francisco."},
+          {"type":"data-card","data":{"kind":"scoreboard","id":"s1","title":"MLB","accompaniesProse":true,"games":[]}},
+          {"type":"data-card","data":{"kind":"weather","id":"w1","place":"San Francisco","temperature":"18°C","accompaniesProse":true}}
+        ]}
+        """#.utf8)
+        let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+        XCTAssertTrue(MessageResponseCard.allSitUnderProse(message.parts))
+
+        let alone = Data(#"""
+        {"id":"weather","role":"assistant","parts":[
+          {"type":"text","text":"It is 18°C and foggy."},
+          {"type":"data-card","data":{"kind":"weather","id":"w1","place":"San Francisco","temperature":"18°C"}}
+        ]}
+        """#.utf8)
+        let single = try JSONDecoder().decode(ChatMessage.self, from: alone)
+        XCTAssertFalse(MessageResponseCard.allSitUnderProse(single.parts), "a lone weather card still stands in")
+        XCTAssertFalse(MessageResponseCard.allSitUnderProse([]))
+    }
+
     /// A route decodes both ends and its line, keeps the reply above it, and
     /// formats time and distance by the device's measurement system.
     @MainActor

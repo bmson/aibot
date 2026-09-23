@@ -1,3 +1,4 @@
+import type { LiveLookup } from './live-lookup.js';
 import type { PersonalReadRequest } from './read-intent.js';
 import type { ActionEvidence } from './response-contract.js';
 
@@ -1261,30 +1262,64 @@ function isCurrentLocalWeatherRequest(requestText: string): boolean {
   return true;
 }
 
+/** The live-lookup kind each lookup-backed card answers. */
+const LOOKUP_KIND_OF_CARD: Partial<Record<ResponseCard['kind'], LiveLookup['kind']>> = {
+  weather: 'weather',
+  scoreboard: 'sports',
+  route: 'directions',
+  'web-search-results': 'web',
+};
+
+/**
+ * Cards for a request with several live lookups: in the order the owner asked,
+ * each sitting under the reply rather than standing in for it. A weather card
+ * alone replaces its prose; beside a scoreboard, that would delete the only
+ * words answering the other half of the question.
+ */
+function orderForLookups(
+  cards: ResponseCard[],
+  lookupOrder: ReadonlyArray<LiveLookup['kind']>,
+): ResponseCard[] {
+  if (lookupOrder.length < 2) return cards;
+  const rank = (card: ResponseCard) => {
+    const kind = LOOKUP_KIND_OF_CARD[card.kind];
+    return kind ? lookupOrder.indexOf(kind) : -1;
+  };
+  return cards
+    .map((card, index) => ({ card, index }))
+    .sort((a, b) => rank(a.card) - rank(b.card) || a.index - b.index)
+    .map(({ card }) => ({ ...card, accompaniesProse: true }));
+}
+
 export function responseCardsForFinal(input: {
   evidence: ActionEvidence[];
   readRequest?: PersonalReadRequest | null;
   ambient?: string;
   requestText?: string;
+  /** The live lookups the request asked for, in the order it asked them. */
+  lookupOrder?: ReadonlyArray<LiveLookup['kind']>;
 }): ResponseCard[] {
-  const cards = [
-    ...resourceResponseCards(input.evidence),
-    ...statusResponseCards(input.evidence),
-    ...calendarWriteResponseCards(input.evidence),
-    ...reminderResponseCards(input.evidence),
-    ...calendarResponseCards(input.evidence, input.readRequest),
-    ...availabilityResponseCards(input.evidence),
-    ...emailResponseCards(input.evidence),
-    ...threadResponseCards(input.evidence),
-    ...documentResponseCards(input.evidence),
-    ...knowledgeGraphResponseCards(input.evidence),
-    ...driveResponseCards(input.evidence),
-    ...sheetRowsResponseCards(input.evidence),
-    ...weatherLookupResponseCards(input.evidence),
-    ...scoreboardResponseCards(input.evidence),
-    ...routeResponseCards(input.evidence),
-    ...searchResponseCards(input.evidence),
-  ];
+  const cards = orderForLookups(
+    [
+      ...resourceResponseCards(input.evidence),
+      ...statusResponseCards(input.evidence),
+      ...calendarWriteResponseCards(input.evidence),
+      ...reminderResponseCards(input.evidence),
+      ...calendarResponseCards(input.evidence, input.readRequest),
+      ...availabilityResponseCards(input.evidence),
+      ...emailResponseCards(input.evidence),
+      ...threadResponseCards(input.evidence),
+      ...documentResponseCards(input.evidence),
+      ...knowledgeGraphResponseCards(input.evidence),
+      ...driveResponseCards(input.evidence),
+      ...sheetRowsResponseCards(input.evidence),
+      ...weatherLookupResponseCards(input.evidence),
+      ...scoreboardResponseCards(input.evidence),
+      ...routeResponseCards(input.evidence),
+      ...searchResponseCards(input.evidence),
+    ],
+    input.lookupOrder ?? [],
+  );
   if (cards.length > 0) return cards;
   // Ambient weather is useful for a conversational/weather answer, but must
   // never appear as an unrelated result below a tool-backed response — nor

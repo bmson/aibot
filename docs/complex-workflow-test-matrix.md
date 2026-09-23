@@ -18,6 +18,15 @@ must end with evidence for each claimed action.
 | Drive resume → approved portal submission → delayed authenticated email → Sheet + Doc → original chat | Preserve one approved action contract across the browser and email event boundary; reject spoofed mail, execute each frozen Workspace action once, and report the evidence in the originating conversation | `apps/agent/src/job-application-continuity.e2e.test.ts` |
 | Portal submission succeeds but the owner denies the delayed confirmation watch | Preserve and report the verified submission while accurately reporting that no watch or future Workspace action was created | `apps/agent/src/job-application-continuity.e2e.test.ts` |
 
+## Compound live questions
+
+| Scenario | Required outcome | Evidence |
+| --- | --- | --- |
+| "What's the Giants score and the drive time to Oracle Park?" | Run `sports.scores` then `maps.directions`, in the order asked; answer both parts; show the scoreboard and route cards under the reply, never in place of it | `packages/tools/src/question-regression/corpus.ts` (`score-and-drive-time`), `packages/core/src/workflow/response-cards.test.ts` |
+| One part's lookup fails, the other succeeds | Answer the part that worked and name the part that failed; refuse only when every lookup failed or a figure matches no source | `packages/core/src/workflow/live-lookup.test.ts` |
+| A second sentence that only adds context ("I work at 181 Fremont Street") | Stays one lookup; context is never read as a second question | `packages/core/src/workflow/live-lookup.test.ts`, question-regression `weather-work` |
+| An uncovered team falls back to web search inside a compound question | The search result can be read without approval, and it does not use up evidence belonging to the other part | `packages/core/src/workflow/live-lookup.test.ts`, `packages/tools/src/dispatcher.test.ts` |
+
 ## Cross-cutting workflow guarantees
 
 | Scenario | Required outcome | Evidence |

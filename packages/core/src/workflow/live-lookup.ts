@@ -108,6 +108,56 @@ export function detectLiveLookup(
   return undefined;
 }
 
+/**
+ * Where a compound question splits: sentence ends, and the words that join two
+ * asks ("the Giants score and the drive time to Oracle Park"). A split that
+ * cuts one ask in half ("Giants and Dodgers score") is harmless — only a
+ * clause that is a complete lookup on its own counts.
+ */
+const CLAUSE_BREAK = /[.?!;\n]+\s*|,?\s+(?:and(?:\s+also)?|also|plus|then|as well as)\s+/gi;
+/** More parts than this is a list to research, not a question to answer live. */
+const MAX_LOOKUPS = 4;
+
+/**
+ * Every live lookup a request asks for, in the order it asks.
+ *
+ * "What's the Giants score and the drive time to Oracle Park?" needs the
+ * scores tool *and* the maps tool; `detectLiveLookup` sees one request and
+ * picks one. Each clause is judged as a standalone question, so it qualifies
+ * only on the evidence a question of its own would need. Fewer than two
+ * qualifying clauses leaves the single-lookup answer untouched.
+ */
+export function detectLiveLookups(history: ReadonlyArray<ReadIntentMessage>): LiveLookup[] {
+  const single = detectLiveLookup(history);
+  const fallback = single ? [single] : [];
+  const message = history.findLast((m) => m.role === 'user');
+  const request = message ? readIntentText(message).trim() : '';
+  if (!request || /^(?:don't|do not|never)\b/i.test(request)) return fallback;
+  if (/\b(?:password|passcode|wifi|wi-fi|API key)\b/i.test(request)) return fallback;
+  const clauses = request
+    .split(CLAUSE_BREAK)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  if (clauses.length < 2) return fallback;
+  // "What's the score and the weather in Reykjavik" asks both halves, though
+  // only the first carries the question word.
+  const asks = QUESTION.test(request) || request.includes('?');
+  const found: LiveLookup[] = [];
+  for (const clause of clauses) {
+    const content = asks && !clause.endsWith('?') ? `${clause}?` : clause;
+    // Judged alone, not against the thread: "I work at 181 Fremont Street"
+    // after a question about the weather reads as the answer to an earlier
+    // "which address?", which is right for a whole message and wrong for the
+    // second sentence of one. The whole-message reading above keeps that.
+    const lookup = detectLiveLookup([{ role: 'user', content }]);
+    if (!lookup) continue;
+    if (found.some((prior) => prior.kind === lookup.kind && prior.request === lookup.request))
+      continue;
+    found.push(lookup);
+  }
+  return found.length >= 2 && found.length <= MAX_LOOKUPS ? found : fallback;
+}
+
 export function successfulLookup(row: ActionEvidence): boolean {
   const result = row.result as Record<string, unknown> | null;
   return (
@@ -166,6 +216,103 @@ export function nextLiveLookup(
 }
 
 /**
+ * Each lookup's share of the ledger, for a request with several.
+ *
+ * The runtime answers the lookups one after another, so the k-th call to a
+ * tool belongs to the k-th lookup that needs it: the first `weather.lookup`
+ * row to the first weather question, the second to the second. A sports
+ * lookup whose scores call came back empty also takes the next search and
+ * read, because that is the fallback `nextLiveLookup` sends it down.
+ */
+export function attributeLookupEvidence(
+  lookups: readonly LiveLookup[],
+  evidence: ActionEvidence[],
+): ActionEvidence[][] {
+  const queues = new Map<string, ActionEvidence[]>();
+  for (const row of evidence) {
+    if (row.fromCurrentTask === false) continue;
+    queues.set(row.toolName, [...(queues.get(row.toolName) ?? []), row]);
+  }
+  const take = (toolName: string): ActionEvidence[] => {
+    const row = queues.get(toolName)?.shift();
+    return row ? [row] : [];
+  };
+  const webChain = () => [...take('web.search'), ...take('web.fetch')];
+  return lookups.map((lookup) => {
+    if (lookup.kind === 'weather') return take('weather.lookup');
+    if (lookup.kind === 'directions') return take('maps.directions');
+    if (lookup.kind === 'web') return webChain();
+    const scores = take('sports.scores');
+    return scores.length === 0 || scores.some(sportsAnswered) ? scores : [...scores, ...webChain()];
+  });
+}
+
+/** The next call the runtime owes the owner, and which part of the request it answers. */
+export function nextLiveLookups(
+  lookups: readonly LiveLookup[],
+  evidence: ActionEvidence[],
+): { toolName: string; input?: Record<string, unknown>; lookup: LiveLookup } | undefined {
+  const [first] = lookups;
+  if (lookups.length === 1 && first) {
+    const next = nextLiveLookup(first, evidence);
+    return next && { ...next, lookup: first };
+  }
+  const shares = attributeLookupEvidence(lookups, evidence);
+  for (const [index, lookup] of lookups.entries()) {
+    const next = nextLiveLookup(lookup, shares[index] ?? []);
+    if (next) return { ...next, lookup };
+  }
+  return undefined;
+}
+
+/** The parts of the request whose lookup came back with nothing usable. */
+export function liveLookupFailures(
+  lookups: readonly LiveLookup[],
+  evidence: ActionEvidence[],
+): Array<{ lookup: LiveLookup; failure: string }> {
+  const shares = lookups.length === 1 ? [evidence] : attributeLookupEvidence(lookups, evidence);
+  return lookups.flatMap((lookup, index) => {
+    const failure = liveLookupFailure(lookup, shares[index] ?? []);
+    return failure ? [{ lookup, failure }] : [];
+  });
+}
+
+/**
+ * What the model is told about the lookups this turn owes. A single lookup
+ * keeps the wording it has always had; a compound request also names every
+ * part, the one being fetched now, and any part whose lookup already failed —
+ * so the answer covers the parts that worked and says which did not.
+ */
+export function liveLookupDirective(
+  lookups: readonly LiveLookup[],
+  context: {
+    next?: LiveLookup;
+    failures?: ReadonlyArray<{ lookup: LiveLookup; failure: string }>;
+    requestAt: Date;
+    timeZone: string;
+  },
+): string {
+  const [first] = lookups;
+  if (!first) return '';
+  const rules = `Use a successful lookup from this task. Earlier assistant answers and recalled conversations are not current evidence. If a provider fails, report the gap; never invent measurements, scores, office holders, opening hours, player traits, or verified job openings. Search snippets locate sources; read the source before concluding. Resolve relative dates using the owner's request time ${context.requestAt.toISOString()} and timezone ${context.timeZone}.`;
+  if (lookups.length === 1)
+    return `This request needs fresh ${first.kind} evidence: ${first.request}\n${rules}`;
+  const parts = lookups.map((lookup, index) => `${index + 1}. ${lookup.kind}: ${lookup.request}`);
+  const now = context.next ? [`Look up this part now: ${context.next.request}`] : [];
+  const failed = (context.failures ?? []).map(
+    ({ lookup }) =>
+      `The ${lookup.kind} lookup for "${lookup.request}" failed. Say so for that part instead of answering it, and answer the other parts.`,
+  );
+  return [
+    `This request has ${lookups.length} parts that each need fresh evidence. Answer every part, in the order asked:`,
+    ...parts,
+    ...now,
+    ...failed,
+    rules,
+  ].join('\n');
+}
+
+/**
  * The text a live lookup actually retrieved, as one searchable corpus.
  *
  * Search *snippets* are deliberately included alongside fetched bodies: the
@@ -220,7 +367,7 @@ const DATE_LIKE = /\d{4}\s*[-–—]\s*\d{1,2}|\d{1,2}\s*[-–—]\s*\d{1,2}\s*[
  * answers, which is worse than the defect it exists to catch.
  */
 const RANGE_UNIT =
-  /^\s*(?:minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|seconds?|secs?|people|items?|percent|%|dollars?|euros?|miles?|kms?|km|degrees?)\b/i;
+  /^\s*(?:°|(?:minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|seconds?|secs?|people|items?|percent|%|dollars?|euros?|miles?|kms?|km|degrees?)\b)/i;
 
 /**
  * A figure the answer asserts that the retrieved sources never contained.

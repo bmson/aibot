@@ -15,7 +15,7 @@
  * only the genuinely ambiguous rest.
  */
 
-import { detectLiveLookup } from '@assistant/core/workflow/live-lookup';
+import { detectLiveLookups } from '@assistant/core/workflow/live-lookup';
 import {
   detectPersonalReadRequest,
   type ReadIntentMessage,
@@ -113,11 +113,11 @@ export function looksLikeActionRequest(
   let t = text.trim().toLowerCase();
   if (!t) return false;
   if (
-    detectLiveLookup([
+    detectLiveLookups([
       ...recentHistory.slice(-8),
       ...(priorAssistantText ? [{ role: 'assistant', content: priorAssistantText }] : []),
       { role: 'user', content: text },
-    ])
+    ]).length > 0
   )
     return true;
   if (/^(?:approved?|i approve(?: the budget increase)?)[.!]*$/i.test(t)) return true;
