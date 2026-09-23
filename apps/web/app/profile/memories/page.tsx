@@ -1,6 +1,7 @@
 import { getMemoryHubOverview } from '@assistant/application/profile';
 import { loadConfig } from '@assistant/config';
 import { createInstallationStore, FirestoreProfileMemoryHubRepository } from '@assistant/firestore';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
@@ -110,6 +111,12 @@ function ReadOnlyMemoryHub({ overview, now }: { overview: Overview; now: Date })
           </p>
           <p>{latestOrganizer ? `Organizer: ${latestOrganizer.status}` : 'No organizer run yet'}</p>
         </div>
+        <Link
+          href="/profile/about"
+          className="mt-3 inline-flex text-sm font-medium text-accent underline underline-offset-2"
+        >
+          View what I know about you
+        </Link>
       </section>
     </PageShell>
   );
