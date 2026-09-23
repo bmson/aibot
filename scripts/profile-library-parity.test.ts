@@ -3,12 +3,16 @@ import { Timestamp } from '@google-cloud/firestore';
 import { inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { profileLibraryQueries } from '../packages/application/src/profile/library-queries.js';
+import { GRAPH_EXTRACTION_VERSION } from '../packages/core/src/memory/knowledge-graph.js';
 import {
   agents,
   contacts,
   createDb,
   createPostgresProfileLibraryRepository,
   type Db,
+  knowledgeGraphEntities,
+  knowledgeGraphRelations,
+  knowledgeGraphSources,
   memories,
 } from '../packages/db/src/index.js';
 import { FirestoreProfileLibraryRepository } from '../packages/firestore/src/profile-library.js';
@@ -30,6 +34,9 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('profile library PG/Firest
   const quarantineId = randomUUID();
   const expiredId = randomUUID();
   const foreignMemoryId = randomUUID();
+  const graphSubjectId = randomUUID();
+  const graphObjectId = randomUUID();
+  const graphRelationId = randomUUID();
   const fillerIds = Array.from({ length: 405 }, () => randomUUID());
   const allMemoryIds = [
     preciseEarly,
@@ -111,6 +118,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('profile library PG/Firest
         subjectContactId: subjectB,
         content: 'Precise late',
         contentHash: 'late',
+        embedding: Array.from({ length: 1536 }, () => 0.25),
         pinned: true,
         ownerConfirmed: true,
         importance: 5,
@@ -164,6 +172,39 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('profile library PG/Firest
     await db.execute(
       sql`update memories set created_at = '2026-09-19T12:00:00.123789Z'::timestamptz where id = ${preciseLate}`,
     );
+    await db.insert(knowledgeGraphEntities).values([
+      {
+        id: graphSubjectId,
+        agentId: ownerId,
+        canonicalKey: 'topic:precise-subject',
+        label: 'Precise subject',
+        kind: 'topic',
+      },
+      {
+        id: graphObjectId,
+        agentId: ownerId,
+        canonicalKey: 'topic:precise-object',
+        label: 'Precise object',
+        kind: 'topic',
+      },
+    ]);
+    await db.insert(knowledgeGraphSources).values({
+      memoryId: preciseLate,
+      contentHash: 'late',
+      status: 'ready',
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+    });
+    await db.insert(knowledgeGraphRelations).values({
+      id: graphRelationId,
+      agentId: ownerId,
+      subjectEntityId: graphSubjectId,
+      objectEntityId: graphObjectId,
+      sourceMemoryId: preciseLate,
+      predicate: 'relates_to',
+      sourceFingerprint: 'precise-relation',
+      ordinal: 0,
+      evidenceQuote: '',
+    });
 
     const batch = store.db.batch();
     for (const contact of contactRows) {
@@ -187,10 +228,37 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('profile library PG/Firest
             : row.createdAt;
       batch.set(store.doc('memories', row.id), { ...row, createdAt: precise });
     }
+    batch.set(store.doc('knowledgeGraphSources', preciseLate), {
+      memoryId: preciseLate,
+      contentHash: 'late',
+      status: 'ready',
+      extractionVersion: GRAPH_EXTRACTION_VERSION,
+    });
+    batch.set(store.doc('knowledgeGraphRelations', graphRelationId), {
+      id: graphRelationId,
+      agentId: ownerId,
+      subjectEntityId: graphSubjectId,
+      objectEntityId: graphObjectId,
+      sourceMemoryId: preciseLate,
+      predicate: 'relates_to',
+      sourceFingerprint: 'precise-relation',
+      ordinal: 0,
+      evidenceQuote: '',
+      reviewStatus: 'unreviewed',
+    });
     await batch.commit();
   });
 
   afterAll(async () => {
+    await db
+      .delete(knowledgeGraphRelations)
+      .where(inArray(knowledgeGraphRelations.id, [graphRelationId]));
+    await db
+      .delete(knowledgeGraphSources)
+      .where(inArray(knowledgeGraphSources.memoryId, [preciseLate]));
+    await db
+      .delete(knowledgeGraphEntities)
+      .where(inArray(knowledgeGraphEntities.id, [graphSubjectId, graphObjectId]));
     await db.delete(memories).where(inArray(memories.id, allMemoryIds));
     await db.delete(contacts).where(inArray(contacts.id, [subjectA, subjectB, foreignSubject]));
     await db.delete(agents).where(inArray(agents.id, [ownerId, foreignId]));
@@ -228,6 +296,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('profile library PG/Firest
       preciseEarly,
     ]);
     expect(fsFirst.rows.some((row) => row.memory.id === foreignMemoryId)).toBe(false);
+    expect(fsFirst.rows.find((row) => row.memory.id === preciseLate)?.connectionCount).toBe(1);
 
     await expect(firestore.listFilters()).resolves.toEqual(await pg.listFilters());
     await expect(
@@ -243,8 +312,8 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('profile library PG/Firest
     ).resolves.toEqual(
       await pg.list({ ...input, filter: 'verified', connectivity: 'unconnected' }),
     );
-    await expect(firestore.list({ ...input, connectivity: 'connected' })).resolves.toEqual(
-      await pg.list({ ...input, connectivity: 'connected' }),
-    );
+    const connected = await firestore.list({ ...input, connectivity: 'connected' });
+    expect(connected.rows.map((row) => row.memory.id)).toEqual([preciseLate]);
+    expect(connected).toEqual(await pg.list({ ...input, connectivity: 'connected' }));
   });
 });

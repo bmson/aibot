@@ -183,7 +183,7 @@ export class FirestoreProfileLibraryRepository implements ProfileLibraryReposito
         source.contentHash === memory.contentHash &&
         source.extractionVersion >= input.extractionVersion &&
         relation.reviewStatus !== 'rejected' &&
-        relation.evidenceQuote
+        relation.evidenceQuote != null
       ) {
         activeCounts.set(memory.id, (activeCounts.get(memory.id) ?? 0) + 1);
       }
