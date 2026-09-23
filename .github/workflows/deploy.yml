@@ -180,6 +180,10 @@ jobs:
       # this stays — and running in parallel it costs the release nothing but
       # the slowest job's copy of it.
       - name: Reclaim runner disk for the image build
+        # The PostgreSQL backup image is small. On two releases its runner
+        # remained in this cleanup step for several minutes before any image
+        # work began, blocking the entire deploy matrix.
+        if: matrix.entry.name != 'backup'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           docker image prune --all --force
