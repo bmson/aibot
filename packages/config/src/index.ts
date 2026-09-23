@@ -18,7 +18,8 @@ export const repoRoot = process.env.ASSISTANT_REPO_ROOT
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 export const envFile = path.join(repoRoot, '.env');
 if (existsSync(envFile)) {
-  dotenv.config({ path: envFile });
+  // dotenv >= 17 logs an "injected env" banner by default; keep script and CLI output clean.
+  dotenv.config({ path: envFile, quiet: true });
 }
 
 const booleanString = z
