@@ -27,7 +27,11 @@ export {
 } from './outbox.js';
 export { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 export { FirestoreOwnerContextRepository } from './owner-context.js';
-export { getFirestorePeopleDirectory, getFirestorePersonDetail } from './people-directory.js';
+export {
+  getFirestoreMobilePeopleDirectory,
+  getFirestorePeopleDirectory,
+  getFirestorePersonDetail,
+} from './people-directory.js';
 export {
   assertPrivacyErasureFenceUnchanged,
   FirestorePrivacyErasureRepository,

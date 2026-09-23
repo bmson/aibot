@@ -12,6 +12,9 @@ import {
   retryQuarantinedKnowledgeGraphSources as retryQuarantinedSources,
   retypeGraphEntity,
 } from '@assistant/core/memory/knowledge-graph';
+
+export { GRAPH_EXTRACTION_VERSION } from '@assistant/core/memory/knowledge-graph';
+
 import {
   type Db,
   knowledgeGraphEntities,
