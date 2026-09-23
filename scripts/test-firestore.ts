@@ -25,6 +25,7 @@ const child = spawn(
     'apps/agent/src/firestore-executor.test.ts',
     'apps/agent/src/firestore-chat.test.ts',
     'apps/agent/src/firestore-application.test.ts',
+    'apps/agent/src/firestore-graph-sync.test.ts',
     'apps/agent/src/firestore-watches.test.ts',
     'scripts/firestore-watch-smoke.test.ts',
     'scripts/profile-library-parity.test.ts',

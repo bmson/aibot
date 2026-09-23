@@ -182,15 +182,20 @@ function materialize(
 function projectRecord(
   record: MigrationRecord,
   bundle: MigrationBundle,
-  memoryAgentIds: ReadonlyMap<string, string>,
+  memoryProjections: ReadonlyMap<string, Record<string, unknown>>,
 ): Record<string, unknown> {
-  const data = materialize(record, bundle.manifest.source.embeddingSpace);
+  const data =
+    (record.table === 'memories' && memoryProjections.get(record.id)) ||
+    materialize(record, bundle.manifest.source.embeddingSpace);
   if (bundle.manifest.formatVersion >= 3 && record.table === 'knowledge_graph_sources') {
     const memoryId = data.memoryId;
-    const agentId = typeof memoryId === 'string' ? memoryAgentIds.get(memoryId) : undefined;
-    if (!agentId)
+    const memory = typeof memoryId === 'string' ? memoryProjections.get(memoryId) : undefined;
+    const agentId = memory?.agentId;
+    if (typeof agentId !== 'string' || !agentId)
       throw new Error(`Knowledge graph source is missing its owned memory: ${record.id}`);
     data.agentId = agentId;
+    if (typeof memory?.retrievalRevision === 'string')
+      data.retrievalRevision = memory.retrievalRevision;
   }
   return data;
 }
@@ -464,13 +469,13 @@ export async function importWorkspaceBundle(
   const records = [...bundle.records].sort((a, b) =>
     recordCompare(`${a.collection}:${a.id}`, `${b.collection}:${b.id}`),
   );
-  const memoryAgentIds = new Map(
+  const memoryProjections = new Map(
     records
       .filter((record) => record.table === 'memories')
-      .flatMap((record) => {
-        const agentId = record.data.agentId;
-        return typeof agentId === 'string' ? [[record.id, agentId] as const] : [];
-      }),
+      .map(
+        (record) =>
+          [record.id, materialize(record, bundle.manifest.source.embeddingSpace)] as const,
+      ),
   );
   const derived = derivedRecords(bundle, options.target);
   const dataDerived = derived.filter(
@@ -481,7 +486,10 @@ export async function importWorkspaceBundle(
       collection: record.collection,
       id: record.id,
       data: encodeRecord(
-        materializeValue(projectRecord(record, bundle, memoryAgentIds)) as Record<string, unknown>,
+        materializeValue(projectRecord(record, bundle, memoryProjections)) as Record<
+          string,
+          unknown
+        >,
       ),
     })),
     ...dataDerived.map((record) => ({

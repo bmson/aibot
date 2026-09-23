@@ -333,14 +333,20 @@ export async function runCodeJob(
         return { done: true, summary: 'knowledge graph: disabled' };
       }
       await deps.heartbeat?.();
-      const r = await syncKnowledgeGraph(deps, {
-        taskId: task.id,
-        agentId: task.agentId,
-        heartbeat: deps.heartbeat,
-      });
+      const graphSync = deps.persistence?.graphSync;
+      if (deps.persistence && !graphSync)
+        throw new Error('Knowledge graph sync repository is missing from execution persistence');
+      const r = await syncKnowledgeGraph(
+        { db: deps.db, router: deps.router, graphSync },
+        {
+          taskId: task.id,
+          agentId: task.agentId,
+          heartbeat: deps.heartbeat,
+        },
+      );
       const [pending, spentUsd] = await Promise.all([
-        pendingKnowledgeGraphSourceCount(deps.db, task.agentId),
-        graphSyncSpendUsd(deps.db, task.id),
+        pendingKnowledgeGraphSourceCount(graphSync ?? deps.db, task.agentId),
+        graphSyncSpendUsd(graphSync ?? deps.db, task.id),
       ]);
       return {
         done: true,

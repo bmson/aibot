@@ -608,6 +608,70 @@ describe('knowledge graph sync and recall', () => {
     expect(first.processed + second.processed).toBe(1);
   });
 
+  it('does not publish an extraction after its PostgreSQL source changes', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const original = `${MARKER} Owner works at ${MARKER} Stale Employer.`;
+    const [memory] = await db
+      .insert(memories)
+      .values({
+        agentId,
+        category: 'knowledge',
+        kind: 'fact',
+        content: original,
+        contentHash: `${MARKER}-stale-extraction-v1`,
+        embedding: unit(51),
+        originTrust: 'owner',
+      })
+      .returning({ id: memories.id });
+    if (!memory) throw new Error('test memory was not created');
+    let release!: () => void;
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const called = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const slowRouter = {
+      async object() {
+        started();
+        await waiting;
+        return {
+          ok: true,
+          object: {
+            relationships: [
+              {
+                subject: { label: `${MARKER} Owner`, kind: 'person' },
+                predicate: 'works_at',
+                object: { label: `${MARKER} Stale Employer`, kind: 'organization' },
+                evidenceQuote: original,
+                confidence: 0.9,
+              },
+            ],
+          },
+        };
+      },
+    } as unknown as ModelRouter;
+    const syncing = syncKnowledgeGraph({ db, router: slowRouter }, { agentId });
+    await called;
+    await db
+      .update(memories)
+      .set({
+        content: `${MARKER} Owner works at ${MARKER} Current Employer.`,
+        contentHash: `${MARKER}-stale-extraction-v2`,
+      })
+      .where(eq(memories.id, memory.id));
+    release();
+
+    expect(await syncing).toMatchObject({ processed: 0, relationships: 0, entities: 0 });
+    expect(
+      await db
+        .select({ id: knowledgeGraphRelations.id })
+        .from(knowledgeGraphRelations)
+        .where(eq(knowledgeGraphRelations.sourceMemoryId, memory.id)),
+    ).toEqual([]);
+  });
+
   it('keeps an owner-rejected edge out of recall and writes owner facts with evidence', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const saved = await createOwnerKnowledgeGraphFact(
