@@ -325,16 +325,14 @@ export default async function SettingsPage() {
                   </>
                 }
                 actions={
-                  readOnly ? null : (
-                    <form action={setScheduleEnabled.bind(null, s.id, !s.enabled)}>
-                      <SubmitButton
-                        variant="outline"
-                        pendingLabel={s.enabled ? 'Pausing…' : 'Resuming…'}
-                      >
-                        {s.enabled ? 'Pause' : 'Resume'}
-                      </SubmitButton>
-                    </form>
-                  )
+                  <form action={setScheduleEnabled.bind(null, s.id, !s.enabled)}>
+                    <SubmitButton
+                      variant="outline"
+                      pendingLabel={s.enabled ? 'Pausing…' : 'Resuming…'}
+                    >
+                      {s.enabled ? 'Pause' : 'Resume'}
+                    </SubmitButton>
+                  </form>
                 }
               />
             ))}
@@ -396,36 +394,34 @@ export default async function SettingsPage() {
                 detailTitle={`${p.toolName} · ${p.templateKey}`}
                 detail={policyScope(p.templateKey, p.match) ?? 'Custom scope'}
                 actions={
-                  readOnly ? null : (
-                    <>
-                      <form action={setPolicyEnabled.bind(null, p.id, !p.enabled)}>
-                        {p.enabled ? (
-                          <SubmitButton variant="outline" pendingLabel="Pausing…">
-                            Pause
-                          </SubmitButton>
-                        ) : (
-                          <ConfirmButton
-                            variant="outline"
-                            pendingLabel="Enabling…"
-                            confirmLabel="Confirm use rule"
-                          >
-                            Use
-                          </ConfirmButton>
-                        )}
+                  <>
+                    <form action={setPolicyEnabled.bind(null, p.id, !p.enabled)}>
+                      {p.enabled ? (
+                        <SubmitButton variant="outline" pendingLabel="Pausing…">
+                          Pause
+                        </SubmitButton>
+                      ) : (
+                        <ConfirmButton
+                          variant="outline"
+                          pendingLabel="Enabling…"
+                          confirmLabel="Confirm use rule"
+                        >
+                          Use
+                        </ConfirmButton>
+                      )}
+                    </form>
+                    {p.createdVia !== 'seed' ? (
+                      <form action={deletePolicy.bind(null, p.id)}>
+                        <ConfirmButton
+                          pendingLabel="Deleting…"
+                          confirmLabel="Confirm delete"
+                          title="Remove the rule — this tool goes back to asking for approval"
+                        >
+                          Delete
+                        </ConfirmButton>
                       </form>
-                      {p.createdVia !== 'seed' ? (
-                        <form action={deletePolicy.bind(null, p.id)}>
-                          <ConfirmButton
-                            pendingLabel="Deleting…"
-                            confirmLabel="Confirm delete"
-                            title="Remove the rule — this tool goes back to asking for approval"
-                          >
-                            Delete
-                          </ConfirmButton>
-                        </form>
-                      ) : null}
-                    </>
-                  )
+                    ) : null}
+                  </>
                 }
               />
             ))}

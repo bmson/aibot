@@ -2,50 +2,14 @@
 
 import { randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { createSettingsFacade } from '@assistant/application/settings';
-import {
-  envFile,
-  loadConfig,
-  reloadConfig,
-  validateAgentPersistenceConfig,
-} from '@assistant/config';
-import {
-  assertPrivacyErasureFenceUnchanged,
-  createFirestoreSettingsPersistence,
-  readPrivacyErasureFence,
-} from '@assistant/firestore';
+import { envFile, loadConfig, reloadConfig } from '@assistant/config';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
+import { runFirestoreSettingsMutation } from '@/lib/firestore-settings-mutation';
+import { getApplication } from '@/lib/server';
 
 function revalidateSettings(): void {
   revalidatePath('/settings');
-}
-
-async function updateFirestoreSettings<T>(
-  update: (settings: ReturnType<typeof createSettingsFacade>) => Promise<T>,
-): Promise<T> {
-  const config = loadConfig();
-  const problems = validateAgentPersistenceConfig(config);
-  if (problems.length) throw new Error(problems.join('; '));
-  const store = getFirestoreInstallationStore();
-  const assertConfiguredOwner = async () => {
-    const agents = await store.collection('agents').limit(2).get();
-    if (
-      agents.size !== 1 ||
-      agents.docs[0]?.id !== store.doc('agents', config.FIRESTORE_AGENT_ID).id ||
-      agents.docs[0]?.get('id') !== config.FIRESTORE_AGENT_ID
-    )
-      throw new Error('Settings update requires exactly one configured agent');
-  };
-  await assertConfiguredOwner();
-  const fence = await readPrivacyErasureFence(store, config.FIRESTORE_AGENT_ID);
-  const result = await update(
-    createSettingsFacade(createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID)),
-  );
-  await assertConfiguredOwner();
-  await assertPrivacyErasureFenceUnchanged(store, config.FIRESTORE_AGENT_ID, fence);
-  return result;
 }
 
 /** Editable agent identity: timezone, locale, signature. */
@@ -58,7 +22,7 @@ export async function updateAgentSettings(input: {
   const config = loadConfig();
   const result =
     config.PERSISTENCE_DRIVER === 'firestore'
-      ? await updateFirestoreSettings((settings) => settings.updateAssistantSettings(input))
+      ? await runFirestoreSettingsMutation((settings) => settings.updateAssistantSettings(input))
       : await getApplication().updateSettings(input);
   if (result.error) return result;
   revalidateSettings();
@@ -68,7 +32,13 @@ export async function updateAgentSettings(input: {
 /** Pause/resume a proactive schedule. Re-enabling recomputes next_run_at on the next sweep. */
 export async function setScheduleEnabled(scheduleId: string, enabled: boolean): Promise<void> {
   await requireOwner();
-  await getApplication().setScheduleEnabled(scheduleId, enabled);
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    await runFirestoreSettingsMutation((settings) =>
+      settings.setRecurringJobEnabled(scheduleId, enabled),
+    );
+  } else {
+    await getApplication().setScheduleEnabled(scheduleId, enabled);
+  }
   revalidateSettings();
 }
 
@@ -82,7 +52,7 @@ export async function updateNotificationSettings(input: {
   const config = loadConfig();
   const result =
     config.PERSISTENCE_DRIVER === 'firestore'
-      ? await updateFirestoreSettings((settings) => settings.updateNotificationPrefs(input))
+      ? await runFirestoreSettingsMutation((settings) => settings.updateNotificationPrefs(input))
       : await getApplication().updateNotificationPrefs(input);
   if (result.error) return result;
   revalidateSettings();
@@ -92,14 +62,24 @@ export async function updateNotificationSettings(input: {
 /** Enable/disable a standing approval rule. */
 export async function setPolicyEnabled(policyId: string, enabled: boolean): Promise<void> {
   await requireOwner();
-  await getApplication().setPolicyEnabled(policyId, enabled);
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    await runFirestoreSettingsMutation((settings) =>
+      settings.setApprovalPolicyEnabled(policyId, enabled),
+    );
+  } else {
+    await getApplication().setPolicyEnabled(policyId, enabled);
+  }
   revalidateSettings();
 }
 
 /** Remove a standing approval rule entirely — the tool goes back to asking. */
 export async function deletePolicy(policyId: string): Promise<void> {
   await requireOwner();
-  await getApplication().deletePolicy(policyId);
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    await runFirestoreSettingsMutation((settings) => settings.deleteApprovalPolicy(policyId));
+  } else {
+    await getApplication().deletePolicy(policyId);
+  }
   revalidateSettings();
 }
 

@@ -1,3 +1,5 @@
+import { loadConfig } from '@assistant/config';
+import { runFirestoreSettingsMutation } from '@/lib/firestore-settings-mutation';
 import { getApplication } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -16,6 +18,12 @@ export async function POST(
   if (typeof body?.enabled !== 'boolean') {
     return mobileJson({ error: 'enabled must be a boolean' }, { status: 400 });
   }
-  await getApplication().setScheduleEnabled(id, body.enabled);
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
+    await runFirestoreSettingsMutation((settings) =>
+      settings.setRecurringJobEnabled(id, body.enabled as boolean),
+    );
+  } else {
+    await getApplication().setScheduleEnabled(id, body.enabled);
+  }
   return mobileJson({ ok: true });
 }

@@ -23,6 +23,17 @@ export function privacyErasureIsActive(status: unknown): boolean {
   return status !== 'complete';
 }
 
+/** Check the erasure write fence inside the same transaction as an owner mutation. */
+export async function assertPrivacyErasureInactiveInTransaction(
+  tx: Transaction,
+  store: InstallationStore,
+  agentId: string,
+): Promise<void> {
+  const job = await tx.get(store.doc('privacyErasureJobs', agentId));
+  if (job.exists && (job.get('agentId') !== agentId || privacyErasureIsActive(job.get('status'))))
+    throw new Error('Privacy erasure is in progress');
+}
+
 /** Read-side token: a completed erasure must still invalidate a read started before it. */
 export async function readPrivacyErasureFence(
   store: InstallationStore,

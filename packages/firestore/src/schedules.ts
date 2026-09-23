@@ -17,6 +17,7 @@ import {
   validateScheduleCreate,
 } from '@assistant/persistence';
 import { createWakeIntent } from './outbox.js';
+import { assertPrivacyErasureInactiveInTransaction } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 /**
@@ -157,6 +158,7 @@ export class FirestoreScheduleRepository implements ScheduleRepository {
     const ref = this.store.doc('schedules', scheduleId);
     return this.store.db.runTransaction(async (tx) => {
       const snapshot = await tx.get(ref);
+      await assertPrivacyErasureInactiveInTransaction(tx, this.store, agentId);
       if (!snapshot.exists) return false;
       const row = decodeSchedule(snapshot.data());
       if (row.id !== scheduleId || row.agentId !== agentId || row.name.startsWith('reminder:'))
