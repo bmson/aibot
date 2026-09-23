@@ -4,6 +4,7 @@ import {
   addPersonOccasion,
   createPerson,
   deletePerson,
+  forgetLongTermMemoryWithRepository,
   forgetPersonOccasion,
   mergePeople,
   type OrganizeMemoryState,
@@ -18,9 +19,11 @@ import {
   updatePersonRelationship,
   updateVoiceProfile,
 } from '@assistant/application/profile';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { FirestorePrivacyErasureRepository } from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getApplication, getDb, getWorkspace } from '@/lib/server';
+import { getApplication, getDb, getFirestoreInstallationStore, getWorkspace } from '@/lib/server';
 
 export type { OrganizeMemoryState, ProminenceLevel } from '@assistant/application/profile';
 
@@ -172,7 +175,22 @@ export async function purgeVoiceSamplesAction(): Promise<void> {
 /** Irreversible owner control for the data that drives recall and voice imitation. */
 export async function forgetLongTermMemoryAction(): Promise<void> {
   await requireOwner();
-  await getApplication().forgetLongTermMemory();
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (config.FILES_DRIVER === 'gcs' && !config.WORKSPACE_BUCKET.trim())
+      problems.push('WORKSPACE_BUCKET is required for Firestore memory erasure');
+    if (problems.length) throw new Error(problems.join('; '));
+    await forgetLongTermMemoryWithRepository(
+      new FirestorePrivacyErasureRepository(
+        getFirestoreInstallationStore(),
+        config.FIRESTORE_AGENT_ID,
+      ),
+      getWorkspace(),
+    );
+  } else {
+    await getApplication().forgetLongTermMemory();
+  }
   revalidateProfile();
   revalidatePath('/chat', 'layout');
 }

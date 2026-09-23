@@ -64,13 +64,23 @@ function validJob(job: Job): boolean {
 export class FirestorePrivacyErasureRepository implements PrivacyErasureRepository {
   readonly kind = 'privacy-erasure-repository' as const;
 
-  constructor(readonly store: InstallationStore) {}
+  constructor(
+    readonly store: InstallationStore,
+    readonly configuredAgentId?: string,
+  ) {}
 
   private async soleOwner(): Promise<string> {
     const snapshot = await this.store.collection('agents').limit(2).get();
     const doc = snapshot.docs[0];
     const id = doc?.get('id');
-    if (snapshot.size !== 1 || !doc || typeof id !== 'string' || !id || documentKey(id) !== doc.id)
+    if (
+      snapshot.size !== 1 ||
+      !doc ||
+      typeof id !== 'string' ||
+      !id ||
+      documentKey(id) !== doc.id ||
+      (this.configuredAgentId !== undefined && id !== this.configuredAgentId)
+    )
       throw new Error('Privacy erasure requires exactly one configured owner');
     return id;
   }

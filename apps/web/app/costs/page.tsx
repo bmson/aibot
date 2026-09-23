@@ -1,4 +1,6 @@
 import { getCostsDashboard } from '@assistant/application/costs';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { createInstallationStore, getFirestoreMobileCosts } from '@assistant/firestore';
 import Link from 'next/link';
 import { updateCaps } from '@/app/costs/actions';
 import { requireOwner } from '@/auth';
@@ -27,7 +29,24 @@ function Bar({ spent, held, limit }: { spent: number; held: number; limit: numbe
 
 export default async function CostsPage() {
   await requireOwner();
-  const db = getDb();
+  const config = loadConfig();
+  const firestore = config.PERSISTENCE_DRIVER === 'firestore';
+  let dashboard: Awaited<ReturnType<typeof getCostsDashboard>>;
+  if (firestore) {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    const store = createInstallationStore({
+      projectId: config.GCP_PROJECT,
+      installationId: config.ASSISTANT_WORKSPACE_ID,
+    });
+    try {
+      dashboard = await getFirestoreMobileCosts(store, config.FIRESTORE_AGENT_ID);
+    } finally {
+      await store.db.terminate();
+    }
+  } else {
+    dashboard = await getCostsDashboard(getDb());
+  }
   const {
     timezone: tz,
     totals,
@@ -38,24 +57,35 @@ export default async function CostsPage() {
     recent,
     parkedTasks: parked,
     taskDefaultLimit,
-  } = await getCostsDashboard(db);
+  } = dashboard;
 
   return (
     <PageShell size="reading">
       <PageHeader
         back={{ href: '/chat', label: 'Chat' }}
         title="Costs"
-        intro="See what the assistant has spent and set limits that keep costs under control."
+        intro={
+          firestore
+            ? 'See what the assistant has spent and the current spending limits.'
+            : 'See what the assistant has spent and set limits that keep costs under control.'
+        }
       />
 
       {parked > 0 ? (
         <p className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
           {parked} {parked === 1 ? 'task is' : 'tasks are'} paused because a spending limit was
-          reached —{' '}
-          <Link href="/tasks" className="underline">
-            see tasks
-          </Link>{' '}
-          or adjust the limits below.
+          reached
+          {firestore ? (
+            '.'
+          ) : (
+            <>
+              {' — '}
+              <Link href="/tasks" className="underline">
+                see tasks
+              </Link>{' '}
+              or adjust the limits below.
+            </>
+          )}
         </p>
       ) : null}
 
@@ -86,48 +116,50 @@ export default async function CostsPage() {
       </section>
 
       {/* Cap editing */}
-      <section className="mt-6">
-        <form action={updateCaps} className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1 text-xs font-medium text-muted">
-            Default task cap (USD)
-            <input
-              type="number"
-              name="task_default"
-              step="0.05"
-              min="0.05"
-              defaultValue={taskDefaultLimit ? Number(taskDefaultLimit) : ''}
-              className={`${inputClass} w-28`}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-muted">
-            Daily cap (USD)
-            <input
-              type="number"
-              name="daily"
-              step="0.5"
-              min="0.5"
-              defaultValue={Number.isFinite(totals.dailyLimitUsd) ? totals.dailyLimitUsd : ''}
-              className={`${inputClass} w-28`}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium text-muted">
-            Monthly cap (USD)
-            <input
-              type="number"
-              name="monthly"
-              step="1"
-              min="1"
-              defaultValue={Number.isFinite(totals.monthlyLimitUsd) ? totals.monthlyLimitUsd : ''}
-              className={`${inputClass} w-28`}
-            />
-          </label>
-          {/* Full width on a phone so it lands on its own row instead of
+      {!firestore ? (
+        <section className="mt-6">
+          <form action={updateCaps} className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+              Default task cap (USD)
+              <input
+                type="number"
+                name="task_default"
+                step="0.05"
+                min="0.05"
+                defaultValue={taskDefaultLimit ? Number(taskDefaultLimit) : ''}
+                className={`${inputClass} w-28`}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+              Daily cap (USD)
+              <input
+                type="number"
+                name="daily"
+                step="0.5"
+                min="0.5"
+                defaultValue={Number.isFinite(totals.dailyLimitUsd) ? totals.dailyLimitUsd : ''}
+                className={`${inputClass} w-28`}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+              Monthly cap (USD)
+              <input
+                type="number"
+                name="monthly"
+                step="1"
+                min="1"
+                defaultValue={Number.isFinite(totals.monthlyLimitUsd) ? totals.monthlyLimitUsd : ''}
+                className={`${inputClass} w-28`}
+              />
+            </label>
+            {/* Full width on a phone so it lands on its own row instead of
               trailing whichever cap field happened to wrap last. */}
-          <SubmitButton variant="outline" pendingLabel="Updating…" className="w-full sm:w-auto">
-            Update caps
-          </SubmitButton>
-        </form>
-      </section>
+            <SubmitButton variant="outline" pendingLabel="Updating…" className="w-full sm:w-auto">
+              Update caps
+            </SubmitButton>
+          </form>
+        </section>
+      ) : null}
 
       <details className="mt-8 rounded-2xl bg-sunken/55">
         <summary className="disclosure flex items-center gap-2 cursor-pointer px-5 py-4 text-sm font-medium">
@@ -206,19 +238,33 @@ export default async function CostsPage() {
           <section className="mt-6">
             <h2 className="text-sm font-medium">Most expensive tasks this month</h2>
             <div className="mt-3 flex flex-col gap-2">
-              {topTasks.map((row) => (
-                <Link
-                  key={row.taskId}
-                  href={`/tasks/${row.taskId}`}
-                  className="flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2 text-sm motion-safe:transition-colors hover:bg-sunken/30"
-                >
-                  <span className="min-w-0 truncate">
-                    <span className="text-xs text-muted">[{taskTypeLabel(row.type)}]</span>{' '}
-                    {truncate(row.progress || row.taskId || '', 80)}
-                  </span>
-                  <span className="shrink-0">{formatUsd(String(row.usd ?? '0'))}</span>
-                </Link>
-              ))}
+              {topTasks.map((row) => {
+                const content = (
+                  <>
+                    <span className="min-w-0 truncate">
+                      <span className="text-xs text-muted">[{taskTypeLabel(row.type)}]</span>{' '}
+                      {truncate(row.progress || row.taskId || '', 80)}
+                    </span>
+                    <span className="shrink-0">{formatUsd(String(row.usd ?? '0'))}</span>
+                  </>
+                );
+                return firestore ? (
+                  <div
+                    key={row.taskId}
+                    className="flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2 text-sm"
+                  >
+                    {content}
+                  </div>
+                ) : (
+                  <Link
+                    key={row.taskId}
+                    href={`/tasks/${row.taskId}`}
+                    className="flex items-center justify-between gap-3 rounded-xl bg-raised px-3 py-2 text-sm motion-safe:transition-colors hover:bg-sunken/30"
+                  >
+                    {content}
+                  </Link>
+                );
+              })}
               {topTasks.length === 0 ? (
                 <p className="text-sm text-muted">No task spending yet this month</p>
               ) : null}

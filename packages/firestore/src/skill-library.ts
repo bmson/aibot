@@ -1,4 +1,5 @@
 import type { SkillLibraryRepository, WorkspaceSkillRecord } from '@assistant/persistence';
+import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const MAX_WORKSPACE_SKILLS = 500;
@@ -64,6 +65,10 @@ export class FirestoreSkillLibraryRepository implements SkillLibraryRepository {
 
   async list(agentId: string): Promise<WorkspaceSkillRecord[]> {
     if (!agentId) throw new Error('An agent is required to list learned skills');
+    const agent = await this.store.doc('agents', agentId).get();
+    if (!agent.exists || agent.get('id') !== agentId || documentKey(agentId) !== agent.id)
+      throw new Error('Configured learned-skill agent is missing or malformed');
+    const fence = await readPrivacyErasureFence(this.store, agentId);
     const snapshot = await this.store
       .collection('skills')
       .where('agentId', '==', agentId)
@@ -73,7 +78,7 @@ export class FirestoreSkillLibraryRepository implements SkillLibraryRepository {
     if (snapshot.size > MAX_WORKSPACE_SKILLS)
       throw new Error('Learned-skill library exceeds the mobile workspace limit');
 
-    return snapshot.docs
+    const skills = snapshot.docs
       .map((doc) => skillFromDocument(doc.data(), doc.id, agentId))
       .sort(
         (left, right) =>
@@ -82,5 +87,7 @@ export class FirestoreSkillLibraryRepository implements SkillLibraryRepository {
           right.updatedAt.getTime() - left.updatedAt.getTime() ||
           left.id.localeCompare(right.id),
       );
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    return skills;
   }
 }

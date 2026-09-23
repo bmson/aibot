@@ -65,7 +65,8 @@ describe.skipIf(!localEmulator)('Firestore profile export with PostgreSQL offlin
     const request = (path: string, method = 'GET') =>
       new NextRequest(`http://localhost${path}`, { method });
     expect(proxy(request('/profile/data')).status).toBe(200);
-    expect(proxy(request('/profile/data', 'POST')).status).toBe(503);
+    expect(proxy(request('/profile/data', 'POST')).status).toBe(200);
+    expect(proxy(request('/profile/data', 'PUT')).status).toBe(503);
     expect(proxy(request('/api/profile-export')).status).toBe(200);
     expect(proxy(request('/api/profile-export', 'POST')).status).toBe(503);
   });
@@ -76,11 +77,11 @@ describe.skipIf(!localEmulator)('Firestore profile export with PostgreSQL offlin
     expect(response.status).toBe(401);
   });
 
-  it('shows the download without an unavailable erase action', async () => {
+  it('shows the download and the confirmed erase action', async () => {
     const { default: page } = await import('../../profile/data/page.js');
     const markup = renderToStaticMarkup(await page());
     expect(markup).toContain('Download memory export');
-    expect(markup).not.toContain('Forget long-term memory');
+    expect(markup).toContain('Forget long-term memory');
   });
 
   it('downloads owner data without credentials, embeddings, or PostgreSQL', async () => {
