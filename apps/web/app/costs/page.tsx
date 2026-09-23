@@ -67,7 +67,7 @@ export default async function CostsPage() {
         title="Costs"
         intro={
           firestore
-            ? 'See what the assistant has spent and the current spending limits.'
+            ? 'See what the assistant has spent and update task, daily, and monthly spending caps.'
             : 'See what the assistant has spent and set limits that keep costs under control.'
         }
       />
@@ -117,50 +117,48 @@ export default async function CostsPage() {
       </section>
 
       {/* Cap editing */}
-      {!firestore ? (
-        <section className="mt-6">
-          <form action={updateCaps} className="flex flex-wrap items-end gap-3">
-            <label className="flex flex-col gap-1 text-xs font-medium text-muted">
-              Default task cap (USD)
-              <input
-                type="number"
-                name="task_default"
-                step="0.05"
-                min="0.05"
-                defaultValue={taskDefaultLimit ? Number(taskDefaultLimit) : ''}
-                className={`${inputClass} w-28`}
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-medium text-muted">
-              Daily cap (USD)
-              <input
-                type="number"
-                name="daily"
-                step="0.5"
-                min="0.5"
-                defaultValue={Number.isFinite(totals.dailyLimitUsd) ? totals.dailyLimitUsd : ''}
-                className={`${inputClass} w-28`}
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-medium text-muted">
-              Monthly cap (USD)
-              <input
-                type="number"
-                name="monthly"
-                step="1"
-                min="1"
-                defaultValue={Number.isFinite(totals.monthlyLimitUsd) ? totals.monthlyLimitUsd : ''}
-                className={`${inputClass} w-28`}
-              />
-            </label>
-            {/* Full width on a phone so it lands on its own row instead of
+      <section className="mt-6">
+        <form action={updateCaps} className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+            Default task cap (USD)
+            <input
+              type="number"
+              name="task_default"
+              step="0.05"
+              min="0.05"
+              defaultValue={taskDefaultLimit ? Number(taskDefaultLimit) : ''}
+              className={`${inputClass} w-28`}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+            Daily cap (USD)
+            <input
+              type="number"
+              name="daily"
+              step="0.5"
+              min="0.5"
+              defaultValue={Number.isFinite(totals.dailyLimitUsd) ? totals.dailyLimitUsd : ''}
+              className={`${inputClass} w-28`}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+            Monthly cap (USD)
+            <input
+              type="number"
+              name="monthly"
+              step="1"
+              min="1"
+              defaultValue={Number.isFinite(totals.monthlyLimitUsd) ? totals.monthlyLimitUsd : ''}
+              className={`${inputClass} w-28`}
+            />
+          </label>
+          {/* Full width on a phone so it lands on its own row instead of
               trailing whichever cap field happened to wrap last. */}
-            <SubmitButton variant="outline" pendingLabel="Updating…" className="w-full sm:w-auto">
-              Update caps
-            </SubmitButton>
-          </form>
-        </section>
-      ) : null}
+          <SubmitButton variant="outline" pendingLabel="Updating…" className="w-full sm:w-auto">
+            Update caps
+          </SubmitButton>
+        </form>
+      </section>
 
       <details className="mt-8 rounded-2xl bg-sunken/55">
         <summary className="disclosure flex items-center gap-2 cursor-pointer px-5 py-4 text-sm font-medium">
