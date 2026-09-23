@@ -18,6 +18,10 @@ import {
   updateContactIdentity,
   voiceProfile,
 } from '@assistant/db';
+import {
+  isProfileOccasionCommandRepository,
+  type ProfileOccasionCommandRepository,
+} from '@assistant/persistence';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
   type CreateProfileMemoryInput,
@@ -402,7 +406,7 @@ export async function updatePersonOccasion(
 }
 
 export async function addPersonOccasion(
-  db: Db,
+  store: Db | ProfileOccasionCommandRepository,
   contactId: string,
   input: PersonOccasionInput,
   occasionId?: string,
@@ -432,9 +436,12 @@ export async function addPersonOccasion(
   if (!Number.isInteger(leadDays) || leadDays < 0 || leadDays > 60) {
     return { error: 'Choose a reminder between 0 and 60 days before.' };
   }
-  const agent = await getAgent(db);
   try {
     if (occasionId) {
+      if (isProfileOccasionCommandRepository(store))
+        return { error: 'Editing occasions is unavailable through this command.' };
+      const db = store;
+      const agent = await getAgent(db);
       const updated = await db
         .update(occasions)
         .set({
@@ -460,22 +467,34 @@ export async function addPersonOccasion(
         .returning({ id: occasions.id });
       return updated.length ? {} : { error: 'That occasion no longer exists.' };
     }
-    await saveOccasion(db, {
-      agentId: agent.id,
+    const normalized = {
       contactId,
       kind: input.kind,
-      label: input.label.trim(),
+      label: input.label.trim().slice(0, 120),
       month,
       day,
       year,
-      leadDays: Number.isInteger(leadDays) && leadDays >= 0 ? leadDays : 7,
-      notes: input.notes.trim(),
-      originTrust: 'owner',
-      quarantined: false,
-      ownerConfirmed: true,
-      source: 'profile',
-    });
-  } catch {
+      leadDays,
+      notes: input.notes.trim().slice(0, 2000),
+    };
+    if (isProfileOccasionCommandRepository(store)) {
+      await store.create(normalized);
+    } else {
+      const agent = await getAgent(store);
+      await saveOccasion(store, {
+        ...normalized,
+        agentId: agent.id,
+        originTrust: 'owner',
+        quarantined: false,
+        ownerConfirmed: true,
+        source: 'profile',
+      });
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Person not found.')
+      return { error: error.message };
+    if (error instanceof Error && error.message === 'Privacy erasure is in progress')
+      return { error: error.message };
     return {
       error:
         'Occasion could not be saved. Check whether this date is already recorded and try again.',

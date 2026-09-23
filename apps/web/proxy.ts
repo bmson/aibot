@@ -15,6 +15,8 @@ export function proxy(request: NextRequest) {
     /^\/api\/mobile\/v1\/activity\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const skillIdPath =
     /^\/api\/mobile\/v1\/skills\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const personOccasionsPath =
+    /^\/api\/mobile\/v1\/memory\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/occasions$/i;
   const chatMessagePath =
     /^\/api\/mobile\/v1\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (
@@ -50,6 +52,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/workspace' && request.method === 'GET') ||
     (path === '/api/mobile/v1/costs' && request.method === 'PATCH') ||
     (path === '/api/mobile/v1/memory/profile' && request.method === 'GET') ||
+    (personOccasionsPath.test(path) && request.method === 'POST') ||
     (path === '/api/card-image' && request.method === 'GET') ||
     (path === '/api/mobile/v1/cards' && request.method === 'GET') ||
     (/^\/api\/mobile\/v1\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
