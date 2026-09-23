@@ -335,10 +335,11 @@ describe('consumer installation', () => {
     firestoreAgentId: '11111111-1111-4111-8111-111111111111',
     firestoreEmbeddingSpace: {
       provider: 'vertex',
-      model: 'text-embedding-005',
-      dimensions: 768,
+      model: 'gemini-embedding-001',
+      dimensions: 1536,
       revision: 'seed-v1',
     },
+    vertexLocation: 'global',
     ownerEmail: 'owner@example.com',
     webAuthUrl: 'https://assistant.example.com',
     authSecretVersion: 1,
@@ -451,6 +452,7 @@ describe('consumer installation', () => {
                     { name: 'AUTH_URL', value: runtimeConfig.webAuthUrl },
                     { name: 'AUTH_DEV_BYPASS', value: 'false' },
                     { name: 'AUTH_LOCALHOST_BYPASS', value: 'false' },
+                    { name: 'VERTEX_LOCATION', value: runtimeConfig.vertexLocation },
                   ],
                 },
               ],
@@ -515,6 +517,18 @@ describe('consumer installation', () => {
     };
     const foundation = await provisionConsumerInstallation({ runner }, options);
     expect(foundation.manifest.stage.current).toBe('provisioned');
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          ...options,
+          runtime: {
+            images: runtimeImages,
+            config: { ...runtimeConfig, vertexLocation: 'not-a-location' },
+          },
+        },
+      ),
+    ).rejects.toThrow('Vertex region or global');
     const runtime = {
       images: runtimeImages,
       config: { ...runtimeConfig, mobileApiTokenVersion: 4 },
@@ -529,6 +543,7 @@ describe('consumer installation', () => {
       ),
     ).toBe(true);
     expect(logs.some((entry) => entry.includes('mobile_api_token_version=4'))).toBe(true);
+    expect(logs.some((entry) => entry.includes('vertex_location=global'))).toBe(true);
     expect(
       logs.filter((entry) => entry.includes('terraform') && entry.includes('apply')).length,
     ).toBe(2);

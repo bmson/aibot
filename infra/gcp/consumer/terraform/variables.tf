@@ -138,12 +138,21 @@ variable "firestore_embedding_space" {
     condition = var.firestore_embedding_space == null || (
       length(trimspace(var.firestore_embedding_space.provider)) > 0 &&
       length(trimspace(var.firestore_embedding_space.model)) > 0 &&
-      var.firestore_embedding_space.dimensions >= 1 &&
-      var.firestore_embedding_space.dimensions <= 2048 &&
-      floor(var.firestore_embedding_space.dimensions) == var.firestore_embedding_space.dimensions &&
+      var.firestore_embedding_space.dimensions == 1536 &&
       length(trimspace(var.firestore_embedding_space.revision)) > 0
     )
-    error_message = "firestore_embedding_space needs nonempty provider/model/revision and 1-2048 integer dimensions."
+    error_message = "firestore_embedding_space needs nonempty provider/model/revision and 1536 dimensions."
+  }
+}
+
+variable "vertex_location" {
+  description = "Explicit model serving location; defaults to the Cloud Run region for regional models."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.vertex_location == null || can(regex("^(global|[a-z][a-z0-9-]*[0-9])$", var.vertex_location))
+    error_message = "vertex_location must be global or an explicit Google region."
   }
 }
 

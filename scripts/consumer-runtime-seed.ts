@@ -73,7 +73,8 @@ const inputSchema = z.strictObject({
   embeddingSpace: z.strictObject({
     provider: z.literal('vertex'),
     model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._@-]*$/),
-    dimensions: z.number().int().min(1).max(2048),
+    // The execution router and learned-skill recall currently share this width.
+    dimensions: z.literal(1536),
     revision: z.string().trim().min(1),
   }),
   models: z.array(modelSchema).min(1).max(32),

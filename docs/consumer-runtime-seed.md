@@ -10,11 +10,13 @@ Create a private JSON plan with these required fields:
 | `projectId`, `installationId`, `seedAt` | Exact customer target and UTC ISO timestamp, such as `2026-09-22T12:00:00.000Z` |
 | `agent` | Explicit UUID `id`, `name`, owner `email`, `timezone`, `locale`, and `signature`. No credential values or references are accepted. |
 | `budget` | Positive integer `dailyLimitMicros`, `monthlyLimitMicros` at least as large as daily, and integer `softPct` from 0 to 100 |
-| `embeddingSpace` | `provider: "vertex"`, explicit `model`, `dimensions` (1–2048), and `revision`; use the same JSON in `FIRESTORE_EMBEDDING_SPACE` |
+| `embeddingSpace` | `provider: "vertex"`, explicit `model`, `dimensions: 1536`, and `revision`; use the same JSON in `FIRESTORE_EMBEDDING_SPACE` |
 | `models` | 1–32 explicit catalog entries. Each needs `id` in `vertex/MODEL` form, `label`, `capabilities`, `latencyClass` (`fast`, `medium`, or `slow`), decimal-string `promptCostPerMTok` and `completionCostPerMTok`, HTTPS `pricingSource`, and UTC `pricingVerifiedAt`. All catalog models must be used by a role. |
 | `roles` | Exactly one each for `plan`, `classify`, `extract`, `draft`, `reason`, `rewrite`, `embed`, and `batch`, with explicit `primaryModel`, `fallbackModel`, and `params` object. Both models must be in the catalog. Non-embed models must declare `capabilities.text: true`; the embedding model must declare `capabilities.embedding: true`. The embed role's primary and fallback must both match `embeddingSpace.model`. |
 
 The operator must verify model availability, capabilities, token prices, pricing units, and the pricing source against the current Vertex documentation for the customer's region. The command validates the supplied data and provenance fields but does **not** fetch pricing or make a live Vertex request. Synthetic prices or the test fixture are not installation inputs. Keep the plan private because it contains the owner's email, even though it accepts no secrets.
+
+The execution router and learned-skill recall currently require 1,536-dimensional vectors, so the seed refuses a different width. The runtime requests that width from Vertex using `FIRESTORE_EMBEDDING_SPACE`. Set the runtime config's optional `vertexLocation` to the serving location shared by the selected chat and embedding models; it can differ from the Cloud Run and Firestore region. Model and location availability still require a live Vertex call.
 
 First inspect the plan without Google authentication:
 

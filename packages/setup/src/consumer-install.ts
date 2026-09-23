@@ -529,6 +529,7 @@ type RuntimeInput = {
       dimensions: number;
       revision: string;
     };
+    vertexLocation?: string;
     ownerEmail: string;
     webAuthUrl: string;
     authSecretVersion: number;
@@ -606,6 +607,7 @@ function validateRuntimeInput(
   const config = record(raw.config, 'Runtime config', [
     'firestoreAgentId',
     'firestoreEmbeddingSpace',
+    'vertexLocation',
     'ownerEmail',
     'webAuthUrl',
     'authSecretVersion',
@@ -629,12 +631,17 @@ function validateRuntimeInput(
     typeof space.model !== 'string' ||
     !space.model ||
     !Number.isInteger(space.dimensions) ||
-    (space.dimensions as number) < 1 ||
-    (space.dimensions as number) > 2048 ||
+    space.dimensions !== 1536 ||
     typeof space.revision !== 'string' ||
     !space.revision
   )
-    throw new Error('Runtime config requires explicit Vertex embedding provenance');
+    throw new Error('Runtime config requires 1536-dimensional Vertex embedding provenance');
+  if (
+    config.vertexLocation !== undefined &&
+    (typeof config.vertexLocation !== 'string' ||
+      !/^(?:global|[a-z][a-z0-9-]*[0-9])$/.test(config.vertexLocation))
+  )
+    throw new Error('Runtime config requires an explicit Vertex region or global');
   if (
     typeof config.ownerEmail !== 'string' ||
     !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(config.ownerEmail) ||
@@ -738,6 +745,7 @@ function runtimeVars(input: RuntimeInput): string[] {
     google_client_id_version: String(input.config.googleClientIdVersion),
     google_client_secret_version: String(input.config.googleClientSecretVersion),
   };
+  if (input.config.vertexLocation !== undefined) vars.vertex_location = input.config.vertexLocation;
   if (input.config.mobileApiTokenVersion !== undefined)
     vars.mobile_api_token_version = String(input.config.mobileApiTokenVersion);
   return Object.entries(vars).flatMap(([key, value]) => ['-var', `${key}=${value}`]);
@@ -863,7 +871,8 @@ async function inspectOwnerAccess(
     env.get('OWNER_EMAIL') !== input.config.ownerEmail ||
     env.get('AUTH_URL') !== input.config.webAuthUrl ||
     env.get('AUTH_DEV_BYPASS') !== 'false' ||
-    env.get('AUTH_LOCALHOST_BYPASS') !== 'false'
+    env.get('AUTH_LOCALHOST_BYPASS') !== 'false' ||
+    env.get('VERTEX_LOCATION') !== (input.config.vertexLocation ?? region)
   )
     throw new Error(
       'Web service URL, owner auth, or Cloud Run IAM configuration differs from the runtime checkpoint',

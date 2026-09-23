@@ -1,5 +1,5 @@
 import { createVertex } from '@ai-sdk/google-vertex';
-import type { Config } from '@assistant/config';
+import { type Config, parseFirestoreEmbeddingSpace } from '@assistant/config';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import type { EmbeddingModel, JSONValue, LanguageModel } from 'ai';
 
@@ -193,6 +193,8 @@ export interface VertexModelProviderOptions {
   project: string;
   /** Explicit Vertex region, for example `us-central1`. */
   location: string;
+  /** Output width selected for this installation's embedding space. */
+  embeddingDimensions?: number;
 }
 
 function vertexModelId(modelId: string): string {
@@ -242,6 +244,14 @@ export function createVertexModelProvider(options: VertexModelProviderOptions): 
   if (!/^(?:global|[a-z][a-z0-9-]*[0-9])$/.test(options.location)) {
     throw new Error(`Vertex provider requires a valid Vertex location: ${options.location}`);
   }
+  if (
+    options.embeddingDimensions !== undefined &&
+    (!Number.isInteger(options.embeddingDimensions) ||
+      options.embeddingDimensions < 1 ||
+      options.embeddingDimensions > 2_048)
+  ) {
+    throw new Error('Vertex embedding dimensions must be an integer from 1 through 2048');
+  }
   // An explicit empty string is intentional: the SDK otherwise falls back to
   // GOOGLE_VERTEX_API_KEY when present and silently selects Express mode.
   // Empty disables that fallback while leaving ADC/service identity active.
@@ -269,7 +279,9 @@ export function createVertexModelProvider(options: VertexModelProviderOptions): 
         ? { vertex: { thinkingConfig: { thinkingBudget: 4_096 } } }
         : { vertex: { thinkingConfig: { thinkingBudget: 0 } } };
     },
-    embeddingOptions: () => ({ vertex: { outputDimensionality: 1_536 } }),
+    embeddingOptions: () => ({
+      vertex: { outputDimensionality: options.embeddingDimensions ?? 1_536 },
+    }),
     cacheHint: () => undefined,
     normalizeUsage: normalizeVertexUsage,
   };
@@ -280,12 +292,20 @@ export function createConfiguredModelProvider(
   config: Pick<
     Config,
     'LLM_PROVIDER' | 'OPENROUTER_API_KEY' | 'VERTEX_PROJECT' | 'VERTEX_LOCATION'
-  >,
+  > &
+    Partial<Pick<Config, 'FIRESTORE_EMBEDDING_SPACE'>>,
 ): ModelProvider {
-  return config.LLM_PROVIDER === 'vertex'
-    ? createVertexModelProvider({
-        project: config.VERTEX_PROJECT,
-        location: config.VERTEX_LOCATION,
-      })
-    : createOpenRouterModelProvider(config.OPENROUTER_API_KEY);
+  if (config.LLM_PROVIDER !== 'vertex')
+    return createOpenRouterModelProvider(config.OPENROUTER_API_KEY);
+  const space = config.FIRESTORE_EMBEDDING_SPACE?.trim()
+    ? parseFirestoreEmbeddingSpace(config.FIRESTORE_EMBEDDING_SPACE)
+    : undefined;
+  if (space && space.provider !== 'vertex') {
+    throw new Error('Vertex provider requires a Vertex Firestore embedding space');
+  }
+  return createVertexModelProvider({
+    project: config.VERTEX_PROJECT,
+    location: config.VERTEX_LOCATION,
+    embeddingDimensions: space?.dimensions,
+  });
 }

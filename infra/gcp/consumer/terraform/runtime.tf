@@ -20,7 +20,7 @@ locals {
     QUEUE_DRIVER              = "local"
     LLM_PROVIDER              = "vertex"
     VERTEX_PROJECT            = var.project_id
-    VERTEX_LOCATION           = var.region
+    VERTEX_LOCATION           = coalesce(var.vertex_location, var.region)
     CANARY_ENABLED            = "false"
     AUTH_DEV_BYPASS           = "false"
     AUTH_LOCALHOST_BYPASS     = "false"
