@@ -1,7 +1,7 @@
 import { loadConfig } from '@assistant/config';
 import { type NextRequest, NextResponse } from 'next/server';
 
-/** Firestore preview exposes only authenticated chat ingress and polling. */
+/** Firestore preview exposes only authenticated chat, polling, and chat card images. */
 export function proxy(request: NextRequest) {
   if (loadConfig().PERSISTENCE_DRIVER !== 'firestore') return NextResponse.next();
   const path = request.nextUrl.pathname;
@@ -18,7 +18,8 @@ export function proxy(request: NextRequest) {
       request.method === 'GET') ||
     ((path === '/api/chat' || path === '/api/mobile/v1/chat') && request.method === 'POST') ||
     ((path === '/api/chat/status' || path === '/api/mobile/v1/chat/status') &&
-      request.method === 'GET')
+      request.method === 'GET') ||
+    (path === '/api/card-image' && request.method === 'GET')
   ) {
     return NextResponse.next();
   }
