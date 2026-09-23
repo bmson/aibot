@@ -3,8 +3,15 @@ import {
   listMemoryLibraryFilters,
   type MemoryFilter,
   type MemoryState,
+  profileLibraryQueries,
 } from '@assistant/application/profile';
-import { getDb } from '@/lib/server';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import {
+  assertPrivacyErasureFenceUnchanged,
+  FirestoreProfileLibraryRepository,
+  readPrivacyErasureFence,
+} from '@assistant/firestore';
+import { getDb, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -30,21 +37,38 @@ export async function GET(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const params = new URL(request.url).searchParams;
   const ageDays = Number(params.get('ageDays'));
-
-  const [library, filters] = await Promise.all([
-    listMemoryLibrary(getDb(), {
-      state: pick(params.get('state'), STATES, 'in-use'),
-      filter: pick(params.get('filter'), FILTERS, 'all'),
-      query: params.get('q')?.slice(0, 200) ?? '',
-      page: Math.max(1, Number(params.get('page')) || 1),
-      subjectId: params.get('subjectId') || undefined,
-      domain: params.get('domain') || undefined,
-      source: params.get('source') || undefined,
-      ageDays: Number.isFinite(ageDays) && ageDays > 0 ? ageDays : undefined,
-      connectivity: pick(params.get('connectivity'), CONNECTIVITY, 'all'),
-    }),
-    listMemoryLibraryFilters(getDb()),
-  ]);
+  const input = {
+    state: pick(params.get('state'), STATES, 'in-use'),
+    filter: pick(params.get('filter'), FILTERS, 'all'),
+    query: params.get('q')?.slice(0, 200) ?? '',
+    page: Math.max(1, Number(params.get('page')) || 1),
+    subjectId: params.get('subjectId') || undefined,
+    domain: params.get('domain') || undefined,
+    source: params.get('source') || undefined,
+    ageDays: Number.isFinite(ageDays) && ageDays > 0 ? ageDays : undefined,
+    connectivity: pick(params.get('connectivity'), CONNECTIVITY, 'all'),
+  };
+  const config = loadConfig();
+  const [library, filters] = await (async () => {
+    if (config.PERSISTENCE_DRIVER !== 'firestore')
+      return Promise.all([listMemoryLibrary(getDb(), input), listMemoryLibraryFilters(getDb())]);
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    const store = getFirestoreInstallationStore();
+    const agentId = config.FIRESTORE_AGENT_ID;
+    const fence = await readPrivacyErasureFence(store, agentId);
+    const agents = await store.collection('agents').limit(2).get();
+    if (
+      agents.size !== 1 ||
+      agents.docs[0]?.id !== store.doc('agents', agentId).id ||
+      agents.docs[0]?.get('id') !== agentId
+    )
+      throw new Error('Memory library requires one matching configured owner');
+    const queries = profileLibraryQueries(new FirestoreProfileLibraryRepository(store), agentId);
+    const result = await Promise.all([queries.list(input), queries.listFilters()] as const);
+    await assertPrivacyErasureFenceUnchanged(store, agentId, fence);
+    return result;
+  })();
 
   // The same rule the web library applies: a row with no joined contact is the
   // owner's, and so is one whose subject is the owner's own contact. The label
