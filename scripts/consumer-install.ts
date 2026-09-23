@@ -1,18 +1,116 @@
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { createInstallationStore } from '@assistant/firestore';
 import {
+  type ConsumerInstallDependencies,
   type ConsumerInstallOptions,
+  type ConsumerInstallResult,
   provisionConsumerInstallation,
   systemRunner,
   validateInstallationManifest,
 } from '@assistant/setup/installation';
+import {
+  applyConsumerRuntimeSeed,
+  type ConsumerRuntimeSeedPlan,
+  planConsumerRuntimeSeed,
+} from './consumer-runtime-seed.js';
 
-const usage = `Usage: pnpm consumer:install --manifest PATH --archive PATH --state PATH --state-bucket NAME --terraform-dir PATH [--images PATH --runtime-config PATH] [--apply]
+const usage = `Usage: pnpm consumer:install --manifest PATH --archive PATH --state PATH --state-bucket NAME --terraform-dir PATH [--seed-plan PATH] [--images PATH --runtime-config PATH] [--apply]
 
 Without --apply this verifies the release archive, customer project, and selected Firestore database absence.
 With --apply it bootstraps customer-owned state, runs Terraform, and records resumable foundation stages.
 Supply both --images and --runtime-config to opt in to digest-pinned Cloud Run deployment after the foundation.
+Supply --seed-plan with an explicit customer runtime seed plan to create required data before Cloud Run.
 `;
+
+type SeedSummary = {
+  status: 'planned' | 'seeded' | 'already_seeded';
+  planHash: string;
+  recordCount: number;
+  agentId: string;
+};
+
+function validateSeedScope(plan: ConsumerRuntimeSeedPlan, options: ConsumerInstallOptions): void {
+  const manifest = validateInstallationManifest(options.manifest);
+  const space = plan.input.embeddingSpace;
+  if (
+    plan.input.projectId !== manifest.identity.projectId ||
+    plan.input.installationId !== manifest.identity.installationId
+  )
+    throw new Error('Runtime seed project and installation must match the manifest');
+  if (manifest.identity.databaseId !== '(default)' || manifest.selection.modelProvider !== 'google')
+    throw new Error('Runtime seed requires the default Firestore database and Google provider');
+  if (
+    manifest.selection.embeddingModel !== space.model ||
+    manifest.selection.embeddingDimension !== space.dimensions
+  )
+    throw new Error('Runtime seed embedding model and dimensions must match the manifest');
+  if (options.runtime) {
+    const config = options.runtime.config as Record<string, unknown> | null;
+    const runtimeSpace = config?.firestoreEmbeddingSpace as Record<string, unknown> | null;
+    if (
+      config?.firestoreAgentId !== plan.input.agent.id ||
+      config?.ownerEmail !== plan.input.agent.email ||
+      runtimeSpace?.provider !== space.provider ||
+      runtimeSpace?.model !== space.model ||
+      runtimeSpace?.dimensions !== space.dimensions ||
+      runtimeSpace?.revision !== space.revision
+    )
+      throw new Error('Runtime config agent, owner, or embedding space differs from seed plan');
+  }
+}
+
+/** Keep the create-only seed outside the setup package and before runtime deployment. */
+export async function provisionConsumerInstallationWithSeed(
+  dependencies: ConsumerInstallDependencies,
+  options: ConsumerInstallOptions & { seedInput?: unknown },
+  provision: typeof provisionConsumerInstallation = provisionConsumerInstallation,
+): Promise<ConsumerInstallResult & { seed?: SeedSummary }> {
+  if (options.seedInput === undefined) return provision(dependencies, options);
+  const plan = planConsumerRuntimeSeed(options.seedInput);
+  validateSeedScope(plan, options);
+  const summary = {
+    planHash: plan.planHash,
+    recordCount: plan.records.length,
+    agentId: plan.input.agent.id,
+  };
+  // This verifies the archive, runtime config, and current installation stage
+  // before the foundation or seed changes customer resources.
+  const preview = await provision(dependencies, { ...options, apply: false });
+  if (!options.apply) return { ...preview, seed: { status: 'planned', ...summary } };
+
+  const initialized = preview.manifest.stage.current === 'initialized';
+  if (preview.manifest.stage.current === 'ready')
+    throw new Error('Runtime seed cannot be added after the installation is ready');
+  const foundation = initialized
+    ? preview
+    : await provision(dependencies, { ...options, runtime: undefined });
+  if (foundation.manifest.stage.current !== 'provisioned' && !initialized)
+    throw new Error('Runtime seed requires a provisioned customer foundation');
+
+  const store = createInstallationStore({
+    projectId: plan.input.projectId,
+    installationId: plan.input.installationId,
+  });
+  let status: 'seeded' | 'already_seeded';
+  try {
+    if (initialized) {
+      const marker = await store.doc('coordination', 'runtime-seed').get();
+      if (!marker.exists)
+        throw new Error('Initialized runtime has no seed marker; refusing late seed creation');
+    }
+    const result = await applyConsumerRuntimeSeed(store, plan);
+    if (result.status !== 'seeded' && result.status !== 'already_seeded')
+      throw new Error('Runtime seed returned an unexpected state');
+    status = result.status;
+  } finally {
+    await store.db.terminate();
+  }
+  const result = options.runtime ? await provision(dependencies, options) : foundation;
+  return { ...result, seed: { status, ...summary } };
+}
 
 async function json(path: string): Promise<unknown> {
   try {
@@ -31,6 +129,7 @@ async function main(): Promise<void> {
       manifest: { type: 'string' },
       images: { type: 'string' },
       'runtime-config': { type: 'string' },
+      'seed-plan': { type: 'string' },
       state: { type: 'string' },
       'state-bucket': { type: 'string' },
       'terraform-dir': { type: 'string' },
@@ -64,15 +163,23 @@ async function main(): Promise<void> {
         ? { images: await json(values.images), config: await json(values['runtime-config']) }
         : undefined,
   };
-  const result = await provisionConsumerInstallation({ runner: systemRunner }, options);
+  const result = await provisionConsumerInstallationWithSeed(
+    { runner: systemRunner },
+    {
+      ...options,
+      seedInput: values['seed-plan'] ? await json(values['seed-plan']) : undefined,
+    },
+  );
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-try {
-  await main();
-} catch (error) {
-  process.stderr.write(
-    `consumer:install: ${error instanceof Error ? error.message : 'installation failed'}\n`,
-  );
-  process.exitCode = 1;
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    await main();
+  } catch (error) {
+    process.stderr.write(
+      `consumer:install: ${error instanceof Error ? error.message : 'installation failed'}\n`,
+    );
+    process.exitCode = 1;
+  }
 }
