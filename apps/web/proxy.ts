@@ -21,6 +21,7 @@ export function proxy(request: NextRequest) {
     (path === '/people' && request.method === 'GET') ||
     (path === '/profile/data' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/profile-export' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/memory/export' && request.method === 'GET') ||
     (path === '/capabilities' && request.method === 'GET') ||
     (path === '/costs' && request.method === 'GET') ||
     (path === '/profile/voice' && request.method === 'GET') ||
