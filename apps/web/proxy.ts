@@ -49,6 +49,11 @@ export function proxy(request: NextRequest) {
     (path === '/import' && request.method === 'GET') ||
     (path === '/skills' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/approvals' && ['GET', 'POST'].includes(request.method)) ||
+    // Activity pages and their Server Actions enforce owner authentication
+    // before reading or changing task records.
+    (path === '/tasks' && ['GET', 'POST'].includes(request.method)) ||
+    (/^\/tasks\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path) &&
+      ['GET', 'POST'].includes(request.method)) ||
     (chatPage && (request.method === 'GET' || request.method === 'POST')) ||
     (['/icon.svg', '/apple-icon.png', '/favicon.ico', '/manifest.webmanifest'].includes(path) &&
       request.method === 'GET') ||

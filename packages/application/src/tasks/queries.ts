@@ -5,7 +5,11 @@ import {
   RequestChecklistSchema,
 } from '@assistant/core/workflow/request-checklist-schema';
 import { approvals, type Db, files, messages, modelCalls, tasks, toolCalls } from '@assistant/db';
-import type { ActivityTaskRecord, TaskActivityRepository } from '@assistant/persistence';
+import type {
+  ActivityTaskRecord,
+  TaskActivityDetailRepository,
+  TaskActivityRepository,
+} from '@assistant/persistence';
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 
@@ -484,6 +488,99 @@ export async function getTaskDetail(
     hasMoreTimeline,
     activeGrant: activeAutonomyGrant(task, Date.now()),
     stuckWaiting,
+  };
+}
+
+/** Load the same clipped Activity audit projection through a portable repository. */
+export async function getTaskDetailWithRepository(
+  repository: TaskActivityDetailRepository,
+  agentId: string,
+  taskId: string,
+  options: { pageSize?: number; before?: Date } = {},
+): Promise<TaskDetail | null> {
+  const pageSize = Math.max(
+    1,
+    Math.min(500, Math.floor(options.pageSize ?? TASK_TIMELINE_PAGE_SIZE)),
+  );
+  const detail = await repository.getDetail(agentId, taskId, {
+    pageSize,
+    ...(options.before ? { before: options.before } : {}),
+  });
+  if (!detail) return null;
+
+  const streams = [detail.toolCalls, detail.modelCalls, detail.approvals, detail.messages];
+  const totalTimelineRows = streams.reduce((total, rows) => total + rows.length, 0);
+  const hasMoreTimeline =
+    totalTimelineRows > pageSize || streams.some((rows) => rows.length === pageSize);
+  const timestamps = [
+    ...detail.toolCalls.map((row) => row.createdAt),
+    ...detail.modelCalls.map((row) => row.createdAt),
+    ...detail.approvals.map((row) => row.requestedAt),
+    ...detail.messages.map((row) => row.createdAt),
+  ];
+  const cutoff = timestamps
+    .sort((a, b) => b.getTime() - a.getTime())
+    .slice(0, pageSize)
+    .at(-1);
+  const onPage = (at: Date) => cutoff === undefined || at.getTime() >= cutoff.getTime();
+  const { autonomyGrant, plan, state, ...task } = detail.task;
+  const stateRecord = state && typeof state === 'object' ? (state as Record<string, unknown>) : {};
+  const parsedChecklist = RequestChecklistSchema.safeParse(stateRecord.requestChecklist);
+  const snapshot: TaskSnapshot = {
+    ...task,
+    plan: record(plan, MAX_RECORDED_CHARS),
+    ...(parsedChecklist.success ? { checklist: { items: parsedChecklist.data.items } } : {}),
+  };
+  const decisionOf = (value: unknown) =>
+    (value ?? {}) as { riskTier?: unknown; policyId?: unknown };
+
+  return {
+    timezone: detail.timezone,
+    task: snapshot,
+    toolCalls: detail.toolCalls
+      .filter((row) => onPage(row.createdAt))
+      .reverse()
+      .map((row) => {
+        const decision = decisionOf(row.decision);
+        return {
+          id: row.id,
+          createdAt: row.createdAt,
+          finishedAt: row.finishedAt,
+          toolName: row.toolName,
+          step: row.step,
+          status: row.status,
+          riskTier: typeof decision.riskTier === 'string' ? decision.riskTier : null,
+          policyId: typeof decision.policyId === 'string' ? decision.policyId : null,
+          args: record(row.args, MAX_RECORDED_CHARS),
+          result: record(row.result, MAX_RECORDED_CHARS),
+          error: record(row.error, MAX_RECORDED_CHARS),
+        };
+      }),
+    modelCalls: detail.modelCalls.filter((row) => onPage(row.createdAt)).reverse(),
+    approvals: detail.approvals.filter((row) => onPage(row.requestedAt)).reverse(),
+    messages: detail.messages
+      .filter((row) => onPage(row.createdAt))
+      .reverse()
+      .map((row) => ({
+        ...row,
+        text:
+          row.text.length > MAX_TIMELINE_MESSAGE_CHARS
+            ? `${row.text.slice(0, MAX_TIMELINE_MESSAGE_CHARS)}…`
+            : row.text,
+      })),
+    files: detail.files,
+    actions: detail.actions.map((row) => ({
+      id: row.id,
+      toolName: row.toolName,
+      createdAt: row.createdAt,
+      finishedAt: row.finishedAt,
+      completed: completedSuccessfully(row.status, row.result),
+      error: row.error,
+      resultPreview: record(row.result, MAX_PREVIEW_CHARS),
+    })),
+    hasMoreTimeline,
+    activeGrant: activeAutonomyGrant({ trust: task.trust, autonomyGrant }, Date.now()),
+    stuckWaiting: task.status === 'waiting_approval' && !detail.hasPendingApproval,
   };
 }
 
