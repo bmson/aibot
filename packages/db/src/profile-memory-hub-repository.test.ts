@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createDb, type Db } from './client.js';
 import { createPostgresProfileMemoryHubRepository } from './profile-memory-hub-repository.js';
@@ -26,7 +27,11 @@ describe('PostgreSQL profile Memory hub', () => {
           const repository = createPostgresProfileMemoryHubRepository(tx as unknown as Db);
           const before = await repository.load();
           const configured = await tx.select({ id: agents.id }).from(agents).limit(2);
-          const [owner] = await tx.select({ id: contacts.id }).from(contacts).limit(1);
+          const [owner] = await tx
+            .select({ id: contacts.id })
+            .from(contacts)
+            .where(eq(contacts.trust, 'owner'))
+            .limit(1);
           if (!configured[0] || !owner) throw new Error('Test seed is missing agent or owner');
           const agentId = configured[0].id;
           const now = new Date();
