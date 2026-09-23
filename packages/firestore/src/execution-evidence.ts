@@ -7,6 +7,8 @@ import { evidenceLimit, type Records } from '@assistant/persistence';
 import { FieldPath } from '@google-cloud/firestore';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
+const MAX_SHARED_DOCUMENT_RECEIPT_SCAN = 500;
+
 function read<T>(snapshot: { exists: boolean; data(): unknown }, id?: string): T | null {
   if (!snapshot.exists) return null;
   const value = decodeRecord<T>(snapshot.data());
@@ -163,6 +165,7 @@ export class FirestoreExecutionEvidenceRepository implements ExecutionEvidenceRe
       throw new Error('Execution evidence conversation is missing or outside the owner scope');
 
     let callCursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+    let scanned = 0;
     for (;;) {
       let query = this.store
         .collection('toolCalls')
@@ -172,6 +175,9 @@ export class FirestoreExecutionEvidenceRepository implements ExecutionEvidenceRe
         .limit(100);
       if (callCursor) query = query.startAfter(callCursor);
       const callSnapshot = await query.get();
+      scanned += callSnapshot.size;
+      if (scanned > MAX_SHARED_DOCUMENT_RECEIPT_SCAN)
+        throw new Error('Shared document receipt lookup exceeds its explicit scan limit');
       for (const callDoc of callSnapshot.docs) {
         const call = read<Records['toolCalls']>({
           exists: callDoc.exists,

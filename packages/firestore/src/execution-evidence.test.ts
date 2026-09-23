@@ -105,6 +105,31 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore execution evide
     ).resolves.toBe(false);
   });
 
+  it('fails explicitly when matching document receipts exceed the lookup bound', async () => {
+    for (let start = 0; start < 501; start += 500) {
+      const batch = store.db.batch();
+      for (let index = start; index < Math.min(start + 500, 501); index += 1) {
+        const id = `crowded-doc-${index}`;
+        batch.set(store.doc('toolCalls', id), {
+          id,
+          taskId: 'foreign-task',
+          toolName: 'docs.get',
+          args: { documentId: 'crowded-doc' },
+        });
+      }
+      await batch.commit();
+    }
+
+    await expect(
+      repository.hasConversationToolCall({
+        agentId: 'owner',
+        conversationId: 'conversation',
+        toolName: 'docs.get',
+        documentId: 'crowded-doc',
+      }),
+    ).rejects.toThrow('exceeds its explicit scan limit');
+  });
+
   it('finds an exact final beyond one message page without weakening outbound bounds', async () => {
     const messageBatch = store.db.batch();
     const messageIds = Array.from({ length: 121 }, (_, index) => `message-${index}`);
