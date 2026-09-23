@@ -171,9 +171,17 @@ export function profileMemoryHubFromSource(source: ProfileHubSource): ProfileMem
 export class FirestoreProfileMemoryHubRepository implements ProfileMemoryHubRepository {
   readonly kind = 'profile-memory-hub-repository' as const;
 
-  constructor(readonly store: InstallationStore) {}
+  constructor(
+    readonly store: InstallationStore,
+    private readonly pinnedAgentId?: string,
+  ) {}
 
   async load(): Promise<ProfileMemoryHubOverview> {
-    return profileMemoryHubFromSource(await loadProfileHubSource(this.store));
+    if (this.pinnedAgentId) {
+      const configured = await this.store.collection('agents').limit(2).get();
+      if (configured.size !== 1 || configured.docs[0]?.get('id') !== this.pinnedAgentId)
+        throw new Error('Memory hub requires one matching configured owner');
+    }
+    return profileMemoryHubFromSource(await loadProfileHubSource(this.store, this.pinnedAgentId));
   }
 }
