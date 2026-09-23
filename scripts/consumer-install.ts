@@ -241,7 +241,7 @@ async function main(): Promise<void> {
   ] as const;
   const missing = required.find(([, value]) => !value)?.[0];
   if (missing) throw new Error(`missing ${missing}\n\n${usage.trim()}`);
-  if (Boolean(values.images) !== Boolean(values['runtime-config']))
+  if (!values['build-images'] && Boolean(values.images) !== Boolean(values['runtime-config']))
     throw new Error('--images and --runtime-config must be supplied together');
   if (values['build-images'] && (!values['runtime-config'] || values.images))
     throw new Error(
