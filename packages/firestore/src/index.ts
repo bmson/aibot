@@ -44,6 +44,7 @@ export {
 } from './runtime-data-preflight.js';
 export { FirestoreScheduleRepository } from './schedules.js';
 export { FirestoreSettingsRepository } from './settings.js';
+export { createFirestoreSettingsPersistence } from './settings-persistence.js';
 export { FirestoreShellPresenceRepository } from './shell-presence.js';
 export { FirestoreShellStatusRepository } from './shell-status.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
@@ -52,3 +53,4 @@ export { FirestoreTaskRepository } from './task-lifecycle.js';
 export { FirestoreTaskLeaseRepository } from './tasks.js';
 export { FirestoreToolExecutionRepository } from './tool-execution.js';
 export { FirestoreWatchRepository } from './watches.js';
+export { FirestoreWorkspaceAnomalyRepository } from './workspace-anomalies.js';
