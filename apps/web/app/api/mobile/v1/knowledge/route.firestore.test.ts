@@ -97,7 +97,7 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
     vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
     vi.stubEnv(
       'FIRESTORE_EMBEDDING_SPACE',
-      '{"provider":"vertex","model":"example-embedding","dimensions":768,"revision":"fixture-v1"}',
+      '{"provider":"vertex","model":"example-embedding","dimensions":1536,"revision":"fixture-v1"}',
     );
     vi.stubEnv('LLM_PROVIDER', 'vertex');
     vi.stubEnv('ASSISTANT_MODULES', 'minimal');
