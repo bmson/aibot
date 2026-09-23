@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { FirestorePrivacyExportRepository } from './privacy-export.js';
 import { disposeStore, emulatorStore } from './test-store.js';
 
-describe('Firestore privacy export repository', () => {
+describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore privacy export repository', () => {
   const stores: ReturnType<typeof emulatorStore>[] = [];
 
   afterEach(async () => {
