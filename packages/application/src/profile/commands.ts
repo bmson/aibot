@@ -20,6 +20,7 @@ import {
 } from '@assistant/db';
 import {
   isProfileOccasionCommandRepository,
+  normalizeVoiceProfileEdit,
   type ProfileOccasionCommandRepository,
 } from '@assistant/persistence';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
@@ -311,31 +312,26 @@ export async function updateVoiceProfile(
   db: Db,
   input: { description: string; dos: string; donts: string; signature: string },
 ): Promise<{ error?: string }> {
-  const description = input.description.trim().slice(0, 2000);
-  if (!description) return { error: 'The voice description is required.' };
-  const lines = (raw: string) =>
-    raw
-      .split('\n')
-      .map((line) => line.trim().slice(0, 300))
-      .filter((line) => line.length > 0)
-      .slice(0, 12);
+  const normalized = normalizeVoiceProfileEdit(input);
+  if (!normalized.value) return { error: normalized.error };
+  const { description, dos, donts, signature } = normalized.value;
   await db
     .insert(voiceProfile)
     .values({
       id: 1,
       description,
-      dos: lines(input.dos),
-      donts: lines(input.donts),
-      signature: input.signature.trim().slice(0, 300),
+      dos,
+      donts,
+      signature,
       updatedAt: sql`now()`,
     })
     .onConflictDoUpdate({
       target: voiceProfile.id,
       set: {
         description,
-        dos: lines(input.dos),
-        donts: lines(input.donts),
-        signature: input.signature.trim().slice(0, 300),
+        dos,
+        donts,
+        signature,
         updatedAt: sql`now()`,
       },
     });

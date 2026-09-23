@@ -36,7 +36,7 @@ export function proxy(request: NextRequest) {
     // The POST is the costs page's Server Action; it performs its own owner
     // authentication and Firestore persistence checks before changing caps.
     (path === '/costs' && ['GET', 'POST'].includes(request.method)) ||
-    (path === '/profile/voice' && request.method === 'GET') ||
+    (path === '/profile/voice' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/profile/about' && request.method === 'GET') ||
     // Settings Server Actions recheck owner auth; Firestore supports the
     // assistant identity and notification preference updates.
@@ -65,7 +65,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/workspace' && request.method === 'GET') ||
     (path === '/api/mobile/v1/costs' && request.method === 'PATCH') ||
     (approvalIdPath.test(path) && request.method === 'POST') ||
-    (path === '/api/mobile/v1/memory/profile' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/memory/profile' && ['GET', 'POST'].includes(request.method)) ||
     (personOccasionsPath.test(path) && request.method === 'POST') ||
     (path === '/api/card-image' && request.method === 'GET') ||
     (path === '/api/mobile/v1/cards' && request.method === 'GET') ||

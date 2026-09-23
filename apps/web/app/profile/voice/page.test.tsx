@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ owner: vi.fn() }));
 vi.mock('@/auth', () => ({ requireOwner: auth.owner }));
+vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
 const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
@@ -17,6 +18,7 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
   const foreignAgentId = randomUUID();
   const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
   let page: typeof import('./page.js');
+  let actions: typeof import('../actions.js');
 
   beforeAll(async () => {
     vi.stubEnv('PERSISTENCE_DRIVER', 'firestore');
@@ -31,6 +33,7 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
     resetConfigForTest();
     auth.owner.mockResolvedValue({ user: { email: 'owner@example.test' } });
     page = await import('./page.js');
+    actions = await import('../actions.js');
 
     const now = new Date();
     await Promise.all([
@@ -68,12 +71,12 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
     resetConfigForTest();
   });
 
-  it('admits only GET and renders the voice overview without write controls', async () => {
+  it('admits owner edits and renders the voice editor without sample upload controls', async () => {
     const { proxy } = await import('../../../proxy.js');
     expect(proxy(new NextRequest('http://localhost/profile/voice')).status).toBe(200);
     expect(
       proxy(new NextRequest('http://localhost/profile/voice', { method: 'POST' })).status,
-    ).toBe(503);
+    ).toBe(200);
     expect(
       proxy(new NextRequest('http://localhost/api/import/upload', { method: 'POST' })).status,
     ).toBe(503);
@@ -84,9 +87,37 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
     expect(html).toContain('2 samples');
     expect(html).toContain('1 learned from your sent mail');
     expect(html).toContain('/profile/memories');
-    expect(html).not.toContain('<form');
-    expect(html).not.toContain('<button');
+    expect(html).toContain('Save voice');
+    expect(html).not.toContain('/api/import/upload');
+    expect(html).not.toContain('Clear 2 samples');
     expect(html).not.toContain('/profile"');
+  });
+
+  it('saves the voice profile through the owner-authenticated web action', async () => {
+    expect(
+      await actions.updateVoiceProfileAction({
+        description: '  Concise  ',
+        dos: 'Lead with result',
+        donts: 'Hedge',
+        signature: '  B  ',
+      }),
+    ).toEqual({});
+    expect((await store.doc('voiceProfile', '1').get()).data()).toMatchObject({
+      description: 'Concise',
+      dos: ['Lead with result'],
+      donts: ['Hedge'],
+      signature: 'B',
+    });
+    auth.owner.mockRejectedValueOnce(new Error('owner authentication required'));
+    await expect(
+      actions.updateVoiceProfileAction({
+        description: 'Unauthorized',
+        dos: '',
+        donts: '',
+        signature: '',
+      }),
+    ).rejects.toThrow('owner authentication required');
+    expect((await store.doc('voiceProfile', '1').get()).get('description')).toBe('Concise');
   });
 
   it('requires owner authentication', async () => {

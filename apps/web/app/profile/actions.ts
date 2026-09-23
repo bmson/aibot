@@ -20,7 +20,10 @@ import {
   updateVoiceProfile,
 } from '@assistant/application/profile';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import { FirestorePrivacyErasureRepository } from '@assistant/firestore';
+import {
+  FirestorePrivacyErasureRepository,
+  FirestoreVoiceProfileRepository,
+} from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import { getApplication, getDb, getFirestoreInstallationStore, getWorkspace } from '@/lib/server';
@@ -203,9 +206,17 @@ export async function updateVoiceProfileAction(input: {
   signature: string;
 }): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await updateVoiceProfile(getDb(), input);
+  const config = loadConfig();
+  const result =
+    config.PERSISTENCE_DRIVER === 'firestore'
+      ? await new FirestoreVoiceProfileRepository(getFirestoreInstallationStore()).update(
+          config.FIRESTORE_AGENT_ID,
+          input,
+        )
+      : await updateVoiceProfile(getDb(), input);
   if (result.error) return result;
   revalidateProfile();
+  revalidatePath('/profile/voice');
   return {};
 }
 
