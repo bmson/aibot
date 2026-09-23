@@ -1,9 +1,27 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Records, WatchCreateInput, WatchRepository } from '@assistant/persistence';
 import type { QueryDocumentSnapshot } from '@google-cloud/firestore';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 type Watch = Records['watches'];
+
+function watchSuggestionId(agentId: string, sourceRef: string): string {
+  return `watch-suggestion:${createHash('sha256')
+    .update(JSON.stringify([agentId, sourceRef]))
+    .digest('hex')}`;
+}
+
+function notificationsConversationId(agentId: string): string {
+  return `watch-notifications:${createHash('sha256').update(agentId).digest('hex')}`;
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 6;
+}
+
+function isPreconditionFailed(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 9;
+}
 
 function watchRecord(
   input: WatchCreateInput,
@@ -269,139 +287,217 @@ export class FirestoreWatchRepository implements WatchRepository {
   }
 
   async commitSuggestion(input: Parameters<WatchRepository['commitSuggestion']>[0]) {
-    return this.store.db.runTransaction(async (tx) => {
-      const fires = await tx.get(
-        this.store
-          .collection('watchFires')
-          .where('agentId', '==', input.agentId)
-          .where('watchId', '==', input.watchId)
-          .where('triggerRef', '==', input.triggerRef)
-          .limit(1),
-      );
-      const fireDoc = fires.docs[0];
-      if (!fireDoc) return null;
-      const fire = decodeRecord<Records['watchFires']>(fireDoc.data());
-      if (documentKey(fire.id) !== fireDoc.id) return null;
-      const watchRef = this.store.doc('watches', fire.watchId);
-      const watchDoc = await tx.get(watchRef);
-      if (!watchDoc.exists) return null;
-      const watch = decodeRecord<Watch>(watchDoc.data());
+    const sourceRef = `watch:${input.watchId}:${input.triggerRef}`;
+    // Imported records have random IDs. Locate them by query, while new records
+    // use stable IDs so concurrent commits can converge through create/get.
+    const [fires, suggestions, notifications] = await Promise.all([
+      this.store
+        .collection('watchFires')
+        .where('agentId', '==', input.agentId)
+        .where('watchId', '==', input.watchId)
+        .where('triggerRef', '==', input.triggerRef)
+        .limit(1)
+        .get(),
+      this.store
+        .collection('suggestions')
+        .where('agentId', '==', input.agentId)
+        .where('sourceRef', '==', sourceRef)
+        .limit(1)
+        .get(),
+      this.store
+        .collection('conversations')
+        .where('agentId', '==', input.agentId)
+        .where('title', '==', 'Notifications')
+        .limit(1)
+        .get(),
+    ]);
+    const fireDoc = fires.docs[0];
+    if (!fireDoc) return null;
+    const legacySuggestion = suggestions.docs[0];
+    const legacyNotifications = notifications.docs[0];
+    const suggestionRef =
+      legacySuggestion?.ref ??
+      this.store.doc('suggestions', watchSuggestionId(input.agentId, sourceRef));
+    const notificationsRef =
+      legacyNotifications?.ref ??
+      this.store.doc('conversations', notificationsConversationId(input.agentId));
+    const fireSnapshot = await fireDoc.ref.get();
+    if (!fireSnapshot.exists) return null;
+    const fire = decodeRecord<Records['watchFires']>(fireSnapshot.data());
+    if (
+      documentKey(fire.id) !== fireSnapshot.id ||
+      fire.agentId !== input.agentId ||
+      fire.watchId !== input.watchId ||
+      fire.triggerRef !== input.triggerRef
+    )
+      return null;
+    const watchDoc = await this.store.doc('watches', fire.watchId).get();
+    if (!watchDoc.exists) return null;
+    const watch = decodeRecord<Watch>(watchDoc.data());
+    if (
+      watch.agentId !== input.agentId ||
+      documentKey(watch.id) !== watchDoc.id ||
+      watch.id !== input.watchId ||
+      watch.tier !== 'suggest'
+    )
+      return null;
+
+    let suggestionSnapshot = await suggestionRef.get();
+    if (legacySuggestion && !suggestionSnapshot.exists) return null;
+    let suggestion = suggestionSnapshot.exists
+      ? decodeRecord<Records['suggestions']>(suggestionSnapshot.data())
+      : null;
+    if (
+      suggestion &&
+      (documentKey(suggestion.id) !== suggestionSnapshot.id ||
+        suggestion.agentId !== input.agentId ||
+        suggestion.sourceRef !== sourceRef)
+    )
+      return null;
+
+    let conversationId: string | null = null;
+    const candidateIds = [suggestion?.conversationId, watch.conversationId].filter(
+      (id, index, all): id is string => Boolean(id) && all.indexOf(id) === index,
+    );
+    for (const candidateId of candidateIds) {
+      const conversationDoc = await this.store.doc('conversations', candidateId).get();
+      if (!conversationDoc.exists) continue;
+      const conversation = decodeRecord<Records['conversations']>(conversationDoc.data());
       if (
-        watch.agentId !== input.agentId ||
-        documentKey(watch.id) !== watchDoc.id ||
-        watch.tier !== 'suggest'
+        documentKey(conversation.id) === conversationDoc.id &&
+        conversation.agentId === input.agentId
+      ) {
+        conversationId = conversation.id;
+        break;
+      }
+    }
+    const now = input.now ?? this.store.now();
+    const ensureNotifications = async (): Promise<string | null> => {
+      let notificationsSnapshot = await notificationsRef.get();
+      if (legacyNotifications && !notificationsSnapshot.exists) return null;
+      if (!notificationsSnapshot.exists) {
+        const id = notificationsConversationId(input.agentId);
+        try {
+          await notificationsRef.create(
+            encodeRecord({
+              id,
+              agentId: input.agentId,
+              channel: 'chat',
+              trust: 'assistant',
+              title: 'Notifications',
+              isPrimary: false,
+              archived: false,
+              createdAt: now,
+              updatedAt: now,
+              archivedAt: null,
+              modelOverride: null,
+              metadata: {},
+              lastReadAt: null,
+            }),
+          );
+        } catch (error) {
+          if (!isAlreadyExists(error)) throw error;
+        }
+        notificationsSnapshot = await notificationsRef.get();
+      }
+      if (!notificationsSnapshot.exists) return null;
+      const conversation = decodeRecord<Records['conversations']>(notificationsSnapshot.data());
+      if (
+        documentKey(conversation.id) !== notificationsSnapshot.id ||
+        conversation.agentId !== input.agentId ||
+        conversation.title !== 'Notifications'
       )
         return null;
+      return conversation.id;
+    };
+    if (!conversationId) {
+      conversationId = await ensureNotifications();
+      if (!conversationId) return null;
+    }
 
-      const sourceRef = `watch:${watch.id}:${fire.triggerRef}`;
-      const existingSuggestions = await tx.get(
-        this.store
-          .collection('suggestions')
-          .where('agentId', '==', input.agentId)
-          .where('sourceRef', '==', sourceRef)
-          .limit(1),
-      );
-      const existingSuggestionDoc = existingSuggestions.docs[0];
-      const existingSuggestion = existingSuggestionDoc
-        ? decodeRecord<Records['suggestions']>(existingSuggestionDoc.data())
-        : null;
+    if (!suggestion) {
+      const id = watchSuggestionId(input.agentId, sourceRef);
+      try {
+        await suggestionRef.create(
+          encodeRecord({
+            id,
+            agentId: input.agentId,
+            conversationId,
+            summary: input.summary.slice(0, 500),
+            proposedAction: input.proposedAction.slice(0, 2000),
+            origin: 'watch',
+            sourceRef,
+            status: 'pending',
+            acceptedTaskId: null,
+            snoozedUntil: null,
+            expiresAt: new Date(now.getTime() + 7 * 24 * 3600 * 1000),
+            createdAt: now,
+            updatedAt: now,
+          }),
+        );
+      } catch (error) {
+        if (!isAlreadyExists(error)) throw error;
+      }
+      suggestionSnapshot = await suggestionRef.get();
+      if (!suggestionSnapshot.exists) return null;
+      suggestion = decodeRecord<Records['suggestions']>(suggestionSnapshot.data());
       if (
-        existingSuggestionDoc &&
-        (!existingSuggestion || documentKey(existingSuggestion.id) !== existingSuggestionDoc.id)
+        documentKey(suggestion.id) !== suggestionSnapshot.id ||
+        suggestion.agentId !== input.agentId ||
+        suggestion.sourceRef !== sourceRef
       )
         return null;
-
-      let conversationId: string | null = null;
-      const candidateIds = [existingSuggestion?.conversationId, watch.conversationId].filter(
+    }
+    // A competing commit may have linked the suggestion after our first read.
+    // Preserve any current owner-scoped destination and repair stale links with
+    // a compare-and-swap so a later caller cannot overwrite that decision.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      suggestionSnapshot = await suggestionRef.get();
+      if (!suggestionSnapshot.exists) return null;
+      suggestion = decodeRecord<Records['suggestions']>(suggestionSnapshot.data());
+      if (
+        documentKey(suggestion.id) !== suggestionSnapshot.id ||
+        suggestion.agentId !== input.agentId ||
+        suggestion.sourceRef !== sourceRef
+      )
+        return null;
+      let selectedId: string | null = null;
+      const currentCandidates = [suggestion.conversationId, watch.conversationId].filter(
         (id, index, all): id is string => Boolean(id) && all.indexOf(id) === index,
       );
-      for (const candidateId of candidateIds) {
-        const conversationDoc = await tx.get(this.store.doc('conversations', candidateId));
-        if (!conversationDoc.exists) continue;
-        const conversation = decodeRecord<Records['conversations']>(conversationDoc.data());
-        if (
-          documentKey(conversation.id) === conversationDoc.id &&
-          conversation.agentId === input.agentId
-        ) {
-          conversationId = conversation.id;
+      for (const candidateId of currentCandidates) {
+        const candidate = await this.store.doc('conversations', candidateId).get();
+        if (!candidate.exists) continue;
+        const row = decodeRecord<Records['conversations']>(candidate.data());
+        if (documentKey(row.id) === candidate.id && row.agentId === input.agentId) {
+          selectedId = row.id;
           break;
         }
       }
-      let notificationRef: FirebaseFirestore.DocumentReference | undefined;
-      if (!conversationId) {
-        const notifications = await tx.get(
-          this.store
-            .collection('conversations')
-            .where('agentId', '==', input.agentId)
-            .where('title', '==', 'Notifications')
-            .limit(1),
-        );
-        const existing = notifications.docs[0];
-        if (existing) {
-          const conversation = decodeRecord<Records['conversations']>(existing.data());
-          if (documentKey(conversation.id) !== existing.id) return null;
-          conversationId = conversation.id;
-        } else {
-          conversationId = randomUUID();
-          notificationRef = this.store.doc('conversations', conversationId);
+      if (!selectedId) selectedId = await ensureNotifications();
+      if (!selectedId) return null;
+      const priorUpdateTime = suggestionSnapshot.updateTime;
+      if (!priorUpdateTime) return null;
+      if (suggestion.conversationId !== selectedId) {
+        try {
+          await suggestionRef.update(encodeRecord({ conversationId: selectedId, updatedAt: now }), {
+            lastUpdateTime: priorUpdateTime,
+          });
+        } catch (error) {
+          if (isPreconditionFailed(error)) continue;
+          throw error;
         }
+        continue;
       }
-
-      const now = input.now ?? this.store.now();
-      const suggestionGeneration = watchDoc.get('suggestionGeneration');
-      tx.update(watchRef, {
-        suggestionGeneration:
-          typeof suggestionGeneration === 'number' && Number.isSafeInteger(suggestionGeneration)
-            ? suggestionGeneration + 1
-            : 1,
-      });
-      if (notificationRef)
-        tx.create(
-          notificationRef,
-          encodeRecord({
-            id: conversationId,
-            agentId: input.agentId,
-            channel: 'chat',
-            trust: 'assistant',
-            title: 'Notifications',
-            isPrimary: false,
-            archived: false,
-            createdAt: now,
-            updatedAt: now,
-            archivedAt: null,
-            modelOverride: null,
-            metadata: {},
-            lastReadAt: null,
-          }),
-        );
-
-      let suggestion = existingSuggestion;
-      if (!suggestion) {
-        const id = randomUUID();
-        suggestion = {
-          id,
-          agentId: input.agentId,
-          conversationId,
-          summary: input.summary.slice(0, 500),
-          proposedAction: input.proposedAction.slice(0, 2000),
-          origin: 'watch',
-          sourceRef,
-          status: 'pending',
-          acceptedTaskId: null,
-          snoozedUntil: null,
-          expiresAt: new Date(now.getTime() + 7 * 24 * 3600 * 1000),
-          createdAt: now,
-          updatedAt: now,
-        };
-        tx.create(this.store.doc('suggestions', id), encodeRecord(suggestion));
-      } else if (!suggestion.conversationId) {
-        suggestion = { ...suggestion, conversationId, updatedAt: now };
-        tx.update(
-          this.store.doc('suggestions', suggestion.id),
-          encodeRecord({ conversationId, updatedAt: now }),
-        );
-      }
-      return { suggestion, conversationId, fireId: fire.id, watchName: watch.name };
-    });
+      const destination = await this.store.doc('conversations', selectedId).get();
+      if (!destination.exists) continue;
+      const row = decodeRecord<Records['conversations']>(destination.data());
+      if (documentKey(row.id) !== destination.id || row.agentId !== input.agentId) continue;
+      const latestSuggestion = await suggestionRef.get();
+      if (!latestSuggestion.exists) return null;
+      if (!latestSuggestion.updateTime?.isEqual(priorUpdateTime)) continue;
+      return { suggestion, conversationId: selectedId, fireId: fire.id, watchName: watch.name };
+    }
+    throw new Error('Watch suggestion destination changed during concurrent commits');
   }
 }
