@@ -1,4 +1,4 @@
-import { getApplication } from '@/lib/server';
+import { loadOwnerProfileExport } from '@/lib/profile-export';
 import { isMobileAuthed, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
-  const payload = await getApplication().exportLongTermMemoryData();
+  const payload = await loadOwnerProfileExport();
   const filename = `assistant-long-term-memory-${new Date().toISOString().slice(0, 10)}.json`;
   return new Response(JSON.stringify(payload, null, 2), {
     headers: {
