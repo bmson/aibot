@@ -7,6 +7,7 @@ export { FirestoreCommitmentMutationRepository } from './commitment-mutations.js
 export { getFirestoreCommitmentOverview } from './commitment-overview.js';
 export { FirestoreCostRepository } from './costs.js';
 export { FirestoreDocumentCatalogRepository } from './document-catalog.js';
+export { FirestoreDocumentExtractionRepository } from './document-extraction.js';
 export { FirestoreDocumentReadRepository } from './documents.js';
 export { createFirestoreExecutionPersistence } from './execution.js';
 export { FirestoreExecutionContextRepository } from './execution-context.js';
