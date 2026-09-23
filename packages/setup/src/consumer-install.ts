@@ -28,6 +28,7 @@ export interface ConsumerInstallOptions {
   terraformDir: string;
   stateBucket: string;
   apply: boolean;
+  runtime?: { images: unknown; config: unknown };
   now?: () => string;
 }
 
@@ -241,6 +242,7 @@ const verifiedFoundationFiles = [
   'infra/gcp/consumer/terraform/firestore-indexes.tf',
   'infra/gcp/firestore/firestore.indexes.json',
 ] as const;
+const runtimeFile = 'infra/gcp/consumer/terraform/runtime.tf';
 const indexSpecPath = 'infra/gcp/firestore/firestore.indexes.json';
 
 function tarString(header: Buffer, start: number, length: number): string {
@@ -261,6 +263,7 @@ function tarOctal(header: Buffer, start: number, length: number): number {
 async function verifyTrustedFoundationArchive(
   archivePath: string,
   expectedDigest: string,
+  includeRuntime = false,
 ): Promise<Map<string, Buffer>> {
   const archiveStat = await stat(archivePath);
   if (!archiveStat.isFile()) throw new Error('Installation archive must be a regular file');
@@ -315,7 +318,9 @@ async function verifyTrustedFoundationArchive(
     if (regular) entries.set(path, Buffer.from(tar.subarray(dataStart, dataEnd)));
     offset = dataStart + Math.ceil(size / 512) * 512;
   }
-  for (const file of verifiedFoundationFiles) {
+  for (const file of includeRuntime
+    ? [...verifiedFoundationFiles, runtimeFile]
+    : verifiedFoundationFiles) {
     const archiveEntry = entries.get(file);
     if (!archiveEntry) throw new Error(`Installation archive is missing ${file}`);
     const trusted = await readFile(resolve(process.cwd(), file));
@@ -327,9 +332,12 @@ async function verifyTrustedFoundationArchive(
 
 async function prepareTerraformWorkspace(
   verified: Map<string, Buffer>,
+  includeRuntime = false,
 ): Promise<{ root: string; terraformDir: string }> {
   const root = await mkdtemp(join(tmpdir(), 'assistant-consumer-terraform-'));
-  for (const file of verifiedFoundationFiles) {
+  for (const file of includeRuntime
+    ? [...verifiedFoundationFiles, runtimeFile]
+    : verifiedFoundationFiles) {
     const content = verified.get(file);
     if (!content) throw new Error(`Verified Terraform file is missing ${file}`);
     const destination = join(root, file);
@@ -436,6 +444,283 @@ function terraformVars(
     : vars;
 }
 
+type RuntimeInput = {
+  webDigest: string;
+  agentDigest: string;
+  config: {
+    firestoreAgentId: string;
+    firestoreEmbeddingSpace: {
+      provider: string;
+      model: string;
+      dimensions: number;
+      revision: string;
+    };
+    ownerEmail: string;
+    webAuthUrl: string;
+    authSecretVersion: number;
+    googleClientIdVersion: number;
+    googleClientSecretVersion: number;
+  };
+  fingerprint: string;
+};
+
+function record(value: unknown, label: string, keys: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error(`${label} must be a JSON object`);
+  const data = value as Record<string, unknown>;
+  if (Object.keys(data).some((key) => !keys.includes(key)))
+    throw new Error(`${label} contains an unsupported field`);
+  return data;
+}
+
+function validateRuntimeInput(
+  raw: NonNullable<ConsumerInstallOptions['runtime']>,
+  manifest: InstallationManifest,
+): RuntimeInput {
+  if (manifest.identity.databaseId !== '(default)')
+    throw new Error('Runtime requires the (default) Firestore database');
+  if (manifest.selection.modelProvider !== 'google')
+    throw new Error('Runtime requires the Google model provider');
+  const images = record(raw.images, 'Image manifest', [
+    'schemaVersion',
+    'sourceSha',
+    'sourceArchiveDigest',
+    'projectId',
+    'region',
+    'repositoryId',
+    'tags',
+    'images',
+    'terraform',
+  ]);
+  const project = manifest.identity.projectId;
+  const region = manifest.identity.region;
+  const id = manifest.identity.installationId;
+  if (
+    images.schemaVersion !== 1 ||
+    images.sourceSha !== manifest.identity.release.commitSha ||
+    typeof images.sourceArchiveDigest !== 'string' ||
+    !/^sha256:[0-9a-f]{64}$/.test(images.sourceArchiveDigest) ||
+    images.projectId !== project ||
+    images.region !== region ||
+    images.repositoryId !== id
+  )
+    throw new Error(
+      'Image manifest does not match this installation release and customer repository',
+    );
+  const refs = record(images.images, 'Image references', ['web', 'agent']);
+  const tags = record(images.tags, 'Image tags', ['web', 'agent']);
+  const tf = record(images.terraform, 'Image Terraform inputs', [
+    'web_image_digest',
+    'agent_image_digest',
+  ]);
+  const root = `${region}-docker.pkg.dev/${project}/${id}`;
+  const digests = ['web', 'agent'].map((name) => {
+    const image = record(refs[name], `${name} image`, ['digest', 'reference', 'tag']);
+    const digest = image.digest;
+    if (
+      typeof digest !== 'string' ||
+      !/^sha256:[0-9a-f]{64}$/.test(digest) ||
+      image.reference !== `${root}/${name}@${digest}` ||
+      image.tag !== `${root}/${name}:${images.sourceSha}` ||
+      tags[name] !== image.tag ||
+      tf[`${name}_image_digest`] !== digest
+    )
+      throw new Error(
+        `${name} image must use the matching customer repository and immutable digest`,
+      );
+    return digest;
+  });
+  const config = record(raw.config, 'Runtime config', [
+    'firestoreAgentId',
+    'firestoreEmbeddingSpace',
+    'ownerEmail',
+    'webAuthUrl',
+    'authSecretVersion',
+    'googleClientIdVersion',
+    'googleClientSecretVersion',
+  ]);
+  const space = record(config.firestoreEmbeddingSpace, 'Embedding space', [
+    'provider',
+    'model',
+    'dimensions',
+    'revision',
+  ]);
+  if (
+    typeof config.firestoreAgentId !== 'string' ||
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(config.firestoreAgentId)
+  )
+    throw new Error('Runtime config requires a seeded Firestore agent UUID');
+  if (
+    space.provider !== 'vertex' ||
+    typeof space.model !== 'string' ||
+    !space.model ||
+    !Number.isInteger(space.dimensions) ||
+    (space.dimensions as number) < 1 ||
+    (space.dimensions as number) > 2048 ||
+    typeof space.revision !== 'string' ||
+    !space.revision
+  )
+    throw new Error('Runtime config requires explicit Vertex embedding provenance');
+  if (
+    typeof config.ownerEmail !== 'string' ||
+    !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(config.ownerEmail) ||
+    typeof config.webAuthUrl !== 'string' ||
+    !/^https:\/\/[A-Za-z0-9.-]+(?::443)?$/.test(config.webAuthUrl)
+  )
+    throw new Error('Runtime config requires an owner email and HTTPS OAuth origin');
+  for (const key of ['authSecretVersion', 'googleClientIdVersion', 'googleClientSecretVersion']) {
+    if (!Number.isSafeInteger(config[key]) || (config[key] as number) < 1)
+      throw new Error(`Runtime config requires a positive numbered ${key}`);
+  }
+  const [webDigest, agentDigest] = digests;
+  if (!webDigest || !agentDigest) throw new Error('Image manifest requires web and agent images');
+  const normalized = { webDigest, agentDigest, config: config as RuntimeInput['config'] };
+  return {
+    ...normalized,
+    fingerprint: `sha256:${createHash('sha256').update(JSON.stringify(normalized)).digest('hex')}`,
+  };
+}
+
+async function runRuntimeCheck(
+  runner: CommandRunner,
+  args: readonly string[],
+  label: string,
+): Promise<CommandResult> {
+  const result = await runner.run('gcloud', args);
+  // Cloud command diagnostics can contain headers or environment values. Keep
+  // customer credentials and secret payloads out of installer output.
+  if (!result.ok)
+    throw new Error(`${label} failed; check customer project access and resource prerequisites`);
+  return result;
+}
+
+async function verifyRuntimePrerequisites(
+  runner: CommandRunner,
+  manifest: InstallationManifest,
+  input: RuntimeInput,
+): Promise<void> {
+  const project = manifest.identity.projectId;
+  const region = manifest.identity.region;
+  const id = manifest.identity.installationId;
+  for (const [name, digest] of [
+    ['web', input.webDigest],
+    ['agent', input.agentDigest],
+  ]) {
+    await runRuntimeCheck(
+      runner,
+      [
+        'artifacts',
+        'docker',
+        'images',
+        'describe',
+        `${region}-docker.pkg.dev/${project}/${id}/${name}@${digest}`,
+        `--project=${project}`,
+        '--format=json',
+      ],
+      `${name} image lookup`,
+    );
+  }
+  for (const [suffix, version] of [
+    ['auth-secret', input.config.authSecretVersion],
+    ['google-client-id', input.config.googleClientIdVersion],
+    ['google-client-secret', input.config.googleClientSecretVersion],
+  ] as const) {
+    const result = await runRuntimeCheck(
+      runner,
+      [
+        'secrets',
+        'versions',
+        'describe',
+        String(version),
+        `--secret=${id}-${suffix}`,
+        `--project=${project}`,
+        '--format=json',
+      ],
+      `${suffix} secret version lookup`,
+    );
+    const data = jsonOutput(result, 'Secret version metadata') as { state?: unknown };
+    if (data?.state !== 'ENABLED') throw new Error(`${suffix} secret version must be enabled`);
+  }
+}
+
+function runtimeVars(input: RuntimeInput): string[] {
+  const vars: Record<string, string> = {
+    web_image_digest: input.webDigest,
+    agent_image_digest: input.agentDigest,
+    firestore_agent_id: input.config.firestoreAgentId,
+    firestore_embedding_space: JSON.stringify(input.config.firestoreEmbeddingSpace),
+    owner_email: input.config.ownerEmail,
+    web_auth_url: input.config.webAuthUrl,
+    auth_secret_version: String(input.config.authSecretVersion),
+    google_client_id_version: String(input.config.googleClientIdVersion),
+    google_client_secret_version: String(input.config.googleClientSecretVersion),
+  };
+  return Object.entries(vars).flatMap(([key, value]) => ['-var', `${key}=${value}`]);
+}
+
+async function verifyRuntimeServices(
+  runner: CommandRunner,
+  manifest: InstallationManifest,
+  input: RuntimeInput,
+): Promise<void> {
+  const { projectId: project, region, installationId: id } = manifest.identity;
+  for (const [name, digest] of [
+    ['web', input.webDigest],
+    ['agent', input.agentDigest],
+  ]) {
+    const result = await runRuntimeCheck(
+      runner,
+      [
+        'run',
+        'services',
+        'describe',
+        `${id}-${name}`,
+        `--project=${project}`,
+        `--region=${region}`,
+        '--format=json',
+      ],
+      `${name} Cloud Run smoke check`,
+    );
+    const service = jsonOutput(result, 'Cloud Run service') as Record<string, unknown>;
+    const metadata = service?.metadata as { name?: unknown } | undefined;
+    const spec = service?.spec as
+      | { template?: { spec?: { containers?: Array<{ image?: unknown }> } } }
+      | undefined;
+    const status = service?.status as
+      | {
+          conditions?: Array<{ type?: unknown; state?: unknown; status?: unknown }>;
+          latestReadyRevisionName?: unknown;
+          latestCreatedRevisionName?: unknown;
+        }
+      | undefined;
+    const template = service?.template as { containers?: Array<{ image?: unknown }> } | undefined;
+    const conditions = (service?.conditions ?? status?.conditions) as
+      | Array<{ type?: unknown; state?: unknown; status?: unknown }>
+      | undefined;
+    const image = `${region}-docker.pkg.dev/${project}/${id}/${name}@${digest}`;
+    const deployedImage =
+      template?.containers?.[0]?.image ?? spec?.template?.spec?.containers?.[0]?.image;
+    const readyRevision = service?.latestReadyRevision ?? status?.latestReadyRevisionName;
+    const createdRevision = service?.latestCreatedRevision ?? status?.latestCreatedRevisionName;
+    if (
+      (service?.name ?? metadata?.name) !== `${id}-${name}` ||
+      deployedImage !== image ||
+      !Array.isArray(conditions) ||
+      !conditions.some(
+        (condition) =>
+          condition.type === 'Ready' &&
+          (condition.state === 'CONDITION_SUCCEEDED' || condition.status === 'True'),
+      ) ||
+      typeof readyRevision !== 'string' ||
+      !readyRevision ||
+      readyRevision !== createdRevision
+    )
+      throw new Error(
+        `${name} Cloud Run service is not serving the expected ready digest revision`,
+      );
+  }
+}
+
 /** Provision the customer-owned foundation in resumable, verified stages. */
 export async function provisionConsumerInstallation(
   dependencies: ConsumerInstallDependencies,
@@ -443,6 +728,7 @@ export async function provisionConsumerInstallation(
 ): Promise<ConsumerInstallResult> {
   const input = validateInstallationManifest(options.manifest);
   if (input.status !== 'active') throw new Error('Cannot provision an invalidated installation');
+  const runtime = options.runtime ? validateRuntimeInput(options.runtime, input) : null;
   const now = options.now ?? (() => new Date().toISOString());
   const terraformRunner = dependencies.terraform ?? dependencies.runner;
   await verifyTerraformDirectory(options.terraformDir);
@@ -452,6 +738,7 @@ export async function provisionConsumerInstallation(
   const verifiedFoundation = await verifyTrustedFoundationArchive(
     options.archivePath,
     input.identity.release.archiveDigest,
+    runtime !== null,
   );
   const trustedIndexSpec = verifiedFoundation.get(indexSpecPath);
   if (!trustedIndexSpec) throw new Error('Verified Firestore index specification is missing');
@@ -470,6 +757,18 @@ export async function provisionConsumerInstallation(
   if (persisted && JSON.stringify(persisted.selection) !== JSON.stringify(input.selection)) {
     throw new Error('Persisted installation selection does not match the supplied manifest');
   }
+  if (current.stage.current === 'initialized' && !runtime)
+    throw new Error(
+      'An initialized runtime requires the same image manifest and runtime config to resume',
+    );
+  if (
+    runtime &&
+    current.stage.current === 'initialized' &&
+    !current.resources.some(
+      (resource) => resource.kind === 'runtime-config' && resource.name === runtime.fingerprint,
+    )
+  )
+    throw new Error('Runtime config differs from the initialized checkpoint');
   if (current.stage.current === 'previewed' || current.stage.current === 'authorized') {
     const missingApis = await verifyProjectAndDatabase(dependencies.runner, current, options.apply);
     if (!options.apply) {
@@ -580,17 +879,91 @@ export async function provisionConsumerInstallation(
       resources: [...current.resources, ...foundationResources(outputValues, current)],
     });
     await persistInstallationProgress(options.statePath, current, previous);
-  } else if (current.stage.current === 'provisioned') {
+  } else if (current.stage.current === 'provisioned' || current.stage.current === 'initialized') {
     // Older provisioned manifests did not attest live index readiness. Recheck
     // on resume, and also detect an index removed after an earlier successful run.
     await verifyConsumerIndexReadiness(dependencies.runner, current.identity, trustedIndexSpec);
+  }
+  if (runtime && current.stage.current === 'provisioned') {
+    await verifyRuntimePrerequisites(dependencies.runner, current, runtime);
+    const workspace = await prepareTerraformWorkspace(verifiedFoundation, true);
+    const terraformOptions = { ...options, terraformDir: workspace.terraformDir };
+    const initialized = await terraformRunner.run('terraform', [
+      `-chdir=${workspace.terraformDir}`,
+      'init',
+      '-input=false',
+      '-lockfile=readonly',
+      '-backend-config',
+      `bucket=${options.stateBucket}`,
+      '-backend-config',
+      `prefix=assistant/${current.identity.installationId}`,
+    ]);
+    if (!initialized.ok)
+      throw new Error('Runtime Terraform init failed; check state bucket access and retry');
+    const applied = await terraformRunner.run('terraform', [
+      `-chdir=${workspace.terraformDir}`,
+      'apply',
+      '-input=false',
+      '-auto-approve',
+      ...terraformVars(current, options.stateBucket),
+      ...runtimeVars(runtime),
+    ]);
+    if (!applied.ok)
+      throw new Error(
+        'Runtime Terraform apply failed; review the retained work directory and retry the same inputs',
+      );
+    const output = await terraformRunner.run('terraform', [
+      `-chdir=${terraformOptions.terraformDir}`,
+      'output',
+      '-json',
+    ]);
+    if (!output.ok)
+      throw new Error('Runtime Terraform output failed; check retained work directory and retry');
+    const values = validateTerraformOutputs(jsonOutput(output, 'Terraform output'), current);
+    const expectedNames = {
+      cloud_run_web_service_name: `${current.identity.installationId}-web`,
+      cloud_run_agent_service_name: `${current.identity.installationId}-agent`,
+    };
+    for (const [key, name] of Object.entries(expectedNames)) {
+      if ((values[key] as { value?: unknown } | undefined)?.value !== name)
+        throw new Error(`Runtime Terraform output ${key} does not match installation`);
+    }
+    await verifyRuntimeServices(dependencies.runner, current, runtime);
+    await rm(workspace.root, { recursive: true, force: true });
+    const previous = current;
+    current = validateInstallationManifest({
+      ...advanceInstallationStage(previous, 'initialized', now()),
+      resources: [
+        ...previous.resources,
+        {
+          kind: 'runtime-config',
+          name: runtime.fingerprint,
+          scope: 'installation',
+          owner: 'terraform',
+          installationId: current.identity.installationId,
+        },
+        ...(['web', 'agent'] as const).map((name) => ({
+          kind: 'cloud-run-service',
+          name: `${current.identity.installationId}-${name}`,
+          scope: 'installation' as const,
+          owner: 'terraform' as const,
+          installationId: current.identity.installationId,
+        })),
+      ],
+    });
+    await persistInstallationProgress(options.statePath, current, previous);
+  } else if (runtime && current.stage.current === 'initialized') {
+    await verifyRuntimeServices(dependencies.runner, current, runtime);
   }
   return {
     manifest: current,
     applied: true,
     runtimeReady: false,
     completed: current.stage.completed,
-    pending: ['initialized', 'ready'],
-    note: 'Customer-owned foundation and READY indexes verified. Runtime services, owner authentication, and end-to-end readiness remain gated.',
+    pending: current.stage.current === 'initialized' ? ['ready'] : ['initialized', 'ready'],
+    note:
+      current.stage.current === 'initialized'
+        ? 'Customer-owned Cloud Run services and revisions verified. Owner sign-in, model response, and end-to-end readiness remain gated.'
+        : 'Customer-owned foundation and READY indexes verified. Runtime services, owner authentication, and end-to-end readiness remain gated.',
   };
 }
