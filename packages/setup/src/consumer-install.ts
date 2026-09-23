@@ -3,6 +3,7 @@ import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
+import { verifyConsumerIndexReadiness } from './consumer-index-readiness.js';
 import {
   advanceInstallationStage,
   type InstallationManifest,
@@ -240,6 +241,7 @@ const verifiedFoundationFiles = [
   'infra/gcp/consumer/terraform/firestore-indexes.tf',
   'infra/gcp/firestore/firestore.indexes.json',
 ] as const;
+const indexSpecPath = 'infra/gcp/firestore/firestore.indexes.json';
 
 function tarString(header: Buffer, start: number, length: number): string {
   return header
@@ -451,6 +453,8 @@ export async function provisionConsumerInstallation(
     options.archivePath,
     input.identity.release.archiveDigest,
   );
+  const trustedIndexSpec = verifiedFoundation.get(indexSpecPath);
+  if (!trustedIndexSpec) throw new Error('Verified Firestore index specification is missing');
   const expectedStateBucket = `${input.identity.projectId}-${input.identity.installationId}-state`;
   if (options.stateBucket !== expectedStateBucket)
     throw new Error(`State bucket must be ${expectedStateBucket} for this installation`);
@@ -490,6 +494,8 @@ export async function provisionConsumerInstallation(
     ]);
   }
   if (!options.apply) {
+    if (current.stage.current === 'provisioned')
+      await verifyConsumerIndexReadiness(dependencies.runner, current.identity, trustedIndexSpec);
     return {
       manifest: current,
       applied: false,
@@ -566,6 +572,7 @@ export async function provisionConsumerInstallation(
     ]);
     const output = await terraform(terraformRunner, terraformOptions, ['output', '-json']);
     const outputValues = validateTerraformOutputs(jsonOutput(output, 'Terraform output'), current);
+    await verifyConsumerIndexReadiness(dependencies.runner, current.identity, trustedIndexSpec);
     await rm(workspace.root, { recursive: true, force: true });
     const previous = current;
     current = validateInstallationManifest({
@@ -573,6 +580,10 @@ export async function provisionConsumerInstallation(
       resources: [...current.resources, ...foundationResources(outputValues, current)],
     });
     await persistInstallationProgress(options.statePath, current, previous);
+  } else if (current.stage.current === 'provisioned') {
+    // Older provisioned manifests did not attest live index readiness. Recheck
+    // on resume, and also detect an index removed after an earlier successful run.
+    await verifyConsumerIndexReadiness(dependencies.runner, current.identity, trustedIndexSpec);
   }
   return {
     manifest: current,
@@ -580,6 +591,6 @@ export async function provisionConsumerInstallation(
     runtimeReady: false,
     completed: current.stage.completed,
     pending: ['initialized', 'ready'],
-    note: 'Customer-owned foundation and index resources provisioned. Runtime services, owner authentication, and index readiness verification remain gated.',
+    note: 'Customer-owned foundation and READY indexes verified. Runtime services, owner authentication, and end-to-end readiness remain gated.',
   };
 }

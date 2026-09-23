@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -19,6 +20,33 @@ const requiredServiceRows = [
   'storage.googleapis.com',
   'aiplatform.googleapis.com',
 ].map((name) => ({ config: { name } }));
+const indexSpec = JSON.parse(
+  readFileSync('infra/gcp/firestore/firestore.indexes.json', 'utf8'),
+) as {
+  indexes: Array<{
+    collectionGroup: string;
+    queryScope: string;
+    fields: Array<{ fieldPath: string; order?: string }>;
+  }>;
+  fieldOverrides: Array<{ collectionGroup: string; fieldPath: string }>;
+};
+const indexPrefix = 'projects/customer-project/databases/(default)/collectionGroups/';
+const compositeIndexRows = indexSpec.indexes.map((index, number) => ({
+  name: `${indexPrefix}${index.collectionGroup}/indexes/${number + 1}`,
+  queryScope: index.queryScope,
+  fields: [
+    ...index.fields,
+    {
+      fieldPath: '__name__',
+      order: index.fields.at(-1)?.order === 'DESCENDING' ? 'DESCENDING' : 'ASCENDING',
+    },
+  ],
+  state: 'READY',
+}));
+const fieldOverrideRows = indexSpec.fieldOverrides.map((field) => ({
+  name: `${indexPrefix}${field.collectionGroup}/fields/${field.fieldPath}`,
+  indexConfig: { indexes: [] },
+}));
 
 const archiveFiles = [
   'infra/gcp/consumer/terraform/main.tf',
@@ -107,6 +135,13 @@ function fakeRunner(
       }
       if (command === 'gcloud' && args[0] === 'services') {
         return { ok: true, stdout: JSON.stringify(requiredServiceRows), stderr: '' };
+      }
+      if (command === 'gcloud' && args[0] === 'firestore' && args[1] === 'indexes') {
+        return {
+          ok: true,
+          stdout: JSON.stringify(args[2] === 'composite' ? compositeIndexRows : fieldOverrideRows),
+          stderr: '',
+        };
       }
       if (command === 'gcloud' && args[0] === 'firestore') {
         return { ok: true, stdout: firestoreList, stderr: '' };
@@ -246,6 +281,73 @@ describe('consumer installation', () => {
     ).toBe(true);
     expect(terraformLog.some((entry) => entry.includes('apply -auto-approve'))).toBe(true);
     expect(verifiedIndexInputs).toBe(true);
+    expect(JSON.parse(await readFile(state, 'utf8')).stage.current).toBe('provisioned');
+  });
+
+  it('leaves state bootstrapped when an index is still building after Terraform apply', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-'));
+    const archive = join(dir, 'release.tar.gz');
+    const state = join(dir, 'state.json');
+    await foundationArchive(archive);
+    const runner = fakeRunner([]);
+    const original = runner.run.bind(runner);
+    runner.run = async (command, args) => {
+      if (command === 'gcloud' && args[0] === 'firestore' && args[2] === 'composite') {
+        return {
+          ok: true,
+          stdout: JSON.stringify([
+            { ...compositeIndexRows[0], state: 'CREATING' },
+            ...compositeIndexRows.slice(1),
+          ]),
+          stderr: '',
+        };
+      }
+      return original(command, args);
+    };
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          manifest: manifest(await sha256File(archive)),
+          archivePath: archive,
+          statePath: state,
+          terraformDir: 'infra/gcp/consumer/terraform',
+          stateBucket: 'customer-project-consumer-install-state',
+          apply: true,
+        },
+      ),
+    ).rejects.toThrow('CREATING');
+    expect(JSON.parse(await readFile(state, 'utf8')).stage.current).toBe('bootstrapped');
+  });
+
+  it('rechecks persisted provisioned state without another Terraform apply', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-'));
+    const archive = join(dir, 'release.tar.gz');
+    const state = join(dir, 'state.json');
+    await foundationArchive(archive);
+    const options = {
+      manifest: manifest(await sha256File(archive)),
+      archivePath: archive,
+      statePath: state,
+      terraformDir: 'infra/gcp/consumer/terraform',
+      stateBucket: 'customer-project-consumer-install-state',
+      apply: true,
+    } as const;
+    await provisionConsumerInstallation({ runner: fakeRunner([]) }, options);
+    const log: string[] = [];
+    const runner = fakeRunner(log);
+    const original = runner.run.bind(runner);
+    runner.run = async (command, args) =>
+      command === 'gcloud' && args[0] === 'firestore' && args[2] === 'composite'
+        ? { ok: true, stdout: JSON.stringify(compositeIndexRows.slice(1)), stderr: '' }
+        : original(command, args);
+    await expect(provisionConsumerInstallation({ runner }, options)).rejects.toThrow(
+      'differ from the trusted installation manifest',
+    );
+    await expect(
+      provisionConsumerInstallation({ runner }, { ...options, apply: false }),
+    ).rejects.toThrow('differ from the trusted installation manifest');
+    expect(log.some((entry) => entry.startsWith('terraform '))).toBe(false);
     expect(JSON.parse(await readFile(state, 'utf8')).stage.current).toBe('provisioned');
   });
 
