@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readlink, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -256,6 +256,47 @@ describe('customer-owned image publisher', () => {
     expect(
       fake.calls.filter((call) => call.command === 'docker' && call.args[0] === 'pull'),
     ).toHaveLength(2);
+  });
+
+  it('exposes the user-installed Buildx executable without copying Docker credentials', async () => {
+    const { root, sha } = await fixture();
+    const userDockerConfig = path.join(root, 'user-docker');
+    const pluginDirectory = path.join(userDockerConfig, 'cli-plugins');
+    await mkdir(pluginDirectory, { recursive: true });
+    const pluginPath = path.join(pluginDirectory, 'docker-buildx');
+    await writeFile(pluginPath, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    const userConfigContents = JSON.stringify({
+      credsStore: 'desktop',
+      auths: { 'private.example': { auth: 'must-not-be-copied' } },
+    });
+    await writeFile(path.join(userDockerConfig, 'config.json'), userConfigContents, {
+      mode: 0o600,
+    });
+
+    const fake = fakePublisher(sha);
+    let linkedPlugin: string | undefined;
+    const runner: CommandRunner = async (command, args, config) => {
+      if (command === 'docker' && args[0] === 'buildx') {
+        const isolatedConfig = config.env?.DOCKER_CONFIG;
+        if (!isolatedConfig) throw new Error('publisher did not set isolated DOCKER_CONFIG');
+        linkedPlugin = await readlink(path.join(isolatedConfig, 'cli-plugins', 'docker-buildx'));
+        const isolatedConfigText = await readFile(path.join(isolatedConfig, 'config.json'), 'utf8');
+        expect(isolatedConfigText).not.toContain('must-not-be-copied');
+        expect(isolatedConfigText).not.toContain('credsStore');
+      }
+      return fake.runner(command, args, config);
+    };
+
+    await publishConsumerImages(options(sha, path.join(root, 'published.json')), {
+      repoRoot: root,
+      runner,
+      userDockerConfig,
+    });
+
+    expect(linkedPlugin).toBe(pluginPath);
+    expect(await readFile(path.join(userDockerConfig, 'config.json'), 'utf8')).toBe(
+      userConfigContents,
+    );
   });
 
   it('fails before pushing when isolated Docker authentication cannot be configured', async () => {
