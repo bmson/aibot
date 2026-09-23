@@ -16,6 +16,7 @@ import {
   buildDeps,
   composedModuleMetas,
   firestoreMaintenanceReady,
+  firestoreOwnerReady,
 } from '../deps.js';
 import { oidcAudienceForPath, verifyInternalAuthorization } from '../google-oidc.js';
 
@@ -67,6 +68,50 @@ internal.post('/tasks/execute', async (c) => {
   const { executeAgentTask } = await import('../task-runner.js');
   const result = await executeAgentTask(deps, taskId, generation as number | undefined);
   return c.json(result);
+});
+
+/**
+ * Private, task-free provider smoke test for a customer-owned Firestore install.
+ * The fixed prompt and hard call limits make this unsuitable as a general
+ * inference endpoint. It is hidden unless explicitly enabled for rehearsal.
+ */
+internal.post('/model-probe/vertex', async (c) => {
+  const config = loadConfig();
+  if (
+    !config.VERTEX_MODEL_PROBE_ENABLED ||
+    config.PERSISTENCE_DRIVER !== 'firestore' ||
+    config.LLM_PROVIDER !== 'vertex'
+  )
+    return c.json({ error: 'not found' }, 404);
+
+  // Callers cannot submit a prompt, model, token limit, or other router option.
+  if ((await c.req.text()).length > 0) return c.json({ error: 'request body must be empty' }, 400);
+
+  try {
+    const deps = buildDeps();
+    if (!(await firestoreOwnerReady(deps)))
+      return c.json({ error: 'Firestore agent is unavailable' }, 503);
+
+    const outcome = await deps.router.generate('draft', {
+      system: 'This is a bounded internal connectivity probe. Reply with exactly PROBE_OK.',
+      prompt: 'Reply with exactly PROBE_OK.',
+      temperature: 0,
+      maxOutputTokens: 16,
+      maxEstimatedCostUsd: 0.005,
+      abortSignal: AbortSignal.timeout(8_000),
+    });
+    if (!outcome.ok) return c.json({ error: 'model probe blocked' }, 503);
+    return c.json({
+      ok: true,
+      matched: outcome.text.trim() === 'PROBE_OK',
+      modelId: outcome.modelId,
+    });
+  } catch {
+    // Provider and IAM errors may contain request metadata; keep them in
+    // protected service diagnostics, never in this endpoint response.
+    console.error('Vertex model probe failed');
+    return c.json({ error: 'model probe failed' }, 502);
+  }
 });
 
 internal.post('/sweep', async (c) => {

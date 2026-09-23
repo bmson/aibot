@@ -290,6 +290,8 @@ const ConfigSchema = z.object({
   TRACES_BUCKET: z.string().default(''),
   /** Explicit opt-in: canaries perform real provider side effects. */
   CANARY_ENABLED: booleanString,
+  /** Explicit rehearsal-only opt-in: permits the authenticated, task-free Vertex probe. */
+  VERTEX_MODEL_PROBE_ENABLED: booleanString,
   CANARY_MAX_COST_USD: z.coerce.number().min(0.01).max(0.1).default(0.03),
   CHAT_RECALL_ENABLED: booleanString,
   /** Evidence-grounded native card composition in final responses. */
@@ -393,6 +395,8 @@ export function validateAgentPersistenceConfig(
   if (config.QUEUE_DRIVER !== 'local')
     problems.push('QUEUE_DRIVER=local is required in Firestore agent mode');
   if (config.CANARY_ENABLED) problems.push('CANARY_ENABLED must be false in Firestore agent mode');
+  if (config.VERTEX_MODEL_PROBE_ENABLED && config.LLM_PROVIDER !== 'vertex')
+    problems.push('VERTEX_MODEL_PROBE_ENABLED requires LLM_PROVIDER=vertex');
   if (config.LOCATION_PING_SECRET)
     problems.push('LOCATION_PING_SECRET must be empty in Firestore agent mode');
   return problems;
