@@ -96,6 +96,7 @@ export async function getFirestorePersonTemporalDetails(
       !(row.createdAt instanceof Date) ||
       (row.validFrom !== null && !(row.validFrom instanceof Date)) ||
       (row.expiresAt !== null && !(row.expiresAt instanceof Date)) ||
+      typeof row.quarantined !== 'boolean' ||
       typeof row.content !== 'string' ||
       typeof row.kind !== 'string' ||
       typeof row.originTrust !== 'string'

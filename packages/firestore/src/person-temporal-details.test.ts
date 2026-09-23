@@ -151,6 +151,17 @@ describe.skipIf(!localEmulator)('Firestore person temporal details', () => {
       expect(await getFirestorePersonTemporalDetails(store, agentId, id, now)).toBeNull();
   });
 
+  it('fails closed on a malformed experience quarantine flag', async () => {
+    await store.doc('memories', 'malformed').set(experience('malformed', { quarantined: null }));
+    try {
+      await expect(
+        getFirestorePersonTemporalDetails(store, agentId, contactId, now),
+      ).rejects.toThrow('malformed experience');
+    } finally {
+      await store.doc('memories', 'malformed').delete();
+    }
+  });
+
   it('requires the one configured agent and respects privacy erasure', async () => {
     await expect(
       getFirestorePersonTemporalDetails(store, foreignAgentId, contactId, now),
