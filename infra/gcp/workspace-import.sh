@@ -39,6 +39,7 @@ WORKSPACE_ID="${WORKSPACE_ID:-assistant}"
 }
 
 image="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/migrate:${SHA}"
+IMPORT_SERVICE_ACCOUNT="assistant-workspace-import@${PROJECT}.iam.gserviceaccount.com"
 deployed_image="$(gcloud run jobs describe assistant-migrate --project "$PROJECT" --region "$REGION" --format=json |
   node -e '
     const fs = require("node:fs");
@@ -70,7 +71,7 @@ node -e '
 
 job_args=(
   --project "$PROJECT" --region "$REGION" --image "$image"
-  --service-account "assistant-agent@${PROJECT}.iam.gserviceaccount.com"
+  --service-account "$IMPORT_SERVICE_ACCOUNT"
   --command pnpm '--args=--filter,@assistant/firestore,workspace-import-job'
   --env-vars-file "$env_file"
   --memory 4Gi --cpu 2 --task-timeout 7200 --max-retries 0 --quiet
