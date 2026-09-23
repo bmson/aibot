@@ -127,6 +127,9 @@ function fakeRunner(
   return {
     async run(command, args) {
       log.push([command, ...args].join(' '));
+      if (command === 'terraform' && args[0] === 'version') {
+        return { ok: true, stdout: '{"terraform_version":"1.14.5"}', stderr: '' };
+      }
       if (command === 'gcloud' && args[0] === 'projects') {
         return {
           ok: true,
@@ -212,6 +215,41 @@ function fakeRunner(
 }
 
 describe('consumer installation', () => {
+  it('checks Terraform compatibility before creating customer resources', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-terraform-version-'));
+    const archive = join(dir, 'release.tar.gz');
+    const state = join(dir, 'state.json');
+    await foundationArchive(archive);
+    const log: string[] = [];
+    const runner = fakeRunner(log);
+    const baseRun = runner.run.bind(runner);
+    runner.run = (command, args) =>
+      command === 'terraform' && args[0] === 'version'
+        ? Promise.resolve({
+            ok: true,
+            stdout: '{"terraform_version":"1.5.7"}',
+            stderr: '',
+          })
+        : baseRun(command, args);
+
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          manifest: manifest(await sha256File(archive)),
+          archivePath: archive,
+          statePath: state,
+          terraformDir: 'infra/gcp/consumer/terraform',
+          stateBucket: 'customer-project-consumer-install-state',
+          apply: true,
+        },
+      ),
+    ).rejects.toThrow('Terraform 1.5.7 is too old');
+    expect(log.some((entry) => entry.includes('storage buckets create'))).toBe(false);
+    expect(log.some((entry) => entry.startsWith('terraform -chdir='))).toBe(false);
+    await expect(readFile(state)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it.each([
     {
       name: 'disabled billing',
@@ -1079,7 +1117,7 @@ describe('consumer installation', () => {
         ),
       ).rejects.toThrow('project, location, or access protection differs');
       expect(
-        log.some((entry) => entry.startsWith('terraform') || entry.includes('storage cp')),
+        log.some((entry) => entry.startsWith('terraform -chdir=') || entry.includes('storage cp')),
       ).toBe(false);
     },
   );

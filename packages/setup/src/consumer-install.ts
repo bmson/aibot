@@ -72,6 +72,40 @@ function jsonOutput(result: CommandResult, description: string): unknown {
   }
 }
 
+const minimumTerraformVersion = [1, 6, 0] as const;
+
+async function verifyTerraformVersion(runner: CommandRunner): Promise<void> {
+  const result = await runner.run('terraform', ['version', '-json']);
+  if (!result.ok)
+    throw new Error(
+      'Terraform is required before provisioning. Install Terraform 1.6.0 or newer and ensure it is on PATH.',
+    );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    throw new Error('Terraform returned invalid version JSON; install Terraform 1.6.0 or newer.');
+  }
+  const version =
+    parsed && typeof parsed === 'object' && 'terraform_version' in parsed
+      ? (parsed as { terraform_version?: unknown }).terraform_version
+      : undefined;
+  const match =
+    typeof version === 'string' ? /^(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z.-]+)?$/.exec(version) : null;
+  if (!match)
+    throw new Error('Could not determine the Terraform version; install Terraform 1.6.0 or newer.');
+  const actual = [Number(match[1]), Number(match[2]), Number(match[3])] as const;
+  const tooOld =
+    actual[0] < minimumTerraformVersion[0] ||
+    (actual[0] === minimumTerraformVersion[0] &&
+      (actual[1] < minimumTerraformVersion[1] ||
+        (actual[1] === minimumTerraformVersion[1] && actual[2] < minimumTerraformVersion[2])));
+  if (tooOld)
+    throw new Error(
+      `Terraform ${version} is too old; this installer requires Terraform 1.6.0 or newer.`,
+    );
+}
+
 function hasDatabase(databases: unknown, databaseId: string): boolean {
   if (!Array.isArray(databases)) throw new Error('Firestore database list returned malformed JSON');
   return databases.some((entry) => {
@@ -974,6 +1008,14 @@ export async function provisionConsumerInstallation(
         : 'Validated archive and project for the persisted foundation stage. No resources were changed.',
     };
   }
+
+  const terraformWillRun =
+    current.stage.current === 'previewed' ||
+    current.stage.current === 'authorized' ||
+    current.stage.current === 'bootstrapped' ||
+    (runtime !== null && current.stage.current === 'provisioned') ||
+    (options.ownerAccessCallback !== undefined && current.stage.current === 'initialized');
+  if (terraformWillRun) await verifyTerraformVersion(terraformRunner);
 
   if (current.stage.current === 'previewed') {
     const previous = current;
