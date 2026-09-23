@@ -111,7 +111,7 @@ describe.skipIf(!localEmulator)('Firestore owner Memory hub page with PostgreSQL
     expect(proxy(request('/profile/memories', 'POST')).status).toBe(503);
     expect(proxy(request('/profile/knowledge')).status).toBe(503);
     expect(proxy(request('/profile')).status).toBe(503);
-    expect(proxy(request('/profile/about')).status).toBe(503);
+    expect(proxy(request('/profile/about')).status).toBe(200);
   });
 
   it('renders only configured-owner memory and feedback through the page', async () => {
@@ -119,6 +119,7 @@ describe.skipIf(!localEmulator)('Firestore owner Memory hub page with PostgreSQL
     const html = renderToStaticMarkup(element);
     expect(auth.owner).toHaveBeenCalled();
     expect(html).toContain('What I remember');
+    expect(html).toContain('href="/profile/about"');
     expect(html).toContain('Private held fact');
     expect(html).toContain('1 fact about you');
     expect(html).toContain('1/1');

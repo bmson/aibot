@@ -95,7 +95,13 @@ function SkillForm({
   );
 }
 
-export function SkillsPanel({ skills }: { skills: SkillView[] }) {
+export function SkillsPanel({
+  skills,
+  readOnly = false,
+}: {
+  skills: SkillView[];
+  readOnly?: boolean;
+}) {
   const [pending, startTransition] = useTransition();
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -115,14 +121,14 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
     <section className="mt-8">
       <div className="flex items-center justify-between gap-2">
         <SectionHeading title="Skills" count={skills.length} />
-        {!adding ? (
+        {!readOnly && !adding ? (
           <button type="button" onClick={() => setAdding(true)} className={btn.outline}>
             Add skill
           </button>
         ) : null}
       </div>
 
-      {adding ? (
+      {!readOnly && adding ? (
         <div className={`${cardShellClass} mt-3 p-4`}>
           <SkillForm
             submitting={pending}
@@ -145,8 +151,9 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
 
       {skills.length === 0 && !adding ? (
         <EmptyState icon={<Lightbulb className="size-5" aria-hidden="true" />}>
-          No skills yet — the assistant drafts these from tasks it solves a non-obvious way, and you
-          can add your own.
+          {readOnly
+            ? 'No skills yet — the assistant drafts these from tasks it solves a non-obvious way.'
+            : 'No skills yet — the assistant drafts these from tasks it solves a non-obvious way, and you can add your own.'}
         </EmptyState>
       ) : (
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
@@ -155,7 +162,7 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
               key={s.id}
               className={`${cardShellClass} flex h-full flex-col ${s.deprecated ? 'opacity-60' : ''}`}
             >
-              {editingId === s.id ? (
+              {!readOnly && editingId === s.id ? (
                 <div className={cardBodyClass}>
                   <SkillForm
                     initial={s}
@@ -233,66 +240,68 @@ export function SkillsPanel({ skills }: { skills: SkillView[] }) {
                         >
                           {s.failureCount} failed
                         </span>,
-                        `Added ${s.createdLabel}`,
+                        s.createdLabel,
                       ]}
                     />
                   </div>
-                  <footer className={cardFooterClass}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingId(s.id);
-                        setError(null);
-                      }}
-                      className={btn.outline}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() =>
-                        startTransition(() => toggleSkillDeprecatedAction(s.id, !s.deprecated))
-                      }
-                      className={btn.outline}
-                    >
-                      {s.deprecated ? 'Restore' : 'Retire'}
-                    </button>
-                    {confirmingDeleteId === s.id ? (
-                      <>
-                        <button
-                          type="button"
-                          disabled={pending}
-                          onClick={() =>
-                            startTransition(async () => {
-                              await deleteSkillAction(s.id);
-                              setConfirmingDeleteId(null);
-                            })
-                          }
-                          className={btn.danger}
-                        >
-                          {pending ? 'Deleting…' : 'Confirm delete'}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={pending}
-                          onClick={() => setConfirmingDeleteId(null)}
-                          className={btn.outline}
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
+                  {!readOnly ? (
+                    <footer className={cardFooterClass}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(s.id);
+                          setError(null);
+                        }}
+                        className={btn.outline}
+                      >
+                        Edit
+                      </button>
                       <button
                         type="button"
                         disabled={pending}
-                        onClick={() => setConfirmingDeleteId(s.id)}
-                        className={btn.dangerOutline}
+                        onClick={() =>
+                          startTransition(() => toggleSkillDeprecatedAction(s.id, !s.deprecated))
+                        }
+                        className={btn.outline}
                       >
-                        Delete
+                        {s.deprecated ? 'Restore' : 'Retire'}
                       </button>
-                    )}
-                  </footer>
+                      {confirmingDeleteId === s.id ? (
+                        <>
+                          <button
+                            type="button"
+                            disabled={pending}
+                            onClick={() =>
+                              startTransition(async () => {
+                                await deleteSkillAction(s.id);
+                                setConfirmingDeleteId(null);
+                              })
+                            }
+                            className={btn.danger}
+                          >
+                            {pending ? 'Deleting…' : 'Confirm delete'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={pending}
+                            onClick={() => setConfirmingDeleteId(null)}
+                            className={btn.outline}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={pending}
+                          onClick={() => setConfirmingDeleteId(s.id)}
+                          className={btn.dangerOutline}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </footer>
+                  ) : null}
                 </>
               )}
             </article>
