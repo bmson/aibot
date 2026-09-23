@@ -27,7 +27,6 @@ function isTerminalArchiveCandidate(
   if (
     task.agentId !== agentId ||
     typeof task.id !== 'string' ||
-    task.id !== document.id ||
     documentKey(task.id) !== document.id ||
     typeof task.status !== 'string' ||
     !(
@@ -119,9 +118,7 @@ export class FirestoreTaskActivityCommandRepository implements TaskActivityComma
           !erasure.updateTime)
       )
         throw new Error('Privacy erasure is in progress');
-      const current = await Promise.all(
-        candidates.map((document) => tx.get(this.store.doc('tasks', document.id))),
-      );
+      const current = await Promise.all(candidates.map((document) => tx.get(document.ref)));
       for (let index = 0; index < current.length; index += 1) {
         const snapshot = current[index];
         const candidate = candidates[index];

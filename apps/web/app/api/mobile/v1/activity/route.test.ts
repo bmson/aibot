@@ -182,13 +182,15 @@ describe.skipIf(!localEmulator)('Firestore mobile Activity GET with PostgreSQL o
     );
     expect(response.status).toBe(200);
     const archived = await Promise.all(
-      ['old-done', 'old-failed', 'old-cancelled'].map((id) => store.doc('tasks', id).get()),
+      ['old-done', 'old-failed', 'old-cancelled'].map(async (id) => ({
+        id,
+        snapshot: await store.doc('tasks', id).get(),
+      })),
     );
-    for (const taskSnapshot of archived) {
-      expect(taskSnapshot.get('archivedAt')).toBeInstanceOf(Date);
-      expect(taskSnapshot.get('updatedAt').toDate().getTime()).toBe(
-        taskSnapshot.get('archivedAt').toDate().getTime(),
-      );
+    for (const { id, snapshot } of archived) {
+      const archivedAt = snapshot.get('archivedAt').toDate();
+      expect(archivedAt, id).toBeInstanceOf(Date);
+      expect(snapshot.get('updatedAt').toDate().getTime()).toBe(archivedAt.getTime());
     }
     for (const id of ['old-running', 'recent-done', 'old-foreign']) {
       expect((await store.doc('tasks', id).get()).get('archivedAt')).toBeNull();
