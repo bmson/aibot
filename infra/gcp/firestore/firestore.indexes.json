@@ -686,6 +686,14 @@
       "collectionGroup": "schedules",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "name", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "schedules",
+      "queryScope": "COLLECTION",
+      "fields": [
         {
           "fieldPath": "enabled",
           "order": "ASCENDING"
