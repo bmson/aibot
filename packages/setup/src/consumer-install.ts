@@ -463,6 +463,7 @@ type RuntimeInput = {
     authSecretVersion: number;
     googleClientIdVersion: number;
     googleClientSecretVersion: number;
+    mobileApiTokenVersion?: number;
   };
   fingerprint: string;
 };
@@ -541,6 +542,7 @@ function validateRuntimeInput(
     'authSecretVersion',
     'googleClientIdVersion',
     'googleClientSecretVersion',
+    'mobileApiTokenVersion',
   ]);
   const space = record(config.firestoreEmbeddingSpace, 'Embedding space', [
     'provider',
@@ -575,6 +577,12 @@ function validateRuntimeInput(
     if (!Number.isSafeInteger(config[key]) || (config[key] as number) < 1)
       throw new Error(`Runtime config requires a positive numbered ${key}`);
   }
+  if (
+    config.mobileApiTokenVersion !== undefined &&
+    (!Number.isSafeInteger(config.mobileApiTokenVersion) ||
+      (config.mobileApiTokenVersion as number) < 1)
+  )
+    throw new Error('Runtime config requires a positive numbered mobileApiTokenVersion');
   const [webDigest, agentDigest] = digests;
   if (!webDigest || !agentDigest) throw new Error('Image manifest requires web and agent images');
   const normalized = { webDigest, agentDigest, config: config as RuntimeInput['config'] };
@@ -627,6 +635,9 @@ async function verifyRuntimePrerequisites(
     ['auth-secret', input.config.authSecretVersion],
     ['google-client-id', input.config.googleClientIdVersion],
     ['google-client-secret', input.config.googleClientSecretVersion],
+    ...(input.config.mobileApiTokenVersion === undefined
+      ? []
+      : ([['mobile-api-token', input.config.mobileApiTokenVersion]] as const)),
   ] as const) {
     const result = await runRuntimeCheck(
       runner,
@@ -658,6 +669,8 @@ function runtimeVars(input: RuntimeInput): string[] {
     google_client_id_version: String(input.config.googleClientIdVersion),
     google_client_secret_version: String(input.config.googleClientSecretVersion),
   };
+  if (input.config.mobileApiTokenVersion !== undefined)
+    vars.mobile_api_token_version = String(input.config.mobileApiTokenVersion);
   return Object.entries(vars).flatMap(([key, value]) => ['-var', `${key}=${value}`]);
 }
 

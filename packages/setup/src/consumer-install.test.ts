@@ -248,14 +248,24 @@ describe('consumer installation', () => {
     let agentIamDisabled = false;
     let broadPlan = false;
     let secretEnabled = true;
+    let mobileSecretEnabled = true;
+    const secretLookups: string[] = [];
     const baseRun = runner.run.bind(runner);
     runner.run = async (command, args) => {
-      if (command === 'gcloud' && args[0] === 'secrets')
+      if (command === 'gcloud' && args[0] === 'secrets') {
+        secretLookups.push(args.join(' '));
         return {
           ok: true,
-          stdout: JSON.stringify({ state: secretEnabled ? 'ENABLED' : 'DISABLED' }),
+          stdout: JSON.stringify({
+            state:
+              secretEnabled &&
+              (!args.some((arg) => arg.includes('mobile-api-token')) || mobileSecretEnabled)
+                ? 'ENABLED'
+                : 'DISABLED',
+          }),
           stderr: '',
         };
+      }
       if (command === 'gcloud' && args[0] === 'run' && args[2] === 'get-iam-policy') {
         const publicWeb =
           args[3]?.endsWith('-web') &&
@@ -375,11 +385,20 @@ describe('consumer installation', () => {
     };
     const foundation = await provisionConsumerInstallation({ runner }, options);
     expect(foundation.manifest.stage.current).toBe('provisioned');
-    const runtime = { images: runtimeImages, config: runtimeConfig };
+    const runtime = {
+      images: runtimeImages,
+      config: { ...runtimeConfig, mobileApiTokenVersion: 4 },
+    };
     const result = await provisionConsumerInstallation({ runner }, { ...options, runtime });
     expect(result.manifest.stage.current).toBe('initialized');
     expect(result.runtimeReady).toBe(false);
     expect(result.pending).toEqual(['ready']);
+    expect(
+      secretLookups.some((entry) =>
+        entry.includes('secrets versions describe 4 --secret=consumer-install-mobile-api-token'),
+      ),
+    ).toBe(true);
+    expect(logs.some((entry) => entry.includes('mobile_api_token_version=4'))).toBe(true);
     expect(
       logs.filter((entry) => entry.includes('terraform') && entry.includes('apply')).length,
     ).toBe(2);
@@ -397,6 +416,14 @@ describe('consumer installation', () => {
       ),
     ).rejects.toThrow('secret version must be enabled');
     secretEnabled = true;
+    mobileSecretEnabled = false;
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        { ...options, runtime, ownerAccessCallback: callback, apply: false },
+      ),
+    ).rejects.toThrow('mobile-api-token secret version must be enabled');
+    mobileSecretEnabled = true;
     await expect(
       provisionConsumerInstallation(
         { runner },
@@ -499,7 +526,41 @@ describe('consumer installation', () => {
         },
       ),
     ).rejects.toThrow('differs from the initialized checkpoint');
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        { ...options, runtime: { images: runtimeImages, config: runtimeConfig } },
+      ),
+    ).rejects.toThrow('differs from the initialized checkpoint');
   });
+
+  it.each([0, 1.5, 'latest', null])(
+    'rejects a non-numbered mobile secret version %s before cloud access',
+    async (mobileApiTokenVersion) => {
+      const dir = await mkdtemp(join(tmpdir(), 'assistant-mobile-token-validation-'));
+      const archive = join(dir, 'release.tar.gz');
+      await foundationArchive(archive);
+      const log: string[] = [];
+      await expect(
+        provisionConsumerInstallation(
+          { runner: fakeRunner(log) },
+          {
+            manifest: manifest(await sha256File(archive)),
+            archivePath: archive,
+            statePath: join(dir, 'state.json'),
+            terraformDir: 'infra/gcp/consumer/terraform',
+            stateBucket: 'customer-project-consumer-install-state',
+            apply: false,
+            runtime: {
+              images: runtimeImages,
+              config: { ...runtimeConfig, mobileApiTokenVersion },
+            },
+          },
+        ),
+      ).rejects.toThrow('positive numbered mobileApiTokenVersion');
+      expect(log).toHaveLength(0);
+    },
+  );
 
   it('rejects image manifests for another customer before cloud access', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-runtime-'));
