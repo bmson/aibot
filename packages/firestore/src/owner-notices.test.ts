@@ -98,4 +98,56 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore owner dashboard
     await expect(notices.post({ text: 'blocked' })).rejects.toThrow('Privacy erasure');
     expect((await store.collection('messages').get()).size).toBe(1);
   });
+
+  it('writes owner.notify into its task chat without opening SQL', async () => {
+    const conversationId = randomUUID();
+    const taskId = randomUUID();
+    await Promise.all([
+      store.doc('conversations', conversationId).set({
+        id: conversationId,
+        agentId,
+        channel: 'chat',
+        isPrimary: false,
+        archivedAt: null,
+      }),
+      store.doc('tasks', taskId).set({ id: taskId, agentId, conversationId }),
+    ]);
+    expect(await notices.postToolNotice({ text: 'Reminder text', taskId, conversationId })).toEqual(
+      {
+        conversationId,
+      },
+    );
+    const messages = await store
+      .collection('messages')
+      .where('conversationId', '==', conversationId)
+      .get();
+    expect(messages.size).toBe(1);
+    expect(messages.docs[0]?.data()).toMatchObject({
+      taskId,
+      role: 'assistant',
+      origin: 'assistant',
+      text: 'Reminder text',
+      parts: [{ type: 'text', text: 'Reminder text' }],
+    });
+  });
+
+  it('uses Notifications without a task chat and refuses foreign ownership or erasure', async () => {
+    const taskId = randomUUID();
+    await store.doc('tasks', taskId).set({ id: taskId, agentId, conversationId: null });
+    const first = await notices.postToolNotice({ text: 'Time to check back', taskId });
+    const second = await notices.postToolNotice({ text: 'Another check', taskId });
+    expect(first.conversationId).toBe(second.conversationId);
+    expect((await store.collection('messages').get()).size).toBe(2);
+
+    const foreignTask = randomUUID();
+    await store.doc('tasks', foreignTask).set({ id: foreignTask, agentId: randomUUID() });
+    await expect(notices.postToolNotice({ text: 'No', taskId: foreignTask })).rejects.toThrow(
+      'outside the configured installation',
+    );
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+    await expect(notices.postToolNotice({ text: 'Blocked', taskId })).rejects.toThrow(
+      'Privacy erasure',
+    );
+    expect((await store.collection('messages').get()).size).toBe(2);
+  });
 });
