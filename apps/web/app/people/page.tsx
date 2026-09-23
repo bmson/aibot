@@ -1,11 +1,15 @@
 import { listPeopleDirectory, type PersonSummary } from '@assistant/application/people';
 import {
   birthdayLabel,
+  derivePersonGroup,
   lastContactLabel,
   PERSON_GROUP_LABELS,
   PERSON_GROUPS,
   type PersonGroup,
 } from '@assistant/application/people-presentation';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { createInstallationStore, getFirestorePeopleDirectory } from '@assistant/firestore';
+import type { ProfileContact } from '@assistant/persistence';
 import { CalendarDays, MapPin, Search } from 'lucide-react';
 import Link from 'next/link';
 import { AddPerson } from '@/app/people/add-person';
@@ -39,6 +43,108 @@ function matches(person: PersonSummary, query: string): boolean {
   );
 }
 
+function ReadOnlyPeopleDirectory({
+  contacts,
+  query,
+}: {
+  contacts: ProfileContact[];
+  query: string;
+}) {
+  const needle = query.toLocaleLowerCase();
+  const shown = contacts.filter(
+    (contact) =>
+      !needle ||
+      contact.name.toLocaleLowerCase().includes(needle) ||
+      contact.relationship.toLocaleLowerCase().includes(needle),
+  );
+  const groups = PERSON_GROUPS.map((group) => ({
+    group,
+    contacts: shown.filter((contact) => derivePersonGroup(contact) === group),
+  })).filter((section) => section.contacts.length > 0);
+
+  return (
+    <PageShell size="reading">
+      <PageHeader
+        back={{ href: '/chat', label: 'Chat' }}
+        title="People"
+        intro="Names and relationships saved in this assistant's contacts."
+      />
+      <section className="mt-8">
+        <SectionHeading
+          title={query ? `Matching “${query}”` : 'Everyone'}
+          count={contacts.length}
+          hint={query ? `${shown.length} shown` : undefined}
+        />
+        <form method="get" className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
+          <label htmlFor="people-search" className="sr-only">
+            Search people
+          </label>
+          <span className="relative min-w-0 flex-1">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"
+              aria-hidden="true"
+            />
+            <input
+              id="people-search"
+              name="q"
+              defaultValue={query}
+              placeholder="Name or relationship"
+              className={`${inputClass} pl-9`}
+            />
+          </span>
+          <button type="submit" className={btn.outline}>
+            Search
+          </button>
+          {query ? (
+            <Link href="/people" className={btn.outline}>
+              Clear
+            </Link>
+          ) : null}
+        </form>
+        {contacts.length === 0 ? (
+          <EmptyState>No people are saved yet.</EmptyState>
+        ) : shown.length === 0 ? (
+          <EmptyState>Nobody matches “{query}”.</EmptyState>
+        ) : (
+          <div className="mt-6 flex flex-col gap-8">
+            {groups.map((section) => (
+              <div key={section.group}>
+                <SectionHeading
+                  title={PERSON_GROUP_LABELS[section.group]}
+                  count={section.contacts.length}
+                />
+                <ul className="mt-3 flex flex-col gap-2">
+                  {section.contacts.map((contact) => (
+                    <li
+                      key={contact.id}
+                      className="flex min-w-0 items-center gap-3 rounded-xl bg-raised p-3.5 ring-1 ring-edge/60"
+                    >
+                      <PersonAvatar name={contact.name} />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-sm font-medium text-strong">
+                            {contact.name}
+                          </span>
+                          {contact.trust === 'unknown' ? (
+                            <Badge tone="amber" size="xs">
+                              Unverified
+                            </Badge>
+                          ) : null}
+                        </span>
+                        <MetaLine segments={[contact.relationship || 'Relationship not set']} />
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </PageShell>
+  );
+}
+
 export default async function PeoplePage({
   searchParams,
 }: {
@@ -47,6 +153,22 @@ export default async function PeoplePage({
   await requireOwner();
   const { q } = await searchParams;
   const query = (q ?? '').trim();
+
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    const store = createInstallationStore({
+      projectId: config.GCP_PROJECT,
+      installationId: config.ASSISTANT_WORKSPACE_ID,
+    });
+    try {
+      const contacts = await getFirestorePeopleDirectory(store, config.FIRESTORE_AGENT_ID);
+      return <ReadOnlyPeopleDirectory contacts={contacts} query={query} />;
+    } finally {
+      await store.db.terminate();
+    }
+  }
 
   const db = getDb();
   const now = new Date();

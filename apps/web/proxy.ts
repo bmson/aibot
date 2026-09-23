@@ -18,6 +18,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/health' && request.method === 'GET') ||
     (path === '/' && request.method === 'GET') ||
     (path === '/profile/memories' && request.method === 'GET') ||
+    (path === '/people' && request.method === 'GET') ||
     (path === '/profile/data' && request.method === 'GET') ||
     (path === '/api/profile-export' && request.method === 'GET') ||
     (path === '/settings' && request.method === 'GET') ||
