@@ -35,6 +35,14 @@
       ]
     },
     {
+      "collectionGroup": "knowledgeGraphEntities",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "contactId", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "importSources",
       "queryScope": "COLLECTION",
       "fields": [
