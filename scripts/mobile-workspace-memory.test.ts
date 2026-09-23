@@ -88,6 +88,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       const sampleId = randomUUID();
       batch.set(store.doc('writingSamples', sampleId), {
         id: sampleId,
+        agentId,
         context: 'upload:sample',
       });
       batch.set(store.doc('ownerCards', agentId), {
