@@ -12,7 +12,7 @@ import {
 import { ConfirmButton } from '@/lib/ui-client';
 
 /** Owner controls for the data that actually enters recall and voice rewriting. */
-export function PrivacyControls() {
+export function PrivacyControls({ readOnly = false }: { readOnly?: boolean }) {
   return (
     <section className={`${cardShellClass} mt-6`}>
       <div className={cardBodyClass}>
@@ -30,20 +30,24 @@ export function PrivacyControls() {
         <a href="/api/profile-export" className={btn.outline}>
           Download memory export
         </a>
-        <form action={forgetLongTermMemoryAction}>
-          <ConfirmButton
-            confirmLabel="Erase memory & voice"
-            pendingLabel="Erasing…"
-            title="Permanently delete saved facts, graph projections, voice samples, and the learned voice profile"
-          >
-            Forget long-term memory
-          </ConfirmButton>
-        </form>
+        {!readOnly ? (
+          <form action={forgetLongTermMemoryAction}>
+            <ConfirmButton
+              confirmLabel="Erase memory & voice"
+              pendingLabel="Erasing…"
+              title="Permanently delete saved facts, graph projections, voice samples, and the learned voice profile"
+            >
+              Forget long-term memory
+            </ConfirmButton>
+          </form>
+        ) : null}
       </footer>
-      <p className="px-5 pb-5 text-xs leading-5 text-muted">
-        Erasure preserves only anonymous content hashes to prevent forgotten facts from being
-        re-ingested. Chats, goals, people records, and connected accounts are left intact.
-      </p>
+      {!readOnly ? (
+        <p className="px-5 pb-5 text-xs leading-5 text-muted">
+          Erasure preserves only anonymous content hashes to prevent forgotten facts from being
+          re-ingested. Chats, goals, people records, and connected accounts are left intact.
+        </p>
+      ) : null}
     </section>
   );
 }

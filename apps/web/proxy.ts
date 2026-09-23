@@ -18,6 +18,8 @@ export function proxy(request: NextRequest) {
     (path === '/api/health' && request.method === 'GET') ||
     (path === '/' && request.method === 'GET') ||
     (path === '/profile/memories' && request.method === 'GET') ||
+    (path === '/profile/data' && request.method === 'GET') ||
+    (path === '/api/profile-export' && request.method === 'GET') ||
     (chatPage && (request.method === 'GET' || request.method === 'POST')) ||
     (['/icon.svg', '/apple-icon.png', '/favicon.ico', '/manifest.webmanifest'].includes(path) &&
       request.method === 'GET') ||
