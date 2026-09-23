@@ -51,6 +51,10 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/memory/profile' && request.method === 'GET') ||
     (path === '/api/card-image' && request.method === 'GET') ||
     (path === '/api/mobile/v1/cards' && request.method === 'GET') ||
+    (/^\/api\/mobile\/v1\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/library' && request.method === 'GET') ||
     (path === '/api/mobile/v1/people' && request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/commitments' && request.method === 'GET') ||

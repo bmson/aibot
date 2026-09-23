@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PersonDossier, PersonSummary } from './people.js';
-import { toPersonCardView, toPersonSummaryView } from './people-view.js';
+import { toPersonCardView, toPersonCardViewFromParts, toPersonSummaryView } from './people-view.js';
 
 const NOW = new Date('2026-09-02T12:00:00.000Z');
 
@@ -84,6 +84,24 @@ describe('toPersonSummaryView', () => {
 });
 
 describe('toPersonCardView', () => {
+  it('uses the same card projection for stored and SQL dossier parts', () => {
+    const source = dossier({
+      upcomingOccasion: { kind: 'birthday', label: '', daysUntil: 6, month: 9, day: 8 },
+    });
+    const stored = toPersonCardViewFromParts(
+      {
+        summary: summary({ birthday: null, lastContactAt: null }),
+        origins: source.origins,
+        relations: source.relations,
+        connections: source.connections,
+        events: source.events,
+        upcomingOccasion: source.upcomingOccasion,
+      },
+      NOW,
+    );
+    expect(stored).toEqual(toPersonCardView(source, NOW));
+  });
+
   it('renders a relationship span through the same rules as the web', () => {
     const view = toPersonCardView(
       dossier({

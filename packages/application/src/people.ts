@@ -389,7 +389,15 @@ export async function getPersonDossier(
 }
 
 /** The soonest occasion already inside its own lead window, if any. */
-function nextOccasionWithinLead(rows: OccasionRow[], now: Date): UpcomingOccasionView | null {
+export function nextOccasionWithinLead(
+  rows: Array<
+    Pick<
+      OccasionRow,
+      'quarantined' | 'kind' | 'label' | 'month' | 'day' | 'year' | 'recurrence' | 'leadDays'
+    >
+  >,
+  now: Date,
+): UpcomingOccasionView | null {
   let soonest: UpcomingOccasionView | null = null;
   for (const row of rows) {
     if (row.quarantined) continue;
