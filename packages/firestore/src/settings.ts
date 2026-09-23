@@ -5,6 +5,7 @@ import type {
   SettingsRepository,
 } from '@assistant/persistence';
 import { Timestamp } from '@google-cloud/firestore';
+import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 const PAGE_SIZE = 500;
@@ -142,6 +143,23 @@ export class FirestoreSettingsRepository implements SettingsRepository {
   ): Promise<boolean> {
     const ref = this.store.doc('agents', agentId);
     return this.store.db.runTransaction(async (tx) => {
+      if (this.configuredAgentId) {
+        if (agentId !== this.configuredAgentId)
+          throw new Error('Settings update requires the configured agent');
+        const agents = await tx.get(this.store.collection('agents').limit(2));
+        if (
+          agents.size !== 1 ||
+          agents.docs[0]?.id !== ref.id ||
+          agents.docs[0]?.get('id') !== agentId
+        )
+          throw new Error('Settings update requires exactly one configured agent');
+        const erasure = await tx.get(this.store.doc('privacyErasureJobs', agentId));
+        if (
+          erasure.exists &&
+          (erasure.get('agentId') !== agentId || privacyErasureIsActive(erasure.get('status')))
+        )
+          throw new Error('Privacy erasure is in progress');
+      }
       const owner = await tx.get(ref);
       if (!owner.exists || owner.get('id') !== agentId) return false;
       tx.update(ref, { ...input, updatedAt: this.store.now() });

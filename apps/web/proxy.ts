@@ -58,6 +58,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/memory/library' && request.method === 'GET') ||
     (path === '/api/mobile/v1/people' && request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/commitments' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/settings' && request.method === 'PATCH') ||
     (path === '/api/mobile/v1/chats' && request.method === 'POST') ||
     (chatIdPath.test(path) && ['GET', 'POST'].includes(request.method)) ||
     (chatMessagePath.test(path) && request.method === 'POST')
