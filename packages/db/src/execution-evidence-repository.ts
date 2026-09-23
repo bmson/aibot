@@ -1,6 +1,6 @@
 import type { ExecutionEvidenceRepository, ResponseCheckInput } from '@assistant/persistence';
 import { evidenceLimit } from '@assistant/persistence';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { approvals, conversations, messages, responseChecks, tasks, toolCalls } from './schema.js';
 
@@ -71,6 +71,22 @@ export function createPostgresExecutionEvidenceRepository(db: Db): ExecutionEvid
       const rows = max === undefined ? await query : await query.limit(max + 1);
       const values = rows.map(({ toolCall }) => evidence(toolCall));
       return max === undefined ? values : bounded(values, max);
+    },
+    async hasConversationToolCall({ agentId, conversationId, toolName, documentId }) {
+      const [match] = await db
+        .select({ id: toolCalls.id })
+        .from(toolCalls)
+        .innerJoin(tasks, eq(toolCalls.taskId, tasks.id))
+        .where(
+          and(
+            eq(tasks.agentId, agentId),
+            eq(tasks.conversationId, conversationId),
+            eq(toolCalls.toolName, toolName),
+            sql`${toolCalls.args}->>'documentId' = ${documentId}`,
+          ),
+        )
+        .limit(1);
+      return Boolean(match);
     },
     async finalMessageExists({ agentId, taskId, conversationId, text }) {
       const [task] = await db

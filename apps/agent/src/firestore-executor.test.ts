@@ -127,6 +127,80 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect((await store.doc('tasks', current.id).get()).get('status')).toBe('done');
     });
 
+    it('does not force a shared document read after a matching Firestore tool call', async () => {
+      const url = 'Please read https://docs.google.com/document/d/doc-1234567890/edit';
+      const previous = taskFixture({
+        id: 'prior-doc-turn',
+        agentId: 'agent',
+        conversationId: 'chat',
+        reminderId: '',
+      });
+      previous.type = 'chat_turn';
+      previous.status = 'done';
+      previous.createdAt = new Date(Date.now() - 60_000);
+      previous.trigger = { payload: { text: url } };
+      const current = taskFixture({
+        id: 'doc-followup-turn',
+        agentId: 'agent',
+        conversationId: 'chat',
+        reminderId: '',
+      });
+      current.type = 'chat_turn';
+      current.trigger = { payload: { text: url } };
+      current.plan = {
+        action: 'reply',
+        reasoning: 'Answer the owner about the supplied document.',
+        steps: [],
+        missingInfo: [],
+      };
+      current.state = TaskStateSchema.parse({
+        contextWindow: [{ role: 'user', content: url }],
+      });
+      await store.doc('agents', 'agent').set({ id: 'agent', name: 'Synthetic owner' });
+      await store.doc('tasks', previous.id).set(previous);
+      await store.doc('toolCalls', 'prior-doc-read').set({
+        id: 'prior-doc-read',
+        createdAt: previous.createdAt,
+        status: 'failed',
+        taskId: previous.id,
+        startedAt: previous.createdAt,
+        step: 1,
+        toolName: 'docs.get',
+        args: { documentId: 'doc-1234567890' },
+        risk: 'low',
+        idempotencyKey: null,
+        result: null,
+        error: 'permission denied',
+        approvalId: null,
+        decision: null,
+        finishedAt: previous.createdAt,
+      });
+      await store.doc('tasks', current.id).set(current);
+      const step = vi.fn().mockResolvedValue({
+        ok: true,
+        modelId: 'fixture-model',
+        degraded: false,
+        text: 'I can help with that document.',
+        toolCalls: [],
+      });
+      deps.router = {
+        step,
+        embed: vi.fn().mockResolvedValue([new Array(1536).fill(0)]),
+      } as unknown as ExecutorDeps['router'];
+      const dispatch = vi.fn();
+      deps.dispatcher = {
+        toolDefs: () => [],
+        resultIsUntrusted: () => false,
+        dispatch,
+        executeApproved: vi.fn(),
+      } as unknown as ExecutorDeps['dispatcher'];
+
+      const result = await executeTask(deps, current.id);
+      expect(result).toMatchObject({ outcome: 'done' });
+      expect(step).toHaveBeenCalledOnce();
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+
     it('reuses the persisted message after a definitive delivery rejection', async () => {
       const task = await pendingFinalTask();
       deps.deliverFinal = vi

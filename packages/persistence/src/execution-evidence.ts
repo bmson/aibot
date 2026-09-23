@@ -32,6 +32,12 @@ export type ExecutionEvidenceRepository = {
     excludeTaskId: string;
     maxRows?: number;
   }): Promise<ExecutionEvidenceRecord[]>;
+  hasConversationToolCall(input: {
+    agentId: string;
+    conversationId: string;
+    toolName: string;
+    documentId: string;
+  }): Promise<boolean>;
   finalMessageExists(input: {
     agentId: string;
     taskId: string;

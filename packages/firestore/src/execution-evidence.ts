@@ -144,6 +144,50 @@ export class FirestoreExecutionEvidenceRepository implements ExecutionEvidenceRe
       .map(evidence);
   }
 
+  async hasConversationToolCall({
+    agentId,
+    conversationId,
+    toolName,
+    documentId,
+  }: {
+    agentId: string;
+    conversationId: string;
+    toolName: string;
+    documentId: string;
+  }) {
+    const conversation = read<Records['conversations']>(
+      await this.store.doc('conversations', conversationId).get(),
+      conversationId,
+    );
+    if (!conversation || conversation.agentId !== agentId)
+      throw new Error('Execution evidence conversation is missing or outside the owner scope');
+
+    let callCursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+    for (;;) {
+      let query = this.store
+        .collection('toolCalls')
+        .where('toolName', '==', toolName)
+        .where('args.documentId', '==', documentId)
+        .orderBy(FieldPath.documentId())
+        .limit(100);
+      if (callCursor) query = query.startAfter(callCursor);
+      const callSnapshot = await query.get();
+      for (const callDoc of callSnapshot.docs) {
+        const call = read<Records['toolCalls']>({
+          exists: callDoc.exists,
+          data: () => callDoc.data(),
+        });
+        if (!call || documentKey(call.id) !== callDoc.id)
+          throw new Error('Execution evidence contains a corrupt tool-call identity');
+        const taskDoc = await this.store.doc('tasks', call.taskId).get();
+        const task = read<Records['tasks']>(taskDoc, call.taskId);
+        if (task?.agentId === agentId && task.conversationId === conversationId) return true;
+      }
+      if (callSnapshot.size < 100) return false;
+      callCursor = callSnapshot.docs.at(-1);
+    }
+  }
+
   async finalMessageExists({
     agentId,
     taskId,
