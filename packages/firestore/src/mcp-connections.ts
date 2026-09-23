@@ -8,16 +8,30 @@ import {
 } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
+type McpConnectionStatus = 'ready' | 'checking' | 'authorization_required' | 'error' | 'disabled';
+type McpConnectionTool = {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+};
+const MCP_CONNECTION_STATUSES: McpConnectionStatus[] = [
+  'ready',
+  'checking',
+  'authorization_required',
+  'error',
+  'disabled',
+];
+
 export interface McpConnectionSummary {
   id: string;
   name: string;
   endpoint: string;
-  status: string;
+  status: McpConnectionStatus;
   enabled: boolean;
   serverName: string | null;
   serverVersion: string | null;
   instructions: string | null;
-  tools: unknown;
+  tools: McpConnectionTool[];
   hasBearerToken: boolean;
   lastCheckedAt: Date | null;
   lastError: string | null;
@@ -63,17 +77,19 @@ export class FirestoreMcpConnectionReadRepository {
         typeof row.enabled !== 'boolean'
       )
         return [];
+      const status = row.enabled ? row.status : 'disabled';
+      if (!MCP_CONNECTION_STATUSES.includes(status as McpConnectionStatus)) return [];
       return [
         {
           id: row.id,
           name: row.name,
           endpoint: row.endpoint,
-          status: row.enabled ? row.status : 'disabled',
+          status: status as McpConnectionStatus,
           enabled: row.enabled,
           serverName: row.serverName,
           serverVersion: row.serverVersion,
           instructions: row.instructions,
-          tools: row.tools,
+          tools: safeTools(row.tools),
           hasBearerToken: row.bearerTokenEncrypted != null,
           lastCheckedAt: row.lastCheckedAt,
           lastError: row.lastError,
@@ -87,6 +103,26 @@ export class FirestoreMcpConnectionReadRepository {
 }
 
 const pendingDiscoveryError = 'MCP discovery is unavailable in Firestore mode.';
+
+function safeTools(value: unknown): McpConnectionTool[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((tool): McpConnectionTool[] => {
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return [];
+    const row = tool as Record<string, unknown>;
+    if (typeof row.name !== 'string') return [];
+    return [
+      {
+        name: row.name,
+        ...(typeof row.description === 'string' ? { description: row.description } : {}),
+        ...(row.inputSchema &&
+        typeof row.inputSchema === 'object' &&
+        !Array.isArray(row.inputSchema)
+          ? { inputSchema: row.inputSchema as Record<string, unknown> }
+          : {}),
+      },
+    ];
+  });
+}
 
 /** Firestore owner mutations. Discovery is deliberately left to a future safe network boundary. */
 export class FirestoreMcpConnectionMutationRepository {

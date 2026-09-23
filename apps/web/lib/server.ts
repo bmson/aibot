@@ -83,6 +83,7 @@ import {
   validateAgentPersistenceConfig,
 } from '@assistant/config';
 import { encodeMessageCursor } from '@assistant/core/chat';
+import { encryptMcpBearerToken } from '@assistant/core/mcp-secrets';
 import { createConfiguredModelProvider, ModelRouter } from '@assistant/core/model-router';
 import {
   goalAutomationCadence,
@@ -121,6 +122,11 @@ const globalCache = globalThis as unknown as {
   __assistantApplication?: ReturnType<typeof createApplication>;
   __assistantFirestoreStore?: ReturnType<typeof createInstallationStore>;
 };
+
+/** Keep credential encryption behind the server-only application boundary. */
+export function encryptMcpConnectionBearerToken(token: string): string {
+  return encryptMcpBearerToken(token);
+}
 
 /** Reuse one Firestore client across requests in a web process. */
 export function getFirestoreInstallationStore() {

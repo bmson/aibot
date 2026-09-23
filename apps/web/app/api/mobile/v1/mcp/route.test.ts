@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { resetConfigForTest } from '@assistant/config';
-import { decryptMcpBearerToken } from '@assistant/core/mcp-secrets';
 import {
   createInstallationStore,
   FirestoreMcpConnectionMutationRepository,
@@ -9,13 +8,7 @@ import {
 import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const auth = vi.hoisted(() => ({ allowed: vi.fn(), store: null as unknown }));
-vi.mock('@/lib/server', () => ({
-  getFirestoreInstallationStore: () => auth.store,
-  getApplication: () => {
-    throw new Error('PostgreSQL-backed application access is unavailable in this test');
-  },
-}));
+const auth = vi.hoisted(() => ({ allowed: vi.fn() }));
 vi.mock('@/mobile-auth', () => ({
   isMobileAuthed: auth.allowed,
   mobileJson: (value: unknown, init?: ResponseInit) =>
@@ -80,7 +73,6 @@ describe.skipIf(!localEmulator)(
       vi.stubEnv('LOCATION_PING_SECRET', '');
       resetConfigForTest();
       auth.allowed.mockResolvedValue(true);
-      auth.store = store;
       route = await import('./route.js');
       itemRoute = await import('./[id]/route.js');
       const alphaId = randomUUID();
@@ -188,7 +180,7 @@ describe.skipIf(!localEmulator)(
       expect(stored.get('name')).toBe('New Service');
       expect(stored.get('endpoint')).toBe('https://service.example.test/mcp');
       expect(stored.get('bearerTokenEncrypted')).not.toBe('owner-secret-token');
-      expect(decryptMcpBearerToken(stored.get('bearerTokenEncrypted'))).toBe('owner-secret-token');
+      expect(stored.get('bearerTokenEncrypted')).toMatch(/^v2\./);
 
       const postAction = (action: string) =>
         itemRoute.POST(

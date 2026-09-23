@@ -2,11 +2,21 @@
 
 import { randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { envFile, loadConfig, reloadConfig } from '@assistant/config';
+import {
+  envFile,
+  loadConfig,
+  reloadConfig,
+  validateAgentPersistenceConfig,
+} from '@assistant/config';
+import { FirestoreMcpConnectionMutationRepository } from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import { runFirestoreSettingsMutation } from '@/lib/firestore-settings-mutation';
-import { getApplication } from '@/lib/server';
+import {
+  encryptMcpConnectionBearerToken,
+  getApplication,
+  getFirestoreInstallationStore,
+} from '@/lib/server';
 
 function revalidateSettings(): void {
   revalidatePath('/settings');
@@ -90,6 +100,33 @@ export async function createMcpConnectionAction(input: {
   bearerToken?: string;
 }): Promise<{ error?: string }> {
   await requireOwner();
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return { error: problems.join('; ') };
+    const bearerToken = input.bearerToken?.trim() ?? '';
+    if (bearerToken.length > 8_192) return { error: 'Bearer token is too long.' };
+    if (
+      [...bearerToken].some((character) => {
+        const codePoint = character.codePointAt(0) ?? 0;
+        return codePoint <= 0x1f || codePoint === 0x7f || /\s/u.test(character);
+      })
+    )
+      return { error: 'Bearer token cannot contain whitespace or control characters.' };
+    let bearerTokenEncrypted: string | null = null;
+    try {
+      bearerTokenEncrypted = bearerToken ? encryptMcpConnectionBearerToken(bearerToken) : null;
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'Unable to protect bearer token.' };
+    }
+    const result = await new FirestoreMcpConnectionMutationRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    ).create({ name: input.name, endpoint: input.endpoint, bearerTokenEncrypted });
+    if (!('connectionId' in result)) return { error: result.error };
+    revalidateSettings();
+    return {};
+  }
   const result = await getApplication().addMcpConnection(input);
   if ('error' in result) return { error: result.error };
   revalidateSettings();
@@ -99,6 +136,8 @@ export async function createMcpConnectionAction(input: {
 /** Re-run MCP tool discovery without changing the saved endpoint. */
 export async function refreshMcpConnectionAction(id: string): Promise<{ error?: string }> {
   await requireOwner();
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
+    return { error: 'MCP discovery is unavailable in Firestore mode.' };
   const result = await getApplication().refreshMcpConnection(id);
   if ('error' in result) return { error: result.error };
   revalidateSettings();
@@ -111,6 +150,18 @@ export async function setMcpConnectionEnabledAction(
   enabled: boolean,
 ): Promise<{ error?: string }> {
   await requireOwner();
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return { error: problems.join('; ') };
+    const result = await new FirestoreMcpConnectionMutationRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    ).setEnabled(id, enabled);
+    if (!result) return { error: 'MCP connection not found.' };
+    revalidateSettings();
+    return {};
+  }
   const result = await getApplication().setMcpConnectionEnabled(id, enabled);
   if ('error' in result) return { error: result.error };
   revalidateSettings();
@@ -120,6 +171,18 @@ export async function setMcpConnectionEnabledAction(
 /** Forget a saved MCP endpoint and its discovered tool metadata. */
 export async function deleteMcpConnectionAction(id: string): Promise<{ error?: string }> {
   await requireOwner();
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) return { error: problems.join('; ') };
+    const deleted = await new FirestoreMcpConnectionMutationRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    ).delete(id);
+    if (!deleted) return { error: 'MCP connection not found.' };
+    revalidateSettings();
+    return {};
+  }
   const deleted = await getApplication().deleteMcpConnection(id);
   if (!deleted) return { error: 'MCP connection not found.' };
   revalidateSettings();

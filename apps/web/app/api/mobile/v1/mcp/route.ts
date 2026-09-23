@@ -1,10 +1,13 @@
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import { encryptMcpBearerToken } from '@assistant/core/mcp-secrets';
 import {
   FirestoreMcpConnectionMutationRepository,
   FirestoreMcpConnectionReadRepository,
 } from '@assistant/firestore';
-import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
+import {
+  encryptMcpConnectionBearerToken,
+  getApplication,
+  getFirestoreInstallationStore,
+} from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -55,7 +58,7 @@ export async function POST(request: Request): Promise<Response> {
       );
     let bearerTokenEncrypted: string | null = null;
     try {
-      bearerTokenEncrypted = bearerToken ? encryptMcpBearerToken(bearerToken) : null;
+      bearerTokenEncrypted = bearerToken ? encryptMcpConnectionBearerToken(bearerToken) : null;
     } catch (error) {
       return mobileJson(
         { error: error instanceof Error ? error.message : 'Unable to protect bearer token.' },
