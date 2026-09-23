@@ -30,6 +30,7 @@ const child = spawn(
     'scripts/firestore-watch-smoke.test.ts',
     'scripts/profile-library-parity.test.ts',
     'scripts/profile-people-read.test.ts',
+    'scripts/mobile-workspace-memory.test.ts',
     'apps/agent/src/task-runner.test.ts',
     'packages/tools/src/dispatcher.firestore.test.ts',
     ...process.argv.slice(2),
