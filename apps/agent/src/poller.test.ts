@@ -163,10 +163,7 @@ describe('startPoller', () => {
     expect(firestoreOwnerReady).toHaveBeenCalled();
     expect(expireStale).toHaveBeenCalled();
     expect(resumeResolved).toHaveBeenCalled();
-    expect(renotifyStalledApprovals).toHaveBeenCalledWith(
-      firestorePersistence,
-      notifyApproval,
-    );
+    expect(renotifyStalledApprovals).toHaveBeenCalledWith(firestorePersistence, notifyApproval);
     expect(expireWatches).toHaveBeenCalledWith('owner-agent', expect.any(Date));
     expect(sweepStep).not.toHaveBeenCalled();
     stop();
