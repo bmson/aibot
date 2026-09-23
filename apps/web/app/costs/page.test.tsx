@@ -5,9 +5,10 @@ import { NextRequest } from 'next/server';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ owner: vi.fn(), db: vi.fn() }));
+const mocks = vi.hoisted(() => ({ owner: vi.fn(), db: vi.fn(), revalidate: vi.fn() }));
 vi.mock('@/auth', () => ({ requireOwner: mocks.owner }));
 vi.mock('@/lib/server', () => ({ getDb: mocks.db }));
+vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidate }));
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
 const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
@@ -95,16 +96,17 @@ describe.skipIf(!localEmulator)('Firestore costs page with PostgreSQL offline', 
     resetConfigForTest();
   });
 
-  it('allows only GET costs through the Firestore proxy', async () => {
+  it('allows costs reads and server-action submissions through the Firestore proxy', async () => {
     const { proxy } = await import('../../proxy.js');
     const request = (path: string, method = 'GET') =>
       new NextRequest(`http://localhost${path}`, { method });
     expect(proxy(request('/costs')).status).toBe(200);
-    expect(proxy(request('/costs', 'POST')).status).toBe(503);
+    expect(proxy(request('/costs', 'POST')).status).toBe(200);
+    expect(proxy(request('/costs', 'DELETE')).status).toBe(503);
     expect(proxy(request('/api/mobile/v1/costs', 'POST')).status).toBe(503);
   });
 
-  it('renders cost data without PostgreSQL, forms, or unsupported task links', async () => {
+  it('renders cost data and the cap form without PostgreSQL or unsupported task links', async () => {
     const html = renderToStaticMarkup(await page.default());
     expect(mocks.owner).toHaveBeenCalled();
     expect(mocks.db).not.toHaveBeenCalled();
@@ -112,17 +114,53 @@ describe.skipIf(!localEmulator)('Firestore costs page with PostgreSQL offline', 
     expect(html).toContain('gemini-test');
     expect(html).toContain('Owner work');
     expect(html).toContain('$0.12');
-    expect(html).not.toContain('<form');
+    expect(html).toContain('<form');
+    expect(html).toContain('Update caps');
+    expect(html).toContain('update task, daily, and monthly spending caps');
     expect(html).not.toContain('href="/tasks');
   });
 
-  it('blocks a direct cap update before opening PostgreSQL', async () => {
+  it('updates the Firestore caps through the owner-authenticated server action', async () => {
+    const form = new FormData();
+    form.set('task_default', '3.25');
+    form.set('daily', '2.75');
+    form.set('monthly', '23');
+    await actions.updateCaps(form);
+
+    expect(mocks.owner).toHaveBeenCalled();
+    expect(mocks.db).not.toHaveBeenCalled();
+    expect(mocks.revalidate).toHaveBeenCalledWith('/costs');
+    expect((await store.doc('coordination', 'budget-policy').get()).data()).toMatchObject({
+      dailyLimitMicros: 2_750_000,
+      monthlyLimitMicros: 23_000_000,
+    });
+    expect((await store.doc('budgets', 'task_default').get()).get('limitUsd')).toBe('3.25');
+  });
+
+  it('keeps blank and invalid cap values unchanged', async () => {
+    const form = new FormData();
+    form.set('task_default', '0');
+    form.set('daily', 'not a number');
+    form.set('monthly', '10001');
+    await actions.updateCaps(form);
+
+    expect(mocks.db).not.toHaveBeenCalled();
+    expect((await store.doc('coordination', 'budget-policy').get()).data()).toMatchObject({
+      dailyLimitMicros: 2_750_000,
+      monthlyLimitMicros: 23_000_000,
+    });
+    expect((await store.doc('budgets', 'task_default').get()).get('limitUsd')).toBe('3.25');
+  });
+
+  it('requires owner authentication before changing caps', async () => {
+    mocks.owner.mockRejectedValueOnce(new Error('owner authentication required'));
     const form = new FormData();
     form.set('daily', '99');
-    await expect(actions.updateCaps(form)).rejects.toThrow(
-      'Cost cap editing is unavailable in Firestore mode',
-    );
+    await expect(actions.updateCaps(form)).rejects.toThrow('owner authentication required');
     expect(mocks.db).not.toHaveBeenCalled();
+    expect((await store.doc('coordination', 'budget-policy').get()).get('dailyLimitMicros')).toBe(
+      2_750_000,
+    );
   });
 
   it('requires owner authentication before reading costs', async () => {
