@@ -4,6 +4,7 @@ import type { Db, TaskRow } from '@assistant/db';
 import type { ExecutionPersistence } from '@assistant/persistence';
 import type { ToolDispatcher } from '@assistant/tools/dispatcher';
 import type { ToolRegistry } from '@assistant/tools/registry';
+import type { PortableReminderTools } from '@assistant/tools/reminders';
 import type { WorkspaceStore } from '@assistant/tools/workspace';
 import type { ModuleMeta } from './contract.js';
 
@@ -28,6 +29,8 @@ export interface ModulePlatformContext {
   workspaceRoot: string;
   repoRoot: string;
   persistence: ExecutionPersistence;
+  /** Present only in Firestore agent mode, where reminder tools use portable storage. */
+  portableReminders?: PortableReminderTools;
 }
 
 /**

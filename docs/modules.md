@@ -58,6 +58,9 @@ Minimal private chat:
 ASSISTANT_MODULES=minimal
 ```
 
+Firestore agent mode also permits `ASSISTANT_MODULES=reminders`; its reminder tools use Firestore
+schedule storage. Other optional modules still require persistence ports that have not migrated.
+
 Productivity assistant without isolated workers:
 
 ```dotenv
