@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createInstallationStore, FirestoreTaskRepository } from '@assistant/firestore';
 import { taskFixture } from '@assistant/persistence/testing';
 import { NextRequest } from 'next/server';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ web: vi.fn(), mobile: vi.fn(), owner: vi.fn() }));
@@ -58,7 +59,7 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
     await store.doc('agents', agentId).set({
       id: agentId,
       name: 'Assistant',
-      timezone: 'UTC',
+      timezone: 'America/Los_Angeles',
       createdAt: now,
       updatedAt: now,
     });
@@ -204,7 +205,9 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
       new NextRequest(`http://localhost${path}`, { method });
     expect(proxy(request('/api/mobile/v1/bootstrap')).status).toBe(200);
     expect(proxy(request('/api/mobile/v1/bootstrap', 'POST')).status).toBe(503);
-    expect(proxy(request('/api/shell/status')).status).toBe(503);
+    expect(proxy(request('/api/shell/status')).status).toBe(200);
+    expect(proxy(request('/cards')).status).toBe(200);
+    expect(proxy(request('/cards', 'POST')).status).toBe(200);
     expect(proxy(request('/chat')).status).toBe(200);
     expect(proxy(request(`/chat/${randomUUID()}`)).status).toBe(200);
     expect(proxy(request('/chat/all')).status).toBe(200);
@@ -222,12 +225,26 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
   });
 
   it('bootstraps and renders the primary chat and history without PostgreSQL', async () => {
-    const { getChatApplication, getAgentIdentity } = await import('./server.js');
+    const { listSavedCards, requestSavedCardRefresh } = await import(
+      '@assistant/application/cards'
+    );
+    const {
+      getChatApplication,
+      getAgentIdentity,
+      getAgentTimezone,
+      getCardRefresh,
+      getGeneratedCards,
+    } = await import('./server.js');
     const { GET: bootstrap } = await import('../app/api/mobile/v1/bootstrap/route.js');
     const application = getChatApplication();
     const primaryId = await application.getPrimaryConversationId();
     expect(await application.getPrimaryConversationId()).toBe(primaryId);
     expect(await getAgentIdentity()).toMatchObject({ id: agentId, name: 'Assistant' });
+    expect(await getAgentTimezone()).toBe('America/Los_Angeles');
+    expect(await listSavedCards(getGeneratedCards(), agentId)).toEqual([]);
+    expect(await requestSavedCardRefresh(getCardRefresh(), agentId, randomUUID())).toMatchObject({
+      ok: false,
+    });
 
     const bootstrapResponse = await bootstrap(
       new Request('http://localhost/api/mobile/v1/bootstrap'),
@@ -280,4 +297,10 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
       expect.arrayContaining([expect.objectContaining({ id: primaryId, agentId })]),
     );
   }, 30_000);
+
+  it('renders the saved Cards page from Firestore with PostgreSQL offline', async () => {
+    const { default: CardsPage } = await import('../app/cards/page.js');
+    const markup = renderToStaticMarkup(await CardsPage());
+    expect(markup).toContain('No active cards');
+  });
 });

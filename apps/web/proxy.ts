@@ -38,6 +38,7 @@ export function proxy(request: NextRequest) {
     (path === '/costs' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/profile/voice' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/profile/about' && request.method === 'GET') ||
+    (path === '/cards' && ['GET', 'POST'].includes(request.method)) ||
     // Settings Server Actions recheck owner auth; Firestore supports the
     // assistant identity and notification preference updates.
     (path === '/settings' && ['GET', 'POST'].includes(request.method)) ||
