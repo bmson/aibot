@@ -24,6 +24,7 @@ import {
   type OccasionRow,
   occasions as occasionsTable,
 } from '@assistant/db';
+import type { ProfileContact, Records } from '@assistant/persistence';
 import { and, count, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
@@ -71,6 +72,41 @@ export interface PersonSummary {
   birthday: BirthdayView | null;
   /** Newest recorded happening. Null when nothing has been recorded. */
   lastContactAt: Date | null;
+}
+
+/** Apply the SQL directory's display derivation to an adapter-backed row. */
+export function personSummaryFromStoredRow(
+  row: {
+    contact: ProfileContact;
+    factCount: number;
+    birthday: Records['occasions'] | null;
+    lastContactAt: Date | null;
+    location: string | null;
+  },
+  now: Date,
+): PersonSummary {
+  const { contact, birthday } = row;
+  const daysUntil = birthday ? daysUntilOccurrence(birthday, now) : null;
+  return {
+    id: contact.id,
+    name: contact.name,
+    relationship: contact.relationship,
+    trust: contact.trust,
+    group: derivePersonGroup(contact),
+    location: row.location,
+    factCount: row.factCount,
+    birthday:
+      birthday && daysUntil !== null
+        ? {
+            month: birthday.month,
+            day: birthday.day,
+            year: birthday.year,
+            daysUntil,
+            turningAge: turningAge(birthday.year, daysUntil, now),
+          }
+        : null,
+    lastContactAt: row.lastContactAt,
+  };
 }
 
 export interface PersonRelation {
