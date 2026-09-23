@@ -2,6 +2,7 @@ import { browserMeta } from './browser/meta.js';
 import { codeMeta } from './code/meta.js';
 import type { ModuleMeta } from './contract.js';
 import { documentsMeta } from './documents/meta.js';
+import { calendarMeta } from './google/calendar-meta.js';
 import { googleMeta } from './google/meta.js';
 import { mapsMeta } from './maps/meta.js';
 import { pushMeta } from './push/meta.js';
@@ -17,6 +18,7 @@ import { watchesMeta } from './watches/meta.js';
  */
 export const assistantModuleMetas: readonly ModuleMeta[] = [
   browserMeta,
+  calendarMeta,
   codeMeta,
   documentsMeta,
   googleMeta,
