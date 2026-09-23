@@ -1,4 +1,4 @@
-import { getApplication } from '@/lib/server';
+import { getChatApplication } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -28,8 +28,8 @@ export async function POST(
   try {
     const ok =
       body.action === 'hide'
-        ? await getApplication().hideChatMessage(id, messageId)
-        : await getApplication().unhideChatMessage(id, messageId);
+        ? await getChatApplication().hideChatMessage(id, messageId)
+        : await getChatApplication().unhideChatMessage(id, messageId);
     if (!ok) return mobileJson({ error: 'message not found' }, { status: 404 });
     return mobileJson({ ok: true });
   } catch (error) {

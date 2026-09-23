@@ -1,4 +1,4 @@
-import { getApplication } from '@/lib/server';
+import { getChatApplication } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -9,11 +9,11 @@ export async function POST(request: Request): Promise<Response> {
   const body = (await request.json().catch(() => null)) as { action?: unknown } | null;
   try {
     if (body?.action === 'create') {
-      const conversationId = await getApplication().createChat();
+      const conversationId = await getChatApplication().createChat();
       return mobileJson({ conversationId }, { status: 201 });
     }
     if (body?.action === 'archive-inactive') {
-      const archived = await getApplication().archiveInactiveChats();
+      const archived = await getChatApplication().archiveInactiveChats();
       return mobileJson({ ok: true, archived });
     }
     return mobileJson({ error: 'action must be create or archive-inactive' }, { status: 400 });

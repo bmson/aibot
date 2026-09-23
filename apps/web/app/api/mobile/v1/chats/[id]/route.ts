@@ -1,4 +1,4 @@
-import { getApplication } from '@/lib/server';
+import { getChatApplication } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -12,7 +12,7 @@ export async function GET(
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const { id } = await params;
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid chat id' }, { status: 400 });
-  const conversation = await getApplication().getChatConversation(id, {});
+  const conversation = await getChatApplication().getChatConversation(id, {});
   return conversation
     ? mobileJson(conversation)
     : mobileJson({ error: 'chat not found' }, { status: 404 });
@@ -32,7 +32,7 @@ export async function POST(
   } | null;
   try {
     if (body?.action === 'archive') {
-      const result = await getApplication().archiveChat(id);
+      const result = await getChatApplication().archiveChat(id);
       if (result === 'primary') {
         return mobileJson({ error: 'The main chat cannot be archived.' }, { status: 409 });
       }
@@ -43,12 +43,12 @@ export async function POST(
         );
       }
     } else if (body?.action === 'restore') {
-      await getApplication().restoreChat(id);
+      await getChatApplication().restoreChat(id);
     } else if (body?.action === 'change-model') {
       if (body.modelId !== null && typeof body.modelId !== 'string') {
         return mobileJson({ error: 'modelId must be a string or null' }, { status: 400 });
       }
-      await getApplication().changeChatModel(id, body.modelId ?? null);
+      await getChatApplication().changeChatModel(id, body.modelId ?? null);
     } else {
       return mobileJson(
         { error: 'action must be archive, restore, or change-model' },
