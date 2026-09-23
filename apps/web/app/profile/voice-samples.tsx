@@ -53,12 +53,14 @@ export function VoiceSamplesPanel({
   uploaded,
   imports,
   profile,
+  readOnly = false,
 }: {
   total: number;
   auto: number;
   uploaded: number;
   imports: VoiceImportView[];
   profile: { description: string; dos: string[]; donts: string[]; signature: string };
+  readOnly?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [confirming, setConfirming] = useState(false);
@@ -94,50 +96,74 @@ export function VoiceSamplesPanel({
         <div className="rounded-xl bg-sunken/55 p-3">
           <p className="text-sm font-semibold text-strong">The voice it learned</p>
           <p className="mt-1 mb-3 text-xs leading-5 text-muted">
-            What outbound drafts are rewritten to sound like. Re-ingesting samples rewrites this —
-            make edits after an ingest.
+            {readOnly
+              ? 'What outbound drafts are rewritten to sound like.'
+              : 'What outbound drafts are rewritten to sound like. Re-ingesting samples rewrites this — make edits after an ingest.'}
           </p>
-          <VoiceProfileForm initial={profile} />
+          {readOnly ? (
+            <dl className="grid gap-3 text-sm sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <dt className="text-muted">Description</dt>
+                <dd>{profile.description || 'No description yet'}</dd>
+              </div>
+              <div>
+                <dt className="text-muted">Use</dt>
+                <dd>{profile.dos.length ? profile.dos.join(', ') : 'None'}</dd>
+              </div>
+              <div>
+                <dt className="text-muted">Avoid</dt>
+                <dd>{profile.donts.length ? profile.donts.join(', ') : 'None'}</dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-muted">Signature</dt>
+                <dd className="whitespace-pre-wrap">{profile.signature || 'None'}</dd>
+              </div>
+            </dl>
+          ) : (
+            <VoiceProfileForm initial={profile} />
+          )}
         </div>
 
         {/* Upload */}
-        <form
-          action="/api/import/upload"
-          method="post"
-          encType="multipart/form-data"
-          className="grid gap-3 rounded-xl bg-sunken/55 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
-        >
-          <input type="hidden" name="voice" value="1" />
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-strong">Add sent messages</p>
-            <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3">
-              <input
-                type="file"
-                name="file"
-                aria-label="Sent messages file"
-                required
-                accept=".mbox,.txt,.json,.md,text/plain,application/json"
-                className={fileInputClass}
-              />
-              <label className="flex items-center gap-1.5 text-xs text-muted">
-                Style
-                <select name="register" defaultValue="email_casual" className={selectClass}>
-                  {registerOptions.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+        {!readOnly && (
+          <form
+            action="/api/import/upload"
+            method="post"
+            encType="multipart/form-data"
+            className="grid gap-3 rounded-xl bg-sunken/55 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
+          >
+            <input type="hidden" name="voice" value="1" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-strong">Add sent messages</p>
+              <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3">
+                <input
+                  type="file"
+                  name="file"
+                  aria-label="Sent messages file"
+                  required
+                  accept=".mbox,.txt,.json,.md,text/plain,application/json"
+                  className={fileInputClass}
+                />
+                <label className="flex items-center gap-1.5 text-xs text-muted">
+                  Style
+                  <select name="register" defaultValue="email_casual" className={selectClass}>
+                    {registerOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-muted">
+                Gmail Takeout <code>.mbox</code>, plain text, or JSON · up to 25MB
+              </p>
             </div>
-            <p className="mt-2 text-xs leading-5 text-muted">
-              Gmail Takeout <code>.mbox</code>, plain text, or JSON · up to 25MB
-            </p>
-          </div>
-          <button type="submit" className={btn.primary}>
-            Upload sent mail
-          </button>
-        </form>
+            <button type="submit" className={btn.primary}>
+              Upload sent mail
+            </button>
+          </form>
+        )}
 
         {/* In-flight / failed voice imports */}
         {imports.length > 0 ? (
@@ -165,7 +191,7 @@ export function VoiceSamplesPanel({
       </div>
 
       {/* Purge */}
-      {purgeable > 0 ? (
+      {!readOnly && purgeable > 0 ? (
         <footer className={cardFooterClass}>
           {confirming ? (
             <>
