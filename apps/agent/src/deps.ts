@@ -57,6 +57,7 @@ import {
   registerPortableMemoryTools,
   registerPortableOwnerNotifyTool,
   registerPortableTaskTools,
+  registerPortableWebWorkspaceTools,
 } from '@assistant/tools/builtin';
 import { ToolDispatcher } from '@assistant/tools/dispatcher';
 import { registerMcpTools } from '@assistant/tools/mcp';
@@ -386,22 +387,25 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     registerPortableOwnerNotifyTool(
       registerPortableGoalProgressTool(
         registerPortableTaskTools(
-          registerPortableMemoryTools(new ToolRegistry(), {
-            memory: persistence.memory,
-            embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
-              router.embed(texts),
-            ),
-            supersede: (input) =>
-              supersedeContradictedFacts(
-                {
-                  memory: persistence.memorySupersede,
-                  router,
-                  onRetired: () =>
-                    compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
-                },
-                input,
+          registerPortableMemoryTools(
+            registerPortableWebWorkspaceTools(new ToolRegistry(), { workspace }),
+            {
+              memory: persistence.memory,
+              embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
+                router.embed(texts),
               ),
-          }),
+              supersede: (input) =>
+                supersedeContradictedFacts(
+                  {
+                    memory: persistence.memorySupersede,
+                    router,
+                    onRetired: () =>
+                      compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
+                  },
+                  input,
+                ),
+            },
+          ),
           { tasks: persistence.tasks },
         ),
         new FirestoreGoalProgressRepository(store, config.FIRESTORE_AGENT_ID),
