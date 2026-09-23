@@ -36,6 +36,7 @@ export function proxy(request: NextRequest) {
       request.method === 'GET') ||
     (path === '/api/shell/status' && request.method === 'GET') ||
     (path === '/api/mobile/v1/bootstrap' && request.method === 'GET') ||
+    (path === '/api/mobile/v1/activity' && request.method === 'GET') ||
     (path === '/api/mobile/v1/workspace' && request.method === 'GET') ||
     (path === '/api/card-image' && request.method === 'GET') ||
     (path === '/api/mobile/v1/cards' && request.method === 'GET') ||

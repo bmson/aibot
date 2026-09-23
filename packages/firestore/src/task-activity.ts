@@ -1,0 +1,142 @@
+import type { ActivityTaskRecord, TaskActivityRepository } from '@assistant/persistence';
+import { FieldPath, type QueryDocumentSnapshot } from '@google-cloud/firestore';
+import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
+import { decodeRecord, documentKey, type InstallationStore } from './store.js';
+
+const PAGE_SIZE = 250;
+const MAX_OWNER_TASKS = 25_000;
+const MAX_APPROVALS_PER_TASK = 500;
+const FIELDS = [
+  'id',
+  'agentId',
+  'type',
+  'status',
+  'title',
+  'progress',
+  'trust',
+  'spentUsd',
+  'budgetUsdLimit',
+  'updatedAt',
+  'archivedAt',
+  'autonomyGrant',
+  'trigger',
+] as const;
+
+function taskFromDocument(value: unknown, documentId: string, agentId: string): ActivityTaskRecord {
+  const row = decodeRecord<Record<string, unknown>>(value);
+  if (
+    row.agentId !== agentId ||
+    typeof row.id !== 'string' ||
+    documentKey(row.id) !== documentId ||
+    typeof row.type !== 'string' ||
+    typeof row.status !== 'string' ||
+    !(row.title === null || typeof row.title === 'string') ||
+    typeof row.progress !== 'string' ||
+    typeof row.trust !== 'string' ||
+    typeof row.spentUsd !== 'string' ||
+    typeof row.budgetUsdLimit !== 'string' ||
+    !(row.updatedAt instanceof Date) ||
+    !Number.isFinite(row.updatedAt.getTime()) ||
+    !(
+      row.archivedAt === null ||
+      (row.archivedAt instanceof Date && Number.isFinite(row.archivedAt.getTime()))
+    ) ||
+    !row.trigger ||
+    typeof row.trigger !== 'object' ||
+    Array.isArray(row.trigger)
+  )
+    throw new Error('Invalid owner activity task');
+  return row as ActivityTaskRecord;
+}
+
+function isCanary(trigger: unknown): boolean {
+  if (!trigger || typeof trigger !== 'object' || Array.isArray(trigger)) return false;
+  const payload = (trigger as { payload?: unknown }).payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  const value = (payload as { canary?: unknown }).canary;
+  return value === true || value === 'true';
+}
+
+/** A bounded owner scan preserves SQL's archived count, filters, and updated ordering. */
+export class FirestoreTaskActivityRepository implements TaskActivityRepository {
+  readonly kind = 'task-activity-repository' as const;
+
+  constructor(readonly store: InstallationStore) {}
+
+  async list(agentId: string, input: { archived: boolean; statuses?: string[]; limit: number }) {
+    if (!agentId || !Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 500)
+      throw new Error('Invalid owner activity request');
+    const agents = await this.store.collection('agents').limit(2).get();
+    const agent = agents.docs[0];
+    if (
+      agents.size !== 1 ||
+      !agent ||
+      agent.id !== documentKey(agentId) ||
+      agent.get('id') !== agentId
+    )
+      throw new Error('Activity requires one matching configured agent');
+    const fence = await readPrivacyErasureFence(this.store, agentId);
+    const rows: ActivityTaskRecord[] = [];
+    let cursor: QueryDocumentSnapshot | undefined;
+    for (;;) {
+      let query = this.store
+        .collection('tasks')
+        .where('agentId', '==', agentId)
+        .select(...FIELDS)
+        .orderBy(FieldPath.documentId())
+        .limit(PAGE_SIZE);
+      if (cursor) query = query.startAfter(cursor);
+      const page = await query.get();
+      for (const doc of page.docs) {
+        rows.push(taskFromDocument(doc.data(), doc.id, agentId));
+        if (rows.length > MAX_OWNER_TASKS)
+          throw new Error('Owner activity exceeds the bounded task scan');
+      }
+      if (page.size < PAGE_SIZE) break;
+      cursor = page.docs.at(-1);
+    }
+
+    const archivedCount = rows.filter((row) => row.archivedAt !== null).length;
+    const statuses = input.statuses ? new Set(input.statuses) : null;
+    const tasks = rows
+      .filter(
+        (row) =>
+          (input.archived ? row.archivedAt !== null : row.archivedAt === null) &&
+          !isCanary(row.trigger) &&
+          (!statuses || statuses.has(row.status)),
+      )
+      .sort(
+        (left, right) =>
+          right.updatedAt.getTime() - left.updatedAt.getTime() || left.id.localeCompare(right.id),
+      )
+      .slice(0, input.limit);
+
+    const pendingApprovalTaskIds: string[] = [];
+    for (const task of tasks.filter((row) => row.status === 'waiting_approval')) {
+      const approvals = await this.store
+        .collection('approvals')
+        .where('taskId', '==', task.id)
+        .select('id', 'taskId', 'status')
+        .limit(MAX_APPROVALS_PER_TASK + 1)
+        .get();
+      if (approvals.size > MAX_APPROVALS_PER_TASK)
+        throw new Error('Activity approval history exceeds the bounded scan');
+      if (
+        approvals.docs.some((doc) => {
+          const row = decodeRecord<Record<string, unknown>>(doc.data());
+          if (
+            row.taskId !== task.id ||
+            typeof row.id !== 'string' ||
+            documentKey(row.id) !== doc.id ||
+            typeof row.status !== 'string'
+          )
+            throw new Error('Invalid activity approval');
+          return row.status === 'pending';
+        })
+      )
+        pendingApprovalTaskIds.push(task.id);
+    }
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    return { tasks, archivedCount, pendingApprovalTaskIds };
+  }
+}
