@@ -156,12 +156,40 @@ The decisions file is written by the owner and never generated:
 }
 ```
 
-On the current `main`, the repository scan already names these blocking paths:
+The release path is split by persistence driver, so the static scan passes for the Firestore path. `pnpm cutover:retirement-report --static-only` runs in CI and proves two things:
 
-- Release pipeline: `infra/gcp/deploy.sh`, `infra/gcp/release.sh`, and `infra/gcp/release-diagnostics.sh`. A normal release still sets `DATABASE_URL=database-url:latest` on the services and on the migrate and backup jobs.
-- Backup tooling: `infra/docker/backup.sh` and `infra/docker/database-admin.sh`, which run the pre-migration `pg_dump`.
+- `infra/gcp/release.sh` hands over to `infra/gcp/release-firestore.sh`;
+- nothing that release reaches (scripts, Cloud Build config, Dockerfiles) references the database.
 
-These must be ported to the Firestore composition or removed before the report can pass. After a READY report, the report lists the retirement actions in order: delete the Neon project and branches, delete the `database-url*` secrets, revoke the Neon API key, and remove the revisions and jobs that still reference the database. Deleting those revisions ends the PostgreSQL rollback path.
+These files still reference the database. They are reported as `postgres-only`, and remain so only while the proof holds:
+
+| File | Why it cannot run on the Firestore path |
+| --- | --- |
+| `infra/gcp/release-postgres.sh` | The original release, renamed without edits. `release.sh` runs it only when the live services use `PERSISTENCE_DRIVER=postgres`. |
+| `infra/gcp/release-diagnostics.sh` | Migration diagnostics, sourced only by `release-postgres.sh`. |
+| `infra/gcp/deploy.sh` | The PostgreSQL provisioner. It refuses to run once `assistant-agent` uses Firestore, because it would reattach the `database-url` secret. |
+| `infra/docker/backup.sh`, `infra/docker/database-admin.sh` | The `pg_dump` backup image. Only `release-postgres.sh` runs it, and a Firestore deploy does not build it. |
+
+Delete these files together with the database. After a READY report, the report lists the retirement actions in order:
+
+1. Delete the Neon project and branches.
+2. Delete the `database-url*` secrets.
+3. Revoke the Neon API key.
+4. Remove the revisions and jobs that still reference the database. Deleting those revisions ends the PostgreSQL rollback path.
+
+### Releases after the cutover
+
+`switch-services` sets `PERSISTENCE_DRIVER=firestore` on both services, so the next `bash infra/gcp/release.sh` selects the Firestore path by itself. After the cutover, also set the GitHub repository variable `PERSISTENCE_DRIVER=firestore`. With it set:
+
+- the `Deploy production` workflow stops building the backup and migration images;
+- every release asserts that the live services agree with the variable.
+
+The Firestore release runs no database step. Before it rolls out any revision, three gates must pass:
+
+1. Both service templates are database-free.
+2. A managed Firestore recovery point covers the pre-release state: point-in-time recovery, or a READY scheduled backup no older than `FIRESTORE_BACKUP_MAX_AGE_HOURS` (default 26).
+3. `pnpm firestore:indexes verify` matches the release's index manifest.
+
 
 ## Active work
 

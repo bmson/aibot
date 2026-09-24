@@ -9,6 +9,7 @@ import {
   type OwnerDecisions,
   renderRetirementReport,
   scanRepository,
+  verifyFirestorePath,
 } from './cutover-retirement-report.js';
 import { type CutoverConfig, configSha256, type Inventory, STEPS } from './cutover-steps.js';
 
@@ -135,6 +136,39 @@ const cleanRepo = [
   { path: 'scripts/cutover-steps.ts', text: 'database-url' },
 ];
 
+/** A minimal repository with both release paths, mirroring infra/gcp. */
+function releaseRepo(overrides: Record<string, string> = {}) {
+  const files: Record<string, string> = {
+    'infra/gcp/release.sh': [
+      '# Selects release-postgres.sh or release-firestore.sh.',
+      'source "$ROOT/release-persistence.sh"',
+      'firestore) exec bash "$ROOT/release-firestore.sh" ;;',
+      'postgres) exec bash "$ROOT/release-postgres.sh" ;;',
+    ].join('\n'),
+    'infra/gcp/release-persistence.sh': 'service_persistence_driver() { :; }',
+    'infra/gcp/release-firestore.sh': [
+      '# Mirrors release-postgres.sh without its database steps.',
+      'const databaseEnv = /^DATABASE_URL$/; // retirement-scan: forbids',
+      'gcloud builds submit --config infra/gcp/cloudbuild-firestore.yaml',
+    ].join('\n'),
+    'infra/gcp/cloudbuild-firestore.yaml': 'args: [build, -f, infra/docker/agent.Dockerfile]',
+    'infra/docker/agent.Dockerfile': 'FROM node:22-slim',
+    'infra/gcp/release-postgres.sh': [
+      'source "$(dirname "$0")/release-diagnostics.sh"',
+      '--set-secrets "DATABASE_URL=database-url:latest"',
+    ].join('\n'),
+    'infra/gcp/release-diagnostics.sh': '# the job contains DATABASE_URL via Secret Manager.',
+    'infra/gcp/deploy.sh': [
+      'refuse_firestore_installation || exit 1',
+      'make_secret database-url "$PROD_DATABASE_URL"',
+    ].join('\n'),
+    'infra/docker/backup.sh': 'pg_dump --dbname="$DATABASE_URL"',
+    'infra/docker/database-admin.sh': ': "$DATABASE_URL"',
+    ...overrides,
+  };
+  return [...cleanRepo, ...Object.entries(files).map(([path, text]) => ({ path, text }))];
+}
+
 function store() {
   return new EvidenceStore(mkdtempSync(join(tmpdir(), 'retirement-')));
 }
@@ -179,6 +213,98 @@ describe('repository dependency scan', () => {
   });
 });
 
+describe('Firestore release path proof', () => {
+  it('proves PostgreSQL-only files unreachable and keeps guards non-blocking', () => {
+    const result = verifyFirestorePath(releaseRepo());
+    expect(result).toMatchObject({ ok: true, problems: [] });
+    expect(result.closure).toEqual([
+      'infra/docker/agent.Dockerfile',
+      'infra/gcp/cloudbuild-firestore.yaml',
+      'infra/gcp/release-firestore.sh',
+    ]);
+    expect(result.postgresOnly.every((item) => item.proven)).toBe(true);
+    const classes = Object.fromEntries(
+      scanRepository(releaseRepo())
+        .filter((item) => item.path.startsWith('infra/'))
+        .map((item) => [item.path, item.class]),
+    );
+    expect(classes).toEqual({
+      'infra/docker/backup.sh': 'postgres-only',
+      'infra/docker/database-admin.sh': 'postgres-only',
+      'infra/gcp/deploy.sh': 'postgres-only',
+      'infra/gcp/release-diagnostics.sh': 'postgres-only',
+      'infra/gcp/release-firestore.sh': 'guard',
+      'infra/gcp/release-postgres.sh': 'postgres-only',
+    });
+  });
+
+  it('fails when the Firestore path reaches a PostgreSQL-only file or references the database', () => {
+    const sourcesPostgres = releaseRepo({
+      'infra/gcp/release-firestore.sh': 'source "$(dirname "$0")/release-diagnostics.sh"',
+    });
+    const reached = verifyFirestorePath(sourcesPostgres);
+    expect(reached.ok).toBe(false);
+    expect(reached.problems).toContain(
+      'infra/gcp/release-diagnostics.sh is reachable from the Firestore release path',
+    );
+    const reachedClass = scanRepository(sourcesPostgres).find(
+      (item) => item.path === 'infra/gcp/release-diagnostics.sh',
+    )?.class;
+    expect(reachedClass).toBe('release-pipeline');
+
+    const direct = verifyFirestorePath(
+      releaseRepo({
+        'infra/gcp/release-firestore.sh':
+          'gcloud run services update x --set-secrets DATABASE_URL=database-url:1',
+      }),
+    );
+    expect(direct.problems).toEqual([
+      'infra/gcp/release-firestore.sh (Firestore release path) references the database',
+    ]);
+  });
+
+  it('requires the deploy.sh guard and ignores scripts named only in comments', () => {
+    const unguarded = releaseRepo({ 'infra/gcp/deploy.sh': 'make_secret database-url "$X"' });
+    expect(verifyFirestorePath(unguarded).problems).toEqual([
+      'infra/gcp/deploy.sh lost its guard (refuse_firestore_installation || exit 1)',
+    ]);
+    const deployClass = scanRepository(unguarded).find(
+      (item) => item.path === 'infra/gcp/deploy.sh',
+    )?.class;
+    expect(deployClass).toBe('release-pipeline');
+    // releaseRepo's Firestore entry names release-postgres.sh in a comment only.
+    expect(verifyFirestorePath(releaseRepo()).closure).not.toContain(
+      'infra/gcp/release-postgres.sh',
+    );
+  });
+
+  it('holds for this repository', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { readFileSync } = await import('node:fs');
+    const root = new URL('..', import.meta.url).pathname;
+    const files = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean)
+      .flatMap((path) => {
+        try {
+          const bytes = readFileSync(join(root, path));
+          return bytes.includes(0) ? [] : [{ path, text: bytes.toString('utf8') }];
+        } catch {
+          return [];
+        }
+      });
+    expect(verifyFirestorePath(files).problems).toEqual([]);
+    const blocking = scanRepository(files)
+      .filter((item) =>
+        ['release-pipeline', 'backup-tooling', 'terraform', 'ci-workflow', 'unclassified'].includes(
+          item.class,
+        ),
+      )
+      .map((item) => item.path);
+    expect(blocking).toEqual([]);
+  });
+});
+
 describe('retirement evidence report', () => {
   it('is READY only with complete evidence, clean cloud config and repo, archive, and owner decisions', () => {
     const evidence = store();
@@ -186,7 +312,8 @@ describe('retirement evidence report', () => {
     const report = buildRetirementReport({
       config,
       store: evidence,
-      findings: scanRepository(cleanRepo),
+      findings: scanRepository(releaseRepo()),
+      firestorePath: verifyFirestorePath(releaseRepo()),
       decisions,
       now: new Date('2026-10-02T12:00:00Z'),
       minObservationHours: 168,
@@ -198,6 +325,8 @@ describe('retirement evidence report', () => {
     const markdown = renderRetirementReport(report);
     expect(markdown).toContain('Verdict: READY');
     expect(markdown).toContain('accepted loss by owner');
+    expect(markdown).toContain('## Firestore release path');
+    expect(markdown).toContain('### postgres-only');
     expect(markdown).toContain('### application-code');
   });
 
@@ -240,14 +369,16 @@ describe('retirement evidence report', () => {
       targetHost: 'old-agent.a.run.app',
     });
     writeEvidence(evidence, inventory);
+    const legacyRepo = [
+      ...cleanRepo,
+      { path: 'infra/gcp/release.sh', text: '--set-secrets "DATABASE_URL=database-url:latest"' },
+      { path: 'infra/docker/backup.sh', text: 'pg_dump --dbname="$DATABASE_URL"' },
+    ];
     const report = buildRetirementReport({
       config,
       store: evidence,
-      findings: scanRepository([
-        ...cleanRepo,
-        { path: 'infra/gcp/release.sh', text: '--set-secrets "DATABASE_URL=database-url:latest"' },
-        { path: 'infra/docker/backup.sh', text: 'pg_dump --dbname="$DATABASE_URL"' },
-      ]),
+      findings: scanRepository(legacyRepo),
+      firestorePath: verifyFirestorePath(legacyRepo),
       decisions,
       now: new Date('2026-10-02T12:00:00Z'),
       minObservationHours: 168,
@@ -261,6 +392,8 @@ describe('retirement evidence report', () => {
       'Every enabled Scheduler job targets a Firestore service': 'assistant-legacy',
       'No release, backup, Terraform, or CI path depends on the database':
         'infra/docker/backup.sh, infra/gcp/release.sh',
+      'Firestore release path reaches no PostgreSQL dependency':
+        'infra/gcp/release-firestore.sh is missing; infra/gcp/release.sh does not hand over to infra/gcp/release-firestore.sh; infra/gcp/release.sh (Firestore release path) references the database',
     });
     expect(renderRetirementReport(report)).toContain('Verdict: NOT READY');
   });
