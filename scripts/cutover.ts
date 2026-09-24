@@ -100,6 +100,31 @@ function realDeps(config: CutoverConfig): CutoverDeps {
   };
 }
 
+/** List/describe access only: every mutating or subprocess path throws. */
+export function createReadOnlyDeps(config: CutoverConfig): CutoverDeps {
+  const refuse = () => {
+    throw new Error('Read-only cutover dependencies refuse this operation');
+  };
+  const gcloud = createGcloud(config.gcp.project);
+  return {
+    gcloud: {
+      json: (args) => {
+        if (!['list', 'describe'].includes(args[2] ?? '') && args[0] !== 'secrets') refuse();
+        if (args[0] === 'secrets' && args[1] !== 'list') refuse();
+        return gcloud.json(args);
+      },
+      run: async () => refuse(),
+    },
+    commands: async () => refuse(),
+    neon: new Proxy({} as CutoverDeps['neon'], { get: () => refuse }),
+    probe: new Proxy({} as CutoverDeps['probe'], { get: () => refuse }),
+    clock: systemClock,
+    storage: async () => refuse(),
+    http: async () => refuse(),
+    readFile: (path) => readFile(path),
+  };
+}
+
 const USAGE = `Usage:
   pnpm cutover status   --config cutover.json --evidence-dir DIR
   pnpm cutover run STEP --config cutover.json --evidence-dir DIR [--confirm STEP]

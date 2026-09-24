@@ -124,6 +124,45 @@ Rollback runs in this order:
 
 It then compares the traffic and dispatch state with preflight and writes `rollback-<time>.json`. Writes made in Firestore after `switch-services` do not return to PostgreSQL. That is why the extra flag is required. The Firestore target keeps its data, so a later cutover attempt must import into a new empty database. Keep the snapshot branch, the final snapshot object, the Firestore backup, and the asset backup until retirement.
 
+### Retirement evidence report
+
+After `live-verify` and an observation window, generate the report required by the last acceptance gate:
+
+```sh
+pnpm cutover:retirement-report $C --decisions owner-decisions.json --out retirement-report.md --live
+```
+
+The report combines the evidence files, a scan of every tracked repository file, and (with `--live`) a fresh inventory of Cloud Run services and jobs, Scheduler, Pub/Sub, and Secret Manager names. `--live` uses read-only `list`/`describe` calls only. It writes `retirement-report.md` and `retirement-report.md.json` (create-only, mode 0600) and exits non-zero unless every gate passes. The verdict is **READY** only when all of these hold:
+
+- every cutover step passed under the same configuration and the evidence chain is intact;
+- production has run on Firestore for `--min-observation-hours` (default 168) since `live-verify`;
+- no Cloud Run service or job references `DATABASE_URL` or a `database-url*`, Neon, or PostgreSQL secret;
+- every enabled Scheduler job and push subscription targets a switched Firestore service;
+- no repository file in a blocking class references the database. The blocking classes are release pipeline, backup tooling, Terraform, non-local CI, and unclassified files. The report also lists the non-blocking classes: inactive application code, manual migration tooling, operator scripts, tests, local development, and documentation;
+- the Firestore backup restored with hash parity, and every present asset (including the 12 recovered objects) was backed up and restored with SHA-256 parity;
+- the owner recorded a separately retained PostgreSQL archive with a tested restore;
+- the owner recorded an accepted-loss decision for each asset reference without recoverable bytes. Five such references are known today (two import originals and three generated artifacts).
+
+The decisions file is written by the owner and never generated:
+
+```json
+{
+  "acceptedLosses": [
+    { "sourceRecordId": "<record id from the assets evidence>", "decision": "accepted-loss",
+      "decidedBy": "<owner>", "decidedAt": "2026-10-01T10:00:00Z", "reason": "<why the bytes cannot be recovered>" }
+  ],
+  "postgresArchive": { "uri": "gs://...", "generation": "...", "sha256": "...",
+    "restoreTestedAt": "2026-10-01T09:00:00Z", "retainedUntil": "2027-10-01T00:00:00Z" }
+}
+```
+
+On the current `main`, the repository scan already names these blocking paths:
+
+- Release pipeline: `infra/gcp/deploy.sh`, `infra/gcp/release.sh`, and `infra/gcp/release-diagnostics.sh`. A normal release still sets `DATABASE_URL=database-url:latest` on the services and on the migrate and backup jobs.
+- Backup tooling: `infra/docker/backup.sh` and `infra/docker/database-admin.sh`, which run the pre-migration `pg_dump`.
+
+These must be ported to the Firestore composition or removed before the report can pass. After a READY report, the report lists the retirement actions in order: delete the Neon project and branches, delete the `database-url*` secrets, revoke the Neon API key, and remove the revisions and jobs that still reference the database. Deleting those revisions ends the PostgreSQL rollback path.
+
 ## Active work
 
 Recovery baseline (2026-09-19): application commit `259d4ecaf8624ea3c337647d442b5b90ea2a29a1`. PostgreSQL is still authoritative. The saved migration work has been reconciled with current chat visibility, immediate memory corrections, and generated-card refresh behavior. The complete installer and production data cutover are unfinished.

@@ -63,6 +63,7 @@
     "workspace:assets-recover": "tsx scripts/workspace-asset-recovery.ts",
     "cutover": "tsx scripts/cutover.ts",
     "cutover:neon-fence": "tsx scripts/cutover-neon-fence.ts",
+    "cutover:retirement-report": "tsx scripts/cutover-retirement-report.ts",
     "consumer:install": "tsx scripts/consumer-install.ts",
     "consumer:prepare": "tsx scripts/consumer-prepare.ts",
     "consumer:seed-runtime": "tsx scripts/consumer-runtime-seed.ts",
