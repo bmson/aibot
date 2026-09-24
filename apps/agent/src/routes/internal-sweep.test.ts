@@ -176,3 +176,25 @@ describe('POST /internal/sweep in Firestore mode', () => {
     expect(f.db.execute).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /internal/tasks/execute in Firestore mode', () => {
+  it('answers 503 so Cloud Tasks retries while the installation is not ready', async () => {
+    const f = fixture();
+    mocks.buildDeps.mockReturnValue(f.deps);
+    mocks.firestoreMaintenanceReady.mockResolvedValue(false);
+
+    const response = await internal.request(
+      '/tasks/execute',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ taskId: 'task-1', generation: 0 }),
+      },
+      { INTERNAL_AUTH_MODE: 'shared-secret' },
+    );
+
+    expect(response.status).toBe(503);
+    expect(mocks.firestoreMaintenanceReady).toHaveBeenCalledWith(f.deps);
+    expect(f.db.execute).not.toHaveBeenCalled();
+  });
+});

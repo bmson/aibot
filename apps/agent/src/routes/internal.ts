@@ -10,7 +10,13 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { latestCanaryRun, runCanaries } from '../canaries.js';
-import { agentServices, buildDeps, composedModuleMetas, firestoreOwnerReady } from '../deps.js';
+import {
+  agentServices,
+  buildDeps,
+  composedModuleMetas,
+  firestoreMaintenanceReady,
+  firestoreOwnerReady,
+} from '../deps.js';
 import { oidcAudienceForPath, verifyInternalAuthorization } from '../google-oidc.js';
 
 /**
@@ -58,6 +64,16 @@ internal.post('/tasks/execute', async (c) => {
   )
     return c.json({ error: 'invalid task generation' }, 400);
   const deps = buildDeps();
+  // Cloud Tasks delivers here without the local poller's readiness fence. An
+  // imported workspace awaiting activation (or a missing owner) answers 503,
+  // so the provider retries later instead of running paused work.
+  if (deps.config.PERSISTENCE_DRIVER === 'firestore') {
+    const ready = await firestoreMaintenanceReady(deps).catch((err) => {
+      console.error('Firestore task readiness check failed', err);
+      return false;
+    });
+    if (!ready) return c.json({ error: 'Firestore installation is not ready for tasks' }, 503);
+  }
   const { executeAgentTask } = await import('../task-runner.js');
   const result = await executeAgentTask(deps, taskId, generation as number | undefined);
   return c.json(result);

@@ -1,13 +1,16 @@
 import {
+  dispatchOutbox,
   expireStaleApprovals,
   firestoreCodeJobUnavailable,
+  getTaskQueue,
   isCodeJobEnabled,
   releaseStaleReservations,
   renotifyStalledApprovals,
   resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
-import { FirestoreScheduleRepository } from '@assistant/firestore';
+import { FirestoreOutbox, FirestoreScheduleRepository } from '@assistant/firestore';
+import type { TaskQueue } from '@assistant/persistence';
 import { type AgentDeps, agentServices, firestoreMaintenanceReady } from './deps.js';
 import { executorDeps } from './executor-deps.js';
 
@@ -23,7 +26,10 @@ export type FirestoreSweepResult =
  * that still need PostgreSQL are skipped until they declare themselves
  * portable.
  */
-export async function runFirestoreSweep(deps: AgentDeps): Promise<FirestoreSweepResult> {
+export async function runFirestoreSweep(
+  deps: AgentDeps,
+  options: { queue?: TaskQueue } = {},
+): Promise<FirestoreSweepResult> {
   let ready = false;
   try {
     ready = await firestoreMaintenanceReady(deps);
@@ -99,6 +105,38 @@ export async function runFirestoreSweep(deps: AgentDeps): Promise<FirestoreSweep
     report[sweepStep.reportKey ?? sweepStep.name] = await step(sweepStep.name, () =>
       sweepStep.run(agentServices(deps)),
     );
+  }
+  if (deps.config.QUEUE_DRIVER === 'cloudtasks') {
+    // With Cloud Tasks there is no local poller, so this scheduled sweep is
+    // the only dispatcher. Every Firestore transition that makes a task
+    // runnable commits a durable wake intent in the same transaction. Here the
+    // intents that are due, including this pass's schedule firings and
+    // approval wakes, are handed to Cloud Tasks under the stable
+    // (task, generation) name, which dedupes the best-effort immediate enqueue.
+    // It runs last so everything above is dispatched in the same pass.
+    const tasks = deps.firestoreTasks;
+    report.reclaimedTaskLeases = await step('reclaimExpiredTaskLeases', async () => {
+      // Expired leases are reclaimed as a side effect of the scoped due-task
+      // query. Each reclaim bumps the generation and commits a wake intent;
+      // the returned rows already hold intents and need nothing further.
+      if (!tasks) throw new Error('Firestore task persistence is unavailable');
+      return (await tasks.findDueTasksForAgent(deps.config.FIRESTORE_AGENT_ID, 50)).length;
+    });
+    const dispatched = await (async () => {
+      try {
+        return await dispatchOutbox(new FirestoreOutbox(store), options.queue ?? getTaskQueue(), {
+          batch: 50,
+          concurrency: 4,
+          maxDurationMs: 30_000,
+        });
+      } catch (err) {
+        console.error('sweep step failed: dispatchWakeIntents', err);
+        return null;
+      }
+    })();
+    report.wakeIntentsDispatched = dispatched?.delivered ?? 0;
+    report.wakeIntentsRetrying = dispatched?.retried ?? 0;
+    report.wakeIntentErrors = dispatched ? dispatched.errors + dispatched.leaseLost : 1;
   }
   return { ready: true, report };
 }

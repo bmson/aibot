@@ -32,6 +32,8 @@ const child = spawn(
     'apps/agent/src/firestore-memory-consolidation.test.ts',
     'apps/agent/src/firestore-watches.test.ts',
     'apps/agent/src/firestore-reminders.test.ts',
+    'apps/agent/src/firestore-cloudtasks.test.ts',
+    'apps/agent/src/firestore-boot-cloudtasks.test.ts',
     'apps/agent/src/firestore-sweep.test.ts',
     'apps/web/app/costs/page.test.tsx',
     'apps/web/app/packs/actions.firestore.test.ts',
