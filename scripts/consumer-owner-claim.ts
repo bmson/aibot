@@ -40,6 +40,42 @@ export type OwnerClaimResult =
       setupUrl: string;
     };
 
+/** Write only the claim verifier and return the one-time setup link. */
+export async function issueOwnerSetupLink(
+  repository: FirestoreOwnerAuthRepository,
+  input: {
+    origin: string;
+    grant: 'claim' | 'recovery';
+    now?: () => Date;
+    secret?: () => string;
+  },
+): Promise<Extract<OwnerClaimResult, { applied: true }>> {
+  const now = (input.now ?? (() => new Date()))();
+  const expiresAt = new Date(now.getTime() + OWNER_CLAIM_TTL_MS);
+  const code = (input.secret ?? generateOwnerSecret)();
+  try {
+    await repository.issueClaim({
+      verifier: ownerSecretVerifier('claim', code),
+      grant: input.grant,
+      expiresAt,
+    });
+  } catch (error) {
+    if (error instanceof OwnerAuthRejectedError && error.code === 'already_claimed')
+      throw new Error(
+        'This installation already has an owner. Use --recover to issue a cloud-owner recovery link.',
+      );
+    if (error instanceof OwnerAuthRejectedError && error.code === 'not_claimed')
+      throw new Error('This installation has no owner yet. Issue a first claim without --recover.');
+    throw error;
+  }
+  return {
+    applied: true,
+    grant: input.grant,
+    expiresAt: expiresAt.toISOString(),
+    setupUrl: `${input.origin}/setup#claim=${code}`,
+  };
+}
+
 function origin(value: string | undefined): string {
   let url: URL;
   try {
@@ -101,32 +137,12 @@ export async function runConsumerOwnerClaimCli(
       const state = await repository.state();
       return { applied: false, claimed: state.claimed, grant };
     }
-    const now = (dependencies.now ?? (() => new Date()))();
-    const expiresAt = new Date(now.getTime() + OWNER_CLAIM_TTL_MS);
-    const code = (dependencies.secret ?? generateOwnerSecret)();
-    try {
-      await repository.issueClaim({
-        verifier: ownerSecretVerifier('claim', code),
-        grant,
-        expiresAt,
-      });
-    } catch (error) {
-      if (error instanceof OwnerAuthRejectedError && error.code === 'already_claimed')
-        throw new Error(
-          'This installation already has an owner. Use --recover to issue a cloud-owner recovery link.',
-        );
-      if (error instanceof OwnerAuthRejectedError && error.code === 'not_claimed')
-        throw new Error(
-          'This installation has no owner yet. Issue a first claim without --recover.',
-        );
-      throw error;
-    }
-    return {
-      applied: true,
+    return await issueOwnerSetupLink(repository, {
+      origin: base,
       grant,
-      expiresAt: expiresAt.toISOString(),
-      setupUrl: `${base}/setup#claim=${code}`,
-    };
+      now: dependencies.now,
+      secret: dependencies.secret,
+    });
   } finally {
     await store.db.terminate();
   }

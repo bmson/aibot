@@ -1290,4 +1290,260 @@ describe('consumer installation', () => {
       ),
     ).rejects.toThrow('Terraform output missing project_id');
   });
+
+  it('deploys a passkey runtime with a generated auth secret, then verifies readiness', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'assistant-consumer-passkey-'));
+    const archive = join(dir, 'release.tar.gz');
+    const state = join(dir, 'state.json');
+    await foundationArchive(archive);
+    const source = manifest(await sha256File(archive));
+    const logs: string[] = [];
+    const runner = fakeRunner(logs);
+    const passkeyUrl = 'https://consumer-install-web-123456789.us-central1.run.app';
+    const release = '0123456789abcdef0123456789abcdef01234567';
+    let secretExists = false;
+    let secretLabels: Record<string, string> = {
+      installation: 'consumer-install',
+      'managed-by': 'assistant-installer',
+    };
+    let versions: string[] = [];
+    let secretFileMode = -1;
+    let webPublic = false;
+    const baseRun = runner.run.bind(runner);
+    runner.run = async (command, args) => {
+      if (command === 'gcloud' && args[0] === 'secrets' && args[1] === 'describe') {
+        return secretExists
+          ? { ok: true, stdout: JSON.stringify({ labels: secretLabels }), stderr: '' }
+          : { ok: false, stdout: '', stderr: 'NOT_FOUND: secret does not exist' };
+      }
+      if (command === 'gcloud' && args[0] === 'secrets' && args[1] === 'create') {
+        secretExists = true;
+        return { ok: true, stdout: '', stderr: '' };
+      }
+      if (command === 'gcloud' && args[1] === 'versions' && args[2] === 'list') {
+        return {
+          ok: true,
+          stdout: JSON.stringify(versions.map((name) => ({ name }))),
+          stderr: '',
+        };
+      }
+      if (command === 'gcloud' && args[1] === 'versions' && args[2] === 'add') {
+        const file = args.find((arg) => arg.startsWith('--data-file='))?.slice(12) ?? '';
+        const { stat } = await import('node:fs/promises');
+        secretFileMode = (await stat(file)).mode & 0o777;
+        const name = `projects/customer-project/secrets/consumer-install-auth-secret/versions/${versions.length + 1}`;
+        versions = [...versions, name];
+        return { ok: true, stdout: JSON.stringify({ name }), stderr: '' };
+      }
+      if (command === 'gcloud' && args[1] === 'versions' && args[2] === 'describe') {
+        return { ok: true, stdout: JSON.stringify({ state: 'ENABLED' }), stderr: '' };
+      }
+      if (command === 'gcloud' && args[0] === 'run' && args[2] === 'get-iam-policy') {
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            bindings:
+              webPublic && args[3]?.endsWith('-web')
+                ? [{ role: 'roles/run.invoker', members: ['allUsers'] }]
+                : [],
+          }),
+          stderr: '',
+        };
+      }
+      if (command === 'gcloud' && args[0] === 'run') {
+        const name = args[3]?.endsWith('-web') ? 'web' : 'agent';
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            name: `consumer-install-${name}`,
+            uri: passkeyUrl,
+            invokerIamDisabled: false,
+            template: {
+              containers: [
+                {
+                  image: runtimeImages.images[name].reference,
+                  env: [
+                    { name: 'OWNER_EMAIL', value: 'owner@example.com' },
+                    { name: 'OWNER_AUTH_MODE', value: 'passkey' },
+                    { name: 'AUTH_URL', value: passkeyUrl },
+                    { name: 'AUTH_DEV_BYPASS', value: 'false' },
+                    { name: 'AUTH_LOCALHOST_BYPASS', value: 'false' },
+                    { name: 'VERTEX_LOCATION', value: 'global' },
+                  ],
+                },
+              ],
+            },
+            conditions: [{ type: 'Ready', state: 'CONDITION_SUCCEEDED' }],
+            latestCreatedRevision: 'rev-1',
+            latestReadyRevision: 'rev-1',
+          }),
+          stderr: '',
+        };
+      }
+      if (
+        command === 'terraform' &&
+        args.includes('apply') &&
+        args.includes('web_image_digest=' + runtimeImages.terraform.web_image_digest) &&
+        !args.some((arg) => arg.startsWith('-target'))
+      )
+        webPublic = args.includes('allow_public_web_invoker=true');
+      if (command === 'terraform' && args.includes('output')) {
+        const result = await baseRun(command, args);
+        return {
+          ...result,
+          stdout: JSON.stringify({
+            ...JSON.parse(result.stdout),
+            cloud_run_web_service_name: { value: 'consumer-install-web' },
+            cloud_run_agent_service_name: { value: 'consumer-install-agent' },
+          }),
+        };
+      }
+      return baseRun(command, args);
+    };
+    const passkeyConfig = {
+      firestoreAgentId: '11111111-1111-4111-8111-111111111111',
+      firestoreEmbeddingSpace: {
+        provider: 'vertex',
+        model: 'gemini-embedding-001',
+        dimensions: 1536,
+        revision: 'seed-v1',
+      },
+      vertexLocation: 'global',
+      ownerEmail: 'owner@example.com',
+      ownerAuth: 'passkey',
+    };
+    const runtime = { images: runtimeImages, config: passkeyConfig };
+    const options = {
+      manifest: source,
+      archivePath: archive,
+      statePath: state,
+      terraformDir: 'infra/gcp/consumer/terraform',
+      stateBucket: 'customer-project-consumer-install-state',
+      apply: true,
+      now: () => '2026-09-12T12:00:10.000Z',
+    };
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          ...options,
+          runtime: {
+            images: runtimeImages,
+            config: { ...passkeyConfig, googleClientIdVersion: 2 },
+          },
+        },
+      ),
+    ).rejects.toThrow('does not use Google OAuth client secrets');
+    await provisionConsumerInstallation({ runner }, options);
+    const fetcher: typeof fetch = async () =>
+      new Response(JSON.stringify({ permissions: ['iam.serviceAccounts.actAs'] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+
+    // A foreign secret with the installer's name is never adopted.
+    secretExists = true;
+    secretLabels = { installation: 'other' } as Record<string, string>;
+    await expect(
+      provisionConsumerInstallation({ runner, fetcher }, { ...options, runtime }),
+    ).rejects.toThrow('Refusing to adopt existing secret');
+    secretExists = false;
+    secretLabels = { installation: 'consumer-install', 'managed-by': 'assistant-installer' };
+
+    const deployed = await provisionConsumerInstallation(
+      { runner, fetcher },
+      { ...options, runtime },
+    );
+    expect(deployed.manifest.stage.current).toBe('initialized');
+    expect(secretFileMode).toBe(0o600);
+    expect(versions).toHaveLength(1);
+    expect(deployed.ownerAccess).toMatchObject({
+      ownerAuth: 'passkey',
+      authOrigin: passkeyUrl,
+      publicInvoker: true,
+    });
+    expect(deployed.ownerAccess?.callback).toBeUndefined();
+    expect(deployed.manifest.resources).toContainEqual(
+      expect.objectContaining({
+        kind: 'auth-secret-version',
+        name: 'projects/customer-project/secrets/consumer-install-auth-secret/versions/1',
+      }),
+    );
+    const runtimeApply = logs.find(
+      (entry) =>
+        entry.includes('apply') &&
+        entry.includes('web_image_digest=') &&
+        !entry.includes('-target='),
+    );
+    expect(runtimeApply).toContain('owner_auth_mode=passkey');
+    expect(runtimeApply).toContain('allow_public_web_invoker=true');
+    expect(runtimeApply).toContain(`web_auth_url=${passkeyUrl}`);
+    expect(runtimeApply).toContain('auth_secret_version=1');
+    expect(runtimeApply).not.toContain('google_client_id_version');
+    await expect(
+      provisionConsumerInstallation(
+        { runner },
+        {
+          ...options,
+          runtime,
+          ownerAccessCallback: `${passkeyUrl}/api/auth/callback/google`,
+        },
+      ),
+    ).rejects.toThrow('need no OAuth callback');
+
+    let claimed = false;
+    let modelResponse = false;
+    let healthSha = release;
+    const httpFetcher: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/health'))
+        return Response.json({ ok: true, service: 'web', sha: healthSha });
+      if (url.endsWith('/api/owner/status')) return Response.json({ mode: 'passkey', claimed });
+      return new Response('not found', { status: 404 });
+    };
+    const verify = {
+      evidence: async () => ({
+        runtimeData: { ready: true, issues: [] },
+        modelResponseObserved: modelResponse,
+      }),
+    };
+    const pending = await provisionConsumerInstallation(
+      { runner, fetcher: httpFetcher },
+      { ...options, runtime, verify },
+    );
+    expect(pending.runtimeReady).toBe(false);
+    expect(pending.manifest.stage.current).toBe('initialized');
+    expect(
+      pending.verification?.checks.filter((check) => !check.ok).map((check) => check.name),
+    ).toEqual(['owner-claimed', 'model-response']);
+    claimed = true;
+    modelResponse = true;
+    healthSha = 'f'.repeat(40);
+    const stale = await provisionConsumerInstallation(
+      { runner, fetcher: httpFetcher },
+      { ...options, runtime, verify },
+    );
+    expect(stale.verification?.passed).toBe(false);
+    healthSha = release;
+    const previewed = await provisionConsumerInstallation(
+      { runner, fetcher: httpFetcher },
+      { ...options, apply: false, runtime, verify },
+    );
+    expect(previewed.verification?.passed).toBe(true);
+    expect(previewed.manifest.stage.current).toBe('initialized');
+    const ready = await provisionConsumerInstallation(
+      { runner, fetcher: httpFetcher },
+      { ...options, runtime, verify },
+    );
+    expect(ready.runtimeReady).toBe(true);
+    expect(ready.manifest.stage.current).toBe('ready');
+    expect(JSON.parse(await readFile(state, 'utf8')).stage.current).toBe('ready');
+    // A ready install re-verifies idempotently and reuses the recorded secret version.
+    const again = await provisionConsumerInstallation(
+      { runner, fetcher: httpFetcher },
+      { ...options, runtime, verify },
+    );
+    expect(again.runtimeReady).toBe(true);
+    expect(versions).toHaveLength(1);
+  });
 });

@@ -141,6 +141,26 @@ Terraform sets the web service's `AGENT_URL` to the agent's default Cloud Run UR
 
 This profile enables the Cloud Run, Secret Manager, and Vertex APIs; creates a dedicated web service account with selected-database Firestore access; grants Vertex access to web (for direct chat replies) and the existing runtime service account (for background turns); and creates both Cloud Run services. It does not build or scan images, seed the agent/models, check a live model response, configure OAuth or public DNS, provision backup/update/uninstall workflows, or connect to installer stages. Applying these resources is **not** evidence that the installation is runtime-ready or that PostgreSQL can be retired. Mobile bootstrap and non-chat web surfaces are still outside the minimal Firestore profile.
 
+### Passkey owner sign-in (no OAuth client)
+
+Set `owner_auth_mode = "passkey"` to use [owner passkeys](../../../../docs/consumer-owner-passkeys.md) instead of a Google OAuth client. Only `<installation_id>-auth-secret` is required; supplying Google client versions is rejected. When `web_auth_url` is omitted, Terraform reads the project number and uses the deterministic Cloud Run URL `https://<installation_id>-web-<project_number>.<region>.run.app` as the exact passkey origin, so no custom domain or DNS is needed. The URL is stable for the life of the service name and project; a later custom domain is a new relying party and needs passkeys re-registered through recovery. Because application sign-in is claim-protected, `allow_public_web_invoker = true` can be applied together with the runtime; issue the one-time setup link with `pnpm consumer:owner-claim` afterward.
+
+### Optional Cloud Tasks dispatch
+
+`task_dispatch = "cloud-tasks"` replaces the always-on agent poller with a scale-to-zero agent (`min_instance_count = 0`, CPU only during requests), a regional `<installation_id>-agent-steps` queue, and a `<installation_id>-sweep` Cloud Scheduler job that POSTs `/internal/sweep` every minute (`sweep_schedule`). A dedicated `<installation_id>-invoker` service account signs route-bound OIDC tokens; it alone receives `roles/run.invoker` on the agent (besides web's readiness probe). Web and the runtime identity receive only `roles/cloudtasks.enqueuer` on this queue and `roles/iam.serviceAccountUser` on the invoker account, and the Cloud Tasks service agent receives `roles/iam.serviceAccountOpenIdTokenCreator` on it. The agent's `AGENT_URL`, `PUBLIC_URL`, and `INTERNAL_OIDC_AUDIENCE` use the deterministic agent URL.
+
+**Keep the default `poller` until the agent release accepts `QUEUE_DRIVER=cloudtasks` in Firestore mode**; the current Firestore agent refuses to boot with it. The installer does not select this profile yet. Scheduler jobs are billed per job beyond the free allowance, and each sweep cold-starts the agent if it is idle.
+
+### Runtime IAM summary
+
+| Identity | Grants |
+| --- | --- |
+| `<id>-runtime` (agent) | `datastore.user` conditioned on the installation database; `storage.objectAdmin` on the assets bucket only; `aiplatform.user`; queue enqueuer and invoker `actAs` with Cloud Tasks dispatch |
+| `<id>-web` | `datastore.user` conditioned on the installation database; `aiplatform.user`; `secretAccessor` on its pinned auth (and optional mobile) secrets only; `run.invoker` on the agent; queue enqueuer and invoker `actAs` with Cloud Tasks dispatch |
+| `<id>-invoker` (Cloud Tasks only) | `run.invoker` on the agent only |
+
+Neither runtime identity can change IAM, deploy services, read the source/state buckets, or administer backups.
+
 ## Offline validation
 
 CI uses Terraform 1.14.5 and the locked Google provider to validate this foundation without credentials:

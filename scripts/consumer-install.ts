@@ -1,18 +1,25 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { createInstallationStore } from '@assistant/firestore';
+import {
+  checkFirestoreRuntimeData,
+  createInstallationStore,
+  FirestoreOwnerAuthRepository,
+} from '@assistant/firestore';
 import {
   type ConsumerInstallDependencies,
   type ConsumerInstallOptions,
   type ConsumerInstallResult,
+  type ConsumerReadinessEvidence,
+  type ConsumerVerifyContext,
   provisionConsumerInstallation,
   systemRunner,
   validateInstallationManifest,
 } from '@assistant/setup/installation';
 import type { AuthClient } from 'google-auth-library';
+import { issueOwnerSetupLink } from './consumer-owner-claim.js';
 import { publishConsumerImages, reportImagePublishProgress } from './consumer-publish-images.js';
 import {
   applyConsumerRuntimeSeed,
@@ -21,7 +28,7 @@ import {
 } from './consumer-runtime-seed.js';
 import { createGcloudAuthClient } from './gcloud-auth.js';
 
-const usage = `Usage: pnpm consumer:install --manifest PATH --archive PATH --state PATH --state-bucket NAME --terraform-dir PATH [--seed-plan PATH] [--gcloud-auth] [--images PATH --runtime-config PATH] [--owner-access-callback HTTPS_URL] [--apply]
+const usage = `Usage: pnpm consumer:install --manifest PATH --archive PATH --state PATH --state-bucket NAME --terraform-dir PATH [--seed-plan PATH] [--gcloud-auth] [--images PATH --runtime-config PATH] [--owner-access-callback HTTPS_URL] [--issue-owner-claim] [--verify [--owner-signed-in]] [--apply]
 
 Without --apply this verifies the release archive, customer project billing, and selected Firestore database absence.
 With --apply it bootstraps customer-owned state, runs Terraform, and records resumable foundation stages.
@@ -29,6 +36,8 @@ Supply both --images and --runtime-config to opt in to digest-pinned Cloud Run d
 Supply --seed-plan with an explicit customer runtime seed plan to create required data before Cloud Run.
 With --seed-plan, --gcloud-auth uses the active gcloud account in memory for the Firestore seed when ADC is unavailable. Terraform can use a short-lived GOOGLE_OAUTH_ACCESS_TOKEN from the active gcloud login.
 On an initialized private runtime, pass --owner-access-callback with the exact Google OAuth Web client redirect URI. Preview is read-only; --apply grants public invocation to web only after the customer has configured the OAuth client and HTTPS routing.
+With a passkey runtime config ("ownerAuth": "passkey"), no Google OAuth client is used: the installer generates the session secret, makes web public at deploy (application sign-in is claim-protected), and --issue-owner-claim --apply prints a one-time 24-hour setup link for the owner passkey.
+--verify runs the final readiness checks (revisions, public health on the release, owner claimed or --owner-signed-in, runtime data, a recorded model response); with --apply a full pass records the ready stage.
 On an already provisioned foundation, --build-images --runtime-config PATH --apply builds and pushes the exact source commit's web and agent images into the customer repository, then deploys those digests. Docker Buildx and an active customer gcloud login are required; Docker authentication is configured for this run.
 `;
 
@@ -181,7 +190,24 @@ export async function provisionConsumerInstallationWithPublishedImages(
     );
     if (!installOptions.apply) return { ...foundation, imagePublish: publishResult };
 
-    const images = JSON.parse(await readFile(outputPath, 'utf8')) as unknown;
+    const imageManifestText = await readFile(outputPath, 'utf8');
+    const images = JSON.parse(imageManifestText) as unknown;
+    // Later steps (owner access, owner claim, verify, update) resume with the
+    // same digests, so keep the non-secret image manifest beside the state.
+    // One file per release keeps earlier digests available for rollback.
+    const imageManifestPath = path.join(
+      path.dirname(installOptions.statePath),
+      `image-manifest-${sourceSha}.json`,
+    );
+    await writeFile(imageManifestPath, imageManifestText, { mode: 0o600, flag: 'wx' }).catch(
+      async (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error;
+        if ((await readFile(imageManifestPath, 'utf8')) !== imageManifestText)
+          throw new Error(
+            `${imageManifestPath} already holds a different image manifest; move it aside before rebuilding`,
+          );
+      },
+    );
     const result = await provisionConsumerInstallationWithSeed(
       dependencies,
       {
@@ -197,10 +223,74 @@ export async function provisionConsumerInstallationWithPublishedImages(
       imagePublish: {
         published: true,
         sourceSha,
+        imageManifestPath,
       },
     };
   } finally {
     await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+async function modelResponseObserved(store: ReturnType<typeof createInstallationStore>) {
+  const recent = await store.collection('modelCalls').orderBy('createdAt', 'desc').limit(20).get();
+  return recent.docs.some((doc) => {
+    const data = doc.data() as { outputTokens?: unknown; model?: unknown };
+    return typeof data.outputTokens === 'number' && data.outputTokens > 0;
+  });
+}
+
+type StoreFactory = (authClient?: AuthClient) => ReturnType<typeof createInstallationStore>;
+
+/** Customer-side Firestore evidence for --verify; reads only configuration and call metadata. */
+export function firestoreReadinessEvidence(
+  createStore: StoreFactory,
+  authClient?: AuthClient,
+): (context: ConsumerVerifyContext) => Promise<ConsumerReadinessEvidence> {
+  return async (context) => {
+    const store = createStore(authClient);
+    try {
+      const preflight = await checkFirestoreRuntimeData(store, {
+        agentId: context.agentId,
+        provider: 'vertex',
+        embeddingSpace: context.embeddingSpace,
+      });
+      return {
+        runtimeData: {
+          ready: preflight.ready,
+          issues: preflight.issues.map((issue) => `${issue.code}:${issue.subject}`),
+        },
+        modelResponseObserved: await modelResponseObserved(store),
+      };
+    } finally {
+      await store.db.terminate();
+    }
+  };
+}
+
+/** Issue the owner setup link for a deployed passkey runtime that has no owner yet. */
+export async function issueInstallerOwnerClaim(
+  result: ConsumerInstallResult,
+  createStore: StoreFactory,
+  authClient?: AuthClient,
+): Promise<{ setupUrl: string; expiresAt: string } | { skipped: string }> {
+  const access = result.ownerAccess;
+  if (access?.ownerAuth !== 'passkey' || !access.publicInvoker)
+    return { skipped: 'owner claims apply only to a deployed, public passkey runtime' };
+  const store = createStore(authClient);
+  try {
+    const repository = new FirestoreOwnerAuthRepository(store);
+    if ((await repository.state()).claimed)
+      return {
+        skipped:
+          'the installation already has an owner; use pnpm consumer:owner-claim --recover for cloud-owner recovery',
+      };
+    const link = await issueOwnerSetupLink(repository, {
+      origin: access.authOrigin,
+      grant: 'claim',
+    });
+    return { setupUrl: link.setupUrl, expiresAt: link.expiresAt };
+  } finally {
+    await store.db.terminate();
   }
 }
 
@@ -225,6 +315,9 @@ async function main(): Promise<void> {
       'seed-plan': { type: 'string' },
       'gcloud-auth': { type: 'boolean', default: false },
       'owner-access-callback': { type: 'string' },
+      'issue-owner-claim': { type: 'boolean', default: false },
+      verify: { type: 'boolean', default: false },
+      'owner-signed-in': { type: 'boolean', default: false },
       state: { type: 'string' },
       'state-bucket': { type: 'string' },
       'terraform-dir': { type: 'string' },
@@ -252,6 +345,13 @@ async function main(): Promise<void> {
     );
   if (values['build-images'] && values['owner-access-callback'])
     throw new Error('--build-images cannot be combined with --owner-access-callback');
+  if (
+    (values.verify || values['issue-owner-claim']) &&
+    (values['build-images'] || values['seed-plan'])
+  )
+    throw new Error('--verify and --issue-owner-claim run on an already deployed runtime');
+  if (values['owner-signed-in'] && !values.verify)
+    throw new Error('--owner-signed-in only applies to --verify');
   const options: ConsumerInstallOptions = {
     manifest: validateInstallationManifest(await json(values.manifest as string)),
     archivePath: values.archive as string,
@@ -266,11 +366,30 @@ async function main(): Promise<void> {
     ownerAccessCallback: values['owner-access-callback'],
   };
   const installDependencies = { runner: systemRunner };
-  if (values['gcloud-auth'] && !values['seed-plan'])
-    throw new Error('--gcloud-auth is only available with --seed-plan');
+  const firestoreNeeded = Boolean(
+    values['seed-plan'] || values.verify || values['issue-owner-claim'],
+  );
+  if (values['gcloud-auth'] && !firestoreNeeded)
+    throw new Error(
+      '--gcloud-auth is only available with --seed-plan, --verify, or --issue-owner-claim',
+    );
   const seedInput = values['seed-plan'] ? await json(values['seed-plan']) : undefined;
   const seedAuthClient =
-    values.apply && values['gcloud-auth'] ? await createGcloudAuthClient() : undefined;
+    (values.apply || values.verify) && values['gcloud-auth']
+      ? await createGcloudAuthClient()
+      : undefined;
+  const createStore: StoreFactory = (authClient) =>
+    createInstallationStore({
+      projectId: options.manifest.identity.projectId,
+      installationId: options.manifest.identity.installationId,
+      databaseId: options.manifest.identity.databaseId,
+      ...(authClient ? { authClient } : {}),
+    });
+  if (values.verify)
+    options.verify = {
+      evidence: firestoreReadinessEvidence(createStore, seedAuthClient),
+      ownerSignInConfirmed: values['owner-signed-in'] === true,
+    };
   const installOptions = {
     ...options,
     seedInput,
@@ -282,7 +401,15 @@ async function main(): Promise<void> {
         runtimeConfig: await json(values['runtime-config'] as string),
       })
     : await provisionConsumerInstallationWithSeed(installDependencies, installOptions);
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  const ownerClaim =
+    values['issue-owner-claim'] && values.apply
+      ? await issueInstallerOwnerClaim(result, createStore, seedAuthClient)
+      : undefined;
+  // The setup link is shown once here and is not written to installer state.
+  process.stdout.write(
+    `${JSON.stringify(ownerClaim ? { ...result, ownerClaim } : result, null, 2)}\n`,
+  );
+  if (result.verification && !result.verification.passed) process.exitCode = 2;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

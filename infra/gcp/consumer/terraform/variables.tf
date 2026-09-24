@@ -185,7 +185,7 @@ variable "owner_email" {
 }
 
 variable "web_auth_url" {
-  description = "Explicit HTTPS URL whose Google OAuth callback is configured; it is not inferred from an uncreated Cloud Run service."
+  description = "Exact HTTPS origin owners use. Required for Google OAuth; in passkey mode null selects the deterministic Cloud Run URL https://<installation>-web-<project number>.<region>.run.app."
   type        = string
   default     = null
 
@@ -242,7 +242,40 @@ variable "mobile_api_token_version" {
 }
 
 variable "allow_public_web_invoker" {
-  description = "Explicitly grant allUsers Cloud Run invocation after owner Google OAuth and URL have been configured. Default is private."
+  description = "Explicitly grant allUsers Cloud Run invocation to web only, after owner sign-in (Google OAuth or passkey claim) is configured. Default is private."
   type        = bool
   default     = false
+}
+
+variable "owner_auth_mode" {
+  description = "Owner sign-in: google (customer Google OAuth client) or passkey (WebAuthn passkeys in Firestore; no OAuth client)."
+  type        = string
+  default     = "google"
+
+  validation {
+    condition     = contains(["google", "passkey"], var.owner_auth_mode)
+    error_message = "owner_auth_mode must be google or passkey."
+  }
+}
+
+variable "task_dispatch" {
+  description = "Agent work dispatch: poller (one always-on agent instance) or cloud-tasks (scale-to-zero agent, Cloud Tasks queue, and Cloud Scheduler sweep). cloud-tasks requires an agent release whose Firestore mode accepts QUEUE_DRIVER=cloudtasks."
+  type        = string
+  default     = "poller"
+
+  validation {
+    condition     = contains(["poller", "cloud-tasks"], var.task_dispatch)
+    error_message = "task_dispatch must be poller or cloud-tasks."
+  }
+}
+
+variable "sweep_schedule" {
+  description = "Cron schedule for the Cloud Scheduler due-work sweep when task_dispatch is cloud-tasks."
+  type        = string
+  default     = "* * * * *"
+
+  validation {
+    condition     = length(split(" ", trimspace(var.sweep_schedule))) == 5
+    error_message = "sweep_schedule must be a five-field cron expression."
+  }
 }
