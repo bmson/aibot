@@ -97,6 +97,46 @@ Repeat the identical command to resume from persisted stages. Terraform state is
 
 The foundation apply uses one Terraform operation at a time because concurrent Firestore field-exemption creates against the same database can fail with a transient 409 contention error. The saved remote state lets the same install command resume after any interrupted apply.
 
+### Passkey runtime (no Google OAuth client)
+
+New installations should use [owner passkeys](consumer-owner-passkeys.md). Add `"ownerAuth": "passkey"` to the runtime config and omit `webAuthUrl`, `authSecretVersion`, and both Google client versions:
+
+```json
+{
+  "firestoreAgentId": "11111111-1111-4111-8111-111111111111",
+  "firestoreEmbeddingSpace": { "provider": "vertex", "model": "gemini-embedding-001", "dimensions": 1536, "revision": "customer-seed-v1" },
+  "vertexLocation": "global",
+  "ownerEmail": "owner@example.com",
+  "ownerAuth": "passkey"
+}
+```
+
+On the runtime apply the installer then:
+
+1. creates `<installation_id>-auth-secret` (labelled `installation=<id>`, `managed-by=assistant-installer`) if absent and adds one random 48-byte version through a mode-0600 temporary file. The value is never printed, passed to Terraform, or stored in installer state; only the version number is recorded. A resumed run reuses the lowest enabled version, and an existing secret without those labels is refused rather than adopted;
+2. uses the deterministic origin `https://<installation_id>-web-<project_number>.<region>.run.app` as `AUTH_URL` and passkey relying party (supply `webAuthUrl` only for a custom domain you already route);
+3. deploys web with `OWNER_AUTH_MODE=passkey` and public invocation in the same apply. The agent stays IAM-private. An unclaimed installation cannot be taken over: every owner route needs a session, and `/setup` needs the claim code.
+
+Then issue the one-time owner setup link and open it on the device that should hold the first passkey:
+
+```sh
+pnpm consumer:install ... --runtime-config ./runtime-config.json --images ./image-manifest.json \
+  --issue-owner-claim --apply
+```
+
+The result's `ownerClaim.setupUrl` is printed once (valid 24 hours) and is not written to state. Rerunning replaces an unused link; once an owner exists the step is skipped. For later cloud-owner recovery use `pnpm consumer:owner-claim --recover`. `--owner-access-callback` is rejected for passkey installs because there is no OAuth callback.
+
+## Final verification (`ready`)
+
+After the owner has registered a passkey (or, for Google OAuth installs, signed in) and sent a first chat message, run:
+
+```sh
+pnpm consumer:install ... --runtime-config ./runtime-config.json --images ./image-manifest.json --verify
+pnpm consumer:install ... --runtime-config ./runtime-config.json --images ./image-manifest.json --verify --apply
+```
+
+Checks, each reported with a pass/fail detail: both Cloud Run services serve the recorded digests on a ready revision; web is publicly invocable while the agent has no public invoker; `/api/health` on the service URL and the owner origin reports the installation's release commit; the owner is claimed (`/api/owner/status`), or `--owner-signed-in` is passed for Google OAuth installs; the Firestore runtime data preflight passes; and at least one completed model call is recorded, proving an authenticated Vertex response through the service identity. Without `--apply` nothing changes; with `--apply` a full pass advances the installation to `ready` and reports `runtimeReady: true`. A failed check leaves the stage at `initialized` and exits with status 2. `--gcloud-auth` is accepted for the Firestore reads.
+
 For the optional runtime, create three enabled, numbered owner-auth Secret Manager versions and configure the owner Google OAuth client for the intended HTTPS origin. For native iOS access, also create an enabled, numbered `<installation_id>-mobile-api-token` version in the same customer project. Then supply a JSON runtime config containing these fields (omit `mobileApiTokenVersion` if native access is not being configured):
 
 ```json
