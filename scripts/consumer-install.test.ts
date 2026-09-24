@@ -476,11 +476,16 @@ describe('consumer install image publishing orchestration', () => {
     expect(result.imagePublish).toMatchObject({
       published: true,
       sourceSha: input.identity.release.commitSha,
-      imageManifestPath: join(stateDir, 'image-manifest.json'),
+      imageManifestPath: join(stateDir, `image-manifest-${input.identity.release.commitSha}.json`),
     });
-    expect(JSON.parse(await readFile(join(stateDir, 'image-manifest.json'), 'utf8'))).toEqual(
-      imageManifest,
-    );
+    expect(
+      JSON.parse(
+        await readFile(
+          join(stateDir, `image-manifest-${input.identity.release.commitSha}.json`),
+          'utf8',
+        ),
+      ),
+    ).toEqual(imageManifest);
   });
 });
 

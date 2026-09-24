@@ -194,9 +194,10 @@ export async function provisionConsumerInstallationWithPublishedImages(
     const images = JSON.parse(imageManifestText) as unknown;
     // Later steps (owner access, owner claim, verify, update) resume with the
     // same digests, so keep the non-secret image manifest beside the state.
+    // One file per release keeps earlier digests available for rollback.
     const imageManifestPath = path.join(
       path.dirname(installOptions.statePath),
-      'image-manifest.json',
+      `image-manifest-${sourceSha}.json`,
     );
     await writeFile(imageManifestPath, imageManifestText, { mode: 0o600, flag: 'wx' }).catch(
       async (error: NodeJS.ErrnoException) => {
