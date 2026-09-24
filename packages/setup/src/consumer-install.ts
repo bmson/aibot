@@ -1646,7 +1646,8 @@ export async function provisionConsumerInstallation(
       ...advanceInstallationStage(previous, 'initialized', now()),
       resources: [
         ...previous.resources,
-        ...(deploying.generatedAuthSecret
+        // A release rebase keeps the bootstrap-owned secret records.
+        ...(deploying.generatedAuthSecret && recordedAuthSecretVersion(previous) === null
           ? [
               {
                 kind: 'secret',
