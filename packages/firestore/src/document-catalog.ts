@@ -4,6 +4,7 @@ import {
   newTaskRecord,
   type Records,
 } from '@assistant/persistence';
+import { isEmulatorClosedTransaction } from './emulator-transaction.js';
 import { createWakeIntent } from './outbox.js';
 import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
@@ -122,117 +123,130 @@ export class FirestoreDocumentCatalogRepository implements DocumentCatalogReposi
     const fileRef = this.store.doc('files', input.file.id);
     const documentRef = this.store.doc('documents', input.document.id);
 
-    return this.store.db.runTransaction(async (tx) => {
-      const owners = await tx.get(this.store.collection('agents').limit(2));
-      const owner = owners.docs[0];
-      if (
-        owners.size !== 1 ||
-        !owner ||
-        owner.id !== documentKey(agentId) ||
-        owner.get('id') !== agentId
-      )
-        throw new Error('Documents require exactly one configured agent');
+    // The dedup claim makes a retry return the committed winner as a duplicate.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.store.db.runTransaction(async (tx) => {
+          const owners = await tx.get(this.store.collection('agents').limit(2));
+          const owner = owners.docs[0];
+          if (
+            owners.size !== 1 ||
+            !owner ||
+            owner.id !== documentKey(agentId) ||
+            owner.get('id') !== agentId
+          )
+            throw new Error('Documents require exactly one configured agent');
 
-      const [erasure, claim, candidateFile, candidateDocument] = await tx.getAll(
-        this.store.doc('privacyErasureJobs', agentId),
-        claimRef,
-        fileRef,
-        documentRef,
-      );
-      if (
-        erasure?.exists &&
-        (erasure.get('agentId') !== agentId || privacyErasureIsActive(erasure.get('status')))
-      )
-        throw new Error('Privacy erasure is in progress');
+          const [erasure, claim, candidateFile, candidateDocument] = await tx.getAll(
+            this.store.doc('privacyErasureJobs', agentId),
+            claimRef,
+            fileRef,
+            documentRef,
+          );
+          if (
+            erasure?.exists &&
+            (erasure.get('agentId') !== agentId || privacyErasureIsActive(erasure.get('status')))
+          )
+            throw new Error('Privacy erasure is in progress');
 
-      if (claim?.exists) {
-        const key = decodeRecord<DedupClaim>(claim.data());
-        if (
-          documentKey(key.id) !== claim.id ||
-          key.id !== dedupClaimId(agentId, input.document.sha256) ||
-          key.agentId !== agentId ||
-          key.sha256 !== input.document.sha256 ||
-          !key.documentId
-        )
-          throw new Error('Document deduplication claim is malformed');
-        const existingRef = this.store.doc('documents', key.documentId);
-        const existingSnapshot = await tx.get(existingRef);
-        if (!existingSnapshot.exists) throw new Error('Document deduplication claim is stale');
-        const existing = validDocument(existingSnapshot, agentId);
-        if (existing.agentId !== agentId || existing.sha256 !== input.document.sha256)
-          throw new Error('Document deduplication claim points outside its owner or hash');
-        const existingFileSnapshot = await tx.get(this.store.doc('files', existing.fileId));
-        if (!existingFileSnapshot.exists) throw new Error('Duplicate document file is missing');
-        validFile(existingFileSnapshot, agentId, input.document.sha256);
-        return { document: existing, duplicate: true, task: null };
-      }
+          if (claim?.exists) {
+            const key = decodeRecord<DedupClaim>(claim.data());
+            if (
+              documentKey(key.id) !== claim.id ||
+              key.id !== dedupClaimId(agentId, input.document.sha256) ||
+              key.agentId !== agentId ||
+              key.sha256 !== input.document.sha256 ||
+              !key.documentId
+            )
+              throw new Error('Document deduplication claim is malformed');
+            const existingRef = this.store.doc('documents', key.documentId);
+            const existingSnapshot = await tx.get(existingRef);
+            if (!existingSnapshot.exists) throw new Error('Document deduplication claim is stale');
+            const existing = validDocument(existingSnapshot, agentId);
+            if (existing.agentId !== agentId || existing.sha256 !== input.document.sha256)
+              throw new Error('Document deduplication claim points outside its owner or hash');
+            const existingFileSnapshot = await tx.get(this.store.doc('files', existing.fileId));
+            if (!existingFileSnapshot.exists) throw new Error('Duplicate document file is missing');
+            validFile(existingFileSnapshot, agentId, input.document.sha256);
+            return { document: existing, duplicate: true, task: null };
+          }
 
-      // Older imported catalogs predate claim documents. A single-field hash
-      // query adopts the existing row without a migration-time claim backfill.
-      const existingRows = await tx.get(
-        this.store.collection('documents').where('sha256', '==', input.document.sha256).limit(2),
-      );
-      if (existingRows.size > 1)
-        throw new Error('Document catalog contains multiple records with the same content hash');
-      for (const snapshot of existingRows.docs) {
-        const existing = validDocument(snapshot, agentId);
-        if (documentKey(existing.id) !== snapshot.id || existing.agentId !== agentId)
-          throw new Error('Document catalog contains an invalid owner record');
-        if (existing.sha256 !== input.document.sha256) continue;
-        const existingFileSnapshot = await tx.get(this.store.doc('files', existing.fileId));
-        if (!existingFileSnapshot.exists) throw new Error('Duplicate document file is missing');
-        validFile(existingFileSnapshot, agentId, input.document.sha256);
-        const key: DedupClaim = {
-          id: claimId,
-          agentId,
-          sha256: input.document.sha256,
-          documentId: existing.id,
-        };
-        tx.create(claimRef, encodeRecord(key));
-        return { document: existing, duplicate: true, task: null };
-      }
+          // Older imported catalogs predate claim documents. A single-field hash
+          // query adopts the existing row without a migration-time claim backfill.
+          const existingRows = await tx.get(
+            this.store
+              .collection('documents')
+              .where('sha256', '==', input.document.sha256)
+              .limit(2),
+          );
+          if (existingRows.size > 1)
+            throw new Error(
+              'Document catalog contains multiple records with the same content hash',
+            );
+          for (const snapshot of existingRows.docs) {
+            const existing = validDocument(snapshot, agentId);
+            if (documentKey(existing.id) !== snapshot.id || existing.agentId !== agentId)
+              throw new Error('Document catalog contains an invalid owner record');
+            if (existing.sha256 !== input.document.sha256) continue;
+            const existingFileSnapshot = await tx.get(this.store.doc('files', existing.fileId));
+            if (!existingFileSnapshot.exists) throw new Error('Duplicate document file is missing');
+            validFile(existingFileSnapshot, agentId, input.document.sha256);
+            const key: DedupClaim = {
+              id: claimId,
+              agentId,
+              sha256: input.document.sha256,
+              documentId: existing.id,
+            };
+            tx.create(claimRef, encodeRecord(key));
+            return { document: existing, duplicate: true, task: null };
+          }
 
-      if (candidateFile?.exists || candidateDocument?.exists)
-        throw new Error('Document catalog record ID collision');
+          if (candidateFile?.exists || candidateDocument?.exists)
+            throw new Error('Document catalog record ID collision');
 
-      const key: DedupClaim = {
-        id: claimId,
-        agentId,
-        sha256: input.document.sha256,
-        documentId: input.document.id,
-      };
-      tx.create(fileRef, encodeRecord(input.file));
-      tx.create(documentRef, encodeRecord(input.document));
-      tx.create(claimRef, encodeRecord(key));
-      let task: Records['tasks'] | null = null;
-      if (job && taskId) {
-        const now = this.store.now();
-        task = newTaskRecord(
-          {
+          const key: DedupClaim = {
+            id: claimId,
             agentId,
-            type: 'adhoc',
-            trust: 'assistant',
-            trigger: {
-              source: 'internal',
-              payload: { job, documentId: input.document.id },
-            },
-            budgetUsdLimit: job === 'documents.process' ? '0.05' : '0.50',
-          },
-          taskId,
-          now,
-        );
-        tx.create(this.store.doc('tasks', task.id), encodeRecord(task));
-        createWakeIntent(tx, this.store, {
-          taskId: task.id,
-          generation: task.queueGeneration,
-          availableAt: task.runAfter ?? now,
+            sha256: input.document.sha256,
+            documentId: input.document.id,
+          };
+          tx.create(fileRef, encodeRecord(input.file));
+          tx.create(documentRef, encodeRecord(input.document));
+          tx.create(claimRef, encodeRecord(key));
+          let task: Records['tasks'] | null = null;
+          if (job && taskId) {
+            const now = this.store.now();
+            task = newTaskRecord(
+              {
+                agentId,
+                type: 'adhoc',
+                trust: 'assistant',
+                trigger: {
+                  source: 'internal',
+                  payload: { job, documentId: input.document.id },
+                },
+                budgetUsdLimit: job === 'documents.process' ? '0.05' : '0.50',
+              },
+              taskId,
+              now,
+            );
+            tx.create(this.store.doc('tasks', task.id), encodeRecord(task));
+            createWakeIntent(tx, this.store, {
+              taskId: task.id,
+              generation: task.queueGeneration,
+              availableAt: task.runAfter ?? now,
+            });
+          }
+          return {
+            document: input.document,
+            duplicate: false,
+            task: task ? { id: task.id, queueGeneration: task.queueGeneration } : null,
+          };
         });
+      } catch (error) {
+        if (!isEmulatorClosedTransaction(error) || attempt >= 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
       }
-      return {
-        document: input.document,
-        duplicate: false,
-        task: task ? { id: task.id, queueGeneration: task.queueGeneration } : null,
-      };
-    });
+    }
   }
 }
