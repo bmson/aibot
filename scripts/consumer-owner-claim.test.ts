@@ -50,6 +50,8 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('consumer owner claim CLI'
         installationId,
       );
     const inspect = createStore();
+    // The repository checks expiry against the real clock, so issue relative to it.
+    const issuedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
     try {
       const preview = await runConsumerOwnerClaimCli(base, { createStore });
       expect(preview).toEqual({ applied: false, claimed: false, grant: 'claim' });
@@ -57,12 +59,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('consumer owner claim CLI'
       const issued = await runConsumerOwnerClaimCli([...base, '--apply'], {
         createStore,
         secret: () => code,
-        now: () => new Date('2026-09-23T12:00:00Z'),
+        now: () => issuedAt,
       });
       expect(issued).toEqual({
         applied: true,
         grant: 'claim',
-        expiresAt: '2026-09-24T12:00:00.000Z',
+        expiresAt: new Date(issuedAt.getTime() + 24 * 3600_000).toISOString(),
         setupUrl: `https://pilot-web-123.us-west1.run.app/setup#claim=${code}`,
       });
       const stored = (await inspect.doc('ownerAuth', 'claim').get()).data();
