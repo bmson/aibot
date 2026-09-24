@@ -105,6 +105,28 @@ export function isCodeJobEnabled(job: string): boolean {
   return !needsGraph || loadConfig().GRAPH_RAG_ENABLED;
 }
 
+/**
+ * Code jobs whose Firestore composition reaches storage only through
+ * `ExecutionPersistence` ports. Every other job still needs PostgreSQL. Under
+ * Firestore those jobs are skipped at the schedule and complete benignly if
+ * already queued, instead of failing into the SQL tripwire and dead-lettering
+ * with an owner notice. Add a job here only with an emulator test that runs it
+ * against a throwing SQL proxy.
+ */
+const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
+  'reminder.notify',
+  'memory.consolidate',
+  'memory.graph_sync',
+  'documents.extract',
+  'watch.suggest',
+]);
+
+/** A completion summary when `job` cannot run on Firestore persistence yet, otherwise null. */
+export function firestoreCodeJobUnavailable(job: string): string | null {
+  if (!CODE_JOBS.has(job) || FIRESTORE_PORTABLE_CODE_JOBS.has(job)) return null;
+  return `${job} skipped because it is not yet available on Firestore persistence`;
+}
+
 export interface CodeJobOutcome {
   done: boolean;
   runAfter?: Date;

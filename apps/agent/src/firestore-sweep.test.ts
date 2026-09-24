@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from '@assistant/config';
+import { firestoreCodeJobUnavailable } from '@assistant/core';
 import type { Db } from '@assistant/db';
-import { createFirestoreExecutionPersistence } from '@assistant/firestore';
+import {
+  createFirestoreExecutionPersistence,
+  FirestoreScheduleRepository,
+} from '@assistant/firestore';
 import {
   installModules,
   type ModuleSweepStep,
@@ -135,6 +139,44 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
     expect(sqlStepRuns).toBe(0);
     expect(portableStepRuns).toBe(1);
     expect(sqlAccesses).toEqual([]);
+  });
+
+  it('fires portable schedules past SQL-only jobs and goal sessions without creating their tasks', async () => {
+    const schedules = new FirestoreScheduleRepository(store);
+    const due = new Date(Date.now() - 60_000);
+    const ensure = (name: string, taskTemplate: Record<string, unknown>) =>
+      schedules.ensure({ agentId, name, cron: '0 9 * * *', taskTemplate, nextRunAt: due });
+    const dream = await ensure('dream', { type: 'scheduled', job: 'dream.run' });
+    const goal = await ensure('goal-session', { type: 'scheduled', goalId: randomUUID() });
+    const consolidation = await ensure('memory-consolidation', {
+      type: 'scheduled',
+      job: 'memory.consolidate',
+    });
+
+    const result = await runFirestoreSweep(deps);
+    expect(result).toMatchObject({ ready: true, report: { schedulesFired: 1 } });
+    const tasks = await store.collection('tasks').get();
+    expect(tasks.docs.map((doc) => doc.get('trigger.payload.job'))).toEqual(['memory.consolidate']);
+    for (const skipped of [dream, goal, consolidation]) {
+      const row = (await store.doc('schedules', skipped.id).get()).data();
+      expect(row?.nextRunAt.toDate().getTime()).toBeGreaterThan(Date.now());
+    }
+    expect(sqlAccesses).toEqual([]);
+  });
+
+  it('names every SQL-only code job and leaves portable ones runnable', () => {
+    expect(firestoreCodeJobUnavailable('dream.run')).toMatch(/not yet available on Firestore/);
+    expect(firestoreCodeJobUnavailable('memory.extract')).not.toBeNull();
+    for (const job of [
+      'reminder.notify',
+      'memory.consolidate',
+      'memory.graph_sync',
+      'documents.extract',
+      'watch.suggest',
+    ])
+      expect(firestoreCodeJobUnavailable(job)).toBeNull();
+    // Unknown names are not code jobs; the executor treats them as model tasks.
+    expect(firestoreCodeJobUnavailable('not.a.job')).toBeNull();
   });
 
   it('runs nothing while an imported workspace awaits activation', async () => {

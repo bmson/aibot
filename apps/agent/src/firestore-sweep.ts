@@ -1,5 +1,7 @@
 import {
   expireStaleApprovals,
+  firestoreCodeJobUnavailable,
+  isCodeJobEnabled,
   releaseStaleReservations,
   renotifyStalledApprovals,
   resumeResolvedApprovalTasks,
@@ -74,7 +76,14 @@ export async function runFirestoreSweep(deps: AgentDeps): Promise<FirestoreSweep
       persistence.watches.expire(deps.config.FIRESTORE_AGENT_ID, new Date()),
     ),
     schedulesFired: await step('runDueSchedules', async () => {
-      const fired = await runDueSchedules(new FirestoreScheduleRepository(store), timezone);
+      const fired = await runDueSchedules(new FirestoreScheduleRepository(store), timezone, {
+        // SQL-only jobs advance their schedule without creating a task.
+        isJobEnabled: (job) => isCodeJobEnabled(job) && !firestoreCodeJobUnavailable(job),
+        // Goal policy has no Firestore adapter yet. Skipping advances the goal's
+        // session schedule without authorizing work. Without this, one goal row
+        // would throw and starve every later schedule in the batch.
+        prepareGoal: async () => ({ action: 'skip' }),
+      });
       for (const item of fired)
         console.log(`schedule fired: ${item.schedule} → ${item.taskId.slice(0, 8)}`);
       return fired.length;

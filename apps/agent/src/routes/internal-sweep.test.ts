@@ -26,6 +26,8 @@ vi.mock('@assistant/core', () => ({
   renotifyStalledAttention: mocks.executeSqlOnlySweep,
   runDueSchedules: mocks.runDueSchedules,
   releaseStaleReservations: mocks.releaseStaleReservations,
+  isCodeJobEnabled: () => true,
+  firestoreCodeJobUnavailable: (job: string) => (job === 'dream.run' ? 'unavailable' : null),
   backfillMessageEmbeddings: mocks.executeSqlOnlySweep,
   emitBudgetNotices: mocks.executeSqlOnlySweep,
   getAgent: mocks.executeSqlOnlySweep,
@@ -137,7 +139,15 @@ describe('POST /internal/sweep in Firestore mode', () => {
     expect(mocks.runDueSchedules).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'schedule-repository', store: f.store }),
       'America/Los_Angeles',
+      expect.objectContaining({ prepareGoal: expect.any(Function) }),
     );
+    const options = mocks.runDueSchedules.mock.calls[0]?.[2] as {
+      isJobEnabled: (job: string) => boolean;
+      prepareGoal: () => Promise<unknown>;
+    };
+    expect(options.isJobEnabled('dream.run')).toBe(false);
+    expect(options.isJobEnabled('memory.consolidate')).toBe(true);
+    await expect(options.prepareGoal()).resolves.toEqual({ action: 'skip' });
     expect(f.db.execute).not.toHaveBeenCalled();
     expect(mocks.executeSqlOnlySweep).not.toHaveBeenCalled();
   });
