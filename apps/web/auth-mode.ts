@@ -1,4 +1,4 @@
-export type AuthMode = 'google' | 'dev-bypass' | 'disabled';
+export type AuthMode = 'google' | 'passkey' | 'dev-bypass' | 'disabled';
 
 function isLoopbackUrl(value: string): boolean {
   try {
@@ -7,6 +7,23 @@ function isLoopbackUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The exact WebAuthn origin for passkey mode: an HTTPS origin with no path,
+ * or loopback HTTP for local development. Returns null when unusable.
+ */
+export function passkeyOrigin(authUrl: string): { origin: string; rpId: string } | null {
+  let url: URL;
+  try {
+    url = new URL(authUrl);
+  } catch {
+    return null;
+  }
+  if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) return null;
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopbackUrl(authUrl)))
+    return null;
+  return { origin: url.origin, rpId: url.hostname };
 }
 
 /**
@@ -65,9 +82,25 @@ export function resolveAuthMode(options: {
   authUrl?: string;
   queueDriver?: 'local' | 'cloudtasks';
   nodeEnv: string | undefined;
+  ownerAuthMode?: 'google' | 'passkey';
+  persistenceDriver?: 'postgres' | 'firestore';
+  authSecret?: string;
 }): AuthMode {
   if (options.devBypass && options.nodeEnv === 'production') {
     throw new Error('AUTH_DEV_BYPASS must not be enabled in production');
+  }
+  if (options.ownerAuthMode === 'passkey') {
+    if (options.devBypass || options.localhostBypass)
+      throw new Error('OWNER_AUTH_MODE=passkey cannot be combined with an auth bypass');
+    if (options.persistenceDriver !== 'firestore')
+      throw new Error('OWNER_AUTH_MODE=passkey requires PERSISTENCE_DRIVER=firestore');
+    if ((options.authSecret ?? '').length < 32)
+      throw new Error('OWNER_AUTH_MODE=passkey requires an AUTH_SECRET of at least 32 characters');
+    if (!passkeyOrigin(options.authUrl ?? ''))
+      throw new Error(
+        'OWNER_AUTH_MODE=passkey requires AUTH_URL to be an HTTPS origin (or loopback HTTP)',
+      );
+    return 'passkey';
   }
   if (
     options.localhostBypass &&

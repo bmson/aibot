@@ -19,6 +19,8 @@
     "@assistant/modules": "workspace:*",
     "@assistant/persistence": "workspace:*",
     "@assistant/tools": "workspace:*",
+    "@simplewebauthn/browser": "^14.0.0",
+    "@simplewebauthn/server": "^14.0.2",
     "ai": "^7.0.107",
     "dompurify": "^3.4.15",
     "katex": "^0.18.5",

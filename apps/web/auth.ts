@@ -10,6 +10,8 @@ import { requestLooksLoopback, resolveAuthMode } from './auth-mode';
 const config = loadConfig();
 
 /**
+ * passkey    — OWNER_AUTH_MODE=passkey; WebAuthn owner sign-in stored in Firestore,
+ *              no Google OAuth client (customer-owned installations).
  * google     — AUTH_GOOGLE_ID is set; real Google sign-in, allowlisted to the owner.
  * dev-bypass — explicitly enabled for development or loopback-only Docker; auth is skipped.
  * disabled   — auth is not configured; every request is rejected (401).
@@ -21,6 +23,9 @@ export const authMode = resolveAuthMode({
   authUrl: config.AUTH_URL,
   queueDriver: config.QUEUE_DRIVER,
   nodeEnv: process.env.NODE_ENV,
+  ownerAuthMode: config.OWNER_AUTH_MODE,
+  persistenceDriver: config.PERSISTENCE_DRIVER,
+  authSecret: config.AUTH_SECRET,
 });
 
 if (authMode === 'dev-bypass') {
@@ -79,6 +84,12 @@ export async function isAuthed(): Promise<OwnerSession | null> {
     return { user: { email: config.OWNER_EMAIL, name: 'Owner (dev)' } };
   }
   if (authMode === 'disabled') return null;
+  if (authMode === 'passkey') {
+    const { currentOwnerSession } = await import('./lib/owner-auth/runtime');
+    return (await currentOwnerSession())
+      ? { user: { email: config.OWNER_EMAIL, name: config.OWNER_NAME } }
+      : null;
+  }
   const session = await auth();
   if (session?.user?.email === config.OWNER_EMAIL) {
     return { user: { email: session.user.email, name: session.user.name } };
@@ -87,12 +98,13 @@ export async function isAuthed(): Promise<OwnerSession | null> {
 }
 
 /**
- * Page guard: redirects to the sign-in page when Google auth is configured,
+ * Page guard: redirects to the sign-in page when Google or passkey auth is configured,
  * renders the 401 page when auth is unconfigured in production.
  */
 export async function requireOwner(): Promise<OwnerSession> {
   const session = await isAuthed();
   if (session) return session;
   if (authMode === 'google') redirect('/api/auth/signin');
+  if (authMode === 'passkey') redirect('/signin');
   unauthorized();
 }
