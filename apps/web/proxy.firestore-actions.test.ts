@@ -49,4 +49,14 @@ describe('Firestore mobile and web ingress', () => {
     expect(status(path, 'PATCH')).toBe(503);
     expect(status('/api/mobile/v1/knowledge/relations/not-a-uuid', 'GET')).toBe(503);
   });
+
+  it('passes passkey owner-auth pages and endpoints', () => {
+    for (const path of ['/setup', '/signin', '/security']) {
+      expect(status(path, 'GET')).toBe(200);
+      expect(status(path, 'POST')).toBe(503);
+    }
+    for (const method of ['GET', 'POST', 'DELETE'])
+      expect(status('/api/owner/passkeys', method)).toBe(200);
+    expect(status('/api/owner/claim', 'PUT')).toBe(503);
+  });
 });

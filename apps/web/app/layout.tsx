@@ -4,7 +4,7 @@ import type { Metadata, Viewport } from 'next';
 import { JetBrains_Mono } from 'next/font/google';
 import Script from 'next/script';
 import type { CSSProperties, ReactNode } from 'react';
-import { auth, authMode } from '@/auth';
+import { auth, authMode, isAuthed } from '@/auth';
 import { getAgentIdentity, getChatApplication } from '@/lib/server';
 import { NavCommandsProvider, type NavDestination } from './nav-commands';
 import { NotchCompanion } from './notch-companion';
@@ -228,6 +228,24 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         item.href === '/chat' ||
         item.href === '/chat/all'),
   );
+  // Passkey installations serve /setup and /signin through this layout, so an
+  // anonymous visitor must not receive shell counts or presence.
+  const passkeyOwner = authMode === 'passkey' ? await isAuthed() : null;
+  if (authMode === 'passkey' && !passkeyOwner) {
+    return (
+      <html lang="en" className={mono.variable} suppressHydrationWarning>
+        <head>
+          {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static no-flash theme script */}
+          <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        </head>
+        <body className="flex min-h-dvh flex-col bg-surface font-sans text-strong antialiased">
+          <main className="app-main page-gutter relative z-10 min-w-0 flex-1 py-5 lg:py-7">
+            {children}
+          </main>
+        </body>
+      </html>
+    );
+  }
   const identity = await getAgentIdentity();
   const [shell, session] = await Promise.all([
     identity.id
@@ -293,7 +311,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           presence={dashboard.presence}
           pollShellStatus={config.PERSISTENCE_DRIVER !== 'firestore'}
         />
-        <NavCommandsProvider destinations={destinations} signedIn={!!session?.user}>
+        <NavCommandsProvider
+          destinations={destinations}
+          signedIn={authMode === 'passkey' ? Boolean(passkeyOwner) : !!session?.user}
+        >
           <main className="app-main page-gutter relative z-10 min-w-0 flex-1 py-5 lg:py-7">
             {children}
           </main>
