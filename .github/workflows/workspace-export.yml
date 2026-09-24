@@ -29,6 +29,11 @@ on:
         required: true
         default: (default)
         type: string
+      database_secret:
+        description: Source URL secret (database-url-final-export reads the fenced snapshot)
+        required: true
+        default: database-url
+        type: string
 
 permissions:
   contents: read
@@ -50,6 +55,7 @@ jobs:
       MIGRATION_EMBEDDING_DIMENSIONS: ${{ inputs.embedding_dimensions }}
       MIGRATION_EMBEDDING_REVISION: ${{ inputs.embedding_revision }}
       FIRESTORE_TARGET_DATABASE_ID: ${{ inputs.firestore_database_id }}
+      EXPORT_DATABASE_SECRET: ${{ inputs.database_secret }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Authenticate to Google Cloud
