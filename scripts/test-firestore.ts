@@ -44,6 +44,7 @@ const child = spawn(
     'apps/web/app/api/mobile/v1/knowledge/route.firestore.test.ts',
     'apps/web/lib/firestore-mobile-workspace.test.ts',
     'scripts/firestore-watch-smoke.test.ts',
+    'scripts/consumer-owner-claim.test.ts',
     'scripts/profile-library-parity.test.ts',
     'scripts/profile-people-read.test.ts',
     'scripts/mobile-workspace-memory.test.ts',

@@ -1,5 +1,56 @@
 import { describe, expect, it } from 'vitest';
-import { requestLooksLoopback, resolveAuthMode } from './auth-mode.js';
+import { passkeyOrigin, requestLooksLoopback, resolveAuthMode } from './auth-mode.js';
+
+describe('passkey owner auth mode', () => {
+  const passkey = {
+    googleClientId: '',
+    devBypass: false,
+    nodeEnv: 'production',
+    ownerAuthMode: 'passkey' as const,
+    persistenceDriver: 'firestore' as const,
+    authSecret: 'x'.repeat(48),
+    authUrl: 'https://assistant-web-123.us-west1.run.app',
+  };
+
+  it('selects passkeys without a Google OAuth client', () => {
+    expect(resolveAuthMode(passkey)).toBe('passkey');
+    expect(resolveAuthMode({ ...passkey, googleClientId: 'ignored-client' })).toBe('passkey');
+  });
+
+  it('fails closed on unsafe or incomplete passkey configuration', () => {
+    expect(() => resolveAuthMode({ ...passkey, persistenceDriver: 'postgres' })).toThrow(
+      'PERSISTENCE_DRIVER=firestore',
+    );
+    expect(() => resolveAuthMode({ ...passkey, authSecret: 'short' })).toThrow('AUTH_SECRET');
+    expect(() => resolveAuthMode({ ...passkey, authUrl: 'http://assistant.example.com' })).toThrow(
+      'HTTPS origin',
+    );
+    expect(() => resolveAuthMode({ ...passkey, authUrl: 'https://a.example.com/app' })).toThrow(
+      'HTTPS origin',
+    );
+    expect(() =>
+      resolveAuthMode({
+        ...passkey,
+        localhostBypass: true,
+        authUrl: 'http://localhost:3000',
+        queueDriver: 'local',
+      }),
+    ).toThrow('cannot be combined');
+  });
+
+  it('derives the exact relying-party origin and hostname', () => {
+    expect(passkeyOrigin('https://assistant.example.com')).toEqual({
+      origin: 'https://assistant.example.com',
+      rpId: 'assistant.example.com',
+    });
+    expect(passkeyOrigin('http://localhost:3000')).toEqual({
+      origin: 'http://localhost:3000',
+      rpId: 'localhost',
+    });
+    expect(passkeyOrigin('https://user:pw@example.com')).toBeNull();
+    expect(passkeyOrigin('not a url')).toBeNull();
+  });
+});
 
 describe('resolveAuthMode', () => {
   it('fails closed when Google auth and the explicit bypass are absent', () => {
