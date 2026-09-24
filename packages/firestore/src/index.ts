@@ -94,7 +94,7 @@ export { FirestoreProfileVoiceOverviewRepository } from './profile-overview.js';
 export { FirestoreProfilePeopleCommandRepository } from './profile-people-command.js';
 export { FirestoreProfilePeopleReadRepository } from './profile-people-read.js';
 export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
-export { FirestoreReminderRepository } from './reminders.js';
+export { FirestoreReminderDeliveryRepository, FirestoreReminderRepository } from './reminders.js';
 export {
   checkFirestoreRuntimeData,
   type RuntimeDataIssue,
