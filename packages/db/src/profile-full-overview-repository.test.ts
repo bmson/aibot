@@ -82,4 +82,62 @@ describe('PostgreSQL full Profile overview', () => {
       await db.$client.end();
     }
   });
+
+  /**
+   * The mobile workspace endpoint (Memory and All chats on iOS) reads this
+   * overview. A real owner has thousands of facts about themselves, so the
+   * view must show the highest-priority slice rather than reject the read —
+   * throwing here turned the whole endpoint into a 500.
+   */
+  it('returns the highest-priority owner facts and people when counts exceed the view limits', async () => {
+    const db = createDb(DATABASE_URL);
+    const rollback = new Error('test rollback');
+    try {
+      await expect(
+        db.transaction(async (tx) => {
+          const repository = createPostgresProfileOverviewRepository(tx as unknown as Db);
+          const before = await repository.load();
+          const configured = await tx.select({ id: agents.id }).from(agents).limit(2);
+          if (!configured[0] || !before.owner) throw new Error('Test seed is incomplete');
+          const agentId = configured[0].id;
+          const ownerId = before.owner.id;
+          const pinnedId = randomUUID();
+          const lowestId = randomUUID();
+          await tx.insert(memories).values(
+            Array.from({ length: 300 }, (_, index) => ({
+              id: index === 0 ? pinnedId : index === 1 ? lowestId : randomUUID(),
+              agentId,
+              category: 'knowledge' as const,
+              kind: 'fact',
+              content: `Owner fact ${index}`,
+              contentHash: randomUUID(),
+              subjectContactId: ownerId,
+              pinned: index === 0,
+              importance: index === 1 ? 0 : 3,
+            })),
+          );
+          // Sorts ahead of any seeded name so the owner falls outside the page.
+          await tx.insert(contacts).values(
+            Array.from({ length: 501 }, (_, index) => ({
+              id: randomUUID(),
+              name: `  Profile limit person ${String(index).padStart(3, '0')}`,
+              trust: 'known' as const,
+              relationship: 'friend',
+            })),
+          );
+
+          const after = await repository.load();
+          expect(after.owner?.id).toBe(ownerId);
+          expect(after.ownerFacts).toHaveLength(250);
+          expect(after.ownerFacts[0]?.id).toBe(pinnedId);
+          expect(after.ownerFacts.map((fact) => fact.id)).not.toContain(lowestId);
+          expect(after.people.length).toBeLessThanOrEqual(500);
+          expect(after.people.some((row) => row.contact.id === ownerId)).toBe(false);
+          throw rollback;
+        }),
+      ).rejects.toBe(rollback);
+    } finally {
+      await db.$client.end();
+    }
+  });
 });
