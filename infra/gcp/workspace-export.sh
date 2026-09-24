@@ -12,6 +12,9 @@ EMBEDDING_MODEL="${MIGRATION_EMBEDDING_MODEL:?Set MIGRATION_EMBEDDING_MODEL}"
 EMBEDDING_DIMENSIONS="${MIGRATION_EMBEDDING_DIMENSIONS:?Set MIGRATION_EMBEDDING_DIMENSIONS}"
 EMBEDDING_REVISION="${MIGRATION_EMBEDDING_REVISION:?Set MIGRATION_EMBEDDING_REVISION}"
 DATABASE_ID="${FIRESTORE_TARGET_DATABASE_ID:-(default)}"
+# The final cutover exports the fenced, read-only Neon snapshot branch through a
+# separate secret; rehearsals keep reading the application's database-url.
+DATABASE_SECRET="${EXPORT_DATABASE_SECRET:-database-url}"
 
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'EXPORT_RELEASE_SHA must be a full commit SHA' >&2; exit 2; }
 [[ "$SOURCE_AGENT_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo 'Invalid source agent ID' >&2; exit 2; }
@@ -20,6 +23,7 @@ DATABASE_ID="${FIRESTORE_TARGET_DATABASE_ID:-(default)}"
 [[ "$EMBEDDING_DIMENSIONS" =~ ^[0-9]+$ ]] || { echo 'Invalid embedding dimensions' >&2; exit 2; }
 [[ "$EMBEDDING_REVISION" =~ ^[a-zA-Z0-9._/-]+$ ]] || { echo 'Invalid embedding revision' >&2; exit 2; }
 [[ "$DATABASE_ID" =~ ^[a-zA-Z0-9_()-]+$ ]] || { echo 'Invalid Firestore database ID' >&2; exit 2; }
+[[ "$DATABASE_SECRET" =~ ^database-url(-[a-z0-9-]+)?$ ]] || { echo 'Invalid export database secret' >&2; exit 2; }
 
 agent_service="$(gcloud run services describe assistant-agent --project "$PROJECT" --region "$REGION" --format=json)"
 agent_env_value() {
@@ -73,7 +77,7 @@ job_args=(
   --project "$PROJECT" --region "$REGION" --image "$image"
   --service-account "assistant-agent@${PROJECT}.iam.gserviceaccount.com"
   --command pnpm '--args=--filter,@assistant/db,workspace-export-job'
-  --env-vars-file "$env_file" --set-secrets DATABASE_URL=database-url:latest
+  --env-vars-file "$env_file" --set-secrets "DATABASE_URL=${DATABASE_SECRET}:latest"
   --memory 2Gi --cpu 2 --task-timeout 3600 --max-retries 0 --quiet
 )
 if gcloud run jobs describe assistant-workspace-export --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then

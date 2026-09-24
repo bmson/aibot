@@ -61,6 +61,7 @@
     "workspace:import": "tsx scripts/workspace-migration-import.ts",
     "workspace:assets-audit": "tsx scripts/workspace-asset-audit.ts",
     "workspace:assets-recover": "tsx scripts/workspace-asset-recovery.ts",
+    "cutover:neon-fence": "tsx scripts/cutover-neon-fence.ts",
     "consumer:install": "tsx scripts/consumer-install.ts",
     "consumer:prepare": "tsx scripts/consumer-prepare.ts",
     "consumer:seed-runtime": "tsx scripts/consumer-runtime-seed.ts",
