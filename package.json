@@ -67,6 +67,7 @@
     "consumer:install": "tsx scripts/consumer-install.ts",
     "consumer:prepare": "tsx scripts/consumer-prepare.ts",
     "consumer:seed-runtime": "tsx scripts/consumer-runtime-seed.ts",
+    "consumer:owner-claim": "tsx scripts/consumer-owner-claim.ts",
     "consumer:publish-images": "tsx scripts/consumer-publish-images.ts"
   },
   "devDependencies": {

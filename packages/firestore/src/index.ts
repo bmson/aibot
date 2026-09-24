@@ -46,6 +46,26 @@ export {
   type WakeIntent,
   wakeIntentId,
 } from './outbox.js';
+export {
+  FirestoreOwnerAuthRepository,
+  generateOwnerSecret,
+  generateRecoveryCode,
+  MAX_OWNER_DEVICES,
+  MAX_OWNER_PASSKEYS,
+  type NewOwnerPasskey,
+  normalizeRecoveryCode,
+  OWNER_CLAIM_TTL_MS,
+  OwnerAuthRejectedError,
+  type OwnerAuthRejection,
+  type OwnerAuthState,
+  type OwnerChallengeUse,
+  type OwnerClaimGrant,
+  type OwnerDevice,
+  type OwnerPasskey,
+  type OwnerRegistrationAuthorization,
+  type OwnerSecretPurpose,
+  ownerSecretVerifier,
+} from './owner-auth.js';
 export { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 export { FirestoreOwnerContextRepository } from './owner-context.js';
 export { FirestoreOwnerKnowledgeGraphFactRepository } from './owner-knowledge-graph-fact.js';

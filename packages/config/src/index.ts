@@ -107,6 +107,12 @@ const ConfigSchema = z.object({
   /** Optional separate production URL used by local deployment scripts. */
   PROD_DATABASE_URL: z.string().default(''),
   AUTH_SECRET: z.string().default(''),
+  /**
+   * `passkey` signs the owner in with WebAuthn credentials stored in Firestore
+   * and needs no Google OAuth client. The installer issues a single-use claim
+   * link; see docs/consumer-owner-passkeys.md.
+   */
+  OWNER_AUTH_MODE: z.enum(['google', 'passkey']).default('google'),
   AUTH_GOOGLE_ID: z.string().default(''),
   AUTH_GOOGLE_SECRET: z.string().default(''),
   AUTH_URL: z.string().default(''),

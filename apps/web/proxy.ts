@@ -37,6 +37,9 @@ export function proxy(request: NextRequest) {
     /^\/api\/mobile\/v1\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (
     path.startsWith('/api/auth/') ||
+    // Passkey owner auth; each route returns 404 unless OWNER_AUTH_MODE=passkey.
+    (path.startsWith('/api/owner/') && ['GET', 'POST', 'DELETE'].includes(request.method)) ||
+    (['/setup', '/signin', '/security'].includes(path) && request.method === 'GET') ||
     (path === '/api/health' && request.method === 'GET') ||
     (path === '/' && request.method === 'GET') ||
     (path === '/profile/memories' && request.method === 'GET') ||
