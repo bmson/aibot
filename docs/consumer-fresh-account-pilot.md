@@ -34,10 +34,10 @@ ARGS="--manifest $DIR/install-manifest.json --archive $PWD/../assistant-source.t
 In the shell:
 
 ```sh
+export PROJECT=pilot-assistant-1234 REGION=us-central1 INSTALL=pilot
 gcloud auth login                     # the new account
 gcloud auth application-default login # optional; otherwise pass --gcloud-auth below
 gcloud config set project $PROJECT
-export PROJECT=pilot-assistant-1234 REGION=us-central1 INSTALL=pilot
 ```
 
 Choose a region where Cloud Run, Firestore, and the Vertex models you select are all available. The Firestore location is permanent.
