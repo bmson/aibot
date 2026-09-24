@@ -62,7 +62,6 @@ import {
 } from './use-chat-polling';
 
 interface ChatClientProps {
-  firestorePreview?: boolean;
   conversationId: string;
   title: string;
   /** The assistant's display name — the chat header shows who you're talking to. */
@@ -144,7 +143,6 @@ function matchesToken(entry: SlashEntry, token: string): boolean {
 }
 
 export function ChatClient({
-  firestorePreview = false,
   conversationId,
   title,
   agentName,
@@ -983,7 +981,6 @@ export function ChatClient({
           ) : (
             <div className="mt-auto flex min-w-0 flex-col">
               <ChatLog
-                legacyActionsAvailable={!firestorePreview}
                 log={log}
                 busy={busy}
                 streaming={status === 'streaming'}
@@ -1014,11 +1011,9 @@ export function ChatClient({
               {asyncNote ? (
                 <p role="status" className="mt-3 text-xs text-stage-muted">
                   {asyncNote.text}{' '}
-                  {!firestorePreview ? (
-                    <Link href="/tasks" className="font-medium underline underline-offset-2">
-                      Open Activity
-                    </Link>
-                  ) : null}
+                  <Link href="/tasks" className="font-medium underline underline-offset-2">
+                    Open Activity
+                  </Link>
                   {asyncNote.retryable && !busy && lastSubmittedText.trim() !== '' ? (
                     <>
                       {' · '}
@@ -1133,7 +1128,6 @@ export function ChatClient({
           ) : null}
           {error && errorInfo ? (
             <ChatErrorBanner
-              showCostsLink={!firestorePreview}
               error={errorInfo}
               canRetry={lastSubmittedText.trim() !== '' && input === ''}
               onRetry={retryLastTurn}
@@ -1359,14 +1353,6 @@ export function ChatClient({
                 <Square className="size-3 fill-current" aria-hidden="true" />
                 <span className="sr-only">Stop</span>
               </button>
-            ) : asyncTurn && firestorePreview ? (
-              <span
-                role="status"
-                className="inline-flex size-10 shrink-0 items-center justify-center"
-                aria-label="Task running"
-              >
-                <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-              </span>
             ) : asyncTurn ? (
               // The spinner IS the stop control. It used to be an inert badge
               // saying "busy" while the button that could actually stop the

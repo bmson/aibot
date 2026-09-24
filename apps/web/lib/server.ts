@@ -54,6 +54,7 @@ import {
   recordOwnerForeground,
   recordOwnerLocationPing,
   recordRecallFeedback,
+  recordRecallFeedbackWithRepository,
   registerDeviceToken,
   resolveOwnerCommitment,
   restoreChatConversation,
@@ -106,6 +107,7 @@ import {
   FirestoreGoalMutationRepository,
   FirestoreMcpConnectionMutationRepository,
   FirestoreOwnerKnowledgeGraphFactRepository,
+  FirestoreRecallFeedbackRepository,
   FirestoreShellStatusRepository,
   FirestoreSkillMutationRepository,
 } from '@assistant/firestore';
@@ -500,6 +502,7 @@ function createFirestoreChatApplication() {
   );
   const embeddingSpace = parseFirestoreEmbeddingSpace(config.FIRESTORE_EMBEDDING_SPACE);
   const chat = new FirestoreApplicationChatPersistence(store, config.FIRESTORE_AGENT_ID);
+  const recallFeedback = new FirestoreRecallFeedbackRepository(store);
   const shellStatus = new FirestoreShellStatusRepository(store, config.FIRESTORE_AGENT_ID);
   const router = new ModelRouter(
     persistence.modelRouting,
@@ -640,6 +643,13 @@ function createFirestoreChatApplication() {
     getChatUpdates: (input: Parameters<typeof waitForChatUpdates>[1]) =>
       waitForChatUpdates(chatReads, input),
     isValidChatCursor,
+    recordRecallFeedback: (messageId: string, verdict: 'helpful' | 'not_helpful') =>
+      recordRecallFeedbackWithRepository(
+        recallFeedback,
+        config.FIRESTORE_AGENT_ID,
+        messageId,
+        verdict,
+      ),
   };
 }
 

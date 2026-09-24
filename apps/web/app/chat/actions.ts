@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { isAuthed } from '@/auth';
-import { getApplication, getChatApplication } from '@/lib/server';
+import { getChatApplication } from '@/lib/server';
 
 function revalidateChatViews(conversationId?: string): void {
   revalidatePath('/chat');
@@ -70,5 +70,5 @@ export async function recordRecallFeedbackAction(
   verdict: 'helpful' | 'not_helpful',
 ): Promise<void> {
   if (!(await isAuthed())) throw new Error('unauthorized');
-  await getApplication().recordRecallFeedback(messageId, verdict);
+  await getChatApplication().recordRecallFeedback(messageId, verdict);
 }

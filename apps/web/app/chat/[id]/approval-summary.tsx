@@ -21,13 +21,7 @@ function receiptFor(outcome: ApprovalSummaryOutcome) {
 }
 
 /** One dashboard mirror per parked task; exact action payload stays on Approvals. */
-export function ApprovalSummaryCard({
-  summary,
-  showReviewLink = true,
-}: {
-  summary: ApprovalSummaryPart;
-  showReviewLink?: boolean;
-}) {
+export function ApprovalSummaryCard({ summary }: { summary: ApprovalSummaryPart }) {
   const outcomes = summary.outcomes ?? [];
   // `pendingCount` is the hydrated truth. Without it — a legacy row hydration
   // could not resolve — fall back to the count frozen into the part.
@@ -66,12 +60,10 @@ export function ApprovalSummaryCard({
       icon={Hand}
       label="Approval needed to continue"
       action={
-        showReviewLink ? (
-          <Link href="/approvals" className={btnSm.outline}>
-            Review approvals
-            <ArrowUpRight className="size-3" aria-hidden="true" />
-          </Link>
-        ) : undefined
+        <Link href="/approvals" className={btnSm.outline}>
+          Review approvals
+          <ArrowUpRight className="size-3" aria-hidden="true" />
+        </Link>
       }
     >
       <p className="text-sm font-medium text-strong">{summary.purpose}</p>
@@ -79,11 +71,6 @@ export function ApprovalSummaryCard({
         {countLabel}
         {answeredLabel}
       </p>
-      {!showReviewLink ? (
-        <p className="mt-1.5 text-xs text-muted">
-          Decision controls are unavailable in this chat right now.
-        </p>
-      ) : null}
     </DecisionCard>
   );
 }
