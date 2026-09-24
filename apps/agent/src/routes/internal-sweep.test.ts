@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   resumeResolvedApprovalTasks: vi.fn(),
   renotifyStalledApprovals: vi.fn(),
   runDueSchedules: vi.fn(),
+  releaseStaleReservations: vi.fn(),
   executeSqlOnlySweep: vi.fn(),
   notifyApproval: vi.fn(),
 }));
@@ -24,6 +25,7 @@ vi.mock('@assistant/core', () => ({
   renotifyStalledApprovals: mocks.renotifyStalledApprovals,
   renotifyStalledAttention: mocks.executeSqlOnlySweep,
   runDueSchedules: mocks.runDueSchedules,
+  releaseStaleReservations: mocks.releaseStaleReservations,
   backfillMessageEmbeddings: mocks.executeSqlOnlySweep,
   emitBudgetNotices: mocks.executeSqlOnlySweep,
   getAgent: mocks.executeSqlOnlySweep,
@@ -80,7 +82,8 @@ function fixture() {
       throw new Error('SQL must not run');
     }),
   };
-  const persistence = { approvals, messages, watches };
+  const costs = { kind: 'cost-repository' };
+  const persistence = { driver: 'firestore', approvals, messages, watches, costs };
   const deps = {
     config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: 'agent-1' },
     db,
@@ -103,6 +106,7 @@ beforeEach(() => {
   mocks.renotifyStalledApprovals.mockResolvedValue(2);
   mocks.runDueSchedules.mockResolvedValue([{ schedule: 'morning', taskId: 'task-fired' }]);
   mocks.firestoreMaintenanceReady.mockResolvedValue(true);
+  mocks.releaseStaleReservations.mockResolvedValue(4);
 });
 
 describe('POST /internal/sweep in Firestore mode', () => {
@@ -120,7 +124,9 @@ describe('POST /internal/sweep in Firestore mode', () => {
       renotifiedApprovals: 2,
       expiredWatches: 3,
       schedulesFired: 1,
+      releasedReservations: 4,
     });
+    expect(mocks.releaseStaleReservations).toHaveBeenCalledWith(f.persistence.costs, 120, 500);
     expect(mocks.expireStaleApprovals).toHaveBeenCalledWith(f.persistence.approvals);
     expect(mocks.resumeResolvedApprovalTasks).toHaveBeenCalledWith(f.persistence.approvals);
     expect(mocks.renotifyStalledApprovals).toHaveBeenCalledWith(

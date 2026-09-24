@@ -6,18 +6,11 @@ import {
   findDueTasks,
   resumeResolvedApprovalTasks,
 } from '@assistant/core';
-import { FirestoreScheduleRepository } from '@assistant/firestore';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { latestCanaryRun, runCanaries } from '../canaries.js';
-import {
-  agentServices,
-  buildDeps,
-  composedModuleMetas,
-  firestoreMaintenanceReady,
-  firestoreOwnerReady,
-} from '../deps.js';
+import { agentServices, buildDeps, composedModuleMetas, firestoreOwnerReady } from '../deps.js';
 import { oidcAudienceForPath, verifyInternalAuthorization } from '../google-oidc.js';
 
 /**
@@ -117,83 +110,10 @@ internal.post('/model-probe/vertex', async (c) => {
 internal.post('/sweep', async (c) => {
   const deps = buildDeps();
   if (deps.config.PERSISTENCE_DRIVER === 'firestore') {
-    let ready = false;
-    try {
-      ready = await firestoreMaintenanceReady(deps);
-    } catch (err) {
-      console.error('Firestore maintenance readiness check failed', err);
-    }
-    if (!ready)
-      return c.json({ error: 'Firestore installation is not ready for maintenance' }, 503);
-
-    const store = deps.firestoreStore;
-    const persistence = deps.persistence;
-    if (!store || !persistence?.approvals || !persistence.messages || !persistence.watches)
-      return c.json({ error: 'Firestore maintenance persistence is unavailable' }, 503);
-    let timezone: string | undefined;
-    try {
-      const owner = await store.doc('agents', deps.config.FIRESTORE_AGENT_ID).get();
-      const configuredTimezone = owner.get('timezone');
-      if (
-        owner.exists &&
-        owner.get('id') === deps.config.FIRESTORE_AGENT_ID &&
-        typeof configuredTimezone === 'string' &&
-        configuredTimezone.trim()
-      )
-        timezone = configuredTimezone;
-    } catch (err) {
-      console.error('Firestore schedule timezone read failed', err);
-    }
-    if (!timezone) return c.json({ error: 'Firestore agent timezone is unavailable' }, 503);
-
-    const {
-      expireStaleApprovals,
-      renotifyStalledApprovals,
-      resumeResolvedApprovalTasks,
-      runDueSchedules,
-    } = await import('@assistant/core');
-    const { executorDeps } = await import('../executor-deps.js');
-    const step = async <T>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
-      try {
-        return await fn();
-      } catch (err) {
-        console.error(`sweep step failed: ${name}`, err);
-        return fallback;
-      }
-    };
-
-    const expiredApprovals = await step(
-      'expireStaleApprovals',
-      () => expireStaleApprovals(persistence.approvals),
-      [] as string[],
-    );
-    const resumedApprovalTasks = await step(
-      'resumeResolvedApprovalTasks',
-      () => resumeResolvedApprovalTasks(persistence.approvals),
-      [] as string[],
-    );
-    const renotifiedApprovals = await step(
-      'renotifyStalledApprovals',
-      () => renotifyStalledApprovals(persistence, executorDeps(deps).notifyApproval),
-      0,
-    );
-    const expiredWatches = await step(
-      'expireWatches',
-      () => persistence.watches.expire(deps.config.FIRESTORE_AGENT_ID, new Date()),
-      0,
-    );
-    const fired = await step(
-      'runDueSchedules',
-      () => runDueSchedules(new FirestoreScheduleRepository(store), timezone),
-      [] as Awaited<ReturnType<typeof runDueSchedules>>,
-    );
-    return c.json({
-      expiredApprovalsWoke: expiredApprovals.length,
-      resumedApprovalTasks: resumedApprovalTasks.length,
-      renotifiedApprovals,
-      expiredWatches,
-      schedulesFired: fired.length,
-    });
+    const { runFirestoreSweep } = await import('../firestore-sweep.js');
+    const result = await runFirestoreSweep(deps);
+    if (!result.ready) return c.json({ error: result.error }, 503);
+    return c.json(result.report);
   }
   const {
     backfillMessageEmbeddings,
