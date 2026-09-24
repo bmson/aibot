@@ -1,8 +1,8 @@
 import { ProposalCard, type ProposalView } from '@/app/improvements/proposal-card';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
-import { getApplication } from '@/lib/server';
 import { cardGridClass, EmptyState, PageHeader, PageShell } from '@/lib/ui';
+import { listOpenImprovements } from '@/lib/workspace-reviews';
 
 export const metadata = { title: 'Improvements' };
 
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 export default async function ImprovementsPage() {
   await requireOwner();
   const now = new Date();
-  const rows = await getApplication().listImprovementProposals();
+  const rows = await listOpenImprovements();
 
   const proposals: ProposalView[] = rows.map((p) => {
     const change = (p.change ?? {}) as { suggestion?: unknown };

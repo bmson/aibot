@@ -1,16 +1,9 @@
-import { type EmbeddingSpace, embeddingModelId } from '@assistant/persistence';
+import {
+  type EmbeddingSpace,
+  embeddingModelId,
+  MODEL_ROLE_NAMES as REQUIRED_ROLES,
+} from '@assistant/persistence';
 import type { InstallationStore } from './store.js';
-
-const REQUIRED_ROLES = [
-  'plan',
-  'classify',
-  'extract',
-  'draft',
-  'reason',
-  'rewrite',
-  'embed',
-  'batch',
-] as const;
 
 export interface RuntimeDataIssue {
   code:
