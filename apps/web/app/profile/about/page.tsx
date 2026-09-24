@@ -1,17 +1,12 @@
-import {
-  getOwnerFactsView,
-  getProfileOverview,
-  type MemorySnapshot,
-  type ProfileOverview,
-} from '@assistant/application/profile';
-import { loadConfig } from '@assistant/config';
-import { createInstallationStore, FirestoreProfileOverviewRepository } from '@assistant/firestore';
+import { getOwnerFactsView, type MemorySnapshot } from '@assistant/application/profile';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { FirestoreProfilePeopleReadRepository } from '@assistant/firestore';
 import { recompileCard } from '@/app/profile/actions';
 import { AddFact } from '@/app/profile/add-fact';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getDb, getFirestoreInstallationStore } from '@/lib/server';
 import {
   Badge,
   cardShellClass,
@@ -62,124 +57,23 @@ function toFactView(m: MemorySnapshot, now: Date, inCard: boolean): FactView {
   };
 }
 
-function ReadOnlyAbout({ overview, now }: { overview: ProfileOverview; now: Date }) {
-  const { owner, ownerFacts, card, cardFactIds } = overview;
-  const inCard = new Set(cardFactIds);
-  const byDomain = DOMAIN_ORDER.map((domain) => ({
-    domain,
-    facts: ownerFacts.filter((fact) => (fact.domain ?? 'other') === domain),
-  })).filter((group) => group.facts.length > 0);
-  const pinnedCount = ownerFacts.filter((fact) => fact.pinned).length;
-
-  return (
-    <PageShell size="reading">
-      <PageHeader
-        back={{ href: '/profile/memories', label: 'Memory' }}
-        title={`About ${owner?.name ?? 'you'}`}
-        intro="What the assistant has learned about you, and the compact summary it carries into conversations."
-      />
-      <Panel className="mt-6">
-        <details open>
-          <summary className={summaryClass}>
-            Used in conversations
-            <span className={countBadgeClass}>{pinnedCount} pinned</span>
-            <span className="text-xs font-normal text-muted">
-              {card ? `refreshed ${relativeTime(card.compiledAt, now)}` : 'not prepared yet'}
-            </span>
-          </summary>
-          {card?.content ? (
-            <div className="mt-4 max-h-52 overscroll-contain overflow-y-auto rounded-xl bg-sunken/60 p-4 text-sm leading-6 whitespace-pre-wrap text-strong">
-              {card.content}
-            </div>
-          ) : (
-            <p className="mt-3 text-sm text-muted">
-              No conversation summary has been prepared yet.
-            </p>
-          )}
-          <form action={recompileCard} className="mt-4">
-            <SubmitButton variant="outline" pendingLabel="Refreshing…">
-              Refresh summary
-            </SubmitButton>
-          </form>
-        </details>
-      </Panel>
-
-      <section className="mt-8">
-        <SectionHeading title="Your facts" count={ownerFacts.length} />
-        {byDomain.length === 0 ? (
-          <EmptyState>
-            No details yet — they are added from conversations only after review.
-          </EmptyState>
-        ) : (
-          <div className="mt-3 flex flex-col gap-2">
-            {byDomain.map((group) => (
-              <details key={group.domain} className="rounded-xl bg-sunken/55 p-3.5">
-                <summary className={summaryClass}>
-                  <span className={`${microLabelClass} text-muted`}>{group.domain}</span>
-                  <span className={countBadgeClass}>{group.facts.length}</span>
-                </summary>
-                <div className="mt-3 flex flex-col gap-2">
-                  {group.facts.map((fact) => (
-                    <article key={fact.id} className={`${cardShellClass} min-w-0 p-4`}>
-                      <p className="break-words text-sm leading-6 text-strong">{fact.content}</p>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {fact.pinned ? (
-                          <Badge tone="accent" size="xs">
-                            Pinned
-                          </Badge>
-                        ) : null}
-                        {!fact.pinned && inCard.has(fact.id) ? (
-                          <Badge tone="accent" size="xs">
-                            In profile
-                          </Badge>
-                        ) : null}
-                        {fact.ownerConfirmed ? (
-                          <Badge tone="green" size="xs">
-                            Verified
-                          </Badge>
-                        ) : null}
-                      </div>
-                      <MetaLine
-                        className="mt-2"
-                        segments={[
-                          fact.kind,
-                          fact.domain ?? 'General',
-                          `Saved ${relativeTime(fact.createdAt, now)}`,
-                        ]}
-                      />
-                    </article>
-                  ))}
-                </div>
-              </details>
-            ))}
-          </div>
-        )}
-      </section>
-    </PageShell>
-  );
-}
-
 export default async function AboutYouPage() {
   await requireOwner();
   const config = loadConfig();
-  if (config.PERSISTENCE_DRIVER === 'firestore') {
-    const store = createInstallationStore({
-      projectId: config.GCP_PROJECT,
-      installationId: config.ASSISTANT_WORKSPACE_ID,
-      databaseId: config.FIRESTORE_DATABASE_ID,
-    });
-    try {
-      const overview = await getProfileOverview(
-        new FirestoreProfileOverviewRepository(store, config.FIRESTORE_AGENT_ID),
-      );
-      return <ReadOnlyAbout overview={overview} now={new Date()} />;
-    } finally {
-      await store.db.terminate();
-    }
+  const firestore = config.PERSISTENCE_DRIVER === 'firestore';
+  if (firestore) {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
   }
-  const db = getDb();
   const now = new Date();
-  const { owner, ownerFacts, card, cardFactIds } = await getOwnerFactsView(db);
+  const { owner, ownerFacts, card, cardFactIds } = await getOwnerFactsView(
+    firestore
+      ? new FirestoreProfilePeopleReadRepository(
+          getFirestoreInstallationStore(),
+          config.FIRESTORE_AGENT_ID,
+        )
+      : getDb(),
+  );
   const inCard = new Set(cardFactIds);
   const byDomain = DOMAIN_ORDER.map((domain) => ({
     domain,
@@ -190,7 +84,8 @@ export default async function AboutYouPage() {
   return (
     <PageShell size="reading">
       <PageHeader
-        back={{ href: '/profile', label: 'Memory' }}
+        // /profile is PostgreSQL-only; Firestore's portable hub is /profile/memories.
+        back={{ href: firestore ? '/profile/memories' : '/profile', label: 'Memory' }}
         title={`About ${owner?.name ?? 'you'}`}
         intro="Everything the assistant has learned about you, and the compact summary it carries into every conversation."
       />
