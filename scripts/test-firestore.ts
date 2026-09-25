@@ -41,6 +41,7 @@ const child = spawn(
     'apps/agent/src/firestore-imports.test.ts',
     'apps/web/app/import/actions.firestore.test.ts',
     'apps/web/app/import/page.test.tsx',
+    'apps/web/app/profile/voice/page.test.tsx',
     'apps/web/app/costs/page.test.tsx',
     'apps/web/app/packs/actions.firestore.test.ts',
     'apps/web/app/skills/actions.firestore.test.ts',

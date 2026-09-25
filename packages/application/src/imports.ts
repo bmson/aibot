@@ -199,7 +199,7 @@ export async function uploadImport(
     voice?: boolean;
     register?: string;
   },
-): Promise<{ destination: '/profile' | '/import' }> {
+): Promise<{ destination: '/profile/voice' | '/import' }> {
   const start = isImportCommandPersistence(store)
     ? portableImportStarters(store.imports)
     : await postgresImportStarters(store);
@@ -220,7 +220,7 @@ export async function uploadImport(
         kind,
         register,
       });
-      return { destination: '/profile' };
+      return { destination: '/profile/voice' };
     }
     await start.backstory({ source, workspacePath, kind });
     return { destination: '/import' };

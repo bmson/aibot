@@ -65,7 +65,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `self.maintain` | self-maintain | SQL |
 | `health.monitor` | assistant-health-monitor | SQL |
 | `documents.process` | document-processing (every 15 min) | SQL |
-| `import.run`, `voice.ingest` | on demand | SQL |
+| `import.run`, `voice.ingest` | on demand | Ready (`firestore-imports.test.ts`). Window commits and the voice checkpoint are lease-fenced. |
 
 Imported installations carry these schedules. On `main`, an SQL job's task fails on the tripwire, retries, and dead-letters with an owner notice. A goal-linked schedule throws inside the portable runner, which starves every later schedule in the batch. #378 marks the SQL jobs **Disabled** instead (`firestoreCodeJobUnavailable`): the sweep advances their schedules without creating tasks, goal sessions are skipped, and an already-queued SQL job completes benignly.
 

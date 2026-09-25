@@ -209,7 +209,7 @@ describe.skipIf(!localEmulator)('Firestore import commands with PostgreSQL offli
       }),
     );
     expect(voice.status).toBe(201);
-    expect(await voice.json()).toEqual({ ok: true, destination: '/profile' });
+    expect(await voice.json()).toEqual({ ok: true, destination: '/profile/voice' });
     const voiceRow = await source('voice-samples-sms-export.txt');
     expect(voiceRow).toMatchObject({ status: 'pending' });
     expect(

@@ -7,6 +7,7 @@ import { getImportCommands } from '@/lib/server';
 function revalidateImport(): void {
   revalidatePath('/import');
   revalidatePath('/profile');
+  revalidatePath('/profile/voice');
 }
 
 /** Start (or re-run) an import for a file already under workspace import/. */
