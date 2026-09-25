@@ -67,8 +67,8 @@ import {
   registerPortableOwnerNotifyTool,
   registerPortableReadResultTool,
   registerPortableTaskTools,
-  registerSituationTools,
   registerPortableWebWorkspaceTools,
+  registerSituationTools,
   registerSportsTools,
   registerWeatherTool,
 } from '@assistant/tools/builtin';
