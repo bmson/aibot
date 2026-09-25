@@ -1,5 +1,7 @@
 import { getKnowledgeGraphNeighborhood, getKnowledgeMapSnapshot } from '@assistant/application';
 import { getPersonDossier } from '@assistant/application/people';
+import { loadConfig } from '@assistant/config';
+import { getFirestoreKnowledgeWorkspace } from '@/lib/firestore-knowledge';
 import { getDb } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -15,20 +17,29 @@ export async function GET(request: Request): Promise<Response> {
   if ([personId, entityId].some((id) => id !== null && !UUID_RE.test(id))) {
     return mobileJson({ error: 'Invalid graph identifier.' }, { status: 400 });
   }
+  const firestore =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore' ? getFirestoreKnowledgeWorkspace() : null;
   if (personId) {
-    const person = await getPersonDossier(getDb(), personId, { factLimit: 1 });
+    const person = firestore
+      ? await firestore.personEntity(personId)
+      : await getPersonDossier(getDb(), personId, { factLimit: 1 });
     if (!person) return mobileJson({ error: 'Person not found.' }, { status: 404 });
     entityId = person.entityId;
     if (!entityId)
       return mobileJson({ nodes: [], edges: [], totalEdges: 0, truncated: false, focusId: null });
   }
-  const snapshot = await getKnowledgeMapSnapshot(getDb(), {
+  const input = {
     entityId: entityId ?? undefined,
     query: params.get('q') ?? '',
     includeVisibleConnections: true,
-  });
+  };
+  const snapshot = firestore
+    ? await (await firestore.load()).map(input)
+    : await getKnowledgeMapSnapshot(getDb(), input);
   if (entityId && snapshot.nodes.length === 0) {
-    const { entity } = await getKnowledgeGraphNeighborhood(getDb(), { entityId, limit: 1 });
+    const entity = firestore
+      ? await firestore.entity(entityId)
+      : (await getKnowledgeGraphNeighborhood(getDb(), { entityId, limit: 1 })).entity;
     if (!entity) return mobileJson({ error: 'Knowledge item not found.' }, { status: 404 });
     snapshot.nodes.push({
       id: entity.id,

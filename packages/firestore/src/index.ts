@@ -20,6 +20,7 @@ export { FirestoreGoalReadRepository } from './goals.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { FirestoreImportOverviewRepository } from './import-overview.js';
+export { FirestoreKnowledgeGraphCurationRepository } from './knowledge-graph-curation.js';
 export {
   getFirestoreKnowledgeGraphOverview,
   getFirestoreKnowledgeGraphRelation,
@@ -27,6 +28,7 @@ export {
 } from './knowledge-graph-read.js';
 export { FirestoreKnowledgeGraphRelationMutationRepository } from './knowledge-graph-relation-mutations.js';
 export { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
+export { FirestoreKnowledgeWorkspaceReadRepository } from './knowledge-workspace-read.js';
 export { FirestoreLocationPingRepository } from './location-pings.js';
 export type { McpDiscoveryResult } from './mcp-connections.js';
 export {
