@@ -57,7 +57,7 @@ const statusLabels: Record<string, string> = {
   purged: 'Removed',
 };
 
-export function SourceCard({ view, readOnly = false }: { view: SourceView; readOnly?: boolean }) {
+export function SourceCard({ view }: { view: SourceView }) {
   const [confirming, setConfirming] = useState<'purge' | 'delete' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -119,32 +119,29 @@ export function SourceCard({ view, readOnly = false }: { view: SourceView; readO
                 Review what this import learned
               </p>
               <p className="mt-0.5 text-xs leading-5 text-amber-800 dark:text-amber-300">
-                {view.quarantinedNow} memories are held back until{' '}
-                {readOnly ? 'they are reviewed.' : 'you approve or reject them.'}
+                {view.quarantinedNow} memories are held back until you approve or reject them.
               </p>
             </div>
-            {!readOnly && (
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => startTransition(() => reviewSourceAction(view.source, 'approve'))}
-                  className={outlineButton}
-                  title="Release every quarantined fact from this source into normal memory"
-                >
-                  Approve all
-                </button>
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => startTransition(() => reviewSourceAction(view.source, 'reject'))}
-                  className={dangerOutlineButton}
-                  title="Delete and tombstone every quarantined fact from this source"
-                >
-                  Reject all
-                </button>
-              </div>
-            )}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => startTransition(() => reviewSourceAction(view.source, 'approve'))}
+                className={outlineButton}
+                title="Release every quarantined fact from this source into normal memory"
+              >
+                Approve all
+              </button>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => startTransition(() => reviewSourceAction(view.source, 'reject'))}
+                className={dangerOutlineButton}
+                title="Delete and tombstone every quarantined fact from this source"
+              >
+                Reject all
+              </button>
+            </div>
           </div>
         ) : null}
         {error ? <p className="text-xs text-red-600 dark:text-red-400">{error}</p> : null}
@@ -152,11 +149,11 @@ export function SourceCard({ view, readOnly = false }: { view: SourceView; readO
 
       <details className={`${cardFooterChromeClass} text-xs`}>
         <summary className="disclosure flex items-center gap-2 cursor-pointer font-medium text-muted">
-          {readOnly ? 'File details' : 'File and actions'}
+          File and actions
         </summary>
         <p className="mt-2 break-words text-muted [overflow-wrap:anywhere]">
           {view.workspacePath} · {view.kind}
-          {view.taskId && !readOnly ? (
+          {view.taskId ? (
             <>
               {' · '}
               <Link href={`/tasks/${view.taskId}`} className="underline hover:text-strong">
@@ -165,72 +162,70 @@ export function SourceCard({ view, readOnly = false }: { view: SourceView; readO
             </>
           ) : null}
         </p>
-        {!readOnly && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {rerunnable ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {rerunnable ? (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() =>
+                startTransition(async () => {
+                  const result = await startImportAction(view.workspacePath, view.source);
+                  if (result.error) setError(result.error);
+                })
+              }
+              className={outlineButton}
+              title="Import this file again; memories already saved are skipped"
+            >
+              Import again
+            </button>
+          ) : null}
+          {confirming ? (
+            <>
               <button
                 type="button"
                 disabled={pending}
                 onClick={() =>
-                  startTransition(async () => {
-                    const result = await startImportAction(view.workspacePath, view.source);
-                    if (result.error) setError(result.error);
-                  })
+                  startTransition(() =>
+                    confirming === 'purge'
+                      ? purgeSourceAction(view.source)
+                      : deleteSourceAction(view.source),
+                  )
                 }
-                className={outlineButton}
-                title="Import this file again; memories already saved are skipped"
+                className={dangerButton}
               >
-                Import again
+                {confirming === 'purge'
+                  ? `Remove ${view.memoriesSaved} memories`
+                  : `Delete import${view.memoriesSaved > 0 ? ` and ${view.memoriesSaved} memories` : ''}`}
               </button>
-            ) : null}
-            {confirming ? (
-              <>
+              <button type="button" onClick={() => setConfirming(null)} className={outlineButton}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              {view.status !== 'purged' && view.memoriesSaved > 0 ? (
                 <button
                   type="button"
                   disabled={pending}
-                  onClick={() =>
-                    startTransition(() =>
-                      confirming === 'purge'
-                        ? purgeSourceAction(view.source)
-                        : deleteSourceAction(view.source),
-                    )
-                  }
-                  className={dangerButton}
-                >
-                  {confirming === 'purge'
-                    ? `Remove ${view.memoriesSaved} memories`
-                    : `Delete import${view.memoriesSaved > 0 ? ` and ${view.memoriesSaved} memories` : ''}`}
-                </button>
-                <button type="button" onClick={() => setConfirming(null)} className={outlineButton}>
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <>
-                {view.status !== 'purged' && view.memoriesSaved > 0 ? (
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => setConfirming('purge')}
-                    className={dangerOutlineButton}
-                    title="Remove the memories from this import but keep its file"
-                  >
-                    Remove memories
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => setConfirming('delete')}
+                  onClick={() => setConfirming('purge')}
                   className={dangerOutlineButton}
-                  title="Remove this import, its memories, and the uploaded file"
+                  title="Remove the memories from this import but keep its file"
                 >
-                  Delete import
+                  Remove memories
                 </button>
-              </>
-            )}
-          </div>
-        )}
+              ) : null}
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => setConfirming('delete')}
+                className={dangerOutlineButton}
+                title="Remove this import, its memories, and the uploaded file"
+              >
+                Delete import
+              </button>
+            </>
+          )}
+        </div>
       </details>
     </article>
   );

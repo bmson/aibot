@@ -3,10 +3,19 @@ import {
   type ProfileMemoryMaintenance,
   type Records,
 } from '@assistant/persistence';
+import type { DocumentSnapshot } from '@google-cloud/firestore';
 import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 import { createTask } from './task-creation.js';
 
 const MAX_ALIAS_WRITES_PER_RELATION = 450;
+
+/**
+ * Purging an import source deletes its memories without tombstoning them, so
+ * re-running the import can learn them again. Its deletion intent is the proof.
+ */
+function untombstonedDeletion(intent: DocumentSnapshot): boolean {
+  return intent.get('reason') === 'import_purge';
+}
 
 export class FirestoreProfileMemoryMaintenance implements ProfileMemoryMaintenance {
   readonly kind = 'profile-memory-maintenance' as const;
@@ -79,10 +88,12 @@ export class FirestoreProfileMemoryMaintenance implements ProfileMemoryMaintenan
         if (memory.exists)
           throw new Error('Graph source cleanup requires the memory deletion fence');
         if (!intentOwned) throw new Error('Cannot prove graph source deletion ownership');
-        const tombstone = await tx.get(
-          this.store.doc('memoryTombstones', String(intent.get('contentHash'))),
-        );
-        if (!tombstone.exists) throw new Error('Graph source deletion tombstone is missing');
+        if (!untombstonedDeletion(intent)) {
+          const tombstone = await tx.get(
+            this.store.doc('memoryTombstones', String(intent.get('contentHash'))),
+          );
+          if (!tombstone.exists) throw new Error('Graph source deletion tombstone is missing');
+        }
         const relation = relations.docs[0];
         if (!relation) return false;
         if (relation.get('agentId') !== input.agentId)
@@ -163,11 +174,12 @@ export class FirestoreProfileMemoryMaintenance implements ProfileMemoryMaintenan
         intent.get('memoryId') === input.memoryId &&
         intent.get('agentId') === input.agentId &&
         typeof intent.get('contentHash') === 'string';
-      const tombstone = intentOwned
-        ? await tx.get(this.store.doc('memoryTombstones', String(intent.get('contentHash'))))
-        : null;
+      const tombstone =
+        intentOwned && !untombstonedDeletion(intent)
+          ? await tx.get(this.store.doc('memoryTombstones', String(intent.get('contentHash'))))
+          : null;
       if (memory.exists) throw new Error('Graph source cleanup requires the memory deletion fence');
-      if (!intentOwned || !tombstone?.exists)
+      if (!intentOwned || (!untombstonedDeletion(intent) && !tombstone?.exists))
         throw new Error('Cannot prove graph source deletion ownership');
       if (
         source.exists &&

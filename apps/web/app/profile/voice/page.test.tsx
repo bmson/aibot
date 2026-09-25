@@ -79,7 +79,7 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
     resetConfigForTest();
   });
 
-  it('admits owner edits and renders the voice editor without sample upload controls', async () => {
+  it('admits owner edits and sample uploads, and keeps the purge control hidden', async () => {
     const { proxy } = await import('../../../proxy.js');
     expect(proxy(new NextRequest('http://localhost/profile/voice')).status).toBe(200);
     expect(
@@ -87,7 +87,7 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
     ).toBe(200);
     expect(
       proxy(new NextRequest('http://localhost/api/import/upload', { method: 'POST' })).status,
-    ).toBe(503);
+    ).toBe(200);
     const html = renderToStaticMarkup(await page.default());
     expect(html).toContain('Warm and direct');
     expect(html).toContain('short sentences');
@@ -96,7 +96,7 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
     expect(html).toContain('1 learned from your sent mail');
     expect(html).toContain('/profile/memories');
     expect(html).toContain('Save voice');
-    expect(html).not.toContain('/api/import/upload');
+    expect(html).toContain('action="/api/import/upload"');
     expect(html).not.toContain('Clear 2 samples');
     expect(html).not.toContain('/profile"');
   });

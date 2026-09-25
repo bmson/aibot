@@ -5,6 +5,7 @@ import type { BriefingRepository } from './briefing.js';
 import type { CardRefreshRepository } from './card-refresh.js';
 import type { CommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import type { CostRepository, MessageRepository } from './contracts.js';
+import type { ConversationSegmentationRepository } from './conversation-segmentation.js';
 import type { ToolExecutionRepository } from './dispatch.js';
 import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
@@ -16,6 +17,7 @@ import type { HistoryRecallRepository } from './history-recall.js';
 import type { KnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 import type { MaintenanceRepository } from './maintenance.js';
 import type { MemoryConsolidationRepository } from './memory-consolidation.js';
+import type { MemoryExtractionRepository } from './memory-extraction.js';
 import type { MemorySupersedeRepository } from './memory-supersede.js';
 import type { MemoryToolRepository } from './memory-tools.js';
 import type { MissionRepository } from './missions.js';
@@ -54,6 +56,8 @@ export interface ExecutionPersistence {
   readonly memorySupersede: MemorySupersedeRepository;
   /** Present while the bounded consolidation job is migrated off SQL. */
   readonly memoryConsolidation?: MemoryConsolidationRepository;
+  /** Present where the nightly `memory.extract` job has a portable adapter. */
+  readonly memoryExtraction?: MemoryExtractionRepository;
   readonly graph: GraphRecallRepository;
   readonly graphSync: KnowledgeGraphSyncRepository;
   readonly generatedCards: GeneratedCardRepository;
@@ -85,4 +89,6 @@ export interface ExecutionPersistence {
   readonly suggestions?: SuggestionRepository;
   /** Present where the `briefing.compose` job has a portable adapter. */
   readonly briefing?: BriefingRepository;
+  /** Present where the `chat.segment` job has a portable adapter. */
+  readonly conversationSegmentation?: ConversationSegmentationRepository;
 }
