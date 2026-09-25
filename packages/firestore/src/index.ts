@@ -3,6 +3,7 @@ export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 export { FirestoreApprovalRepository } from './approvals.js';
 export { FirestoreBudgetCapsRepository } from './budget-caps.js';
 export { createFirestoreCardRefreshRepository } from './card-refresh.js';
+export { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
 export { FirestoreCommitmentMutationRepository } from './commitment-mutations.js';
 export { getFirestoreCommitmentOverview } from './commitment-overview.js';
 export { FirestoreCostRepository } from './costs.js';
