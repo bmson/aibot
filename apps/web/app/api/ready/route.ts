@@ -1,9 +1,9 @@
-import { getApplication } from '@/lib/server';
+import { checkWebReadiness } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(): Promise<Response> {
-  const readiness = await getApplication().checkReadiness();
+  const readiness = await checkWebReadiness();
   return Response.json(readiness, {
     status: readiness.ready ? 200 : 503,
     headers: { 'cache-control': 'no-store' },

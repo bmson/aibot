@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { commitments, conversations, type Db, messages } from '@assistant/db';
 import {
+  COMMITMENT_STALE_AFTER_DAYS,
+  COMMITMENT_STALE_AFTER_DUE_DAYS,
+  type CommitmentMaintenanceRepository,
   isOwnerContextRepository,
   type OwnerCommitment,
   type OwnerContextRepository,
@@ -47,25 +50,10 @@ const MIN_CONFIDENCE = 0.85;
 
 const DAY_MS = 24 * 3600 * 1000;
 
-/**
- * How long a loop may sit untouched before it leaves the desk. The windows
- * differ because the kinds decay differently: a month of silence on a question
- * or on someone else's reply is its own answer, while a decision is a record
- * rather than a task and is worth keeping visible for a quarter.
- */
-const STALE_AFTER_DAYS: Record<CommitmentKind, number> = {
-  question: 30,
-  waiting_on: 30,
-  promise: 45,
-  decision: 90,
-};
-
-/**
- * A loop that named its own date and blew through it by a fortnight was not
- * kept, whatever its kind — waiting out the idle window would only keep a dead
- * commitment on the list for another month.
- */
-const STALE_AFTER_DUE_DAYS = 14;
+// The staleness windows are shared with portable adapters through
+// @assistant/persistence, so both stores retire exactly the same loops.
+const STALE_AFTER_DAYS = COMMITMENT_STALE_AFTER_DAYS;
+const STALE_AFTER_DUE_DAYS = COMMITMENT_STALE_AFTER_DUE_DAYS;
 
 function hashCommitment(kind: string, title: string, details: string): string {
   return createHash('sha256')
@@ -534,10 +522,13 @@ export async function correctCommitment(
  * owner asking to be reminded later, not permission to forget.
  */
 export async function markStaleCommitments(
-  db: Db,
+  store: Db | CommitmentMaintenanceRepository,
   agentId: string,
   now: Date = new Date(),
 ): Promise<number> {
+  if ('kind' in store && store.kind === 'commitment-maintenance-repository')
+    return store.markStale(agentId, now);
+  const db = store as Db;
   const idle = Object.entries(STALE_AFTER_DAYS).map(([kind, days]) =>
     and(
       eq(commitments.kind, kind),
