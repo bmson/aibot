@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Records } from '@assistant/persistence';
+import type { NotificationsConversationRepository, Records } from '@assistant/persistence';
 import type { DocumentSnapshot, Transaction } from '@google-cloud/firestore';
 import { messageRecord } from './messages.js';
 import { privacyErasureIsActive, readPrivacyErasureFence } from './privacy-erasure.js';
@@ -20,7 +20,9 @@ function ownedConversation(snapshot: DocumentSnapshot, agentId: string): Convers
 }
 
 /** Durable dashboard sink for background work in a customer-owned installation. */
-export class FirestoreOwnerNoticeRepository {
+export class FirestoreOwnerNoticeRepository implements NotificationsConversationRepository {
+  readonly kind = 'notifications-conversation-repository' as const;
+
   constructor(
     readonly store: InstallationStore,
     readonly agentId: string,
@@ -131,7 +133,12 @@ export class FirestoreOwnerNoticeRepository {
     return { row, created: true };
   }
 
-  /** The owner's Notifications chat for background work without its own chat, created on first use. */
+  /**
+   * The owner's Notifications chat for background work without its own chat,
+   * created on first use. The `notificationConversations` marker is the
+   * uniqueness record: concurrent first uses contend on it and converge on the
+   * one conversation it names.
+   */
   async notificationsConversationId(): Promise<string> {
     return this.store.db.runTransaction(async (tx) => {
       await this.owner(tx);
@@ -143,6 +150,12 @@ export class FirestoreOwnerNoticeRepository {
         tx.update(ref, { archivedAt: null, archived: false, updatedAt: this.store.now() });
       return destination.row.id;
     });
+  }
+
+  async getOrCreate(agentId: string): Promise<string> {
+    if (!this.agentId || agentId !== this.agentId)
+      throw new Error('Notifications conversation is outside the configured owner');
+    return this.notificationsConversationId();
   }
 
   async post(input: {

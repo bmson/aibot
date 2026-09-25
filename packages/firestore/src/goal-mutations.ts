@@ -6,6 +6,7 @@ import type {
   QuerySnapshot,
   Transaction,
 } from '@google-cloud/firestore';
+import { messageRecord } from './messages.js';
 import { createWakeIntent } from './outbox.js';
 import { privacyErasureIsActive, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
@@ -23,6 +24,8 @@ type GoalSettings = Pick<
   | 'mirrorToPrimary'
 >;
 const TERMINAL_TASKS = new Set(['done', 'failed', 'cancelled']);
+const AUTOMATION_WELCOME =
+  'Automatic goal work is enabled. Use this chat to refine what I should prioritize.';
 const MAX_GOAL_TASKS = 200;
 
 function goalName(id: string) {
@@ -97,12 +100,13 @@ export class FirestoreGoalMutationRepository {
 
   private async createWork(
     goalId: string,
-    input: GoalSettings | null,
+    input: (GoalSettings & { taintedOrigin?: boolean }) | null,
     automationFor: (goal: Goal) => {
       cron: string;
       instruction: string;
       nextRunAt: (timezone: string) => Date;
     },
+    options: { openingTask: boolean } = { openingTask: true },
   ) {
     if (!this.configuredAgentId) throw new Error('Goal mutation requires the configured owner');
     const fence = await readPrivacyErasureFence(this.store, this.configuredAgentId);
@@ -156,11 +160,13 @@ export class FirestoreGoalMutationRepository {
           description: input.description,
           status: 'active',
           priority: input.priority,
-          progress: 'First task queued.',
-          nextAction: 'Check the work chat for the first update.',
+          progress: options.openingTask ? 'First task queued.' : input.progress,
+          nextAction: options.openingTask
+            ? 'Check the work chat for the first update.'
+            : input.nextAction,
           targetDate: input.targetDate,
           mirrorToPrimary: input.mirrorToPrimary,
-          taintedOrigin: false,
+          taintedOrigin: input.taintedOrigin ?? false,
           autonomy: false,
           archivedAt: null,
         };
@@ -256,8 +262,23 @@ export class FirestoreGoalMutationRepository {
         lastReadAt: null,
       });
       if (input) tx.create(goalRef, encodeRecord(goal));
-      tx.create(this.store.doc('tasks', taskId), encodeRecord(task));
-      createWakeIntent(tx, this.store, { taskId, generation: 0, availableAt: now });
+      if (options.openingTask) {
+        tx.create(this.store.doc('tasks', taskId), encodeRecord(task));
+        createWakeIntent(tx, this.store, { taskId, generation: 0, availableAt: now });
+      } else {
+        const welcome = messageRecord(
+          {
+            conversationId,
+            role: 'assistant',
+            origin: 'assistant',
+            parts: [{ type: 'text', text: AUTOMATION_WELCOME }],
+            text: AUTOMATION_WELCOME,
+          },
+          randomUUID(),
+          now,
+        );
+        tx.create(this.store.doc('messages', welcome.id), encodeRecord(welcome));
+      }
       if (scheduleRow) {
         if (existing) tx.update(existing.doc.ref, encodeRecord(scheduleRow));
         else tx.create(this.store.doc('schedules', scheduleId), encodeRecord(scheduleRow));
@@ -271,6 +292,7 @@ export class FirestoreGoalMutationRepository {
         tx.update(existing.doc.ref, { enabled: false, updatedAt: now });
       }
       return {
+        goalId,
         conversationId,
         taskId,
         taskGeneration: task.queueGeneration,
@@ -288,6 +310,25 @@ export class FirestoreGoalMutationRepository {
     },
   ) {
     return this.createWork(randomUUID(), input, automationFor);
+  }
+
+  /**
+   * The goals.create tool: the goal, its work chat, and its automation, as
+   * the PostgreSQL sweep's goal sync would create them. Work starts on the
+   * automation's cadence rather than with an opening task.
+   */
+  async createFromTool(
+    input: GoalSettings & { taintedOrigin: boolean },
+    automationFor: (goal: Goal) => {
+      cron: string;
+      instruction: string;
+      nextRunAt: (timezone: string) => Date;
+    },
+  ): Promise<{ goalId: string; conversationId: string }> {
+    const work = await this.createWork(randomUUID(), input, automationFor, {
+      openingTask: false,
+    });
+    return { goalId: work.goalId, conversationId: work.conversationId };
   }
 
   startWork(

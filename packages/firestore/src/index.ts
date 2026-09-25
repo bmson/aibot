@@ -23,6 +23,7 @@ export { FirestoreExecutionJobRepository } from './execution-jobs.js';
 export { FirestoreGeneratedCardRepository } from './generated-cards.js';
 export { FirestoreGoalMutationRepository } from './goal-mutations.js';
 export { FirestoreGoalProgressRepository } from './goal-progress.js';
+export { FirestoreGoalRuntimeRepository } from './goal-runtime.js';
 export { FirestoreGoalReadRepository } from './goals.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
@@ -48,6 +49,7 @@ export { FirestoreMemoryConsolidationRepository } from './memory-consolidation.j
 export { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 export { FirestoreMemoryToolRepository } from './memory-tools.js';
 export { FirestoreMessageRepository } from './messages.js';
+export { FirestoreMissionRepository } from './missions.js';
 export { getFirestoreMobileCosts } from './mobile-costs.js';
 export { FirestoreModelRoutingRepository } from './model-routing.js';
 export { FirestoreOccasionToolRepository } from './occasion-tools.js';

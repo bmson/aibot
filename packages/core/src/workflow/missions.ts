@@ -1,5 +1,10 @@
-import { type AgentRow, type Db, type TaskRow, tasks } from '@assistant/db';
-import { and, desc, eq, notInArray, or, sql } from 'drizzle-orm';
+import {
+  type AgentRow,
+  createPostgresMissionRepository,
+  type Db,
+  type TaskRow,
+} from '@assistant/db';
+import type { ExecutionPersistence, TaskRepository } from '@assistant/persistence';
 import { z } from 'zod';
 import { mirrorGoalUpdateToNotifications, persistMessage } from '../chat.js';
 import { InboundEventSchema, type Plan, type TaskState } from '../events.js';
@@ -17,7 +22,6 @@ import {
   taskState,
 } from './machine.js';
 
-const TERMINAL_STATUSES = ['done', 'failed', 'cancelled'] as const;
 const DEFAULT_MISSION_DAYS = 30;
 const DEFAULT_WAKE_HOURS = 24;
 const DEFAULT_REFLECT_DAYS = 7;
@@ -36,7 +40,7 @@ export type Reflection = z.infer<typeof ReflectionSchema>;
  * bounded sessions, sleep, and reflect — never one endless transcript.
  */
 export async function startMission(
-  db: Db,
+  store: Db | TaskRepository,
   source: TaskRow,
   plan: Plan,
   missionStatement: string,
@@ -56,21 +60,15 @@ export async function startMission(
     trust: source.trust,
     payload: { instruction: missionStatement, plan: plan.steps },
   });
-  const { task: mission } = await enqueueTask(db, {
+  const { task: mission } = await enqueueTask(store, {
     event,
     type: 'mission',
     goalId: source.goalId ?? plan.goalId,
     budgetUsdLimit: budget.toFixed(4),
     deadline,
+    reflectEvery: `${DEFAULT_REFLECT_DAYS} days`,
+    nextAction: plan.steps[0] ?? '',
   });
-  await db
-    .update(tasks)
-    .set({
-      reflectEvery: sql`interval '${sql.raw(String(DEFAULT_REFLECT_DAYS))} days'`,
-      nextAction: plan.steps[0] ?? '',
-      updatedAt: sql`now()`,
-    })
-    .where(eq(tasks.id, mission.id));
   return mission;
 }
 
@@ -118,8 +116,14 @@ export type MissionNotifyOwner = (input: {
 
 interface MissionDeps {
   db: Db;
+  /** Portable task, mission, goal, and message state; PostgreSQL is used without it. */
+  persistence?: ExecutionPersistence;
   router: ModelRouter;
   notifyOwner?: MissionNotifyOwner;
+}
+
+function missionTasks(deps: MissionDeps): Db | TaskRepository {
+  return deps.persistence?.tasks ?? deps.db;
 }
 
 /**
@@ -132,7 +136,8 @@ export async function wakeMission(
   mission: TaskLease,
   agent: AgentRow,
 ): Promise<MissionWake> {
-  const { db } = deps;
+  const db = missionTasks(deps);
+  const missions = deps.persistence?.missions ?? createPostgresMissionRepository(deps.db);
   const state = taskState(mission);
 
   if (mission.deadline && mission.deadline.getTime() <= Date.now()) {
@@ -160,14 +165,7 @@ export async function wakeMission(
   // skip this wake and sleep again rather than spawning a duplicate that could
   // repeat the same real-world side effect (a second form submission, a second
   // email). One work session per mission at a time.
-  const [activeSession] = await db
-    .select({ id: tasks.id, status: tasks.status })
-    .from(tasks)
-    .where(
-      and(eq(tasks.parentTaskId, mission.id), notInArray(tasks.status, [...TERMINAL_STATUSES])),
-    )
-    .orderBy(desc(tasks.updatedAt))
-    .limit(1);
+  const activeSession = await missions.activeSession(mission.agentId, mission.id);
   if (activeSession) {
     // A child stuck in needs_attention will not resume on its own (task-budget
     // exhaustion or a dead-letter). Silently re-sleeping would leave the mission
@@ -204,11 +202,7 @@ export async function wakeMission(
   // and its session children; at the cap, surface it instead of spawning more.
   const missionCap = Number(mission.budgetUsdLimit);
   if (Number.isFinite(missionCap) && missionCap > 0) {
-    const [spend] = await db
-      .select({ total: sql<number>`coalesce(sum(${tasks.spentUsd}), 0)` })
-      .from(tasks)
-      .where(or(eq(tasks.id, mission.id), eq(tasks.parentTaskId, mission.id)));
-    const spent = Number(spend?.total ?? 0);
+    const spent = await missions.spentUsd(mission.agentId, mission.id);
     if (spent >= missionCap) {
       if (!(await renewTaskLease(db, mission))) return { action: 'lease_lost' };
       if (
@@ -259,7 +253,8 @@ async function reflect(
   _agent: AgentRow,
   state: TaskState,
 ): Promise<MissionWake> {
-  const { db, router } = deps;
+  const { router } = deps;
+  const db = missionTasks(deps);
   const outcome = await router.object<Reflection>('reason', {
     taskId: mission.id,
     schema: ReflectionSchema,
@@ -356,7 +351,7 @@ async function reflect(
 async function report(deps: MissionDeps, mission: TaskRow, text: string): Promise<boolean> {
   let delivered = false;
   if (mission.conversationId) {
-    await persistMessage(deps.db, {
+    await persistMessage(deps.persistence?.messages ?? deps.db, {
       conversationId: mission.conversationId,
       taskId: mission.id,
       role: 'assistant',
@@ -371,7 +366,7 @@ async function report(deps: MissionDeps, mission: TaskRow, text: string): Promis
         .catch((err) => console.error('mission owner notification failed', err));
     }
   }
-  await mirrorGoalUpdateToNotifications(deps.db, mission, text).catch((err) =>
+  await mirrorGoalUpdateToNotifications(deps.persistence ?? deps.db, mission, text).catch((err) =>
     console.error('goal update mirror to notifications thread failed', err),
   );
   return delivered;

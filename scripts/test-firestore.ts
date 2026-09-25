@@ -46,6 +46,7 @@ const child = spawn(
     'apps/web/app/import/actions.firestore.test.ts',
     'apps/web/app/import/page.test.tsx',
     'apps/web/app/profile/voice/page.test.tsx',
+    'apps/agent/src/firestore-goals-missions.test.ts',
     'apps/agent/src/firestore-builtin-tools.test.ts',
     'apps/web/app/costs/page.test.tsx',
     'apps/web/app/packs/actions.firestore.test.ts',
