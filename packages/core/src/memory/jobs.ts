@@ -139,6 +139,28 @@ export function codeJobName(task: TaskRow): CodeJobName | null {
   return job && CODE_JOBS.has(job) ? (job as CodeJobName) : null;
 }
 
+/**
+ * A delivered reminder lands in the owner's primary thread, beside their chat
+ * replies. The card is what tells them apart — on screen, and in the window a
+ * later chat turn is seeded from (see backgroundNoticeIds in chat.ts). Without
+ * it a fired reminder reads as the assistant's own last conversational turn.
+ */
+function reminderMessageParts(taskId: string, reminderText: string): unknown[] {
+  return [
+    { type: 'text', text: reminderText },
+    {
+      type: 'data-card',
+      data: {
+        kind: 'proactive-alert',
+        id: `reminder-fired:${taskId}`,
+        category: 'commitment',
+        urgencyLabel: 'Reminder',
+        title: reminderText,
+      },
+    },
+  ];
+}
+
 export async function runCodeJob(
   deps: {
     db: Db;
@@ -182,6 +204,7 @@ export async function runCodeJob(
             reminderKind?: unknown;
             scheduleId?: unknown;
             schedule?: unknown;
+            occurrenceId?: unknown;
           };
         } | null
       )?.payload;
@@ -199,6 +222,40 @@ export async function runCodeJob(
       }
       const scheduleId = typeof payload?.scheduleId === 'string' ? payload.scheduleId : null;
       const scheduleName = typeof payload?.schedule === 'string' ? payload.schedule : null;
+
+      // Portable stores commit the message, the occurrence receipt, and the
+      // one-time delivered stamp in one fenced write. Every reminder they fire
+      // carries its schedule occurrence, so a missing one is refused rather
+      // than delivered without the cancellation and duplicate fences.
+      const reminderDelivery = deps.persistence?.reminderDelivery;
+      if (reminderDelivery) {
+        const occurrenceId =
+          typeof payload?.occurrenceId === 'string' ? payload.occurrenceId : null;
+        if (!scheduleId || !occurrenceId)
+          throw new Error('reminder: portable delivery requires the firing schedule occurrence');
+        if (!task.lockedUntil) throw new Error('reminder: delivery requires an active task lease');
+        const outcome = await reminderDelivery.deliver({
+          agentId: task.agentId,
+          reminderId: scheduleId,
+          occurrenceId,
+          lease: { ...task, lockedUntil: task.lockedUntil },
+          conversationId: task.conversationId,
+          text: reminderText,
+          parts: reminderMessageParts(task.id, reminderText),
+        });
+        if (!outcome.delivered)
+          return {
+            done: true,
+            summary: 'reminder: not delivered (cancelled, already delivered, or lease lost)',
+          };
+        const pinged = await pingOwner(deps.notifyOwner, {
+          taskId: task.id,
+          conversationId: outcome.conversationId,
+          text: reminderText,
+        });
+        return { done: true, summary: `reminder: delivered${pinged ? ' and pinged' : ''}` };
+      }
+
       const managedSchedule = Boolean(scheduleId || scheduleName?.startsWith('reminder:'));
       const [initialSchedule] = managedSchedule
         ? await deps.db
@@ -239,24 +296,7 @@ export async function runCodeJob(
           taskId: task.id,
           role: 'assistant',
           origin: 'assistant',
-          // A delivered reminder lands in the owner's primary thread, beside
-          // their chat replies. The card is what tells them apart — on screen,
-          // and in the window a later chat turn is seeded from (see
-          // backgroundNoticeIds in chat.ts). Without it a fired reminder reads
-          // as the assistant's own last conversational turn.
-          parts: [
-            { type: 'text', text: reminderText },
-            {
-              type: 'data-card',
-              data: {
-                kind: 'proactive-alert',
-                id: `reminder-fired:${task.id}`,
-                category: 'commitment',
-                urgencyLabel: 'Reminder',
-                title: reminderText,
-              },
-            },
-          ],
+          parts: reminderMessageParts(task.id, reminderText),
           text: reminderText,
         });
         const pinged = await pingOwner(deps.notifyOwner, {

@@ -3,12 +3,17 @@ import {
   type AppendMessageInput,
   REMINDER_SCHEDULE_PREFIX,
   type Records,
+  type ReminderDeliveryInput,
+  type ReminderDeliveryOutcome,
+  type ReminderDeliveryRepository,
   type ReminderRepository,
   reminderScheduleIsActive,
   reminderScheduleTemplate,
   type TaskLease,
 } from '@assistant/persistence';
 import { messageRecord } from './messages.js';
+import { FirestoreOwnerNoticeRepository } from './owner-notices.js';
+import { assertPrivacyErasureInactiveInTransaction } from './privacy-erasure.js';
 import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
 
 /** Cancellation and durable delivery serialize on the same schedule document. */
@@ -102,6 +107,9 @@ export class FirestoreReminderRepository implements ReminderRepository {
         this.store.doc('conversations', input.message.conversationId),
       );
       if (!schedule?.exists || !task?.exists || !conversation?.exists) return false;
+      // Owner content must not reappear while an erasure is deleting it; the
+      // task retries after the erasure completes.
+      await assertPrivacyErasureInactiveInTransaction(tx, this.store, input.agentId);
       const row = decodeRecord<Records['schedules']>(schedule.data());
       const lease = decodeRecord<TaskLease>(task.data());
       const now = this.store.now();
@@ -150,5 +158,42 @@ export class FirestoreReminderRepository implements ReminderRepository {
       tx.update(conversation.ref, { updatedAt: now });
       return true;
     });
+  }
+}
+
+/** Executor-facing reminder delivery for one configured owner. */
+export class FirestoreReminderDeliveryRepository implements ReminderDeliveryRepository {
+  readonly kind = 'reminder-delivery-repository' as const;
+  private readonly reminders: FirestoreReminderRepository;
+  private readonly notices: FirestoreOwnerNoticeRepository;
+
+  constructor(
+    readonly store: InstallationStore,
+    readonly agentId: string,
+  ) {
+    this.reminders = new FirestoreReminderRepository(store);
+    this.notices = new FirestoreOwnerNoticeRepository(store, agentId);
+  }
+
+  async deliver(input: ReminderDeliveryInput): Promise<ReminderDeliveryOutcome> {
+    if (!this.agentId || input.agentId !== this.agentId || input.lease.agentId !== this.agentId)
+      throw new Error('Reminder delivery is outside the configured Firestore agent');
+    const conversationId =
+      input.conversationId ?? (await this.notices.notificationsConversationId());
+    const delivered = await this.reminders.deliver({
+      agentId: input.agentId,
+      reminderId: input.reminderId,
+      occurrenceId: input.occurrenceId,
+      lease: input.lease,
+      message: {
+        conversationId,
+        taskId: input.lease.id,
+        role: 'assistant',
+        origin: 'assistant',
+        parts: input.parts,
+        text: input.text,
+      },
+    });
+    return delivered ? { delivered: true, conversationId } : { delivered: false };
   }
 }

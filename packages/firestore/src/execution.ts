@@ -18,6 +18,7 @@ import { FirestoreModelRoutingRepository } from './model-routing.js';
 import { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 import { FirestoreOwnerContextRepository } from './owner-context.js';
 import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
+import { FirestoreReminderDeliveryRepository } from './reminders.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
 import type { InstallationStore } from './store.js';
 import { FirestoreTaskRepository } from './task-lifecycle.js';
@@ -55,5 +56,6 @@ export function createFirestoreExecutionPersistence(
     cardRefresh: createFirestoreCardRefreshRepository(store),
     recallMetrics: new FirestoreRecallMetricsRepository(store),
     watches: new FirestoreWatchRepository(store),
+    reminderDelivery: new FirestoreReminderDeliveryRepository(store, agentId),
   };
 }
