@@ -41,6 +41,8 @@ export function proxy(request: NextRequest) {
     (path.startsWith('/api/owner/') && ['GET', 'POST', 'DELETE'].includes(request.method)) ||
     (['/setup', '/signin', '/security'].includes(path) && request.method === 'GET') ||
     (path === '/api/health' && request.method === 'GET') ||
+    // Owner artifact download, gated on the owner's files record.
+    (path === '/api/files' && request.method === 'GET') ||
     (path === '/api/ready' && request.method === 'GET') ||
     // Persistence-free owner reads: live scores (agent timezone only) and route maps.
     ((path === '/api/live/scoreboard' ||
@@ -72,6 +74,8 @@ export function proxy(request: NextRequest) {
     (path === '/costs' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/profile/voice' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/profile/about' && ['GET', 'POST'].includes(request.method)) ||
+    // Knowledge workspace: bounded Firestore reads and owner graph curation actions.
+    (path === '/profile/knowledge' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/cards' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/packs' && ['GET', 'POST'].includes(request.method)) ||
     // Settings Server Actions recheck owner auth; Firestore supports the
@@ -126,7 +130,7 @@ export function proxy(request: NextRequest) {
     (improvementIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/memory/profile' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/mobile/v1/memory/people' && request.method === 'POST') ||
-    (memoryPersonPath.test(path) && ['GET', 'PATCH'].includes(request.method)) ||
+    (memoryPersonPath.test(path) && ['GET', 'PATCH', 'POST', 'DELETE'].includes(request.method)) ||
     // Owner memory commands: create, correct, confirm, forget, and review.
     (path === '/api/mobile/v1/memory' && request.method === 'POST') ||
     (/^\/api\/mobile\/v1\/memory\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -136,7 +140,7 @@ export function proxy(request: NextRequest) {
     (/^\/api\/mobile\/v1\/knowledge\/sources\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       path,
     ) &&
-      ['PATCH', 'DELETE'].includes(request.method)) ||
+      ['GET', 'PATCH', 'DELETE'].includes(request.method)) ||
     (memoryOccasionPath.test(path) && ['POST', 'PATCH', 'DELETE'].includes(request.method)) ||
     (personOccasionsPath.test(path) && request.method === 'POST') ||
     (path === '/api/card-image' && request.method === 'GET') ||
@@ -149,10 +153,13 @@ export function proxy(request: NextRequest) {
       request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/library' && request.method === 'GET') ||
     (path === '/api/mobile/v1/knowledge' && ['GET', 'POST'].includes(request.method)) ||
+    (['/api/mobile/v1/knowledge/workspace', '/api/mobile/v1/knowledge/graph'].includes(path) &&
+      request.method === 'GET') ||
+    (path === '/api/mobile/v1/knowledge/cleanup' && ['GET', 'POST'].includes(request.method)) ||
     (/^\/api\/mobile\/v1\/knowledge\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       path,
     ) &&
-      request.method === 'GET') ||
+      ['GET', 'PATCH'].includes(request.method)) ||
     (/^\/api\/mobile\/v1\/knowledge\/relations\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       path,
     ) &&

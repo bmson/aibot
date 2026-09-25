@@ -21,30 +21,29 @@ Classification:
 
 | Surface | Total | Ready | Degraded | Gated | SQL |
 |---|---:|---:|---:|---:|---:|
-| Mobile API handlers (`/api/mobile/v1`, per method) | 82 | 60 | 5 | 1 | 16 |
+| Mobile API handlers (`/api/mobile/v1`, per method) | 82 | 70 | 4 | 1 | 7 |
 | Web API handlers (`/api`, per method) | 14 | 9 | 0 | 2 | 3 |
-| Pages (27 `page.tsx`) | 27 | 13 | 8 | 1 | 5 |
-| Server Action modules (17) | 17 | 9 | 4 | 0 | 4 |
+| Pages (27 `page.tsx`) | 27 | 14 | 8 | 1 | 4 |
+| Server Action modules (17) | 17 | 10 | 4 | 0 | 3 |
 
 "Degraded" pages count as working for reads; each lists what is still missing below.
 
 ## Mobile API (`/api/mobile/v1`)
 
-Ready (60 handlers): `activity` GET/POST, `activity/[id]` POST, `activity/foreground` POST, `anomalies/[id]` POST, `approvals/[id]` POST, `bootstrap` GET, `cards` GET, `cards/[id]` POST, `chat` POST, `chat/status` GET, `chats` POST, `chats/[id]` GET/POST, `chats/[id]/messages/[messageId]` POST, `costs` PATCH, `documents` GET, `documents/[id]` GET, `goals` GET/POST, `goals/[id]` GET/PATCH/POST, `imports` POST, `knowledge` GET/POST, `knowledge/[id]` GET, `knowledge/relations/[id]` GET/DELETE, `mcp` GET/POST, `mcp/[id]` POST/DELETE, `memory/commitments` GET/POST, `memory/export` GET, `memory/library` GET, `memory/occasions/[id]` POST/PATCH/DELETE, `memory/people` POST, `memory/people/[id]` PATCH, `memory/people/[id]/occasions` POST, `memory/profile` GET, `overview` GET, `packs` GET/POST, `people` GET, `people/[id]` GET, `settings` PATCH, `settings/policies/[id]` POST/DELETE, `settings/reminders/[id]` DELETE, `settings/schedules/[id]` POST, `skills` POST, `skills/[id]` PATCH/POST/DELETE, `suggestions/[id]` POST, `workspace` GET.
+Ready (70 handlers): `activity` GET/POST, `activity/[id]` POST, `activity/foreground` POST, `anomalies/[id]` POST, `approvals/[id]` POST, `bootstrap` GET, `cards` GET, `cards/[id]` POST, `chat` POST, `chat/status` GET, `chats` POST, `chats/[id]` GET/POST, `chats/[id]/messages/[messageId]` POST, `costs` PATCH, `documents` GET, `documents/[id]` GET, `goals` GET/POST, `goals/[id]` GET/PATCH/POST, `imports` POST, `knowledge` GET/POST, `knowledge/[id]` GET/PATCH, `knowledge/cleanup` GET/POST, `knowledge/graph` GET, `knowledge/relations/[id]` GET/POST/DELETE, `knowledge/sources/[id]` GET/PATCH/DELETE, `knowledge/workspace` GET, `mcp` GET/POST, `mcp/[id]` POST/DELETE, `memory/commitments` GET/POST, `memory/export` GET, `memory/library` GET, `memory/occasions/[id]` POST/PATCH/DELETE, `memory/people` POST, `memory/people/[id]` GET/PATCH, `memory/people/[id]/occasions` POST, `memory/profile` GET, `overview` GET, `packs` GET/POST, `people` GET, `people/[id]` GET, `settings` PATCH, `settings/policies/[id]` POST/DELETE, `settings/reminders/[id]` DELETE, `settings/schedules/[id]` POST, `skills` POST, `skills/[id]` PATCH/POST/DELETE, `suggestions/[id]` POST, `workspace` GET.
 
-Degraded (5):
+Degraded (4):
 
 | Handler | Missing in Firestore mode |
 |---|---|
 | `documents` POST | Returns `501`. Text uploads are in flight in PR #360. |
 | `documents/[id]` DELETE | Returns `501`; no portable document/chunk/file/bytes deletion. |
 | `improvements/[id]` POST | `apply` on a `model_role` proposal throws ("require PostgreSQL model and role records"); dismiss and advisory apply work. |
-| `knowledge/relations/[id]` POST | `confirm`/`reject` work; `correct` returns `503`. |
 | `memory/profile` POST | `voice-profile` and `recompile` work; `organize`, `purge-voice`, `forget-all` return `503`. |
 
 Gated (1): `live/scoreboard` GET (reads only the agent timezone, which already has a Firestore path).
 
-SQL (16):
+SQL (7):
 
 | Handler | SQL dependency |
 |---|---|
@@ -52,13 +51,7 @@ SQL (16):
 | `location` POST | `recordOwnerLocationPing(db)` → location ping + arrival nudge task |
 | `memory` POST | `createMemory` (profile memory commands bound to `db`) |
 | `memory/[id]` PATCH, POST | `correctMemory`, confirm, approve, reject, forget, prominence (profile memory commands bound to `db`) |
-| `memory/people/[id]` GET | `getPersonProfile(db)` |
 | `memory/people/[id]` POST, DELETE | people merge/delete; explicit `409` in Firestore mode |
-| `knowledge/[id]` PATCH | entity rename / retype / merge |
-| `knowledge/cleanup` GET, POST | cleanup findings, orphan removal, quarantine retry, memory forget/approve/restore |
-| `knowledge/graph` GET | knowledge map snapshot, person dossier, neighborhood |
-| `knowledge/sources/[id]` GET, PATCH, DELETE | source impact; memory correction/forget |
-| `knowledge/workspace` GET | knowledge workspace overview |
 
 ## Web API (`/api`)
 
@@ -92,6 +85,7 @@ SQL (16):
 | `/skills` | Ready | |
 | `/tasks` | Ready | Archive/restore/archive-old actions are portable. |
 | `/profile/data` | Ready | Firestore privacy export and erasure. |
+| `/profile/knowledge` | Ready | One bounded Firestore snapshot serves the header, library, map, entity focus, and cleanup views. |
 | `/chat/[id]` | Degraded | `firestorePreview` hides inline approval, budget and suggestion decisions, recall feedback, card refresh, the Stop button and the Activity link. |
 | `/tasks/[id]` | Degraded | Retry, revoke autonomy, raise budget and cancel call `getDb()`. |
 | `/settings` | Degraded | Read-only: no mobile pairing/token rotation (explicitly refused, though it needs no SQL) and no proactive-health panel. |
@@ -105,7 +99,6 @@ SQL (16):
 | `/improvements` | SQL | `listImprovementProposals(db)`; Firestore repository already exists. |
 | `/documents` | SQL | `getDocumentsOverview(db)` |
 | `/profile` | SQL | memory hub overview, commitments, recall feedback summary |
-| `/profile/knowledge` | SQL | knowledge workspace (uncommitted performance work in progress elsewhere) |
 
 ## Server Actions
 
@@ -118,6 +111,7 @@ SQL (16):
 | `goals/actions.ts` | Ready | |
 | `import/actions.ts` | Ready | |
 | `packs/actions.ts` | Ready | |
+| `profile/knowledge/actions.ts` | Ready | Graph curation (rename, retype, merge, orphan removal, source retry and re-extraction) uses `FirestoreKnowledgeGraphCurationRepository`. |
 | `skills/actions.ts` | Ready | |
 | `suggestions/actions.ts` | Ready | |
 | `chat/actions.ts` | Degraded | `recordRecallFeedbackAction` |
@@ -127,7 +121,6 @@ SQL (16):
 | `anomalies/actions.ts` | SQL | dismiss, suspend policy |
 | `improvements/actions.ts` | SQL | apply, dismiss |
 | `documents/actions.ts` | SQL | delete document |
-| `profile/knowledge/actions.ts` | SQL | all knowledge-workspace actions |
 
 ## Structural gap
 
@@ -142,4 +135,4 @@ The routes above are ported one domain per PR, each with emulator tests in `pnpm
 3. Profile memory commands (web profile actions, mobile `memory`, `memory/[id]`, `knowledge/sources/[id]` PATCH/DELETE).
 4. SQL-free routes that only need unblocking (`live/scoreboard`, `maps/snapshot`, `/profile/people/[id]`, mobile token rotation).
 5. Device registration, location pings, readiness.
-6. Remaining: documents deletion, people merge/delete/profile, knowledge maintenance and map, memory organize/purge, `model_role` improvements, `/profile`, and the structural gap.
+6. Remaining: documents deletion, people merge/delete, memory organize/purge, `model_role` improvements, `/profile`, and the structural gap.

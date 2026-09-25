@@ -38,7 +38,7 @@ describe('Firestore mobile and web ingress', () => {
     expect(status('/api/mobile/v1/suggestions/not-a-uuid', 'POST')).toBe(503);
     expect(status('/api/mobile/v1/documents/not-a-uuid', 'GET')).toBe(503);
     expect(status('/api/mobile/v1/overview', 'POST')).toBe(503);
-    expect(status('/api/mobile/v1/knowledge/graph', 'GET')).toBe(503);
+    expect(status('/api/mobile/v1/knowledge/graph', 'POST')).toBe(503);
   });
 
   it('passes only supported knowledge relationship review methods for exact IDs', () => {

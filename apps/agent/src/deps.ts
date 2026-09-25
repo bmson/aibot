@@ -21,13 +21,18 @@ import { createDb, createPostgresExecutionPersistence, type Db } from '@assistan
 import {
   createFirestoreExecutionPersistence,
   createInstallationStore,
+  FirestoreContactLookupRepository,
+  FirestoreConversationSearchRepository,
   FirestoreDocumentExtractionRepository,
   FirestoreGoalProgressRepository,
+  FirestoreGraphRecallRepository,
   FirestoreImportJobRepository,
   FirestoreMcpConnectionReadRepository,
+  FirestoreOccasionToolRepository,
   FirestoreOwnerNoticeRepository,
   FirestoreReminderRepository,
   FirestoreScheduleRepository,
+  FirestoreSituationToolRepository,
   type FirestoreTaskRepository,
   type InstallationStore,
 } from '@assistant/firestore';
@@ -55,11 +60,17 @@ import {
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
 import {
   registerBuiltinTools,
+  registerPortableContactLookupTool,
+  registerPortableConversationSearchTool,
   registerPortableGoalProgressTool,
+  registerPortableGraphSnapshotTool,
   registerPortableMemoryTools,
+  registerPortableOccasionTools,
   registerPortableOwnerNotifyTool,
+  registerPortableReadResultTool,
   registerPortableTaskTools,
   registerPortableWebWorkspaceTools,
+  registerSituationTools,
   registerSportsTools,
   registerWeatherTool,
 } from '@assistant/tools/builtin';
@@ -456,6 +467,33 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
     ),
     store,
     config.FIRESTORE_AGENT_ID,
+  );
+  // Built-in record tools (graph snapshot, stored results, occasions,
+  // contacts, conversation search, situation packs) use their Firestore
+  // repositories. Vector reads use the pinned embedding space.
+  const recordEmbed = pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
+    router.embed(texts),
+  );
+  registerPortableGraphSnapshotTool(registry, {
+    embed: recordEmbed,
+    graph: new FirestoreGraphRecallRepository(store, embeddingSpace),
+  });
+  registerPortableReadResultTool(registry, { toolExecution: persistence.toolExecution });
+  registerPortableOccasionTools(
+    registry,
+    new FirestoreOccasionToolRepository(store, config.FIRESTORE_AGENT_ID),
+  );
+  registerPortableContactLookupTool(
+    registry,
+    new FirestoreContactLookupRepository(store, config.FIRESTORE_AGENT_ID),
+  );
+  registerPortableConversationSearchTool(registry, {
+    embed: recordEmbed,
+    conversations: new FirestoreConversationSearchRepository(store, embeddingSpace),
+  });
+  registerSituationTools(
+    registry,
+    new FirestoreSituationToolRepository(store, config.FIRESTORE_AGENT_ID),
   );
   const modules = installModules(composition.modules, {
     config,

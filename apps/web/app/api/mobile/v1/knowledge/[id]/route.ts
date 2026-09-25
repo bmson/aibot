@@ -8,6 +8,7 @@ import {
 } from '@assistant/application';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import { getFirestoreKnowledgeGraphOverview } from '@assistant/firestore';
+import { getFirestoreKnowledgeCuration } from '@/lib/firestore-knowledge';
 import { getDb, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -65,25 +66,24 @@ export async function PATCH(
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid knowledge item id' }, { status: 400 });
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
   const action = body?.action;
+  const curation =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore' ? getFirestoreKnowledgeCuration() : null;
   let result: { error?: string };
   if (action === 'rename') {
-    result = await renameKnowledgeGraphEntity(
-      getDb(),
-      id,
-      typeof body?.label === 'string' ? body.label : '',
-    );
+    const label = typeof body?.label === 'string' ? body.label : '';
+    result = curation
+      ? await curation.rename(id, label)
+      : await renameKnowledgeGraphEntity(getDb(), id, label);
   } else if (action === 'retype') {
-    result = await retypeKnowledgeGraphEntity(
-      getDb(),
-      id,
-      typeof body?.kind === 'string' ? body.kind : '',
-    );
+    const kind = typeof body?.kind === 'string' ? body.kind : '';
+    result = curation
+      ? await curation.retype(id, kind)
+      : await retypeKnowledgeGraphEntity(getDb(), id, kind);
   } else if (action === 'merge') {
-    result = await mergeKnowledgeGraphEntities(
-      getDb(),
-      id,
-      typeof body?.targetId === 'string' ? body.targetId : '',
-    );
+    const targetId = typeof body?.targetId === 'string' ? body.targetId : '';
+    result = curation
+      ? await curation.merge(id, targetId)
+      : await mergeKnowledgeGraphEntities(getDb(), id, targetId);
   } else {
     return mobileJson({ error: 'action must be rename, retype, or merge' }, { status: 400 });
   }

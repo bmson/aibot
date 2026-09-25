@@ -16,6 +16,7 @@ import {
 } from '@assistant/db';
 import {
   isKnowledgeGraphSyncRepository,
+  type KnowledgeGraphCurationRepository,
   type KnowledgeGraphProjectionEntity,
   type KnowledgeGraphProjectionRelation,
   type KnowledgeGraphSyncRepository,
@@ -772,6 +773,46 @@ export async function retypeGraphEntity(
       })
       .where(eq(knowledgeGraphEntities.id, entity.id));
   });
+  return {};
+}
+
+/**
+ * `retypeGraphEntity` over a curation repository. The identity rules are the
+ * same; the repository re-keys atomically and reports a conflict it finds at
+ * commit time, so a concurrent writer cannot slip a duplicate identity in.
+ */
+export async function retypeGraphEntityWithRepository(
+  repository: KnowledgeGraphCurationRepository,
+  agentId: string,
+  entityId: string,
+  kind: GraphEntityKind,
+): Promise<{ error?: string }> {
+  const entity = await repository.entity(agentId, entityId);
+  if (!entity) return { error: 'Knowledge item not found.' };
+  if (entity.kind === kind) return {};
+  if (entity.kind === 'date' || kind === 'date') {
+    return {
+      error:
+        'Dates keep a canonical identity and cannot change type. If it duplicates another item, merge them instead.',
+    };
+  }
+  const result = await repository.retype(agentId, {
+    entityId: entity.id,
+    fromKey: entity.canonicalKey,
+    kind,
+    canonicalKey:
+      kind === 'person' && entity.contactId
+        ? `contact:${entity.contactId}`
+        : `${kind}:${normalized(entity.label)}`,
+    contactId: kind === 'person' ? entity.contactId : null,
+  });
+  if (result === 'missing') return { error: 'Knowledge item not found.' };
+  if (result === 'changed')
+    return { error: 'That item changed while saving. Refresh and try again.' };
+  if (result === 'conflict')
+    return {
+      error: `An item named "${entity.label}" already exists as that type. Merge them instead.`,
+    };
   return {};
 }
 

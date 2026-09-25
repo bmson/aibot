@@ -265,8 +265,9 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
     expect(status('/api/mobile/v1/knowledge')).toBe(200);
     expect(status(`/api/mobile/v1/knowledge/${subjectId}`)).toBe(200);
     expect(status('/api/mobile/v1/knowledge', 'POST')).toBe(200);
-    expect(status(`/api/mobile/v1/knowledge/${subjectId}`, 'PATCH')).toBe(503);
-    expect(status('/api/mobile/v1/knowledge/graph')).toBe(503);
+    expect(status(`/api/mobile/v1/knowledge/${subjectId}`, 'PATCH')).toBe(200);
+    expect(status(`/api/mobile/v1/knowledge/${subjectId}`, 'DELETE')).toBe(503);
+    expect(status('/api/mobile/v1/knowledge/graph', 'POST')).toBe(503);
     expect(status('/api/mobile/v1/knowledge/bad')).toBe(503);
   });
 
