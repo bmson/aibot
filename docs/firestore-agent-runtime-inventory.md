@@ -56,7 +56,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `pulse.check` | pulse (every 20 min) | SQL |
 | `graph.curiosity` | knowledge-graph-curiosity | SQL |
 | `memory.graph_date_backfill` | knowledge-graph-date-backfill | SQL |
-| `chat.segment` | chat-segmentation | SQL |
+| `chat.segment` | chat-segmentation | Ready (`firestore-chat-segmentation.test.ts`). Groups only vectors in `FIRESTORE_EMBEDDING_SPACE` and stamps new segments with it; one segment per start message. |
 | `anomaly.scan` | anomaly-scan | SQL |
 | `skill.reflect` | skill-reflection | SQL |
 | `self.improve` | self-improve | SQL |

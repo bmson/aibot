@@ -4,6 +4,7 @@ import type { AssistantHealthRepository } from './assistant-health.js';
 import type { CardRefreshRepository } from './card-refresh.js';
 import type { CommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import type { CostRepository, MessageRepository } from './contracts.js';
+import type { ConversationSegmentationRepository } from './conversation-segmentation.js';
 import type { ToolExecutionRepository } from './dispatch.js';
 import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
@@ -74,4 +75,6 @@ export interface ExecutionPersistence {
   readonly ambientSnapshots?: AmbientSnapshotRepository;
   /** Present where the open-loop sweep has a portable adapter. */
   readonly commitmentMaintenance?: CommitmentMaintenanceRepository;
+  /** Present where the `chat.segment` job has a portable adapter. */
+  readonly conversationSegmentation?: ConversationSegmentationRepository;
 }
