@@ -1,6 +1,9 @@
+import { normalizeContactAliases, normalizeContactName } from '@assistant/persistence';
 import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { type ContactRow, contacts, memories, memoryTombstones, occasions } from './schema.js';
+
+export { normalizeContactAliases, normalizeContactName } from '@assistant/persistence';
 
 /** Subjects that are the assistant itself — facts about it never become contacts. */
 const ASSISTANT_ALIASES = new Set(['assistant', 'ai bot', 'b bot', 'the assistant', 'bot']);
@@ -13,33 +16,6 @@ const ASSISTANT_ALIASES = new Set(['assistant', 'ai bot', 'b bot', 'the assistan
 export function namePrefixMatch(a: string, b: string): boolean {
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
   return shorter.length >= 3 && (longer === shorter || longer.startsWith(`${shorter} `));
-}
-
-export function normalizeContactName(value: string): string {
-  const name = value.trim().replace(/\s+/g, ' ');
-  if (!name) throw new Error('Person name is required.');
-  if (name.length > 120) throw new Error('Person name must be 120 characters or fewer.');
-  if (
-    [...name].some((character) => {
-      const codePoint = character.codePointAt(0) ?? 0;
-      return codePoint <= 0x1f || codePoint === 0x7f;
-    })
-  ) {
-    throw new Error('Person name contains unsupported control characters.');
-  }
-  return name;
-}
-
-export function normalizeContactAliases(values: string[], canonicalName: string): string[] {
-  const canonical = canonicalName.toLocaleLowerCase();
-  const aliases = new Map<string, string>();
-  for (const value of values) {
-    const alias = normalizeContactName(value);
-    const key = alias.toLocaleLowerCase();
-    if (key !== canonical && !aliases.has(key)) aliases.set(key, alias);
-  }
-  if (aliases.size > 20) throw new Error('A person can have at most 20 aliases.');
-  return [...aliases.values()];
 }
 
 /** Update canonical name and aliases while remembering the old name after a rename. */

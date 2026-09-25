@@ -179,6 +179,53 @@ export class FirestoreSituationPackReadRepository {
     return views;
   }
 
+  async get(agentId: string, id: string): Promise<SituationPackView | null> {
+    const fence = await readPrivacyErasureFence(this.store, agentId);
+    const row = await this.owned<Pack>('situationPacks', id, agentId);
+    const view = row ? await this.project(row) : null;
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    return view;
+  }
+
+  /**
+   * Confirmed choices matching the query words, from the 50 most recently
+   * edited packs (archived included, like SQL). The current pack's choices
+   * come first and need no word match; elsewhere only lasting preferences can.
+   */
+  async decisions(agentId: string, query: string, packId?: string) {
+    const words = query.toLocaleLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? [];
+    if (!words.length && !packId) return [];
+    const fence = await readPrivacyErasureFence(this.store, agentId);
+    const rows = (await this.ownedRows<Pack>('situationPacks', agentId))
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || b.id.localeCompare(a.id))
+      .slice(0, 50);
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    const candidates = rows
+      .sort((a, b) => Number(b.id === packId) - Number(a.id === packId))
+      .flatMap((row) =>
+        PackDataSchema.parse(row.data)
+          .decisions.filter(
+            (decision) =>
+              decision.confirmed && (decision.scope === 'preference' || row.id === packId),
+          )
+          .filter(
+            (decision) =>
+              row.id === packId ||
+              words.some((word) =>
+                `${decision.option} ${decision.reason}`.toLocaleLowerCase().includes(word),
+              ),
+          )
+          .map((decision) => ({ ...decision, packId: row.id, packTitle: row.title })),
+      );
+    // For the same literal option, keep the situation-specific or most recent choice.
+    const latest = new Map<string, (typeof candidates)[number]>();
+    for (const decision of candidates) {
+      const key = decision.option.trim().toLocaleLowerCase();
+      if (!latest.has(key)) latest.set(key, decision);
+    }
+    return [...latest.values()].slice(0, 12);
+  }
+
   async listSources(agentId: string) {
     const fence = await readPrivacyErasureFence(this.store, agentId);
     const [cards, commitments] = await Promise.all([
