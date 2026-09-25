@@ -6,7 +6,14 @@ import {
   purgeDocument,
   startDocumentIngest,
 } from '@assistant/core/memory/document-catalog';
-import { type Db, documentChunks, documents, files } from '@assistant/db';
+import {
+  createPostgresWorkspaceFileLookup,
+  type Db,
+  documentChunks,
+  documents,
+  files,
+} from '@assistant/db';
+import type { WorkspaceFileLookup } from '@assistant/persistence';
 import { and, asc, eq } from 'drizzle-orm';
 import { safeWorkspacePath, type WorkspacePort } from './workspace.js';
 
@@ -120,11 +127,23 @@ export async function downloadArtifact(
 ): Promise<DownloadedArtifact | null> {
   if (!SAFE_DOWNLOAD_PREFIXES.some((prefix) => workspacePath.startsWith(prefix))) return null;
   const agent = await getAgent(db);
-  const [row] = await db
-    .select({ mime: files.mime })
-    .from(files)
-    .where(and(eq(files.agentId, agent.id), eq(files.workspacePath, workspacePath)))
-    .limit(1);
+  return downloadArtifactWithLookup(
+    createPostgresWorkspaceFileLookup(db),
+    workspace,
+    agent.id,
+    workspacePath,
+  );
+}
+
+/** Stream an owner artifact only when a `files` record for that exact path exists. */
+export async function downloadArtifactWithLookup(
+  lookup: WorkspaceFileLookup,
+  workspace: WorkspacePort,
+  agentId: string,
+  workspacePath: string,
+): Promise<DownloadedArtifact | null> {
+  if (!SAFE_DOWNLOAD_PREFIXES.some((prefix) => workspacePath.startsWith(prefix))) return null;
+  const row = await lookup.findOwned(agentId, workspacePath);
   if (!row) return null;
   const bytes = await workspace.readBytes(workspacePath).catch(() => null);
   if (!bytes) return null;

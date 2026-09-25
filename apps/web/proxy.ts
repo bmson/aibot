@@ -41,6 +41,8 @@ export function proxy(request: NextRequest) {
     (path.startsWith('/api/owner/') && ['GET', 'POST', 'DELETE'].includes(request.method)) ||
     (['/setup', '/signin', '/security'].includes(path) && request.method === 'GET') ||
     (path === '/api/health' && request.method === 'GET') ||
+    // Owner artifact download, gated on the owner's files record.
+    (path === '/api/files' && request.method === 'GET') ||
     (path === '/' && request.method === 'GET') ||
     (path === '/profile/memories' && request.method === 'GET') ||
     (path === '/people' && request.method === 'GET') ||

@@ -24,6 +24,7 @@ import {
   dismissImprovementProposal,
   dismissOwnerCommitment,
   downloadArtifact,
+  downloadArtifactWithLookup,
   editAssistantSkill,
   exportLongTermMemoryData,
   forgetLongTermMemory,
@@ -112,6 +113,7 @@ import {
   FirestoreRecallFeedbackRepository,
   FirestoreShellStatusRepository,
   FirestoreSkillMutationRepository,
+  FirestoreWorkspaceFileLookup,
 } from '@assistant/firestore';
 import { embeddingModelId, validateEmbedding } from '@assistant/persistence';
 import { inspectMcpConnection } from '@assistant/tools/mcp';
@@ -711,4 +713,19 @@ export function getWorkspaceSettings() {
 /** Record an owner location ping and run the arrival hook with the configured driver. */
 export function recordOwnerLocation(body: unknown) {
   return getChatApplication().recordOwnerLocationPing(body);
+}
+
+/** Stream an owner artifact with the configured driver's `files` record as the gate. */
+export function downloadOwnerArtifact(workspacePath: string) {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER !== 'firestore')
+    return getApplication().downloadArtifact(workspacePath);
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  return downloadArtifactWithLookup(
+    new FirestoreWorkspaceFileLookup(getFirestoreInstallationStore()),
+    getWorkspace(),
+    config.FIRESTORE_AGENT_ID,
+    workspacePath,
+  );
 }
