@@ -105,7 +105,7 @@ Owner notifications in Firestore mode post to the dashboard only (`firestoreDash
 
 ## Built-in tools
 
-The Firestore composition registers `memory.save`, `memory.recall`, `task.schedule`, `goals.update_progress`, `owner.notify`, `weather.lookup`, `sports.scores`, `web.fetch`, `workspace.read/write/list`, and (opt-in, non-production) MCP tools.
+The Firestore composition registers `memory.save`, `memory.recall`, `task.schedule`, `goals.update_progress`, `owner.notify`, `weather.lookup`, `sports.scores`, `web.fetch`, `workspace.read/write/list`, the record tools below, and (opt-in, non-production) MCP tools.
 
 | Tool | State |
 |---|---|
@@ -113,11 +113,13 @@ The Firestore composition registers `memory.save`, `memory.recall`, `task.schedu
 | `sports.scores` | Ready and registered under Firestore in #381 |
 | `web.fetch` | Ready and registered under Firestore in #362 |
 | `workspace.read/write/list` | Ready and registered under Firestore in #362 |
-| `memory.graph_snapshot` | SQL (pgvector join) |
-| `tools.read_result` | SQL (`tool_calls`) |
-| `occasions.save/list`, `contacts.lookup`, `conversations.search` | SQL |
+| `memory.graph_snapshot` | Ready: graph recall repository's verified seeds, filtered by embedding space |
+| `tools.read_result` | Ready: tool-execution `load`, scoped to the calling task and owner |
+| `occasions.save/list` | Ready: Profile occasion writer with tool provenance (untrusted saves stay quarantined); bounded owner scan for the list |
+| `contacts.lookup` | Ready: bounded contact scan, name and alias prefix match |
+| `conversations.search` | Ready: owned-conversation vector search in the configured space; bounded newest-first substring fallback |
 | `goals.list`, `goals.create`, `mission.update` | SQL |
-| `situations.read/decisions/sources/change` | SQL |
+| `situations.read/decisions/sources/change` | Ready: the situation pack read and command repositories the owner UI uses |
 
 ## Remaining work, in dependency order
 
@@ -125,6 +127,6 @@ Done in open PRs: portable sweep and reservation release (#374), explicit SQL-jo
 
 1. Port the Notifications-conversation final delivery and the goal-blocked write in the executor.
 2. Port the lightweight SQL code jobs next (`memory.sweep_loops`, `ambient.refresh`, `health.monitor`, `memory.graph_date_backfill`), then the model-backed proactive jobs.
-3. Large domains, each needing its own repository family: Gmail sync/ingest/delivery (google), SMS channel and approval codes, push device tokens and nudge policy, documents search/processor, missions, goals list/create, occasions/contacts/conversation search, situations, the remaining proactive code jobs, location ingest, and canaries.
+3. Large domains, each needing its own repository family: Gmail sync/ingest/delivery (google), SMS channel and approval codes, push device tokens and nudge policy, documents search/processor, missions, goals list/create, the remaining proactive code jobs, location ingest, and canaries.
 
 Relaxing `validateAgentPersistenceConfig` for a module is safe only once every row for that module above is Ready. Every row for search, maps, browser, and code is now Ready, so those modules are eligible; the allowlist still refuses them until it is relaxed deliberately.

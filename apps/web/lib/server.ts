@@ -25,6 +25,7 @@ import {
   dismissImprovementProposal,
   dismissOwnerCommitment,
   downloadArtifact,
+  downloadArtifactWithLookup,
   editAssistantSkill,
   exportLongTermMemoryData,
   forgetLongTermMemory,
@@ -80,6 +81,8 @@ import {
 import type { GoalInput } from '@assistant/application/goals';
 import {
   createProfileMemoryCommands,
+  organizeMemoryNow,
+  organizeMemoryNowWithRepository,
   type ProfileMemoryCommandPersistence,
   profileMemoryCommands,
 } from '@assistant/application/profile';
@@ -108,6 +111,7 @@ import {
   createFirestoreProfileMemoryCommandPersistence,
   createFirestoreSettingsPersistence,
   createInstallationStore,
+  FirestoreActiveJobLookup,
   FirestoreApplicationChatPersistence,
   FirestoreCommitmentMutationRepository,
   FirestoreDeviceTokenRepository,
@@ -118,6 +122,7 @@ import {
   FirestoreRecallFeedbackRepository,
   FirestoreShellStatusRepository,
   FirestoreSkillMutationRepository,
+  FirestoreWorkspaceFileLookup,
 } from '@assistant/firestore';
 import { embeddingModelId, validateEmbedding } from '@assistant/persistence';
 import { inspectMcpConnection } from '@assistant/tools/mcp';
@@ -586,6 +591,12 @@ function createFirestoreChatApplication() {
         body,
       );
     },
+    organizeMemoryNow: () =>
+      organizeMemoryNowWithRepository(
+        new FirestoreActiveJobLookup(store),
+        persistence.tasks,
+        config.FIRESTORE_AGENT_ID,
+      ),
     registerDeviceToken: (body: unknown) =>
       registerDeviceTokenWithRepository(deviceTokens, config.FIRESTORE_AGENT_ID, body),
     checkReadiness: () =>
@@ -751,6 +762,28 @@ export function getWorkspaceSettings() {
 /** Record an owner location ping and run the arrival hook with the configured driver. */
 export function recordOwnerLocation(body: unknown) {
   return getChatApplication().recordOwnerLocationPing(body);
+}
+
+/** Stream an owner artifact with the configured driver's `files` record as the gate. */
+export function downloadOwnerArtifact(workspacePath: string) {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER !== 'firestore')
+    return getApplication().downloadArtifact(workspacePath);
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  return downloadArtifactWithLookup(
+    new FirestoreWorkspaceFileLookup(getFirestoreInstallationStore()),
+    getWorkspace(),
+    config.FIRESTORE_AGENT_ID,
+    workspacePath,
+  );
+}
+
+/** Queue an owner-requested memory organization pass with the configured driver. */
+export function organizeOwnerMemoryNow() {
+  return loadConfig().PERSISTENCE_DRIVER === 'firestore'
+    ? getFirestoreChatApplication().organizeMemoryNow()
+    : organizeMemoryNow(getDb());
 }
 
 /** Register the owner's APNs token with the configured driver. */

@@ -1,3 +1,4 @@
+export { FirestoreActiveJobLookup } from './active-jobs.js';
 export { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
 export { FirestoreApplicationChatPersistence } from './application-chat.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
@@ -8,6 +9,8 @@ export { createFirestoreCardRefreshRepository } from './card-refresh.js';
 export { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
 export { FirestoreCommitmentMutationRepository } from './commitment-mutations.js';
 export { getFirestoreCommitmentOverview } from './commitment-overview.js';
+export { FirestoreContactLookupRepository } from './contact-lookup.js';
+export { FirestoreConversationSearchRepository } from './conversation-search.js';
 export { FirestoreCostRepository } from './costs.js';
 export { FirestoreDeviceTokenRepository } from './device-tokens.js';
 export { FirestoreDocumentCatalogRepository } from './document-catalog.js';
@@ -24,6 +27,7 @@ export { FirestoreGoalReadRepository } from './goals.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { FirestoreImportOverviewRepository } from './import-overview.js';
+export { FirestoreKnowledgeGraphCurationRepository } from './knowledge-graph-curation.js';
 export {
   getFirestoreKnowledgeGraphOverview,
   getFirestoreKnowledgeGraphRelation,
@@ -31,6 +35,7 @@ export {
 } from './knowledge-graph-read.js';
 export { FirestoreKnowledgeGraphRelationMutationRepository } from './knowledge-graph-relation-mutations.js';
 export { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
+export { FirestoreKnowledgeWorkspaceReadRepository } from './knowledge-workspace-read.js';
 export { FirestoreLocationPingRepository } from './location-pings.js';
 export { FirestoreMaintenanceRepository } from './maintenance.js';
 export type { McpDiscoveryResult } from './mcp-connections.js';
@@ -45,6 +50,7 @@ export { FirestoreMemoryToolRepository } from './memory-tools.js';
 export { FirestoreMessageRepository } from './messages.js';
 export { getFirestoreMobileCosts } from './mobile-costs.js';
 export { FirestoreModelRoutingRepository } from './model-routing.js';
+export { FirestoreOccasionToolRepository } from './occasion-tools.js';
 export {
   createWakeIntent,
   FirestoreOutbox,
@@ -99,6 +105,7 @@ export { FirestoreProfileOccasionCommandRepository } from './profile-occasion-co
 export { FirestoreProfileVoiceOverviewRepository } from './profile-overview.js';
 export { FirestoreProfilePeopleCommandRepository } from './profile-people-command.js';
 export { FirestoreProfilePeopleReadRepository } from './profile-people-read.js';
+export { FirestoreProfilePeopleRemovalRepository } from './profile-people-removal.js';
 export { FirestoreRecallFeedbackRepository } from './recall-feedback.js';
 export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 export { FirestoreReminderDeliveryRepository, FirestoreReminderRepository } from './reminders.js';
@@ -114,6 +121,7 @@ export { FirestoreShellPresenceRepository } from './shell-presence.js';
 export { FirestoreShellStatusRepository } from './shell-status.js';
 export { FirestoreSituationPackMutationRepository } from './situation-pack-mutations.js';
 export { FirestoreSituationPackReadRepository } from './situation-packs.js';
+export { FirestoreSituationToolRepository } from './situation-tools.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { FirestoreSkillMutationRepository } from './skill-mutations.js';
 export { createInstallationStore, InstallationStore } from './store.js';
@@ -127,4 +135,5 @@ export { FirestoreVoiceProfileRepository } from './voice-profile.js';
 export { FirestoreWatchRepository } from './watches.js';
 export { FirestoreWorkspaceAnomalyRepository } from './workspace-anomalies.js';
 export { FirestoreWorkspaceCapabilityRepository } from './workspace-capabilities.js';
+export { FirestoreWorkspaceFileLookup } from './workspace-files.js';
 export { FirestoreWorkspaceImprovementRepository } from './workspace-improvements.js';

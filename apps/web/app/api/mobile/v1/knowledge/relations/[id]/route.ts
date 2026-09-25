@@ -10,6 +10,7 @@ import {
   FirestoreKnowledgeGraphRelationMutationRepository,
   getFirestoreKnowledgeGraphRelation,
 } from '@assistant/firestore';
+import { correctFirestoreKnowledgeRelation } from '@/lib/firestore-knowledge';
 import { getDb, getFirestoreInstallationStore, getRouter } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -93,12 +94,7 @@ export async function POST(
       : mobileJson({ error: 'relationship not found' }, { status: 404 });
   }
   if (body?.action === 'correct') {
-    if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-      return mobileJson(
-        { error: 'Knowledge relationship correction is unavailable in Firestore mode.' },
-        { status: 503 },
-      );
-    const result = await correctKnowledgeGraphRelation(getDb(), getRouter(), id, {
+    const input = {
       subjectLabel: typeof body.subjectLabel === 'string' ? body.subjectLabel : '',
       subjectKind: typeof body.subjectKind === 'string' ? body.subjectKind : '',
       subjectId: typeof body.subjectId === 'string' ? body.subjectId : undefined,
@@ -107,7 +103,11 @@ export async function POST(
       objectKind: typeof body.objectKind === 'string' ? body.objectKind : '',
       objectId: typeof body.objectId === 'string' ? body.objectId : undefined,
       note: typeof body.note === 'string' ? body.note : '',
-    });
+    };
+    const result =
+      loadConfig().PERSISTENCE_DRIVER === 'firestore'
+        ? await correctFirestoreKnowledgeRelation(id, input)
+        : await correctKnowledgeGraphRelation(getDb(), getRouter(), id, input);
     return result.error ? mobileJson(result, { status: 400 }) : mobileJson(result, { status: 201 });
   }
   return mobileJson({ error: 'action must be confirm, reject, or correct' }, { status: 400 });
