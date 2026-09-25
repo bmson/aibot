@@ -119,8 +119,11 @@ export function isCodeJobEnabled(job: string): boolean {
  */
 const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'reminder.notify',
+  'memory.sweep_loops',
   'memory.consolidate',
   'memory.graph_sync',
+  'ambient.refresh',
+  'health.monitor',
   'documents.extract',
   'watch.suggest',
   'import.run',
@@ -356,7 +359,10 @@ export async function runCodeJob(
     // stopped the cleanup. It runs on its own clock now, and more often, so a
     // loop that ages out leaves the desk the same day rather than the next.
     case 'memory.sweep_loops': {
-      const stale = await markStaleCommitments(deps.db, task.agentId);
+      const stale = await markStaleCommitments(
+        deps.persistence?.commitmentMaintenance ?? deps.db,
+        task.agentId,
+      );
       return { done: true, summary: `open loops: ${stale} retired as stale` };
     }
     case 'email.extract': {
@@ -536,8 +542,15 @@ export async function runCodeJob(
       );
     case 'ambient.refresh': {
       await deps.heartbeat?.();
+      const snapshots = deps.persistence?.ambientSnapshots;
       const r = await refreshAmbientSnapshot(
-        { db: deps.db, heartbeat: deps.heartbeat },
+        {
+          db: deps.db,
+          heartbeat: deps.heartbeat,
+          ...(snapshots && deps.persistence
+            ? { portable: { ownerContext: deps.persistence.ownerContext, snapshots } }
+            : {}),
+        },
         { agentId: task.agentId },
       );
       return {
@@ -565,8 +578,13 @@ export async function runCodeJob(
     }
     case 'health.monitor': {
       await deps.heartbeat?.();
+      const health = deps.persistence?.assistantHealth;
       const r = await runAssistantHealthMonitor(
-        { db: deps.db, heartbeat: deps.heartbeat },
+        {
+          db: deps.db,
+          heartbeat: deps.heartbeat,
+          ...(health && deps.persistence ? { health, graphSync: deps.persistence.graphSync } : {}),
+        },
         { agentId: task.agentId, taskId: task.id },
       );
       return {
