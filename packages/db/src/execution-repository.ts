@@ -8,13 +8,16 @@ import { createPostgresExecutionContextRepository } from './execution-context-re
 import { createPostgresExecutionEvidenceRepository } from './execution-evidence-repository.js';
 import { createPostgresExecutionJobRepository } from './execution-jobs-repository.js';
 import { createPostgresGeneratedCardRepository } from './generated-card-repository.js';
+import { createPostgresGoalRuntimeRepository } from './goal-runtime-repository.js';
 import { createPostgresGraphRecallRepository } from './graph-recall-repository.js';
 import { createPostgresHistoryRecallRepository } from './history-recall-repository.js';
 import { createPostgresKnowledgeGraphSyncRepository } from './knowledge-graph-sync-repository.js';
 import { createPostgresMemorySupersedeRepository } from './memory-supersede-repository.js';
 import { createPostgresMemoryToolRepository } from './memory-tool-repository.js';
 import { createPostgresMessageRepository } from './message-repository.js';
+import { createPostgresMissionRepository } from './mission-repository.js';
 import { createPostgresModelRoutingRepository } from './model-routing-repository.js';
+import { createPostgresNotificationsConversationRepository } from './notifications-conversation-repository.js';
 import { createPostgresOwnerCardCompilationRepository } from './owner-card-compilation-repository.js';
 import { createPostgresOwnerContextRepository } from './owner-context-repository.js';
 import { createPostgresRecallMetricsRepository } from './recall-metrics-repository.js';
@@ -48,5 +51,8 @@ export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence
     cardRefresh: createPostgresCardRefreshRepository(db),
     recallMetrics: createPostgresRecallMetricsRepository(db),
     watches: createPostgresWatchRepository(db),
+    notifications: createPostgresNotificationsConversationRepository(db),
+    goals: createPostgresGoalRuntimeRepository(db),
+    missions: createPostgresMissionRepository(db),
   };
 }

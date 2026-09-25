@@ -15,6 +15,13 @@ async function assertConfiguredOwner(store: InstallationStore, agentId: string) 
     throw new Error('Goals require exactly one configured agent');
 }
 
+const MAX_STANDING_GOALS = 200;
+const STATUS_RANK: Record<string, number> = { active: 0, paused: 1, done: 2 };
+
+function statusRank(status: string): number {
+  return STATUS_RANK[status] ?? 3;
+}
+
 /** SQL-free, installation-owner-scoped reads for mobile Goals. */
 export class FirestoreGoalReadRepository implements GoalReadRepository {
   constructor(
@@ -53,6 +60,36 @@ export class FirestoreGoalReadRepository implements GoalReadRepository {
     await assertConfiguredOwner(this.store, agentId);
     await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
     return result;
+  }
+
+  /** The goals.list view: unarchived goals, active first, then by priority. */
+  async listStanding(agentId: string): Promise<Records['goals'][]> {
+    if (agentId !== this.configuredAgentId)
+      throw new Error('Goal read is outside the configured installation');
+    await assertConfiguredOwner(this.store, agentId);
+    const fence = await readPrivacyErasureFence(this.store, agentId);
+    const snapshot = await this.store
+      .collection('goals')
+      .where('agentId', '==', agentId)
+      .where('archivedAt', '==', null)
+      .limit(MAX_STANDING_GOALS + 1)
+      .get();
+    if (snapshot.size > MAX_STANDING_GOALS)
+      throw new Error('Too many goals to list safely; archive finished goals first');
+    const goals = snapshot.docs.map((doc) => {
+      const row = decodeRecord<Records['goals']>(doc.data());
+      if (row.agentId !== agentId || documentKey(row.id) !== doc.id)
+        throw new Error('Goal record identity mismatch');
+      return row;
+    });
+    await assertConfiguredOwner(this.store, agentId);
+    await assertPrivacyErasureFenceUnchanged(this.store, agentId, fence);
+    return goals.sort(
+      (left, right) =>
+        statusRank(left.status) - statusRank(right.status) ||
+        left.priority - right.priority ||
+        left.id.localeCompare(right.id),
+    );
   }
 
   async get(agentId: string, id: string): Promise<Records['goals'] | null> {

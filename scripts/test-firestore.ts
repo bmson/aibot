@@ -42,6 +42,7 @@ const child = spawn(
     'apps/agent/src/firestore-ambient-refresh.test.ts',
     'apps/agent/src/firestore-open-loop-sweep.test.ts',
     'apps/agent/src/firestore-lookup-tools.test.ts',
+    'apps/agent/src/firestore-goals-missions.test.ts',
     'apps/agent/src/firestore-builtin-tools.test.ts',
     'apps/web/app/costs/page.test.tsx',
     'apps/web/app/packs/actions.firestore.test.ts',
