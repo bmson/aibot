@@ -27,7 +27,10 @@ export interface OutOfBandPingInput {
  */
 export interface NudgePolicyRepository {
   readonly kind: 'nudge-policy-repository';
-  evaluate(agent: { id: string; timezone: string }, input: OutOfBandPingInput): Promise<PingDecision>;
+  evaluate(
+    agent: { id: string; timezone: string },
+    input: OutOfBandPingInput,
+  ): Promise<PingDecision>;
 }
 
 /** Wall-clock minutes after midnight in the zone, for the quiet-hours window. */

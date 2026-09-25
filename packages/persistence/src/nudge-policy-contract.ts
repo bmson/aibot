@@ -82,7 +82,8 @@ export function nudgePolicyContract(
 
     it('holds ambient pings inside an overnight quiet window, end exclusive', async () => {
       await f.setPrefs({ quietStartMin: 22 * 60, quietEndMin: 7 * 60 });
-      const evaluate = (now: Date) => f.repository.evaluate(utcOwner(), { urgency: 'ambient', now });
+      const evaluate = (now: Date) =>
+        f.repository.evaluate(utcOwner(), { urgency: 'ambient', now });
       expect(await evaluate(LATE_NIGHT)).toEqual({ deliver: false, reason: 'quiet-hours' });
       expect(await evaluate(new Date('2026-08-25T22:00:00Z'))).toEqual({
         deliver: false,
@@ -121,14 +122,14 @@ export function nudgePolicyContract(
       ).toBe(true);
       await f.setPrefs({ quietStartMin: 22 * 60, quietEndMin: null });
       expect(
-        (await f.repository.evaluate(utcOwner(), { urgency: 'ambient', now: LATE_NIGHT }))
-          .deliver,
+        (await f.repository.evaluate(utcOwner(), { urgency: 'ambient', now: LATE_NIGHT })).deliver,
       ).toBe(true);
     });
 
     it('reports quiet hours before the daily cap', async () => {
       await f.setPrefs({ quietStartMin: 22 * 60, quietEndMin: 7 * 60, ambientDailyCap: 1 });
-      const evaluate = (now: Date) => f.repository.evaluate(utcOwner(), { urgency: 'ambient', now });
+      const evaluate = (now: Date) =>
+        f.repository.evaluate(utcOwner(), { urgency: 'ambient', now });
       expect(await evaluate(MIDDAY)).toEqual({ deliver: true });
       expect(await evaluate(LATE_NIGHT)).toEqual({ deliver: false, reason: 'quiet-hours' });
       expect(await evaluate(minutesAfter(MIDDAY, 1))).toEqual({
