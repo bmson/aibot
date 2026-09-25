@@ -2,6 +2,7 @@ import {
   channelBindings,
   conversations,
   createDb,
+  createPostgresExecutionPersistence,
   type Db,
   emailIngest,
   messages,
@@ -350,6 +351,7 @@ describe('forwarded-ingest owner alerts', () => {
           EMAIL_INGEST_MAX_TRIAGE_PER_DAY: 40,
         },
         db,
+        persistence: createPostgresExecutionPersistence(db),
         router: {
           object: async () => ({
             ok: true,

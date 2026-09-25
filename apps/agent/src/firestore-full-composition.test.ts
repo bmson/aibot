@@ -176,9 +176,9 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
 
       // Recurring work that still needs SQL is declared, and the Firestore
       // runtime skips it rather than tripping over it every tick.
-      expect(deps.modules.ticks.filter((tick) => !tick.portable).map((tick) => tick.name)).toEqual([
-        'email-sync',
-      ]);
+      expect(deps.modules.ticks.filter((tick) => !tick.portable).map((tick) => tick.name)).toEqual(
+        [],
+      );
       expect(
         deps.modules.sweepSteps.filter((step) => !step.portable).map((step) => step.name),
       ).toEqual([]);

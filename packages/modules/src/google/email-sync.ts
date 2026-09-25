@@ -5,24 +5,14 @@ import {
   captureOwnerWritingSample,
   enqueueTask,
   extractorFor,
-  getAgent,
   persistMessage,
   quotesExternalContent,
   startDocumentIngest,
   TaskRateLimitError,
 } from '@assistant/core';
 import { collapseWhitespace, truncateAtBoundary } from '@assistant/core/owner-text';
-import {
-  channelBindings,
-  contacts,
-  conversations,
-  type Db,
-  emailIngest,
-  gmailSyncState,
-  messages as storedMessages,
-  tasks,
-} from '@assistant/db';
-import type { ExecutionPersistence } from '@assistant/persistence';
+import type { Db } from '@assistant/db';
+import type { EmailSyncRepository, ExecutionPersistence } from '@assistant/persistence';
 import {
   collectGmailAttachments,
   extractGmailText,
@@ -32,7 +22,6 @@ import {
 } from '@assistant/tools';
 import type { GoogleClient } from '@assistant/tools/modules/google';
 import type { WorkspaceStore } from '@assistant/tools/workspace';
-import { and, eq, gte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { InboundEmailEvent, OwnerNotifier } from '../platform.js';
 import {
@@ -49,8 +38,9 @@ import { emailIngestForwarded } from './runtime.js';
  */
 export interface EmailSyncDeps {
   config: Config;
-  db: Db;
   persistence: ExecutionPersistence;
+  /** PostgreSQL only: attachments are catalogued through SQL when the bundle has no catalog. */
+  db?: Db;
   router: ModelRouter;
   workspace: WorkspaceStore;
   googleClient: GoogleClient;
@@ -427,18 +417,27 @@ function ingestContentTrust(
  * Counted over a rolling 24 hours rather than a calendar day so a burst at
  * midnight cannot spend two days' allowance in two minutes.
  */
-async function underIngestTriageLimit(db: Db, limit: number): Promise<boolean> {
+async function underIngestTriageLimit(deps: EmailSyncDeps, limit: number): Promise<boolean> {
   if (limit <= 0) return false;
-  const [row] = await db
-    .select({ n: sql<number>`count(*)` })
-    .from(emailIngest)
-    .where(
-      and(
-        eq(emailIngest.triaged, true),
-        gte(emailIngest.createdAt, sql`now() - '1 day'::interval`),
-      ),
-    );
-  return Number(row?.n ?? 0) < limit;
+  const triaged = await syncStore(deps).triagedSince(new Date(Date.now() - 24 * 3600_000));
+  return triaged < limit;
+}
+
+function voiceStore(deps: EmailSyncDeps) {
+  const voice = deps.persistence.voiceContext;
+  if (!voice) throw new Error('email-sync: persistence has no voice repository');
+  return voice;
+}
+
+function missingCatalog(): never {
+  throw new Error('email-sync: persistence has no document catalog');
+}
+
+/** Gmail sync's own state, from the persistence bundle of either driver. */
+function syncStore(deps: EmailSyncDeps): EmailSyncRepository {
+  const store = deps.persistence.emailSync;
+  if (!store) throw new Error('email-sync: persistence has no Gmail sync repository');
+  return store;
 }
 
 /**
@@ -470,29 +469,14 @@ async function reportUnauthenticatedTrustedSender(
     .catch((err) => console.error('unauthenticated-sender notice failed', err));
 }
 
-async function conversationForThread(
+function conversationForThread(
   deps: EmailSyncDeps,
   agentId: string,
   threadId: string,
   trust: Trust,
   subject: string,
 ): Promise<string> {
-  const [binding] = await deps.db
-    .select()
-    .from(channelBindings)
-    .where(and(eq(channelBindings.channel, 'email'), eq(channelBindings.externalId, threadId)));
-  if (binding) return binding.conversationId;
-
-  const [conversation] = await deps.db
-    .insert(conversations)
-    .values({ agentId, channel: 'email', trust, title: subject.slice(0, 80) || '(no subject)' })
-    .returning();
-  if (!conversation) throw new Error('failed to create email conversation');
-  await deps.db
-    .insert(channelBindings)
-    .values({ conversationId: conversation.id, channel: 'email', externalId: threadId })
-    .onConflictDoNothing();
-  return conversation.id;
+  return syncStore(deps).conversationForThread(agentId, threadId, trust, subject);
 }
 
 /**
@@ -526,17 +510,20 @@ async function fileMessageAttachments(
         att.filename.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) || 'attachment';
       const workspacePath = safeRelPath(`documents/email/${input.message.id}-${cleanName}`);
       await deps.workspace.writeBytes(workspacePath, bytes, att.mimeType);
-      const result = await startDocumentIngest(deps.db, {
-        agentId: input.agentId,
-        title: att.filename.slice(0, 300),
-        workspacePath,
-        mime: att.mimeType,
-        bytes: bytes.length,
-        sha256: createHash('sha256').update(bytes).digest('hex'),
-        source: 'email',
-        sourceRef: `gmail:${input.message.id}`,
-        trust: input.trust,
-      });
+      const result = await startDocumentIngest(
+        deps.persistence.documentCatalog ?? deps.db ?? missingCatalog(),
+        {
+          agentId: input.agentId,
+          title: att.filename.slice(0, 300),
+          workspacePath,
+          mime: att.mimeType,
+          bytes: bytes.length,
+          sha256: createHash('sha256').update(bytes).digest('hex'),
+          source: 'email',
+          sourceRef: `gmail:${input.message.id}`,
+          trust: input.trust,
+        },
+      );
       if (result.duplicate) await deps.workspace.delete(workspacePath).catch(() => {});
     } catch (err) {
       console.error(`email-sync: failed to file attachment ${att.filename}`, err);
@@ -605,18 +592,7 @@ export async function processForwardedIngest(
   const { agentId, message: msg, from, subject, text, channelMessageId } = input;
   const threshold = deps.config.EMAIL_INGEST_IMPORTANCE_THRESHOLD;
 
-  const [recorded] = await deps.db
-    .select({
-      id: emailIngest.id,
-      conversationId: emailIngest.conversationId,
-      importance: emailIngest.importance,
-      category: emailIngest.category,
-      contentTrust: emailIngest.contentTrust,
-      triaged: emailIngest.triaged,
-    })
-    .from(emailIngest)
-    .where(eq(emailIngest.channelMessageId, channelMessageId))
-    .limit(1);
+  const recorded = await syncStore(deps).ingestRecord(channelMessageId);
 
   // A Gmail history replay re-delivers messages we have already scored. Never
   // pay to score one twice; only finish the work that a crash left undone.
@@ -655,7 +631,7 @@ export async function processForwardedIngest(
     contentTrust,
     subject,
   );
-  const persisted = await persistMessage(deps.db, {
+  const persisted = await persistMessage(deps.persistence.messages, {
     conversationId,
     role: 'user',
     origin:
@@ -666,30 +642,26 @@ export async function processForwardedIngest(
   });
   if (!persisted) return 'skipped'; // another instance won the idempotency race
 
-  const [ingested] = await deps.db
-    .insert(emailIngest)
-    .values({
-      agentId,
-      conversationId,
-      channelMessageId,
-      fromEmail: from,
-      fromName: parseSenderName(gmailHeader(msg.payload, 'From')),
-      subject: subject.slice(0, 500),
-      contentTrust,
-      authenticated: input.authenticated,
-      category: score.category,
-      importance: score.importance,
-      actionable: score.actionable,
-      reason: truncateAtBoundary(score.reason, 300),
-      dates: score.dates,
-    })
-    .onConflictDoNothing({ target: emailIngest.channelMessageId })
-    .returning({ id: emailIngest.id });
-  if (!ingested) return 'skipped'; // concurrent instance recorded it first
+  const ingestedId = await syncStore(deps).recordIngest({
+    agentId,
+    conversationId,
+    channelMessageId,
+    fromEmail: from,
+    fromName: parseSenderName(gmailHeader(msg.payload, 'From')) ?? null,
+    subject: subject.slice(0, 500),
+    contentTrust,
+    authenticated: input.authenticated,
+    category: score.category,
+    importance: score.importance,
+    actionable: score.actionable,
+    reason: truncateAtBoundary(score.reason, 300),
+    dates: score.dates,
+  });
+  if (!ingestedId) return 'skipped'; // concurrent instance recorded it first
 
   // Learn the owner's voice only from their own verified, non-forwarded prose.
   if (contentTrust === 'owner' && !quotesExternalContent({ subject, body: text })) {
-    await captureOwnerWritingSample(deps.db, deps.router, {
+    await captureOwnerWritingSample(voiceStore(deps), deps.router, {
       text,
       register: 'email_casual',
       context: 'inbound-email',
@@ -741,7 +713,7 @@ export async function processForwardedIngest(
     contentTrust,
     importance: score.importance,
     category: score.category,
-    ingestId: ingested.id,
+    ingestId: ingestedId,
     ownerAlerted: alerted,
   });
   return enqueued ? 'triaged' : 'skipped';
@@ -790,24 +762,21 @@ async function recordDirectIngest(
       contentTrust: input.contentTrust,
       authenticated: input.authenticated,
     });
-    await deps.db
-      .insert(emailIngest)
-      .values({
-        agentId: input.agentId,
-        conversationId: input.conversationId,
-        channelMessageId: input.channelMessageId,
-        fromEmail: input.from,
-        fromName: parseSenderName(gmailHeader(input.payload, 'From')),
-        subject: input.subject.slice(0, 500),
-        contentTrust: input.contentTrust,
-        authenticated: input.authenticated,
-        category: score.category,
-        importance: score.importance,
-        actionable: score.actionable,
-        reason: truncateAtBoundary(score.reason, 300),
-        dates: score.dates,
-      })
-      .onConflictDoNothing({ target: emailIngest.channelMessageId });
+    await syncStore(deps).recordIngest({
+      agentId: input.agentId,
+      conversationId: input.conversationId,
+      channelMessageId: input.channelMessageId,
+      fromEmail: input.from,
+      fromName: parseSenderName(gmailHeader(input.payload, 'From')) ?? null,
+      subject: input.subject.slice(0, 500),
+      contentTrust: input.contentTrust,
+      authenticated: input.authenticated,
+      category: score.category,
+      importance: score.importance,
+      actionable: score.actionable,
+      reason: truncateAtBoundary(score.reason, 300),
+      dates: score.dates,
+    });
   } catch (err) {
     console.error('email-sync: could not record direct-mode ingest', err);
   }
@@ -828,14 +797,14 @@ async function enqueueIngestTriage(
     ownerAlerted?: boolean;
   },
 ): Promise<boolean> {
-  if (!(await underIngestTriageLimit(deps.db, deps.config.EMAIL_INGEST_MAX_TRIAGE_PER_DAY))) {
+  if (!(await underIngestTriageLimit(deps, deps.config.EMAIL_INGEST_MAX_TRIAGE_PER_DAY))) {
     console.warn(
       `email-sync: daily ingest triage ceiling reached; storing ${input.from} without triage`,
     );
     return false;
   }
 
-  const { created } = await enqueueTask(deps.db, {
+  const { created } = await enqueueTask(deps.persistence.tasks, {
     type: 'email_triage',
     maxSteps: 16,
     // 16 steps on the reason role does not fit the default $0.50 cap: the soft
@@ -871,10 +840,7 @@ async function enqueueIngestTriage(
   });
 
   if (created) {
-    await deps.db
-      .update(emailIngest)
-      .set({ triaged: true, updatedAt: new Date() })
-      .where(eq(emailIngest.id, input.ingestId));
+    await syncStore(deps).markTriaged(input.ingestId, new Date());
     console.log(
       `email-sync: triaging ${input.from} ("${input.subject.slice(0, 40)}") — ${input.category}, importance ${input.importance}`,
     );
@@ -890,21 +856,10 @@ export async function processMessage(
   messageId: string,
 ): Promise<'triaged' | 'skipped'> {
   const channelMessageId = `gmail:${messageId}`;
-  const [[existing], [existingTask]] = await Promise.all([
-    deps.db
-      .select({
-        id: storedMessages.id,
-        conversationId: storedMessages.conversationId,
-        origin: storedMessages.origin,
-      })
-      .from(storedMessages)
-      .where(eq(storedMessages.channelMessageId, channelMessageId))
-      .limit(1),
-    deps.db
-      .select({ id: tasks.id })
-      .from(tasks)
-      .where(eq(tasks.externalEventId, channelMessageId))
-      .limit(1),
+  const sync = syncStore(deps);
+  const [existing, existingTask] = await Promise.all([
+    sync.inboundMessage(channelMessageId),
+    sync.hasTaskForEvent(channelMessageId),
   ]);
   // History replays are normal after a partial page failure. Fetch current
   // metadata again, but avoid paying to classify a message already persisted.
@@ -973,7 +928,7 @@ export async function processMessage(
           : 'unknown';
     let created = false;
     try {
-      ({ created } = await enqueueTask(deps.db, {
+      ({ created } = await enqueueTask(deps.persistence.tasks, {
         type: 'email_triage',
         // Email triage reasons with tools (roleForTask → reason) on Sonnet, so
         // its 16-step headroom for a browse-and-reply only exists if the budget
@@ -1057,7 +1012,7 @@ export async function processMessage(
   }
 
   const conversationId = await conversationForThread(deps, agentId, msg.threadId, trust, subject);
-  const persisted = await persistMessage(deps.db, {
+  const persisted = await persistMessage(deps.persistence.messages, {
     conversationId,
     role: 'user',
     origin: trust === 'owner' ? 'owner' : trust === 'known' ? 'known_contact' : 'unknown',
@@ -1085,7 +1040,7 @@ export async function processMessage(
   // non-forwarded mail. Gated on owner trust + not quoting external content so
   // no third-party text ever enters the private voice corpus. Best-effort.
   if (trust === 'owner' && !quotesExternalContent({ subject, body: text })) {
-    await captureOwnerWritingSample(deps.db, deps.router, {
+    await captureOwnerWritingSample(voiceStore(deps), deps.router, {
       text,
       register: 'email_casual',
       context: 'inbound-email',
@@ -1102,7 +1057,7 @@ export async function processMessage(
 
   let created = false;
   try {
-    ({ created } = await enqueueTask(deps.db, {
+    ({ created } = await enqueueTask(deps.persistence.tasks, {
       type: 'email_triage',
       // Email triage now reasons with tools (roleForTask → reason); give it the
       // same step headroom as a goal session so a browse-and-reply can complete.
@@ -1150,32 +1105,20 @@ export async function processMessage(
  */
 async function syncMailboxOnce(deps: EmailSyncDeps): Promise<MailboxSyncResult> {
   if (!deps.googleClient.configured()) return { processed: 0 };
-  const agent = await getAgent(deps.db);
+  const sync = syncStore(deps);
+  const agent = await sync.mailbox();
   const botEmail = agent.email;
 
-  const [[state], profile, contactRows] = await Promise.all([
-    deps.db.select().from(gmailSyncState).where(eq(gmailSyncState.mailbox, botEmail)),
+  const [state, profile, contactRows] = await Promise.all([
+    sync.syncState(botEmail),
     deps.googleClient.api<{ historyId: string }>(`${GMAIL}/profile`),
-    deps.db.select({ emails: contacts.emails, trust: contacts.trust }).from(contacts),
+    sync.contactTrust(),
   ]);
   const contactTrustByEmail = new Map<string, 'owner' | 'known'>();
-  for (const contact of contactRows) {
-    if (contact.trust !== 'owner' && contact.trust !== 'known') continue;
-    for (const email of contact.emails) contactTrustByEmail.set(email.toLowerCase(), contact.trust);
-  }
+  for (const contact of contactRows) contactTrustByEmail.set(contact.email, contact.trust);
 
   if (!state?.lastHistoryId) {
-    const baseline = BigInt(profile.historyId);
-    await deps.db
-      .insert(gmailSyncState)
-      .values({ mailbox: botEmail, lastHistoryId: baseline })
-      .onConflictDoUpdate({
-        target: gmailSyncState.mailbox,
-        set: {
-          lastHistoryId: sql`GREATEST(${gmailSyncState.lastHistoryId}, ${baseline})`,
-          updatedAt: new Date(),
-        },
-      });
+    await sync.raiseBaseline(botEmail, BigInt(profile.historyId));
     console.log(`email-sync: baseline set at historyId ${profile.historyId}`);
     return { processed: 0 };
   }
@@ -1192,12 +1135,7 @@ async function syncMailboxOnce(deps: EmailSyncDeps): Promise<MailboxSyncResult> 
     };
   }
 
-  const saveCursor = async () => {
-    await deps.db
-      .update(gmailSyncState)
-      .set({ cursor, updatedAt: new Date() })
-      .where(eq(gmailSyncState.mailbox, botEmail));
-  };
+  const saveCursor = () => sync.saveCursor(botEmail, cursor);
   // Publish the fixed target before any page work. A crash therefore resumes
   // the same drain instead of moving the baseline to a newer mailbox state.
   if (!rawCursor || Object.keys(rawCursor).length === 0) await saveCursor();
@@ -1278,7 +1216,7 @@ async function syncMailboxOnce(deps: EmailSyncDeps): Promise<MailboxSyncResult> 
       const messageId = pending.messageIds[pending.index] as string;
       try {
         if (
-          (await processMessage(deps, agent.id, botEmail, contactTrustByEmail, messageId)) ===
+          (await processMessage(deps, agent.agentId, botEmail, contactTrustByEmail, messageId)) ===
           'triaged'
         ) {
           processed += 1;
@@ -1300,14 +1238,7 @@ async function syncMailboxOnce(deps: EmailSyncDeps): Promise<MailboxSyncResult> 
       continue;
     }
 
-    await deps.db
-      .update(gmailSyncState)
-      .set({
-        lastHistoryId: sql`GREATEST(${gmailSyncState.lastHistoryId}, ${BigInt(cursor.targetHistoryId)})`,
-        cursor: {},
-        updatedAt: new Date(),
-      })
-      .where(eq(gmailSyncState.mailbox, botEmail));
+    await sync.completeDrain(botEmail, BigInt(cursor.targetHistoryId));
     return { processed };
   }
 }
@@ -1320,26 +1251,11 @@ async function syncMailboxOnce(deps: EmailSyncDeps): Promise<MailboxSyncResult> 
 export async function syncMailboxWithDistributedLock(
   deps: EmailSyncDeps,
 ): Promise<MailboxSyncResult> {
-  const connection = await deps.db.$client.reserve();
-  let acquired = false;
-  try {
-    const [row] = await connection<[{ acquired: boolean }]>`
-      select pg_try_advisory_lock(hashtext('assistant:gmail-sync')) as acquired
-    `;
-    acquired = row?.acquired === true;
-    // Another instance is already draining the same durable cursor. That is
-    // expected single-flight behavior, not a failed Scheduler execution; the
-    // next push or minute tick will pick up anything still pending.
-    if (!acquired) return { processed: 0, morePending: true };
-    return await syncMailboxOnce(deps);
-  } finally {
-    if (acquired) {
-      await connection`select pg_advisory_unlock(hashtext('assistant:gmail-sync'))`.catch((error) =>
-        console.error('email-sync: failed to release advisory lock', error),
-      );
-    }
-    connection.release();
-  }
+  const held = await syncStore(deps).withLock(() => syncMailboxOnce(deps));
+  // Another instance is already draining the same durable cursor. That is
+  // expected single-flight behavior, not a failed Scheduler execution; the
+  // next push or minute tick will pick up anything still pending.
+  return held ? held.value : { processed: 0, morePending: true };
 }
 
 /** Renew users.watch (Gmail push). Requires GMAIL_PUBSUB_TOPIC; expires in 7 days. */
@@ -1351,14 +1267,8 @@ export async function renewWatch(deps: EmailSyncDeps, topicName: string): Promis
       body: JSON.stringify({ topicName, labelIds: ['INBOX'], labelFilterBehavior: 'INCLUDE' }),
     },
   );
-  const agent = await getAgent(deps.db);
   const expiration = new Date(Number(res.expiration));
-  await deps.db
-    .insert(gmailSyncState)
-    .values({ mailbox: agent.email, watchExpiration: expiration })
-    .onConflictDoUpdate({
-      target: gmailSyncState.mailbox,
-      set: { watchExpiration: expiration, updatedAt: new Date() },
-    });
+  const sync = syncStore(deps);
+  await sync.setWatchExpiration((await sync.mailbox()).email, expiration);
   return expiration;
 }

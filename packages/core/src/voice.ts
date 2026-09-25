@@ -1,6 +1,5 @@
-import { createPostgresVoiceContextRepository, type Db, writingSamples } from '@assistant/db';
+import { createPostgresVoiceContextRepository, type Db } from '@assistant/db';
 import type { VoiceContextRepository } from '@assistant/persistence';
-import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ModelRouter } from './model-router/router.js';
 
@@ -22,26 +21,20 @@ const MAX_AUTO_SAMPLES = 300;
  * corpus. Trivial one-liners are skipped (too short to be a useful sample).
  */
 export async function captureOwnerWritingSample(
-  db: Db,
+  store: Db | VoiceContextRepository,
   router: ModelRouter,
   input: { text: string; register: VoiceRegister; context?: string },
 ): Promise<boolean> {
   const text = input.text.trim();
   if (text.length < MIN_SAMPLE_CHARS || text.length > MAX_SAMPLE_CHARS) return false;
+  const voice = voiceStore(store);
   try {
-    const [duplicate] = await db
-      .select({ id: writingSamples.id })
-      .from(writingSamples)
-      .where(eq(writingSamples.text, text))
-      .limit(1);
-    if (duplicate) return false;
-    const [count] = await db
-      .select({ n: sql<number>`count(*)` })
-      .from(writingSamples)
-      .where(sql`${writingSamples.context} LIKE ${`${AUTO_SAMPLE_PREFIX}%`}`);
-    if (Number(count?.n ?? 0) >= MAX_AUTO_SAMPLES) return false;
+    if (await voice.hasSampleText(text)) return false;
+    if ((await voice.countSamplesWithContextPrefix(AUTO_SAMPLE_PREFIX)) >= MAX_AUTO_SAMPLES)
+      return false;
     const [embedding] = await router.embed([text.slice(0, 4000)]);
-    await db.insert(writingSamples).values({
+    if (!embedding) return false;
+    await voice.addSample({
       register: input.register,
       text,
       context: `${AUTO_SAMPLE_PREFIX}${input.context ?? 'email'}`,
@@ -53,6 +46,12 @@ export async function captureOwnerWritingSample(
     console.error('owner voice sample capture failed', err);
     return false;
   }
+}
+
+function voiceStore(store: Db | VoiceContextRepository): VoiceContextRepository {
+  return 'kind' in store && store.kind === 'voice-context-repository'
+    ? store
+    : createPostgresVoiceContextRepository(store as Db);
 }
 
 export interface VoiceContext {
@@ -77,10 +76,7 @@ export async function loadVoiceContext(
   register: VoiceRegister,
   draft: string,
 ): Promise<VoiceContext> {
-  const voice =
-    'kind' in store && store.kind === 'voice-context-repository'
-      ? store
-      : createPostgresVoiceContextRepository(store as Db);
+  const voice = voiceStore(store);
   const profile = await voice.profile();
   let samples: string[] = [];
   if (await voice.hasSamples(register)) {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   type EmbeddingSpace,
   type Records,
@@ -6,8 +7,9 @@ import {
   validateEmbedding,
   validateSkillEmbeddingSpace,
 } from '@assistant/persistence';
+import { FieldValue } from '@google-cloud/firestore';
 import { embeddingSpaceKey } from './memory.js';
-import { decodeRecord, type InstallationStore } from './store.js';
+import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
 
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
@@ -67,6 +69,49 @@ export class FirestoreVoiceContextRepository implements VoiceContextRepository {
     return result.docs.flatMap((doc) => {
       const text = doc.get('text');
       return typeof text === 'string' ? [text] : [];
+    });
+  }
+
+  async hasSampleText(text: string): Promise<boolean> {
+    const snapshot = await this.store
+      .collection('writingSamples')
+      .where('agentId', '==', this.agentId)
+      .where('text', '==', text)
+      .limit(1)
+      .get();
+    return !snapshot.empty;
+  }
+
+  async countSamplesWithContextPrefix(prefix: string): Promise<number> {
+    const result = await this.store
+      .collection('writingSamples')
+      .where('agentId', '==', this.agentId)
+      .where('context', '>=', prefix)
+      .where('context', '<', `${prefix}\uf8ff`)
+      .count()
+      .get();
+    return result.data().count;
+  }
+
+  async addSample(input: {
+    register: string;
+    text: string;
+    context: string;
+    embedding: number[];
+  }): Promise<void> {
+    validateEmbedding(this.space, input.embedding);
+    const id = randomUUID();
+    await this.store.doc('writingSamples', id).create({
+      ...encodeRecord({
+        id,
+        agentId: this.agentId,
+        register: input.register,
+        text: input.text,
+        context: input.context,
+        createdAt: this.store.now(),
+      }),
+      embedding: FieldValue.vector(input.embedding),
+      embeddingSpace: this.spaceKey,
     });
   }
 }

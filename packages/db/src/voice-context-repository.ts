@@ -33,5 +33,23 @@ export function createPostgresVoiceContextRepository(db: Db): VoiceContextReposi
         .limit(limit);
       return rows.map((row) => row.text);
     },
+    async hasSampleText(text) {
+      const [duplicate] = await db
+        .select({ id: writingSamples.id })
+        .from(writingSamples)
+        .where(eq(writingSamples.text, text))
+        .limit(1);
+      return Boolean(duplicate);
+    },
+    async countSamplesWithContextPrefix(prefix) {
+      const [count] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(writingSamples)
+        .where(sql`${writingSamples.context} LIKE ${`${prefix}%`}`);
+      return Number(count?.n ?? 0);
+    },
+    async addSample(input) {
+      await db.insert(writingSamples).values(input);
+    },
   };
 }

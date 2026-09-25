@@ -7,6 +7,8 @@ import type { CommitmentMaintenanceRepository } from './commitment-maintenance.j
 import type { CostRepository, MessageRepository } from './contracts.js';
 import type { DeviceTokenRepository } from './device-tokens.js';
 import type { ToolExecutionRepository } from './dispatch.js';
+import type { DocumentCatalogRepository } from './document-catalog.js';
+import type { EmailSyncRepository } from './email-sync.js';
 import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
 import type { ExecutionJobRepository } from './execution-jobs.js';
@@ -83,4 +85,8 @@ export interface ExecutionPersistence {
   readonly smsChannel?: SmsChannelRepository;
   /** Present where application confirmation watches are kept portably. */
   readonly applications?: ApplicationConfirmationRepository;
+  /** Present where Gmail sync keeps its state portably. */
+  readonly emailSync?: EmailSyncRepository;
+  /** Present where documents are catalogued portably (uploads, email attachments). */
+  readonly documentCatalog?: DocumentCatalogRepository;
 }

@@ -45,6 +45,7 @@ const child = spawn(
     'apps/agent/src/firestore-push-notifier.test.ts',
     'apps/agent/src/firestore-sms-channel.test.ts',
     'apps/agent/src/firestore-application-confirmations.test.ts',
+    'apps/agent/src/firestore-email-sync.test.ts',
     'apps/agent/src/firestore-goals-missions.test.ts',
     'apps/agent/src/firestore-builtin-tools.test.ts',
     'apps/web/app/costs/page.test.tsx',
