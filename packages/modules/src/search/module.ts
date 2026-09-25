@@ -4,7 +4,7 @@ import { searchMeta } from './meta.js';
 
 export const searchModule = defineModule({
   meta: searchMeta,
-  create: ({ config, registry }) => {
+  create: ({ config, registry, persistence }) => {
     // The readiness rule lives in metadata so `pnpm config:check` and this
     // warning can never disagree about what "configured" means. The provider
     // test is repeated here only because it is what narrows the enum below.
@@ -16,6 +16,7 @@ export const searchModule = defineModule({
     registerSearchTools(registry, {
       provider: config.SEARCH_PROVIDER,
       apiKey: config.SEARCH_API_KEY,
+      costs: persistence.costs,
     });
     return {};
   },
