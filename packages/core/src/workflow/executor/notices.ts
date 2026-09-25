@@ -1,7 +1,5 @@
-import type { Db, TaskRow } from '@assistant/db';
-import { goals } from '@assistant/db';
+import { createPostgresGoalRuntimeRepository, type Db, type TaskRow } from '@assistant/db';
 import type { MessageRepository } from '@assistant/persistence';
-import { eq, sql } from 'drizzle-orm';
 import { persistMessage } from '../../chat.js';
 import { compactChatMessageParts } from '../../chat-card.js';
 import { markAttentionNotified } from '../machine.js';
@@ -218,12 +216,15 @@ export function taskBudgetPermissionRequest(task: TaskRow, reason: string) {
  * session from these columns, so an unanswered question has to land here or
  * tomorrow's run starts from the same stale line and asks all over again.
  */
-export async function recordGoalBlocked(db: Db, goalId: string, question: string): Promise<void> {
-  await db
-    .update(goals)
-    .set({
-      nextAction: `${GOAL_BLOCKED_PREFIX} ${question}`.slice(0, 500),
-      updatedAt: sql`now()`,
-    })
-    .where(eq(goals.id, goalId));
+export async function recordGoalBlocked(
+  deps: ExecutorDeps,
+  task: Pick<TaskRow, 'agentId' | 'goalId'>,
+  question: string,
+): Promise<void> {
+  if (!task.goalId) return;
+  await (deps.persistence?.goals ?? createPostgresGoalRuntimeRepository(deps.db)).recordBlocked({
+    agentId: task.agentId,
+    goalId: task.goalId,
+    nextAction: `${GOAL_BLOCKED_PREFIX} ${question}`.slice(0, 500),
+  });
 }

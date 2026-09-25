@@ -16,6 +16,8 @@ export type TaskCreateInput = Pick<Task, 'agentId' | 'type' | 'trust' | 'trigger
       | 'budgetUsdLimit'
       | 'plan'
       | 'autonomyGrant'
+      | 'nextAction'
+      | 'reflectEvery'
     >
   >;
 export interface TaskCreateResult {
@@ -87,10 +89,10 @@ export function newTaskRecord(input: TaskCreateInput, id: string, now: Date): Ta
     autonomyGrant: input.autonomyGrant ?? null,
     state: {},
     progress: '',
-    nextAction: '',
+    nextAction: input.nextAction ?? '',
     progressPercent: null,
     archivedAt: null,
-    reflectEvery: null,
+    reflectEvery: input.reflectEvery ?? null,
     lastReflectedAt: null,
     lockedUntil: null,
     leaseToken: null,

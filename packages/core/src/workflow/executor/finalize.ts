@@ -2,6 +2,7 @@ import { loadConfig } from '@assistant/config';
 import {
   createPostgresExecutionEvidenceRepository,
   createPostgresGeneratedCardRepository,
+  createPostgresNotificationsConversationRepository,
   type Db,
   type TaskRow,
 } from '@assistant/db';
@@ -9,15 +10,11 @@ import type {
   ExecutionEvidenceRecord,
   ExecutionEvidenceRepository,
   MessageRepository,
+  NotificationsConversationRepository,
   SkillContextRepository,
 } from '@assistant/persistence';
 import type { ModelMessage } from 'ai';
-import {
-  assistantMessageParts,
-  getOrCreateNotificationsConversation,
-  PROMPT_VERSION,
-  persistMessage,
-} from '../../chat.js';
+import { assistantMessageParts, PROMPT_VERSION, persistMessage } from '../../chat.js';
 import { type Cue, stripCueTags } from '../../chat-cues.js';
 import { isForwardedIngest } from '../../email-provenance.js';
 import type { PendingFinal, TaskState } from '../../events.js';
@@ -110,7 +107,7 @@ export async function stopForUnsavedGoalProgress(
     taskId: task.id,
     reason,
   });
-  if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, text);
+  await recordGoalBlocked(deps, task, text);
   await notifyOwnerAndConversation(
     deps,
     task,
@@ -136,6 +133,7 @@ export async function stopForUnsavedGoalProgress(
 async function persistFinalConversationOnce(
   evidence: ExecutionEvidenceRepository,
   messageRepository: MessageRepository | undefined,
+  notifications: NotificationsConversationRepository,
   db: Db,
   task: TaskRow,
   text: string,
@@ -148,7 +146,7 @@ async function persistFinalConversationOnce(
   let body = text;
   if (!conversationId) {
     if (task.trust !== 'assistant' || !text.trim()) return false;
-    conversationId = await getOrCreateNotificationsConversation(db, task.agentId);
+    conversationId = await notifications.getOrCreate(task.agentId);
     // The Notifications thread mixes many tasks — title the entry so the owner
     // can tell what produced it.
     const title = task.title?.trim() || 'Scheduled task';
@@ -188,6 +186,7 @@ export async function finalizePendingResponse(
   const conversationDelivered = await persistFinalConversationOnce(
     evidence,
     deps.persistence?.messages,
+    deps.persistence?.notifications ?? createPostgresNotificationsConversationRepository(deps.db),
     deps.db,
     task,
     pending.text,
@@ -753,7 +752,7 @@ export async function stageModelFinalResponse(
   // work, whatever its prose says. Surfacing it as needs_attention is what
   // turns a goal that is quietly spinning into one the owner can see is stuck.
   if (isUnattendedGoalSession(task) && !rows.some(isGoalWorkEvidence)) {
-    if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, text);
+    await recordGoalBlocked(deps, task, text);
     await notifyOwnerAndConversation(
       deps,
       task,
