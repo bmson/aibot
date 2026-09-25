@@ -1,6 +1,7 @@
 import type { EmbeddingSpace, ExecutionPersistence } from '@assistant/persistence';
 import { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 import { FirestoreApprovalRepository } from './approvals.js';
+import { FirestoreAssistantHealthRepository } from './assistant-health.js';
 import { createFirestoreCardRefreshRepository } from './card-refresh.js';
 import { FirestoreCostRepository } from './costs.js';
 import { FirestoreExecutionContextRepository } from './execution-context.js';
@@ -56,6 +57,7 @@ export function createFirestoreExecutionPersistence(
     cardRefresh: createFirestoreCardRefreshRepository(store),
     recallMetrics: new FirestoreRecallMetricsRepository(store),
     watches: new FirestoreWatchRepository(store),
+    assistantHealth: new FirestoreAssistantHealthRepository(store, agentId),
     reminderDelivery: new FirestoreReminderDeliveryRepository(store, agentId),
   };
 }

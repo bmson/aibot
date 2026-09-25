@@ -1,5 +1,6 @@
 import type { ApprovalPolicyRepository } from './approval-policies.js';
 import type { ApprovalRepository } from './approvals.js';
+import type { AssistantHealthRepository } from './assistant-health.js';
 import type { CardRefreshRepository } from './card-refresh.js';
 import type { CostRepository, MessageRepository } from './contracts.js';
 import type { ToolExecutionRepository } from './dispatch.js';
@@ -49,6 +50,8 @@ export interface ExecutionPersistence {
   readonly cardRefresh: CardRefreshRepository;
   readonly recallMetrics: RecallMetricsRepository;
   readonly watches: WatchRepository;
+  /** Present where the health monitor job has a portable adapter. */
+  readonly assistantHealth?: AssistantHealthRepository;
   /**
    * Present where scheduled reminder delivery has a portable adapter. Without
    * it the `reminder.notify` job keeps its PostgreSQL delivery path.

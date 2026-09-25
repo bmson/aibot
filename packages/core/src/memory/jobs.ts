@@ -117,6 +117,7 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'reminder.notify',
   'memory.consolidate',
   'memory.graph_sync',
+  'health.monitor',
   'documents.extract',
   'watch.suggest',
 ]);
@@ -550,8 +551,13 @@ export async function runCodeJob(
     }
     case 'health.monitor': {
       await deps.heartbeat?.();
+      const health = deps.persistence?.assistantHealth;
       const r = await runAssistantHealthMonitor(
-        { db: deps.db, heartbeat: deps.heartbeat },
+        {
+          db: deps.db,
+          heartbeat: deps.heartbeat,
+          ...(health && deps.persistence ? { health, graphSync: deps.persistence.graphSync } : {}),
+        },
         { agentId: task.agentId, taskId: task.id },
       );
       return {
