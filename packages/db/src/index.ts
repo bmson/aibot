@@ -4,6 +4,7 @@ export { createPostgresApprovalRepository } from './approval-repository.js';
 export { createPostgresCardRefreshRepository } from './card-refresh-repository.js';
 export * from './client.js';
 export { createPostgresCostRepository } from './cost-repository.js';
+export { createPostgresDeviceTokenRepository } from './device-token-repository.js';
 export * from './entities.js';
 export { createPostgresExecutionContextRepository } from './execution-context-repository.js';
 export { createPostgresExecutionEvidenceRepository } from './execution-evidence-repository.js';

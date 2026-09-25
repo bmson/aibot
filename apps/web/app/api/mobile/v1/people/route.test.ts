@@ -194,14 +194,14 @@ describe.skipIf(!localEmulator)('Firestore mobile People directory with PostgreS
     resetConfigForTest();
   });
 
-  it('allows only the directory GET through the Firestore proxy', async () => {
+  it('allows the directory and person reads but not directory writes through the proxy', async () => {
     const { proxy } = await import('../../../../../proxy.js');
     const status = (path: string, method = 'GET') =>
       proxy(new NextRequest(`http://localhost${path}`, { method })).status;
     expect(status('/api/mobile/v1/people')).toBe(200);
     expect(status('/api/mobile/v1/people', 'POST')).toBe(503);
-    expect(status(`/api/mobile/v1/people/${personId}`)).toBe(503);
-    expect(status(`/api/mobile/v1/memory/people/${personId}`, 'PATCH')).toBe(503);
+    expect(status(`/api/mobile/v1/people/${personId}`)).toBe(200);
+    expect(status(`/api/mobile/v1/people/${personId}`, 'DELETE')).toBe(503);
   });
 
   it('preserves the mobile contract and real directory derivations without PostgreSQL', async () => {

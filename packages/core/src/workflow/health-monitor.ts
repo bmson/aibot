@@ -7,6 +7,12 @@ import {
   responseChecks,
   tasks,
 } from '@assistant/db';
+import type {
+  AssistantHealthObservations,
+  AssistantHealthRepository,
+  AssistantHealthSignal,
+  KnowledgeGraphSyncRepository,
+} from '@assistant/persistence';
 import { and, eq, gte, inArray, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import { loadConfig } from '../config.js';
 import { pendingKnowledgeGraphSourceCount } from '../memory/knowledge-graph.js';
@@ -53,13 +59,13 @@ export interface HealthMonitorResult {
 async function claimHealthNotifications(
   db: Db,
   agentId: string,
-  signals: HealthSignal[],
+  signals: readonly AssistantHealthSignal[],
   now: Date,
-): Promise<HealthSignal[]> {
-  const reminderBefore = new Date(now.getTime() - HEALTH_ALERT_RENOTIFY_MS);
+  reminderBefore: Date,
+): Promise<AssistantHealthSignal[]> {
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Db;
-    const notify: HealthSignal[] = [];
+    const notify: AssistantHealthSignal[] = [];
     for (const signal of signals) {
       const [claimed] = await txDb
         .update(assistantHealthAlerts)
@@ -151,9 +157,16 @@ async function claimHealthNotifications(
  * automatically when a resolved condition returns.
  */
 export async function runAssistantHealthMonitor(
-  deps: { db: Db; heartbeat?: () => Promise<void> },
+  deps: {
+    db: Db;
+    heartbeat?: () => Promise<void>;
+    /** Portable persistence; both are supplied together or not at all. */
+    health?: AssistantHealthRepository;
+    graphSync?: KnowledgeGraphSyncRepository;
+  },
   opts: { agentId: string; taskId?: string; now?: Date },
 ): Promise<HealthMonitorResult> {
+  const health = deps.health ?? postgresAssistantHealth(deps.db);
   const now = opts.now ?? new Date();
   const config = loadConfig();
   const graphRagEnabled = config.GRAPH_RAG_ENABLED;
@@ -162,59 +175,23 @@ export async function runAssistantHealthMonitor(
   const qualitySince = new Date(now.getTime() - QUALITY_WINDOW_MS);
   await deps.heartbeat?.();
 
-  const [[quarantinedRow], [stalePendingRow], graphBacklog, [recallRow], [quality]] =
-    await Promise.all([
-      deps.db
-        .select({ value: sql<number>`count(*)` })
-        .from(knowledgeGraphSources)
-        .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
-        .where(
-          and(eq(memories.agentId, opts.agentId), eq(knowledgeGraphSources.status, 'quarantined')),
-        ),
-      deps.db
-        .select({ value: sql<number>`count(*)` })
-        .from(knowledgeGraphSources)
-        .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
-        .where(
-          and(
-            eq(memories.agentId, opts.agentId),
-            eq(knowledgeGraphSources.status, 'pending'),
-            lt(knowledgeGraphSources.updatedAt, staleBefore),
-          ),
-        ),
-      graphRagEnabled
-        ? pendingKnowledgeGraphSourceCount(deps.db, opts.agentId)
-        : Promise.resolve(0),
-      deps.db
-        .select({
-          graphFailures: sql<number>`count(*) FILTER (WHERE ${recallMetrics.graphFailed})`,
-          historyFailures: sql<number>`count(*) FILTER (WHERE ${recallMetrics.historyFailed})`,
-        })
-        .from(recallMetrics)
-        .where(
-          and(eq(recallMetrics.agentId, opts.agentId), gte(recallMetrics.createdAt, qualitySince)),
-        ),
-      deps.db
-        .select({
-          verifierUnavailable: sql<number>`count(*) FILTER (WHERE ${responseChecks.outputVerificationUnavailable})`,
-          contractBlocks: sql<number>`count(*) FILTER (WHERE ${responseChecks.blocked})`,
-          mustActRetries: sql<number>`COALESCE(sum(${responseChecks.mustActRetries}), 0)`,
-          degradedSteps: sql<number>`COALESCE(sum(${responseChecks.degradedSteps}), 0)`,
-        })
-        .from(responseChecks)
-        .innerJoin(tasks, eq(tasks.id, responseChecks.taskId))
-        .where(and(eq(tasks.agentId, opts.agentId), gte(responseChecks.createdAt, qualitySince))),
-    ]);
-
-  const quarantined = Number(quarantinedRow?.value ?? 0);
-  const stalePending = Number(stalePendingRow?.value ?? 0);
-  const graphRecallFailures = Number(recallRow?.graphFailures ?? 0);
-  const historyRecallFailures = Number(recallRow?.historyFailures ?? 0);
-  const verifierUnavailable = Number(quality?.verifierUnavailable ?? 0);
-  const contractBlocks = Number(quality?.contractBlocks ?? 0);
-  const mustActRetries = Number(quality?.mustActRetries ?? 0);
-  const degradedSteps = Number(quality?.degradedSteps ?? 0);
-  const signals: HealthSignal[] = [
+  const [observed, graphBacklog] = await Promise.all([
+    health.observe({ agentId: opts.agentId, staleBefore, qualitySince }),
+    graphRagEnabled
+      ? pendingKnowledgeGraphSourceCount(deps.graphSync ?? deps.db, opts.agentId)
+      : Promise.resolve(0),
+  ]);
+  const {
+    graphQuarantined: quarantined,
+    graphStalePending: stalePending,
+    graphRecallFailures,
+    historyRecallFailures,
+    verifierUnavailable,
+    contractBlocks,
+    mustActRetries,
+    degradedSteps,
+  } = observed;
+  const signals: AssistantHealthSignal[] = [
     graphRagEnabled && quarantined > 0
       ? {
           kind: 'graph_quarantined',
@@ -271,37 +248,111 @@ export async function runAssistantHealthMonitor(
       : null,
   ].filter((signal): signal is HealthSignal => signal !== null);
 
-  const notify = await claimHealthNotifications(deps.db, opts.agentId, signals, now);
+  const notify = await health.claim({
+    agentId: opts.agentId,
+    signals,
+    now,
+    renotifyBefore: new Date(now.getTime() - HEALTH_ALERT_RENOTIFY_MS),
+  });
   if (notify.length === 0)
     return { signals: signals.map((signal) => signal.detail), notified: false };
   try {
-    await notifyOwnerInNotifications(
-      deps.db,
-      opts.agentId,
-      [
+    await health.notify({
+      agentId: opts.agentId,
+      text: [
         '⚠️ Assistant health needs attention:',
         ...notify.map((signal) => `• ${signal.detail}`),
         'These are deterministic checks; no configuration was changed automatically.',
       ].join('\n'),
-      opts.taskId,
-    );
+      ...(opts.taskId ? { taskId: opts.taskId } : {}),
+    });
   } catch (error) {
     // The alert is not considered delivered until the durable owner message
     // exists. Releasing just this claim lets the normal task retry report it.
-    await deps.db
-      .update(assistantHealthAlerts)
-      .set({ lastNotifiedAt: null, updatedAt: new Date() })
-      .where(
-        and(
-          eq(assistantHealthAlerts.agentId, opts.agentId),
-          inArray(
-            assistantHealthAlerts.kind,
-            notify.map((signal) => signal.kind),
-          ),
-          eq(assistantHealthAlerts.lastNotifiedAt, now),
-        ),
-      );
+    await health.release({
+      agentId: opts.agentId,
+      kinds: notify.map((signal) => signal.kind),
+      claimedAt: now,
+    });
     throw error;
   }
   return { signals: signals.map((signal) => signal.detail), notified: true };
+}
+
+/** The PostgreSQL implementation of the monitor's persistence. */
+function postgresAssistantHealth(db: Db): AssistantHealthRepository {
+  return {
+    kind: 'assistant-health-repository',
+    observe: ({ agentId, staleBefore, qualitySince }) =>
+      observePostgresHealth(db, agentId, staleBefore, qualitySince),
+    claim: ({ agentId, signals, now, renotifyBefore }) =>
+      claimHealthNotifications(db, agentId, signals, now, renotifyBefore),
+    release: async ({ agentId, kinds, claimedAt }) => {
+      await db
+        .update(assistantHealthAlerts)
+        .set({ lastNotifiedAt: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(assistantHealthAlerts.agentId, agentId),
+            inArray(assistantHealthAlerts.kind, [...kinds]),
+            eq(assistantHealthAlerts.lastNotifiedAt, claimedAt),
+          ),
+        );
+    },
+    notify: ({ agentId, text, taskId }) => notifyOwnerInNotifications(db, agentId, text, taskId),
+  };
+}
+
+async function observePostgresHealth(
+  db: Db,
+  agentId: string,
+  staleBefore: Date,
+  qualitySince: Date,
+): Promise<AssistantHealthObservations> {
+  const [[quarantinedRow], [stalePendingRow], [recallRow], [quality]] = await Promise.all([
+    db
+      .select({ value: sql<number>`count(*)` })
+      .from(knowledgeGraphSources)
+      .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
+      .where(and(eq(memories.agentId, agentId), eq(knowledgeGraphSources.status, 'quarantined'))),
+    db
+      .select({ value: sql<number>`count(*)` })
+      .from(knowledgeGraphSources)
+      .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
+      .where(
+        and(
+          eq(memories.agentId, agentId),
+          eq(knowledgeGraphSources.status, 'pending'),
+          lt(knowledgeGraphSources.updatedAt, staleBefore),
+        ),
+      ),
+    db
+      .select({
+        graphFailures: sql<number>`count(*) FILTER (WHERE ${recallMetrics.graphFailed})`,
+        historyFailures: sql<number>`count(*) FILTER (WHERE ${recallMetrics.historyFailed})`,
+      })
+      .from(recallMetrics)
+      .where(and(eq(recallMetrics.agentId, agentId), gte(recallMetrics.createdAt, qualitySince))),
+    db
+      .select({
+        verifierUnavailable: sql<number>`count(*) FILTER (WHERE ${responseChecks.outputVerificationUnavailable})`,
+        contractBlocks: sql<number>`count(*) FILTER (WHERE ${responseChecks.blocked})`,
+        mustActRetries: sql<number>`COALESCE(sum(${responseChecks.mustActRetries}), 0)`,
+        degradedSteps: sql<number>`COALESCE(sum(${responseChecks.degradedSteps}), 0)`,
+      })
+      .from(responseChecks)
+      .innerJoin(tasks, eq(tasks.id, responseChecks.taskId))
+      .where(and(eq(tasks.agentId, agentId), gte(responseChecks.createdAt, qualitySince))),
+  ]);
+
+  return {
+    graphQuarantined: Number(quarantinedRow?.value ?? 0),
+    graphStalePending: Number(stalePendingRow?.value ?? 0),
+    graphRecallFailures: Number(recallRow?.graphFailures ?? 0),
+    historyRecallFailures: Number(recallRow?.historyFailures ?? 0),
+    verifierUnavailable: Number(quality?.verifierUnavailable ?? 0),
+    contractBlocks: Number(quality?.contractBlocks ?? 0),
+    mustActRetries: Number(quality?.mustActRetries ?? 0),
+    degradedSteps: Number(quality?.degradedSteps ?? 0),
+  };
 }
