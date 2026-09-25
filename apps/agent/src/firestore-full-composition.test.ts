@@ -81,7 +81,11 @@ const PORTABLE_TOOLS = [
   'watch.list',
   'watch.web',
   'weather.lookup',
+  'web.fetch',
   'web.search',
+  'workspace.list',
+  'workspace.read',
+  'workspace.write',
 ];
 const SQL_DEPENDENT_TOOLS = [
   // Voice rewrite reads the writing-sample corpus (loadVoiceContext).

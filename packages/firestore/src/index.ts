@@ -1,13 +1,17 @@
+export { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
 export { FirestoreApplicationChatPersistence } from './application-chat.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 export { FirestoreApprovalRepository } from './approvals.js';
+export { FirestoreAssistantHealthRepository } from './assistant-health.js';
 export { FirestoreBudgetCapsRepository } from './budget-caps.js';
 export { createFirestoreCardRefreshRepository } from './card-refresh.js';
+export { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
 export { FirestoreCommitmentMutationRepository } from './commitment-mutations.js';
 export { getFirestoreCommitmentOverview } from './commitment-overview.js';
 export { FirestoreContactLookupRepository } from './contact-lookup.js';
 export { FirestoreConversationSearchRepository } from './conversation-search.js';
 export { FirestoreCostRepository } from './costs.js';
+export { FirestoreDeviceTokenRepository } from './device-tokens.js';
 export { FirestoreDocumentCatalogRepository } from './document-catalog.js';
 export { FirestoreDocumentExtractionRepository } from './document-extraction.js';
 export { FirestoreDocumentReadRepository } from './documents.js';

@@ -102,12 +102,14 @@ Owner notifications in Firestore mode post to the dashboard only (`firestoreDash
 
 ## Built-in tools
 
-The Firestore composition registers `memory.save`, `memory.recall`, `task.schedule`, `goals.update_progress`, `owner.notify`, the record tools below, and (opt-in, non-production) MCP tools. PR #362 (Codex, open) adds `web.fetch` and `workspace.read/write/list`.
+The Firestore composition registers `memory.save`, `memory.recall`, `task.schedule`, `goals.update_progress`, `owner.notify`, `weather.lookup`, `sports.scores`, `web.fetch`, `workspace.read/write/list`, the record tools below, and (opt-in, non-production) MCP tools.
 
 | Tool | State |
 |---|---|
 | `weather.lookup` | Ready and registered under Firestore in #381 |
 | `sports.scores` | Ready and registered under Firestore in #381 |
+| `web.fetch` | Ready and registered under Firestore in #362 |
+| `workspace.read/write/list` | Ready and registered under Firestore in #362 |
 | `memory.graph_snapshot` | Ready: graph recall repository's verified seeds, filtered by embedding space |
 | `tools.read_result` | Ready: tool-execution `load`, scoped to the calling task and owner |
 | `occasions.save/list` | Ready: Profile occasion writer with tool provenance (untrusted saves stay quarantined); bounded owner scan for the list |
