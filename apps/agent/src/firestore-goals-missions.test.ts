@@ -146,12 +146,15 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       return id;
     }
 
+    /** Oldest first: an unordered query returns document-id order, so `.at(-1)` would be random. */
     async function messagesIn(conversationId: string) {
       const snapshot = await store
         .collection('messages')
         .where('conversationId', '==', conversationId)
         .get();
-      return snapshot.docs.map((doc) => doc.data());
+      return snapshot.docs
+        .map((doc) => doc.data())
+        .sort((left, right) => left.createdAt.toMillis() - right.createdAt.toMillis());
     }
 
     async function notificationsConversations() {
