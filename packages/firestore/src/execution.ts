@@ -10,6 +10,7 @@ import { FirestoreExecutionContextRepository } from './execution-context.js';
 import { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 import { FirestoreExecutionJobRepository } from './execution-jobs.js';
 import { FirestoreGeneratedCardRepository } from './generated-cards.js';
+import { FirestoreGoalRuntimeRepository } from './goal-runtime.js';
 import { FirestoreGraphRecallRepository } from './graph-recall.js';
 import { FirestoreHistoryRecallRepository } from './history-recall.js';
 import { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
@@ -18,9 +19,11 @@ import { FirestoreMemoryExtractionRepository } from './memory-extraction.js';
 import { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 import { FirestoreMemoryToolRepository } from './memory-tools.js';
 import { FirestoreMessageRepository } from './messages.js';
+import { FirestoreMissionRepository } from './missions.js';
 import { FirestoreModelRoutingRepository } from './model-routing.js';
 import { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 import { FirestoreOwnerContextRepository } from './owner-context.js';
+import { FirestoreOwnerNoticeRepository } from './owner-notices.js';
 import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 import { FirestoreReminderDeliveryRepository } from './reminders.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
@@ -63,6 +66,9 @@ export function createFirestoreExecutionPersistence(
     watches: new FirestoreWatchRepository(store),
     assistantHealth: new FirestoreAssistantHealthRepository(store, agentId),
     reminderDelivery: new FirestoreReminderDeliveryRepository(store, agentId),
+    notifications: new FirestoreOwnerNoticeRepository(store, agentId),
+    goals: new FirestoreGoalRuntimeRepository(store, agentId),
+    missions: new FirestoreMissionRepository(store, agentId),
     ambientSnapshots: new FirestoreAmbientSnapshotRepository(store),
     commitmentMaintenance: new FirestoreCommitmentMaintenanceRepository(store),
   };

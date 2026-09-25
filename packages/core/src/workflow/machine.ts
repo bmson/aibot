@@ -77,6 +77,9 @@ export async function enqueueTask(
      * callers must never derive this from task content.
      */
     autonomyGrant?: AutonomyGrant;
+    /** A mission's reflection cadence as an interval, e.g. `7 days`. */
+    reflectEvery?: string;
+    nextAction?: string;
     /** Caller is inside a larger transaction and will notify only after commit. */
     deferNotification?: boolean;
   },
@@ -97,6 +100,8 @@ export async function enqueueTask(
     maxSteps: input.maxSteps,
     plan: input.plan,
     autonomyGrant: input.autonomyGrant,
+    reflectEvery: input.reflectEvery,
+    nextAction: input.nextAction,
   });
   if (result.created && result.task.status === 'pending' && !input.deferNotification) {
     getQueueNotifier().notify(result.task.id, result.task.queueGeneration);

@@ -1437,7 +1437,7 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       );
     }
     if (!goalToolEvidence.some(isGoalWorkEvidence)) {
-      if (task.goalId) await recordGoalBlocked(db, task.goalId, stuckMessage);
+      await recordGoalBlocked(deps, task, stuckMessage);
       await notifyOwnerAndConversation(
         deps,
         task,
