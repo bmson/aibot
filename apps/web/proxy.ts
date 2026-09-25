@@ -50,6 +50,9 @@ export function proxy(request: NextRequest) {
     (path === '/api/profile-export' && request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/export' && request.method === 'GET') ||
     (path === '/capabilities' && request.method === 'GET') ||
+    // Anomaly and improvement review: owner-authenticated pages and actions.
+    ((path === '/anomalies' || path === '/improvements') &&
+      ['GET', 'POST'].includes(request.method)) ||
     // The POST is the costs page's Server Action; it performs its own owner
     // authentication and Firestore persistence checks before changing caps.
     (path === '/costs' && ['GET', 'POST'].includes(request.method)) ||

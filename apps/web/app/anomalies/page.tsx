@@ -1,8 +1,8 @@
 import { AnomalyCard, type AnomalyView } from '@/app/anomalies/anomaly-card';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
-import { getApplication } from '@/lib/server';
 import { cardGridClass, EmptyState, PageHeader, PageShell } from '@/lib/ui';
+import { listOpenAnomalies } from '@/lib/workspace-reviews';
 
 export const metadata = { title: 'Anomalies' };
 
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 export default async function AnomaliesPage() {
   await requireOwner();
   const now = new Date();
-  const rows = await getApplication().listAnomalies();
+  const rows = await listOpenAnomalies();
 
   const anomalies: AnomalyView[] = rows.map((a) => ({
     id: a.id,
