@@ -12,6 +12,7 @@ export { createPostgresExecutionEvidenceRepository } from './execution-evidence-
 export { createPostgresExecutionJobRepository } from './execution-jobs-repository.js';
 export { createPostgresExecutionPersistence } from './execution-repository.js';
 export { createPostgresGeneratedCardRepository } from './generated-card-repository.js';
+export { createPostgresGoalRuntimeRepository } from './goal-runtime-repository.js';
 export {
   createPostgresGraphRecallRepository,
   postgresActiveGraphWhere,
@@ -22,8 +23,10 @@ export { createPostgresLocationPingRepository } from './location-ping-repository
 export { createPostgresMemorySupersedeRepository } from './memory-supersede-repository.js';
 export { createPostgresMemoryToolRepository } from './memory-tool-repository.js';
 export { createPostgresMessageRepository } from './message-repository.js';
+export { createPostgresMissionRepository } from './mission-repository.js';
 export * from './model-config.js';
 export { createPostgresModelRoutingRepository } from './model-routing-repository.js';
+export { createPostgresNotificationsConversationRepository } from './notifications-conversation-repository.js';
 export { createPostgresOwnerCardCompilationRepository } from './owner-card-compilation-repository.js';
 export { createPostgresOwnerContextRepository } from './owner-context-repository.js';
 export { createPostgresPrivacyErasureRepository } from './privacy-erasure-repository.js';

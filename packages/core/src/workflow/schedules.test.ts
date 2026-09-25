@@ -151,7 +151,7 @@ describe('goalAutomationGate (integration)', () => {
   it('blocks while an unattended session is genuinely in flight', async (ctx) => {
     if (!dbUp) return ctx.skip();
     await insertGoalTask({ status: 'pending' });
-    const verdict = await goalAutomationGate(db, goalId, workChatId);
+    const verdict = await goalAutomationGate(db, agentId, goalId, workChatId);
     expect(verdict.fire).toBe(false);
     expect(verdict.reason).toBe('session still in flight');
   });
@@ -159,10 +159,10 @@ describe('goalAutomationGate (integration)', () => {
   it('blocks while an attended goal turn is pending, but not while it is parked', async (ctx) => {
     if (!dbUp) return ctx.skip();
     const attendedId = await insertGoalTask({ type: 'chat_turn', status: 'pending' });
-    expect((await goalAutomationGate(db, goalId, workChatId)).fire).toBe(false);
+    expect((await goalAutomationGate(db, agentId, goalId, workChatId)).fire).toBe(false);
 
     await db.update(tasks).set({ status: 'waiting_approval' }).where(eq(tasks.id, attendedId));
-    const parked = await goalAutomationGate(db, goalId, workChatId);
+    const parked = await goalAutomationGate(db, agentId, goalId, workChatId);
     expect(parked.fire).toBe(true);
     expect(parked.cancelTaskIds).toEqual([]);
   });
@@ -171,7 +171,7 @@ describe('goalAutomationGate (integration)', () => {
     if (!dbUp) return ctx.skip();
     await insertGoalTask({ status: 'needs_attention' });
     await setNextAction(`${GOAL_BLOCKED_PREFIX} which cities should I search?`);
-    const verdict = await goalAutomationGate(db, goalId, workChatId);
+    const verdict = await goalAutomationGate(db, agentId, goalId, workChatId);
     expect(verdict.fire).toBe(false);
     expect(verdict.reason).toBe('waiting on the owner');
     expect(verdict.cancelTaskIds).toEqual([]);
@@ -182,7 +182,7 @@ describe('goalAutomationGate (integration)', () => {
     const stalledId = await insertGoalTask({ status: 'needs_attention' });
     await setNextAction(`${GOAL_BLOCKED_PREFIX} which cities should I search?`);
     await ownerReply('Reykjavik and Berlin, please.');
-    const verdict = await goalAutomationGate(db, goalId, workChatId);
+    const verdict = await goalAutomationGate(db, agentId, goalId, workChatId);
     expect(verdict.fire).toBe(true);
     expect(verdict.cancelTaskIds).toEqual([stalledId]);
   });
@@ -191,7 +191,7 @@ describe('goalAutomationGate (integration)', () => {
     if (!dbUp) return ctx.skip();
     const stalledId = await insertGoalTask({ status: 'needs_attention' });
     await setNextAction('search the next job board');
-    const verdict = await goalAutomationGate(db, goalId, workChatId);
+    const verdict = await goalAutomationGate(db, agentId, goalId, workChatId);
     expect(verdict.fire).toBe(true);
     expect(verdict.cancelTaskIds).toEqual([stalledId]);
   });
@@ -207,7 +207,7 @@ describe('goalAutomationGate (integration)', () => {
     await insertGoalTask({ status: 'failed', createdAt: new Date(base + 86400e3) });
     await insertGoalTask({ status: 'needs_attention', createdAt: new Date(base + 2 * 86400e3) });
     await setNextAction('search the next job board');
-    const verdict = await goalAutomationGate(db, goalId, workChatId);
+    const verdict = await goalAutomationGate(db, agentId, goalId, workChatId);
     expect(verdict.fire).toBe(false);
     expect(verdict.reason).toBe('three stalled sessions without owner input');
   });
@@ -227,7 +227,7 @@ describe('goalAutomationGate (integration)', () => {
     });
     await setNextAction('search the next job board');
     await ownerReply('keep going — try the Berlin boards');
-    const verdict = await goalAutomationGate(db, goalId, workChatId);
+    const verdict = await goalAutomationGate(db, agentId, goalId, workChatId);
     expect(verdict.fire).toBe(true);
     expect(verdict.cancelTaskIds).toEqual([stalledId]);
   });
@@ -239,7 +239,7 @@ describe('goalAutomationGate (integration)', () => {
     await insertGoalTask({ status: 'failed', createdAt: new Date(base + 86400e3) });
     await insertGoalTask({ status: 'needs_attention', createdAt: new Date(base + 2 * 86400e3) });
     await setNextAction('search the next job board');
-    const verdict = await goalAutomationGate(db, goalId, workChatId);
+    const verdict = await goalAutomationGate(db, agentId, goalId, workChatId);
     expect(verdict.fire).toBe(true);
   });
 

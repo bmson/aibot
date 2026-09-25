@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   purgeExpired: vi.fn(),
   purgeAgedHistory: vi.fn(),
   pinnedMemoryEmbed: vi.fn(),
+  prepareGoalSession: vi.fn(),
+  releaseStaleReservations: vi.fn(),
   executeSqlOnlySweep: vi.fn(),
   notifyApproval: vi.fn(),
   notifyOwner: vi.fn(),
@@ -33,6 +35,8 @@ vi.mock('@assistant/core', () => ({
   renotifyStalledApprovals: mocks.renotifyStalledApprovals,
   renotifyStalledAttention: mocks.renotifyStalledAttention,
   runDueSchedules: mocks.runDueSchedules,
+  prepareGoalSession: mocks.prepareGoalSession,
+  releaseStaleReservations: mocks.releaseStaleReservations,
   isCodeJobEnabled: () => true,
   firestoreCodeJobUnavailable: (job: string) => (job === 'dream.run' ? 'unavailable' : null),
   backfillMessageEmbeddings: mocks.backfillMessageEmbeddings,
@@ -94,6 +98,7 @@ function fixture() {
   };
   const costs = { kind: 'cost-repository' };
   const maintenance = { kind: 'maintenance-repository' };
+  const goals = { kind: 'goal-runtime-repository' };
   const tasks = { kind: 'task-lease-repository' };
   const recallMetrics = { kind: 'recall-metrics-repository' };
   const modelRouting = { kind: 'model-routing-repository' };
@@ -104,6 +109,7 @@ function fixture() {
     watches,
     costs,
     maintenance,
+    goals,
     tasks,
     recallMetrics,
     modelRouting,
@@ -211,11 +217,23 @@ describe('POST /internal/sweep in Firestore mode', () => {
     );
     const options = mocks.runDueSchedules.mock.calls[0]?.[2] as {
       isJobEnabled: (job: string) => boolean;
-      prepareGoal: () => Promise<unknown>;
+      prepareGoal: (row: unknown, template: unknown) => Promise<unknown>;
     };
     expect(options.isJobEnabled('dream.run')).toBe(false);
     expect(options.isJobEnabled('memory.consolidate')).toBe(true);
-    await expect(options.prepareGoal()).resolves.toEqual({ action: 'skip' });
+    const row = { name: 'goal:goal-1', agentId: 'agent-1' };
+    const template = { goalId: 'goal-1' };
+    mocks.prepareGoalSession.mockResolvedValueOnce({ action: 'fire' });
+    await expect(options.prepareGoal(row, template)).resolves.toEqual({ action: 'fire' });
+    expect(mocks.prepareGoalSession).toHaveBeenCalledWith(
+      { goals: f.persistence.goals, tasks: f.persistence.tasks },
+      'agent-1',
+      template,
+    );
+    // An unreadable goal skips its own firing instead of failing the batch.
+    vi.spyOn(console, 'error').mockImplementationOnce(() => {});
+    mocks.prepareGoalSession.mockRejectedValueOnce(new Error('goal read failed'));
+    await expect(options.prepareGoal(row, template)).resolves.toEqual({ action: 'skip' });
     expect(f.db.execute).not.toHaveBeenCalled();
     expect(mocks.executeSqlOnlySweep).not.toHaveBeenCalled();
   });

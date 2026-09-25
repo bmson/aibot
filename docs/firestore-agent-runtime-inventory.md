@@ -35,9 +35,9 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | Browser/code job staging, callback, and settle | Ready | `executionJobs`. The `/webhooks/{browser,code}/callback` command keeps the hashed sentinel check, callback-versus-timeout ordering, lease fencing, and pending reservation settlement (`firestore-job-callbacks.test.ts`). |
 | Final delivery to the task's own chat, generated cards, response checks | Ready | |
 | Full composition with all 11 modules (construction + maintenance) | Ready in #387 | `firestore-full-composition.test.ts` checks that `createDb` is never called and every tool is classified. |
-| Final delivery for a conversation-less assistant task (e.g. seeded `tomorrow-check`) | SQL | `getOrCreateNotificationsConversation(db)` in `executor/finalize.ts`. |
-| Goal-blocked write (`recordGoalBlocked`) | SQL | `goals` update in `executor/notices.ts`. Reached by unattended goal sessions. |
-| Missions (`startMission`, `wakeMission`) | SQL | `missions` domain. |
+| Final delivery for a conversation-less assistant task (e.g. seeded `tomorrow-check`) | Ready | `persistence.notifications`. The `notificationConversations` marker makes concurrent first uses converge on one conversation. `firestore-goals-missions.test.ts` races two finals and four direct calls. |
+| Goal-blocked write (`recordGoalBlocked`) | Ready | `persistence.goals.recordBlocked`. `firestore-goals-missions.test.ts` runs an unattended goal session to its clarify park. |
+| Missions (`startMission`, `wakeMission`) | Ready | `enqueueTask` carries the reflection cadence; the wake reads sessions and spend through `persistence.missions`, and reports through `persistence.messages` and the goal mirror. `firestore-goals-missions.test.ts` covers start, session spawn, the in-flight guard, the budget stop, and reflection. |
 | Save-status answers | Ready | |
 
 ## Code jobs (`packages/core/src/memory/jobs.ts`)
@@ -67,7 +67,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `documents.process` | document-processing (every 15 min) | SQL |
 | `import.run`, `voice.ingest` | on demand | SQL |
 
-Imported installations carry these schedules. On `main`, an SQL job's task fails on the tripwire, retries, and dead-letters with an owner notice. A goal-linked schedule throws inside the portable runner, which starves every later schedule in the batch. #378 marks the SQL jobs **Disabled** instead (`firestoreCodeJobUnavailable`): the sweep advances their schedules without creating tasks, goal sessions are skipped, and an already-queued SQL job completes benignly.
+Imported installations carry these schedules. The SQL jobs are **Disabled** (`firestoreCodeJobUnavailable`): the sweep advances their schedules without creating tasks, and an already-queued SQL job completes benignly. Goal sessions run through the portable goal gate. Unlike PostgreSQL, the Firestore sweep does not re-sync goal cadences each tick; the firing's instruction is rebuilt from the goal's current progress, and the cadence is the one the goal's last mobile or tool mutation wrote.
 
 ## Maintenance sweep (`/internal/sweep` and local poller)
 
@@ -75,7 +75,7 @@ Imported installations carry these schedules. On `main`, an SQL job's task fails
 |---|---|
 | `expireStaleApprovals`, `resumeResolvedApprovalTasks`, `renotifyStalledApprovals` | Ready |
 | Watch expiry (`persistence.watches.expire`) | Ready |
-| `runDueSchedules` (portable runner) | Ready. Goal-linked schedules reject without a goal adapter. |
+| `runDueSchedules` (portable runner) | Ready. Goal sessions pass `prepareGoalSession` on `persistence.goals`, the same gate PostgreSQL uses (`firestore-goals-missions.test.ts`). |
 | Stale cost-reservation release | Ready (`firestore-sweep.test.ts`). Runs inside `purgeExpired`, as in PostgreSQL. |
 | `expireStaleSuggestions`, `renotifyStalledAttention`, `emitBudgetNotices` | Ready (`MaintenanceRepository`, `firestore-sweep.test.ts`, `maintenance.test.ts`). Stalled-attention scans walk a durable cursor, so tasks whose notice fails cannot starve later ones. A budget notice and its dedupe key commit together. |
 | `backfillMessageEmbeddings` | Ready. Vectors are written only in `FIRESTORE_EMBEDDING_SPACE`, with matching space metadata, and only while the embed role produces that space. Messages are read in creation order behind a durable cursor that advances after the vectors are stored. A vector from another space is re-embedded. |
@@ -105,7 +105,7 @@ Owner notifications in Firestore mode post to the dashboard only (`firestoreDash
 
 ## Built-in tools
 
-The Firestore composition registers `memory.save`, `memory.recall`, `task.schedule`, `goals.update_progress`, `owner.notify`, `weather.lookup`, `sports.scores`, `web.fetch`, `workspace.read/write/list`, the record tools below, and (opt-in, non-production) MCP tools.
+The Firestore composition registers `memory.save`, `memory.recall`, `task.schedule`, `goals.list`, `goals.create`, `goals.update_progress`, `mission.update`, `owner.notify`, `weather.lookup`, `sports.scores`, `web.fetch`, `workspace.read/write/list`, the record tools below, and (opt-in, non-production) MCP tools.
 
 | Tool | State |
 |---|---|
@@ -118,15 +118,14 @@ The Firestore composition registers `memory.save`, `memory.recall`, `task.schedu
 | `occasions.save/list` | Ready: Profile occasion writer with tool provenance (untrusted saves stay quarantined); bounded owner scan for the list |
 | `contacts.lookup` | Ready: bounded contact scan, name and alias prefix match |
 | `conversations.search` | Ready: owned-conversation vector search in the configured space; bounded newest-first substring fallback |
-| `goals.list`, `goals.create`, `mission.update` | SQL |
+| `goals.list`, `goals.create`, `mission.update` | Ready (`firestore-goals-missions.test.ts`). `goals.create` also writes the work chat and automation that the PostgreSQL sweep's goal sync would create. |
 | `situations.read/decisions/sources/change` | Ready: the situation pack read and command repositories the owner UI uses |
 
 ## Remaining work, in dependency order
 
 Done in open PRs: portable sweep and reservation release (#374), explicit SQL-job skipping (#378), keyless lookup tools (#381), Cloud Tasks dispatch (#383), and the full-composition proof (#387).
 
-1. Port the Notifications-conversation final delivery and the goal-blocked write in the executor.
-2. Port the lightweight SQL code jobs next (`memory.sweep_loops`, `ambient.refresh`, `health.monitor`, `memory.graph_date_backfill`), then the model-backed proactive jobs.
-3. Large domains, each needing its own repository family: Gmail sync/ingest/delivery (google), SMS channel and approval codes, push device tokens and nudge policy, documents search/processor, missions, goals list/create, the remaining proactive code jobs, location ingest, and canaries.
+1. Port the lightweight SQL code jobs next (`memory.sweep_loops`, `ambient.refresh`, `health.monitor`, `memory.graph_date_backfill`), then the model-backed proactive jobs.
+2. Large domains, each needing its own repository family: Gmail sync/ingest/delivery (google), SMS channel and approval codes, push device tokens and nudge policy, documents search/processor, the remaining proactive code jobs, location ingest, and canaries.
 
 Relaxing `validateAgentPersistenceConfig` for a module is safe only once every row for that module above is Ready. Every row for search, maps, browser, and code is now Ready, so those modules are eligible; the allowlist still refuses them until it is relaxed deliberately.

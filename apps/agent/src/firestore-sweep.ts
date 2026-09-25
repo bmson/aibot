@@ -8,6 +8,7 @@ import {
   firestoreCodeJobUnavailable,
   getTaskQueue,
   isCodeJobEnabled,
+  prepareGoalSession,
   purgeAgedHistory,
   purgeExpired,
   renotifyStalledApprovals,
@@ -111,10 +112,21 @@ export async function runFirestoreSweep(
       const fired = await runDueSchedules(new FirestoreScheduleRepository(store), timezone, {
         // SQL-only jobs advance their schedule without creating a task.
         isJobEnabled: (job) => isCodeJobEnabled(job) && !firestoreCodeJobUnavailable(job),
-        // Goal policy has no Firestore adapter yet. Skipping advances the goal's
-        // session schedule without authorizing work. Without this, one goal row
-        // would throw and starve every later schedule in the batch.
-        prepareGoal: async () => ({ action: 'skip' }),
+        // Goal sessions pass the same gate as PostgreSQL. A goal whose state
+        // cannot be read skips this firing, which advances its schedule without
+        // authorizing work, rather than starving every later schedule.
+        prepareGoal: async (row, template) => {
+          try {
+            return await prepareGoalSession(
+              { goals: persistence.goals, tasks: persistence.tasks },
+              row.agentId,
+              template,
+            );
+          } catch (err) {
+            console.error(`goal schedule preparation failed: ${row.name}`, err);
+            return { action: 'skip' };
+          }
+        },
       });
       for (const item of fired)
         console.log(`schedule fired: ${item.schedule} → ${item.taskId.slice(0, 8)}`);

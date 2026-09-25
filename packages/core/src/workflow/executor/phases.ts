@@ -157,7 +157,11 @@ export async function runMissionPhase(
 ): Promise<ExecuteResult | null> {
   const { db, router } = deps;
   if (task.type === 'mission') {
-    const wake = await wakeMission({ db, router, notifyOwner: deps.notifyOwner }, task, agent);
+    const wake = await wakeMission(
+      { db, persistence: deps.persistence, router, notifyOwner: deps.notifyOwner },
+      task,
+      agent,
+    );
     if (wake.action === 'lease_lost') return LOST_LEASE;
     return {
       outcome: wake.action === 'deadline_reached' ? 'done' : 'sleeping',
@@ -497,7 +501,7 @@ export async function runPlanPhase(rc: RunContext): Promise<ExecuteResult | { pl
       const statement = plan.steps.length
         ? `${plan.reasoning || 'Long-horizon work'} — steps: ${plan.steps.join('; ')}`
         : plan.reasoning || 'Long-horizon work from owner request';
-      const mission = await startMission(db, task, plan, statement);
+      const mission = await startMission(deps.persistence?.tasks ?? db, task, plan, statement);
       const confirmation = `Started a mission for this (id ${mission.id.slice(0, 8)}). I'll work on it in daily sessions, reflect weekly on whether it's still worth pursuing, and report as things happen. It's visible under Monitoring on the dashboard.`;
       window.push({ role: 'assistant', content: confirmation } as ModelMessage);
       return stageFinalResponse(deps, lease, state, window, {
@@ -519,7 +523,7 @@ export async function runPlanPhase(rc: RunContext): Promise<ExecuteResult | { pl
       // the goal keeps its previous progress line, and every later session
       // re-asks the same question into an empty room.
       if (isUnattendedGoalSession(task)) {
-        if (task.goalId) await recordGoalBlocked(deps.db, task.goalId, question);
+        await recordGoalBlocked(deps, task, question);
         await notifyOwnerAndConversation(
           deps,
           task,

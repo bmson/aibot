@@ -2,18 +2,24 @@ import {
   type AgentRow,
   agents,
   conversations,
+  createPostgresGoalRuntimeRepository,
   createPostgresScheduleRepository,
+  createPostgresTaskRepository,
   type Db,
   type GoalRow,
   goals,
-  messages,
   type ScheduleRow,
   schedules,
   tasks,
 } from '@assistant/db';
-import type { ScheduleRepository } from '@assistant/persistence';
+import type {
+  GoalRuntimeRepository,
+  GoalSessionState,
+  ScheduleRepository,
+  TaskRepository,
+} from '@assistant/persistence';
 import { Cron } from 'croner';
-import { and, desc, eq, gt, like, notInArray, sql } from 'drizzle-orm';
+import { and, eq, like, notInArray, sql } from 'drizzle-orm';
 import { persistMessage } from '../chat.js';
 import { InboundEventSchema } from '../events.js';
 import { isCodeJobEnabled } from '../memory/jobs.js';
@@ -30,6 +36,12 @@ import { nextRun } from './schedule-time.js';
 
 export { runScheduleBatch, type ScheduleRunnerOptions } from './schedule-runner.js';
 export { nextRun } from './schedule-time.js';
+
+function goalRuntime(store: Db | GoalRuntimeRepository): GoalRuntimeRepository {
+  return 'kind' in store && store.kind === 'goal-runtime-repository'
+    ? (store as GoalRuntimeRepository)
+    : createPostgresGoalRuntimeRepository(store as Db);
+}
 
 export function scheduleRepository(store: Db | ScheduleRepository): ScheduleRepository {
   return 'kind' in store && store.kind === 'schedule-repository'
@@ -434,27 +446,6 @@ export async function syncGoalAutomations(db: Db): Promise<number> {
   return synced;
 }
 
-/** Any owner-authored message in the conversation after `since`? */
-async function ownerRepliedSince(
-  db: Db,
-  conversationId: string | undefined,
-  since: Date,
-): Promise<boolean> {
-  if (!conversationId) return false;
-  const [row] = await db
-    .select({ id: messages.id })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.conversationId, conversationId),
-        eq(messages.origin, 'owner'),
-        gt(messages.createdAt, since),
-      ),
-    )
-    .limit(1);
-  return Boolean(row);
-}
-
 export interface GoalGateVerdict {
   fire: boolean;
   /** Stalled needs_attention sessions to supersede before the new one spawns. */
@@ -473,14 +464,21 @@ export interface GoalGateVerdict {
  * Exported for tests; runDueSchedules is the only production caller.
  */
 export async function goalAutomationGate(
-  db: Db,
+  store: Db | GoalRuntimeRepository,
+  agentId: string,
   goalId: string,
   workChatId: string | undefined,
+  state?: GoalSessionState,
 ): Promise<GoalGateVerdict> {
-  const open = await db
-    .select({ id: tasks.id, type: tasks.type, status: tasks.status, updatedAt: tasks.updatedAt })
-    .from(tasks)
-    .where(and(eq(tasks.goalId, goalId), notInArray(tasks.status, TERMINAL_TASK_STATUSES)));
+  const goals = goalRuntime(store);
+  const {
+    goal,
+    openTasks: open,
+    recentSessions: recent,
+  } = state ?? (await goals.sessionState(agentId, goalId));
+  // Any owner-authored message in the work chat after `since`?
+  const ownerRepliedSince = async (since: Date) =>
+    workChatId ? goals.ownerRepliedSince({ agentId, conversationId: workChatId, since }) : false;
 
   const stalled: typeof open = [];
   for (const task of open) {
@@ -503,17 +501,12 @@ export async function goalAutomationGate(
   }
 
   if (stalled.length > 0) {
-    const [goal] = await db
-      .select({ nextAction: goals.nextAction })
-      .from(goals)
-      .where(eq(goals.id, goalId))
-      .limit(1);
     const blockedOnOwner = goal?.nextAction?.startsWith(GOAL_BLOCKED_PREFIX) ?? false;
     const newestStall = stalled.reduce(
       (latest, task) => (task.updatedAt > latest ? task.updatedAt : latest),
       new Date(0),
     );
-    if (blockedOnOwner && !(await ownerRepliedSince(db, workChatId, newestStall))) {
+    if (blockedOnOwner && !(await ownerRepliedSince(newestStall))) {
       return { fire: false, cancelTaskIds: [], reason: 'waiting on the owner' };
     }
   }
@@ -522,12 +515,6 @@ export async function goalAutomationGate(
   // between — a fourth would burn budget on the same wall. Stay visibly stuck
   // (blocked badge) until the owner weighs in. Superseded cancellations count
   // as the stalls they replaced.
-  const recent = await db
-    .select({ status: tasks.status, progress: tasks.progress, createdAt: tasks.createdAt })
-    .from(tasks)
-    .where(and(eq(tasks.goalId, goalId), notInArray(tasks.type, ATTENDED_GOAL_TASK_TYPES)))
-    .orderBy(desc(tasks.createdAt))
-    .limit(3);
   const stalledRun =
     recent.length === 3 &&
     recent.every(
@@ -537,7 +524,7 @@ export async function goalAutomationGate(
     );
   const earliest = recent.at(-1)?.createdAt;
   if (stalledRun && earliest) {
-    if (!(await ownerRepliedSince(db, workChatId, earliest))) {
+    if (!(await ownerRepliedSince(earliest))) {
       return {
         fire: false,
         cancelTaskIds: [],
@@ -567,33 +554,52 @@ export async function runDueSchedules(
       options.prepareGoal ??
       (portable
         ? undefined
-        : async (_row, template) => preparePostgresGoalSchedule(store as Db, template)),
+        : async (row, template) =>
+            prepareGoalSession(
+              {
+                goals: createPostgresGoalRuntimeRepository(store as Db),
+                tasks: createPostgresTaskRepository(store as Db),
+              },
+              row.agentId,
+              template,
+            )),
     onCreated:
       options.onCreated ??
       (portable ? undefined : (id, generation) => getQueueNotifier().notify(id, generation)),
   });
 }
 
-/** Existing goal policy stays in the PostgreSQL domain until its repository is ported. */
-async function preparePostgresGoalSchedule(
-  db: Db,
+/**
+ * Decide one goal schedule firing: disable it once its goal is gone or no
+ * longer active, run the session gate, supersede stalled sessions, and arm an
+ * opted-in goal's autonomy. The session instruction is rebuilt from the goal's
+ * current progress, so every firing carries what the last session recorded.
+ */
+export async function prepareGoalSession(
+  repositories: { goals: GoalRuntimeRepository; tasks: TaskRepository },
+  agentId: string,
   template: ScheduledTaskTemplate,
 ): Promise<SchedulePreparation> {
   if (!template.goalId) return { action: 'fire' };
-  const [goal] = await db
-    .select({ autonomy: goals.autonomy, taintedOrigin: goals.taintedOrigin })
-    .from(goals)
-    .where(eq(goals.id, template.goalId));
-  if (!goal) return { action: 'disable' };
-  const verdict = await goalAutomationGate(db, template.goalId, template.conversationId);
+  const state = await repositories.goals.sessionState(agentId, template.goalId);
+  const { goal } = state;
+  if (goal?.status !== 'active' || goal.archivedAt) return { action: 'disable' };
+  const verdict = await goalAutomationGate(
+    repositories.goals,
+    agentId,
+    template.goalId,
+    template.conversationId,
+    state,
+  );
   if (!verdict.fire) return { action: 'skip' };
   for (const id of verdict.cancelTaskIds)
-    await completeTask(db, id, {
+    await completeTask(repositories.tasks, id, {
       status: 'cancelled',
       progress: GOAL_SESSION_SUPERSEDED,
     });
   return {
     action: 'fire',
+    instruction: goalAutomationInstruction(goal),
     ...(goal.autonomy && !goal.taintedOrigin
       ? {
           autonomyGrant: buildAutonomyGrant({ grantedVia: 'goal', nowMs: Date.now() }),

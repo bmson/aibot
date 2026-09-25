@@ -35,6 +35,7 @@ import { registerWeatherTool } from './weather.js';
 import type { WebFetchIo } from './web-fetch.js';
 
 export { registerPortableGoalProgressTool } from './goal-progress.js';
+export { registerPortableGoalTools } from './goals.js';
 export { registerPortableOwnerNotifyTool } from './owner-notify.js';
 export {
   registerPortableWebFetchTool,
