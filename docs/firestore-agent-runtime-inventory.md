@@ -49,14 +49,14 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `memory.graph_sync` | knowledge-graph-sync | Ready (`firestore-graph-sync.test.ts`) |
 | `documents.extract` | per upload | Ready (`firestore-document-extraction.test.ts`). The upload path is in PR #360. |
 | `watch.suggest` | per watch fire | Ready. It uses only `persistence.watches/messages/executionContext`. |
-| `memory.extract` (+ commitments) | memory-extraction | SQL |
+| `memory.extract` (+ commitments) | memory-extraction | Ready (`firestore-memory-extraction.test.ts`). Each conversation's facts, occasions, and open loops commit with a per-task checkpoint under the task lease, so a reclaimed run resumes after the last committed conversation. |
 | `memory.sweep_loops` | open-loop-sweep | SQL |
 | `email.extract` | email-extraction | SQL |
 | `briefing.compose` | daily-briefing | Ready (`firestore-briefing.test.ts`). Reads the same inputs through `persistence.briefing`, proposes dates through `persistence.suggestions` (one per source, UUID-shaped ids), and posts through `persistence.ownerNotices`. |
 | `pulse.check` | pulse (every 20 min) | Ready (`firestore-pulse.test.ts`). The moment ledger, calendar snapshot, actionable mail, due loops and situation packs go through `persistence.pulse`; suggestions and notices share the briefing seams. |
 | `graph.curiosity` | knowledge-graph-curiosity | SQL |
 | `memory.graph_date_backfill` | knowledge-graph-date-backfill | SQL |
-| `chat.segment` | chat-segmentation | SQL |
+| `chat.segment` | chat-segmentation | Ready (`firestore-chat-segmentation.test.ts`). Groups only vectors in `FIRESTORE_EMBEDDING_SPACE` and stamps new segments with it; one segment per start message. |
 | `anomaly.scan` | anomaly-scan | SQL |
 | `skill.reflect` | skill-reflection | SQL |
 | `self.improve` | self-improve | SQL |
@@ -65,7 +65,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `self.maintain` | self-maintain | SQL |
 | `health.monitor` | assistant-health-monitor | SQL |
 | `documents.process` | document-processing (every 15 min) | SQL |
-| `import.run`, `voice.ingest` | on demand | SQL |
+| `import.run`, `voice.ingest` | on demand | Ready (`firestore-imports.test.ts`). Window commits and the voice checkpoint are lease-fenced. |
 
 Imported installations carry these schedules. The SQL jobs are **Disabled** (`firestoreCodeJobUnavailable`): the sweep advances their schedules without creating tasks, and an already-queued SQL job completes benignly. Goal sessions run through the portable goal gate. Unlike PostgreSQL, the Firestore sweep does not re-sync goal cadences each tick; the firing's instruction is rebuilt from the goal's current progress, and the cadence is the one the goal's last mobile or tool mutation wrote.
 

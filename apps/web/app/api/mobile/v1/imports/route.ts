@@ -1,4 +1,4 @@
-import { getApplication } from '@/lib/server';
+import { getImportCommands } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -24,15 +24,15 @@ export async function POST(request: Request): Promise<Response> {
         if (typeof body.workspacePath !== 'string') {
           return mobileJson({ error: 'workspacePath is required' }, { status: 400 });
         }
-        const result = await getApplication().startImport(body.workspacePath, body.source);
+        const result = await getImportCommands().startImport(body.workspacePath, body.source);
         if (result.error) return mobileJson({ error: result.error }, { status: 409 });
-      } else if (body.action === 'purge') await getApplication().purgeImport(body.source);
-      else if (body.action === 'delete') await getApplication().deleteImport(body.source);
+      } else if (body.action === 'purge') await getImportCommands().purgeImport(body.source);
+      else if (body.action === 'delete') await getImportCommands().deleteImport(body.source);
       else if (body.action === 'review') {
         if (body.verdict !== 'approve' && body.verdict !== 'reject') {
           return mobileJson({ error: 'verdict must be approve or reject' }, { status: 400 });
         }
-        await getApplication().reviewImport(body.source, body.verdict);
+        await getImportCommands().reviewImport(body.source, body.verdict);
       } else {
         return mobileJson(
           { error: 'action must be start, purge, delete, or review' },
@@ -60,7 +60,7 @@ export async function POST(request: Request): Promise<Response> {
     return mobileJson({ error: 'file too large for upload' }, { status: 413 });
   }
   try {
-    const result = await getApplication().uploadImport({
+    const result = await getImportCommands().uploadImport({
       fileName: file.name,
       content: await file.text(),
       source: String(form?.get('source') ?? '').trim(),
