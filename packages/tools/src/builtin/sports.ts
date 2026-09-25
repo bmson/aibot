@@ -5,7 +5,14 @@ import type { ToolRegistry } from '../registry.js';
 
 type Fetch = (url: string, init?: { signal?: AbortSignal }) => Promise<Response>;
 
-export function registerSportsTools(registry: ToolRegistry, deps: { fetchImpl?: Fetch } = {}) {
+export function registerSportsTools(
+  registry: ToolRegistry,
+  deps: {
+    fetchImpl?: Fetch;
+    /** The owner's timezone; defaults to the PostgreSQL agent row. */
+    timezone?: (agentId: string) => Promise<string>;
+  } = {},
+): ToolRegistry {
   register(
     registry,
     {
@@ -34,13 +41,15 @@ export function registerSportsTools(registry: ToolRegistry, deps: { fetchImpl?: 
       acceptsUntrustedInput: true,
       cacheTtlSeconds: 20,
       execute: async (args, ctx) => {
-        const agent = await getAgent(ctx.db);
+        const timeZone = deps.timezone
+          ? await deps.timezone(ctx.agentId)
+          : (await getAgent(ctx.db)).timezone;
         try {
           return await lookupScores({
             ...(args.team ? { team: args.team } : {}),
             ...(args.league ? { league: args.league } : {}),
             ...(args.date ? { date: args.date } : {}),
-            timeZone: agent.timezone,
+            timeZone,
             now: ctx.now(),
             signal: ctx.signal,
             ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
@@ -57,4 +66,5 @@ export function registerSportsTools(registry: ToolRegistry, deps: { fetchImpl?: 
     // it would put "what's the Giants score?" behind an approval card.
     {},
   );
+  return registry;
 }
