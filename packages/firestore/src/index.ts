@@ -11,6 +11,7 @@ export { FirestoreCommitmentMutationRepository } from './commitment-mutations.js
 export { getFirestoreCommitmentOverview } from './commitment-overview.js';
 export { FirestoreContactLookupRepository } from './contact-lookup.js';
 export { FirestoreConversationSearchRepository } from './conversation-search.js';
+export { FirestoreConversationSegmentationRepository } from './conversation-segmentation.js';
 export { FirestoreCostRepository } from './costs.js';
 export { FirestoreDeviceTokenRepository } from './device-tokens.js';
 export { FirestoreDocumentCatalogRepository } from './document-catalog.js';

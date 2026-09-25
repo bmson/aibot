@@ -123,6 +123,7 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.sweep_loops',
   'memory.consolidate',
   'memory.graph_sync',
+  'chat.segment',
   'ambient.refresh',
   'health.monitor',
   'documents.extract',
@@ -465,7 +466,11 @@ export async function runCodeJob(
     }
     case 'chat.segment': {
       await deps.heartbeat?.();
-      const r = await segmentConversations(deps, { taskId: task.id, agentId: task.agentId });
+      const segments = deps.persistence?.conversationSegmentation;
+      const r = await segmentConversations(
+        { db: deps.db, router: deps.router, ...(segments ? { segments } : {}) },
+        { taskId: task.id, agentId: task.agentId },
+      );
       return {
         done: true,
         summary: `segmentation: ${r.segmentsCreated} new segment(s) across ${r.conversationsScanned} conversation(s)`,
