@@ -1,3 +1,4 @@
+export { FirestoreActiveJobLookup } from './active-jobs.js';
 export { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
 export { FirestoreApplicationChatPersistence } from './application-chat.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
