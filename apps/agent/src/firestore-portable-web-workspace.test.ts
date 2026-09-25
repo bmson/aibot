@@ -140,26 +140,16 @@ describe('Firestore portable web and workspace tool composition', () => {
           result: { status: 200, text: 'Page at example.com' },
         });
 
+        // Same taint policy as the PostgreSQL dispatcher: private workspace writes
+        // stay autonomous, while network egress needs exact-argument approval.
         const taintedContext = { ...ctx, tainted: true } as ToolContext;
-        const gatedWrite = await dispatch(
-          'workspace.write',
-          { path: 'notes/tainted.txt', content: 'Untrusted content.' },
-          taintedContext,
-        );
-        expect(gatedWrite.kind).toBe('awaiting_approval');
-        if (gatedWrite.kind !== 'awaiting_approval')
-          throw new Error('Tainted workspace write was not approval gated');
-        expect(
-          await approvals.resolve({
-            approvalId: gatedWrite.approvalId,
-            decision: 'approved',
-            via: 'web',
-            deferNotification: true,
-          }),
-        ).toMatchObject({ ok: true });
         await expect(
-          dispatcher.executeApproved(gatedWrite.toolCallId, taintedContext),
-        ).resolves.toMatchObject({ kind: 'executed' });
+          dispatch(
+            'workspace.write',
+            { path: 'notes/tainted.txt', content: 'Untrusted content.' },
+            taintedContext,
+          ),
+        ).resolves.toMatchObject({ kind: 'executed', result: { written: 'notes/tainted.txt' } });
 
         const gatedFetch = await dispatch(
           'web.fetch',
