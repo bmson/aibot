@@ -29,6 +29,7 @@ export { FirestoreGoalReadRepository } from './goals.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { FirestoreImportOverviewRepository } from './import-overview.js';
+export { FirestoreImportCommandRepository, FirestoreImportJobRepository } from './imports.js';
 export { FirestoreKnowledgeGraphCurationRepository } from './knowledge-graph-curation.js';
 export {
   getFirestoreKnowledgeGraphOverview,
@@ -47,6 +48,7 @@ export {
 } from './mcp-connections.js';
 export { embeddingSpaceKey, FirestoreMemoryRepository } from './memory.js';
 export { FirestoreMemoryConsolidationRepository } from './memory-consolidation.js';
+export { FirestoreMemoryExtractionRepository } from './memory-extraction.js';
 export { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 export { FirestoreMemoryToolRepository } from './memory-tools.js';
 export { FirestoreMessageRepository } from './messages.js';

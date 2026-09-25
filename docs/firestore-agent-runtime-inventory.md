@@ -49,7 +49,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `memory.graph_sync` | knowledge-graph-sync | Ready (`firestore-graph-sync.test.ts`) |
 | `documents.extract` | per upload | Ready (`firestore-document-extraction.test.ts`). The upload path is in PR #360. |
 | `watch.suggest` | per watch fire | Ready. It uses only `persistence.watches/messages/executionContext`. |
-| `memory.extract` (+ commitments) | memory-extraction | SQL |
+| `memory.extract` (+ commitments) | memory-extraction | Ready (`firestore-memory-extraction.test.ts`). Each conversation's facts, occasions, and open loops commit with a per-task checkpoint under the task lease, so a reclaimed run resumes after the last committed conversation. |
 | `memory.sweep_loops` | open-loop-sweep | SQL |
 | `email.extract` | email-extraction | SQL |
 | `briefing.compose` | daily-briefing | SQL |
@@ -65,7 +65,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `self.maintain` | self-maintain | SQL |
 | `health.monitor` | assistant-health-monitor | SQL |
 | `documents.process` | document-processing (every 15 min) | SQL |
-| `import.run`, `voice.ingest` | on demand | SQL |
+| `import.run`, `voice.ingest` | on demand | Ready (`firestore-imports.test.ts`). Window commits and the voice checkpoint are lease-fenced. |
 
 Imported installations carry these schedules. The SQL jobs are **Disabled** (`firestoreCodeJobUnavailable`): the sweep advances their schedules without creating tasks, and an already-queued SQL job completes benignly. Goal sessions run through the portable goal gate. Unlike PostgreSQL, the Firestore sweep does not re-sync goal cadences each tick; the firing's instruction is rebuilt from the goal's current progress, and the cadence is the one the goal's last mobile or tool mutation wrote.
 

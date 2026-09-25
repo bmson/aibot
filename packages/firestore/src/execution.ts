@@ -17,6 +17,7 @@ import { FirestoreHistoryRecallRepository } from './history-recall.js';
 import { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 import { FirestoreMaintenanceRepository } from './maintenance.js';
 import { FirestoreMemoryConsolidationRepository } from './memory-consolidation.js';
+import { FirestoreMemoryExtractionRepository } from './memory-extraction.js';
 import { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 import { FirestoreMemoryToolRepository } from './memory-tools.js';
 import { FirestoreMessageRepository } from './messages.js';
@@ -50,6 +51,7 @@ export function createFirestoreExecutionPersistence(
     memory: new FirestoreMemoryToolRepository(store, skillEmbeddingSpace),
     memorySupersede: new FirestoreMemorySupersedeRepository(store, skillEmbeddingSpace),
     memoryConsolidation: new FirestoreMemoryConsolidationRepository(store, skillEmbeddingSpace),
+    memoryExtraction: new FirestoreMemoryExtractionRepository(store, skillEmbeddingSpace),
     approvals: new FirestoreApprovalRepository(store),
     approvalPolicies: new FirestoreApprovalPolicyRepository(store),
     modelRouting: new FirestoreModelRoutingRepository(store, agentId),
