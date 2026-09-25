@@ -15,6 +15,7 @@ import {
   type MemorySnapshot,
   type MemoryState,
 } from '@assistant/application/profile';
+import { loadConfig } from '@assistant/config';
 import { Check, CircleAlert, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
 import Link from 'next/link';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
@@ -31,6 +32,10 @@ import { EditKnowledgeEntity } from '@/app/profile/knowledge/entity-forms';
 import { KnowledgeMap } from '@/app/profile/knowledge/knowledge-map';
 import { SourceImpactForget } from '@/app/profile/knowledge/source-impact-forget';
 import { requireOwner } from '@/auth';
+import {
+  getFirestoreKnowledgeWorkspace,
+  loadFirestoreMemoryLibrary,
+} from '@/lib/firestore-knowledge';
 import { relativeTime } from '@/lib/format';
 import { entityKindLabel } from '@/lib/knowledge';
 import { getDb } from '@/lib/server';
@@ -266,6 +271,73 @@ function CleanupGroup({
   );
 }
 
+type LibraryInput = Parameters<typeof listMemoryLibrary>[1];
+type MapInput = Omit<Parameters<typeof getKnowledgeMapSnapshot>[1] & object, 'entityId'>;
+
+/**
+ * The graph overview and the cleanup scan are both needed by the header and
+ * by the body, so they are read once here and handed to the header rather
+ * than fetched again inside it.
+ */
+async function loadPostgresWorkspace(
+  view: WorkspaceView,
+  entity: string | undefined,
+  page: number,
+  libraryInput: LibraryInput,
+  mapInput: MapInput,
+) {
+  const db = getDb();
+  const [graph, findings] = await Promise.all([
+    getKnowledgeGraphOverview(db, {
+      query: libraryInput.query,
+      kind: mapInput.kind,
+      entityId: entity,
+      page,
+    }),
+    getKnowledgeCleanupFindings(db),
+  ]);
+  const [overview, library, libraryFilters, map] = await Promise.all([
+    getKnowledgeWorkspaceOverview(db, { graph, findings }),
+    view === 'library' ? listMemoryLibrary(db, libraryInput) : Promise.resolve(null),
+    view === 'library' ? listMemoryLibraryFilters(db) : Promise.resolve(null),
+    view === 'map'
+      ? getKnowledgeMapSnapshot(db, {
+          ...mapInput,
+          entityId: graph.selected && entity === graph.selected.id ? graph.selected.id : undefined,
+        })
+      : Promise.resolve(null),
+  ]);
+  const focus =
+    entity && graph.selected?.id === entity
+      ? { selected: graph.selected, duplicates: graph.duplicates, relations: graph.relations }
+      : null;
+  return { overview, findings, focus, library, libraryFilters, map };
+}
+
+/** One bounded Firestore snapshot serves the header, cleanup, map, and entity focus. */
+async function loadFirestoreWorkspace(
+  view: WorkspaceView,
+  entity: string | undefined,
+  libraryInput: LibraryInput,
+  mapInput: MapInput,
+) {
+  const [workspace, libraryResult] = await Promise.all([
+    getFirestoreKnowledgeWorkspace().load(),
+    view === 'library' ? loadFirestoreMemoryLibrary(libraryInput) : Promise.resolve(null),
+  ]);
+  const focus = view === 'map' && entity ? await workspace.focus(entity) : null;
+  const map =
+    view === 'map' ? await workspace.map({ ...mapInput, entityId: focus?.selected.id }) : null;
+  return {
+    overview: workspace.overview,
+    findings: workspace.findings,
+    focus,
+    library: libraryResult?.[0] ?? null,
+    libraryFilters: libraryResult?.[1] ?? null,
+    map,
+  };
+}
+
 export default async function KnowledgePage({
   searchParams,
 }: {
@@ -300,43 +372,28 @@ export default async function KnowledgePage({
         (predicate) => predicate.id,
       )
     : [];
-  const db = getDb();
-  // The graph overview and the cleanup scan are both needed by the header and
-  // by the body, so they are read once here and handed to the header rather
-  // than fetched again inside it.
-  const [graph, findings] = await Promise.all([
-    getKnowledgeGraphOverview(db, { query, kind, entityId: params.entity, page }),
-    getKnowledgeCleanupFindings(db),
-  ]);
-  const [overview, library, libraryFilters, map] = await Promise.all([
-    getKnowledgeWorkspaceOverview(db, { graph, findings }),
-    view === 'library'
-      ? listMemoryLibrary(db, {
-          state,
-          filter,
-          query,
-          page,
-          subjectId: params.subject,
-          domain: params.domain,
-          source: params.source,
-          ageDays,
-          connectivity,
-        })
-      : Promise.resolve(null),
-    view === 'library' ? listMemoryLibraryFilters(db) : Promise.resolve(null),
-    view === 'map'
-      ? getKnowledgeMapSnapshot(db, {
-          query,
-          kind,
-          predicates,
-          review:
-            params.review === 'confirmed' || params.review === 'unreviewed' ? params.review : 'all',
-          sourceMemoryId,
-          entityId:
-            graph.selected && params.entity === graph.selected.id ? graph.selected.id : undefined,
-        })
-      : Promise.resolve(null),
-  ]);
+  const libraryInput: LibraryInput = {
+    state,
+    filter,
+    query,
+    page,
+    subjectId: params.subject,
+    domain: params.domain,
+    source: params.source,
+    ageDays,
+    connectivity,
+  };
+  const mapInput: MapInput = {
+    query,
+    kind,
+    predicates,
+    review: params.review === 'confirmed' || params.review === 'unreviewed' ? params.review : 'all',
+    sourceMemoryId,
+  };
+  const { overview, findings, focus, library, libraryFilters, map } =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? await loadFirestoreWorkspace(view, params.entity, libraryInput, mapInput)
+      : await loadPostgresWorkspace(view, params.entity, page, libraryInput, mapInput);
   const now = new Date();
   const ownerId = libraryFilters?.subjects.find((subject) => subject.trust === 'owner')?.id ?? null;
   const families = [...new Set(PREDICATE_VOCABULARY.map((entry) => entry.group))];
@@ -774,20 +831,20 @@ export default async function KnowledgePage({
               connections. Search or narrow the filters to inspect another area.
             </p>
           ) : null}
-          {params.entity && graph.selected?.id === params.entity ? (
+          {focus ? (
             <div id="knowledge-item" className="mt-7 max-w-3xl scroll-mt-24">
               <h3 className="text-lg font-semibold text-strong">
-                Connections around {graph.selected.label}
+                Connections around {focus.selected.label}
               </h3>
               <div className="mt-3 flex flex-wrap gap-2">
-                <EditKnowledgeEntity entity={graph.selected} duplicates={graph.duplicates} />
-                <AddKnowledgeRelation selected={graph.selected} vocabulary={PREDICATE_VOCABULARY} />
+                <EditKnowledgeEntity entity={focus.selected} duplicates={focus.duplicates} />
+                <AddKnowledgeRelation selected={focus.selected} vocabulary={PREDICATE_VOCABULARY} />
                 <Link href={hrefFor({ view: 'map' })} className={btn.outline}>
                   All knowledge
                 </Link>
               </div>
               <div className="mt-3 grid gap-3">
-                {graph.relations
+                {focus.relations
                   .filter((relation) => relation.reviewStatus !== 'rejected')
                   .map((relation) => (
                     <article

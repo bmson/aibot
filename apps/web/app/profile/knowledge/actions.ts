@@ -3,12 +3,14 @@
 import {
   cleanKnowledgeProjectionOrphans,
   correctKnowledgeGraphRelation,
+  GRAPH_EXTRACTION_VERSION,
   getKnowledgeGraphNeighborhood,
   getKnowledgeGraphRelation,
   getKnowledgeSourceImpact,
   type KnowledgeGraphEntityView,
   type KnowledgeGraphNeighborEdge,
   mergeKnowledgeGraphEntities,
+  presentKnowledgeGraphRelation,
   reextractRelativeDateSources,
   renameKnowledgeGraphEntity,
   retryQuarantinedKnowledgeGraphSources,
@@ -17,14 +19,22 @@ import {
   searchKnowledgeGraphEntities,
 } from '@assistant/application';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import { FirestoreKnowledgeGraphRelationMutationRepository } from '@assistant/firestore';
+import {
+  FirestoreKnowledgeGraphRelationMutationRepository,
+  getFirestoreKnowledgeGraphRelation,
+} from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import {
+  correctFirestoreKnowledgeRelation,
+  getFirestoreKnowledgeCuration,
+  getFirestoreKnowledgeWorkspace,
+} from '@/lib/firestore-knowledge';
+import {
   addOwnerKnowledgeGraphFactForCurrentPersistence,
-  getApplication,
   getDb,
   getFirestoreInstallationStore,
+  getOwnerMemoryCommands,
   getRouter,
 } from '@/lib/server';
 
@@ -44,6 +54,11 @@ async function reportable<T extends { error?: string | null }>(
     console.error('[knowledge] owner relation write failed', cause);
     return { error: 'That could not be saved right now. Check the connection and try again.' };
   }
+}
+
+/** Firestore curation commands, or null when PostgreSQL serves the workspace. */
+function firestoreCuration() {
+  return loadConfig().PERSISTENCE_DRIVER === 'firestore' ? getFirestoreKnowledgeCuration() : null;
 }
 
 function revalidateKnowledgeGraph(): void {
@@ -89,7 +104,10 @@ export async function rejectKnowledgeRelation(relationId: string): Promise<void>
 
 export async function retryQuarantinedKnowledgeSources(): Promise<void> {
   await requireOwner();
-  await retryQuarantinedKnowledgeGraphSources(getDb());
+  const curation = firestoreCuration();
+  await (curation
+    ? curation.retryBlockedSources()
+    : retryQuarantinedKnowledgeGraphSources(getDb()));
   revalidateKnowledgeGraph();
 }
 
@@ -104,7 +122,8 @@ export async function retryQuarantinedKnowledgeSources(): Promise<void> {
  */
 export async function reextractDatedSources(): Promise<void> {
   await requireOwner();
-  await reextractRelativeDateSources(getDb());
+  const curation = firestoreCuration();
+  await (curation ? curation.requeueRelativeDateSources() : reextractRelativeDateSources(getDb()));
   revalidateKnowledgeGraph();
 }
 
@@ -115,7 +134,10 @@ export async function renameKnowledgeEntity(
 ): Promise<KnowledgeActionState> {
   await requireOwner();
   const label = String(formData.get('label') ?? '');
-  const result = await renameKnowledgeGraphEntity(getDb(), entityId, label);
+  const curation = firestoreCuration();
+  const result = curation
+    ? await curation.rename(entityId, label)
+    : await renameKnowledgeGraphEntity(getDb(), entityId, label);
   if (result.error) return { error: result.error, success: null };
   revalidateKnowledgeGraph();
   return { error: null, success: 'Display name updated.' };
@@ -129,7 +151,10 @@ export async function mergeKnowledgeEntity(
   await requireOwner();
   const targetId = String(formData.get('targetId') ?? '');
   if (!targetId) return { error: 'Choose an item to merge into.', success: null };
-  const result = await mergeKnowledgeGraphEntities(getDb(), sourceId, targetId);
+  const curation = firestoreCuration();
+  const result = curation
+    ? await curation.merge(sourceId, targetId)
+    : await mergeKnowledgeGraphEntities(getDb(), sourceId, targetId);
   if (result.error) return { error: result.error, success: null };
   revalidateKnowledgeGraph();
   return { error: null, success: 'Items merged. Future extractions will use the one you kept.' };
@@ -142,7 +167,10 @@ export async function retypeKnowledgeEntity(
 ): Promise<KnowledgeActionState> {
   await requireOwner();
   const kind = String(formData.get('kind') ?? '');
-  const result = await retypeKnowledgeGraphEntity(getDb(), entityId, kind);
+  const curation = firestoreCuration();
+  const result = curation
+    ? await curation.retype(entityId, kind)
+    : await retypeKnowledgeGraphEntity(getDb(), entityId, kind);
   if (result.error) return { error: result.error, success: null };
   revalidateKnowledgeGraph();
   return { error: null, success: 'Type updated. Existing connections are unchanged.' };
@@ -155,11 +183,9 @@ export async function searchKnowledgeEntities(
   kind: string,
 ): Promise<KnowledgeGraphEntityView[]> {
   await requireOwner();
-  return searchKnowledgeGraphEntities(getDb(), {
-    query,
-    excludeId,
-    kind: kind || undefined,
-  });
+  const input = { query, excludeId, kind: kind || undefined };
+  const curation = firestoreCuration();
+  return curation ? curation.searchEntities(input) : searchKnowledgeGraphEntities(getDb(), input);
 }
 
 /**
@@ -171,7 +197,10 @@ export async function loadKnowledgeNeighborhood(
   limit?: number,
 ): Promise<{ edges: KnowledgeGraphNeighborEdge[]; total: number }> {
   await requireOwner();
-  const neighborhood = await getKnowledgeGraphNeighborhood(getDb(), { entityId, limit });
+  const neighborhood =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? await getFirestoreKnowledgeWorkspace().neighborhood({ entityId, limit })
+      : await getKnowledgeGraphNeighborhood(getDb(), { entityId, limit });
   return { edges: neighborhood.edges, total: neighborhood.total };
 }
 
@@ -208,17 +237,20 @@ export async function correctKnowledgeRelation(
   formData: FormData,
 ): Promise<AddKnowledgeRelationState> {
   await requireOwner();
+  const input = {
+    subjectLabel: String(formData.get('subjectLabel') ?? ''),
+    subjectKind: String(formData.get('subjectKind') ?? ''),
+    subjectId: String(formData.get('subjectId') ?? '') || undefined,
+    predicate: String(formData.get('predicate') ?? ''),
+    objectLabel: String(formData.get('objectLabel') ?? ''),
+    objectKind: String(formData.get('objectKind') ?? ''),
+    objectId: String(formData.get('objectId') ?? '') || undefined,
+    note: String(formData.get('note') ?? ''),
+  };
   const result = await reportable(() =>
-    correctKnowledgeGraphRelation(getDb(), getRouter(), relationId, {
-      subjectLabel: String(formData.get('subjectLabel') ?? ''),
-      subjectKind: String(formData.get('subjectKind') ?? ''),
-      subjectId: String(formData.get('subjectId') ?? '') || undefined,
-      predicate: String(formData.get('predicate') ?? ''),
-      objectLabel: String(formData.get('objectLabel') ?? ''),
-      objectKind: String(formData.get('objectKind') ?? ''),
-      objectId: String(formData.get('objectId') ?? '') || undefined,
-      note: String(formData.get('note') ?? ''),
-    }),
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? correctFirestoreKnowledgeRelation(relationId, input)
+      : correctKnowledgeGraphRelation(getDb(), getRouter(), relationId, input),
   );
   if (result.error) return { error: result.error, success: null };
   revalidateKnowledgeGraph();
@@ -230,7 +262,9 @@ export async function correctKnowledgeRelation(
 
 export async function loadKnowledgeSourceImpact(memoryId: string) {
   await requireOwner();
-  return getKnowledgeSourceImpact(getDb(), memoryId);
+  return loadConfig().PERSISTENCE_DRIVER === 'firestore'
+    ? getFirestoreKnowledgeWorkspace().sourceImpact(memoryId)
+    : getKnowledgeSourceImpact(getDb(), memoryId);
 }
 
 export async function correctKnowledgeMemory(
@@ -238,32 +272,33 @@ export async function correctKnowledgeMemory(
   content: string,
 ): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await getApplication().correctMemory(memoryId, content);
+  const result = await getOwnerMemoryCommands().correctMemory(memoryId, content);
   revalidateKnowledgeGraph();
   return result;
 }
 
 export async function forgetKnowledgeMemory(memoryId: string): Promise<void> {
   await requireOwner();
-  await getApplication().forgetMemory(memoryId);
+  await getOwnerMemoryCommands().forgetMemory(memoryId);
   revalidateKnowledgeGraph();
 }
 
 export async function keepKnowledgeMemory(memoryId: string): Promise<void> {
   await requireOwner();
-  await getApplication().restoreMemory(memoryId);
+  await getOwnerMemoryCommands().restoreMemory(memoryId);
   revalidateKnowledgeGraph();
 }
 
 export async function approveKnowledgeMemory(memoryId: string): Promise<void> {
   await requireOwner();
-  await getApplication().approveQuarantinedMemory(memoryId);
+  await getOwnerMemoryCommands().approveQuarantinedMemory(memoryId);
   revalidateKnowledgeGraph();
 }
 
 export async function removeDisconnectedKnowledgeItems(): Promise<void> {
   await requireOwner();
-  await cleanKnowledgeProjectionOrphans(getDb());
+  const curation = firestoreCuration();
+  await (curation ? curation.removeOrphanedEntities() : cleanKnowledgeProjectionOrphans(getDb()));
   revalidateKnowledgeGraph();
 }
 
@@ -279,6 +314,27 @@ export async function loadConnectionSource(
   relationId: string,
 ): Promise<{ content: string; sentence: string } | null> {
   await requireOwner();
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    const relation = await getFirestoreKnowledgeGraphRelation(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+      GRAPH_EXTRACTION_VERSION,
+      relationId,
+    );
+    return relation
+      ? {
+          content: relation.source.content,
+          sentence: presentKnowledgeGraphRelation({
+            subjectLabel: relation.subject.label,
+            predicate: relation.predicate,
+            objectLabel: relation.object.label,
+          }).sentence,
+        }
+      : null;
+  }
   const relation = await getKnowledgeGraphRelation(getDb(), relationId);
   return relation
     ? { content: relation.source.content, sentence: relation.presentation.sentence }

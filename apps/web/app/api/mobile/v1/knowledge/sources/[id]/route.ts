@@ -1,4 +1,6 @@
 import { getKnowledgeSourceImpact } from '@assistant/application';
+import { loadConfig } from '@assistant/config';
+import { getFirestoreKnowledgeWorkspace } from '@/lib/firestore-knowledge';
 import { getDb, getOwnerMemoryCommands } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -23,7 +25,10 @@ export async function GET(
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const id = sourceId((await params).id);
   if (!id) return notFound();
-  const impact = await getKnowledgeSourceImpact(getDb(), id);
+  const impact =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? await getFirestoreKnowledgeWorkspace().sourceImpact(id)
+      : await getKnowledgeSourceImpact(getDb(), id);
   return impact ? mobileJson(impact) : notFound();
 }
 

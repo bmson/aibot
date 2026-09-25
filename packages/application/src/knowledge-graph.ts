@@ -43,6 +43,10 @@ import {
   sql,
 } from 'drizzle-orm';
 import { type AnyPgColumn, alias } from 'drizzle-orm/pg-core';
+import {
+  NEIGHBORHOOD_DEFAULT_LIMIT,
+  NEIGHBORHOOD_MAX_LIMIT,
+} from './knowledge-workspace-queries.js';
 import type { EmbeddingPort } from './profile/commands.js';
 import {
   presentKnowledgeGraphRelation,
@@ -708,12 +712,6 @@ export interface KnowledgeGraphMapSummary {
   neighborhood: KnowledgeGraphNeighborhood;
 }
 
-/**
- * First paint of the interactive map. 150 keeps a hub readable while covering
- * nearly every real entity; the server clamps anything larger to 250.
- */
-const NEIGHBORHOOD_DEFAULT_LIMIT = 150;
-const NEIGHBORHOOD_MAX_LIMIT = 250;
 /** One expansion click's worth of second-hop neighbours. */
 export const NEIGHBORHOOD_EXPANSION_LIMIT = 50;
 
