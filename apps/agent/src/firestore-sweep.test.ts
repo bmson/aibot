@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { loadConfig } from '@assistant/config';
+import { loadConfig, resetConfigForTest } from '@assistant/config';
 import { firestoreCodeJobUnavailable } from '@assistant/core';
 import type { Db } from '@assistant/db';
 import {
   createFirestoreExecutionPersistence,
+  embeddingSpaceKey,
   FirestoreScheduleRepository,
 } from '@assistant/firestore';
 import {
@@ -14,7 +15,7 @@ import {
 } from '@assistant/modules';
 import { ToolRegistry } from '@assistant/tools/registry';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { InstallationStore } from '../../../packages/firestore/src/store.js';
+import { encodeRecord, type InstallationStore } from '../../../packages/firestore/src/store.js';
 import {
   disposeStore,
   emulatorStore,
@@ -54,6 +55,8 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
       ...loadConfig({}),
       PERSISTENCE_DRIVER: 'firestore' as const,
       FIRESTORE_AGENT_ID: agentId,
+      FIRESTORE_EMBEDDING_SPACE:
+        '{"provider":"synthetic","model":"sweep-fixture","dimensions":1536,"revision":"1"}',
       ASSISTANT_MODULES: ['watches' as const],
     };
     const persistence = createFirestoreExecutionPersistence(store, agentId, {
@@ -112,6 +115,8 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
   afterEach(async () => {
     await disposeStore(store);
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    resetConfigForTest();
   });
 
   it('releases stale reservations and runs only portable module steps without SQL', async () => {
@@ -125,10 +130,16 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
       ready: true,
       report: {
         expiredApprovalsWoke: 0,
+        expiredSuggestions: 0,
         resumedApprovalTasks: 0,
         renotifiedApprovals: 0,
+        renotifiedAttention: 0,
         expiredWatches: 0,
         schedulesFired: 0,
+        budgetNotices: 0,
+        messagesEmbedded: 0,
+        purgedExpired: 0,
+        agedHistory: 0,
         releasedReservations: 1,
         expiredInboxWatches: 0,
         webWatchFires: 0,
@@ -166,6 +177,143 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
       enabled: false,
       nextRunAt: null,
     });
+    expect(sqlAccesses).toEqual([]);
+  });
+
+  it('runs suggestion expiry, notices, embeddings, and retention on Firestore alone', async () => {
+    vi.stubEnv('HISTORY_RETENTION_DAYS', '30');
+    resetConfigForTest();
+    const vector = Array.from({ length: 1536 }, (_, i) => (i === 0 ? 1 : 0.001));
+    const embed = vi.fn(async (texts: string[]) => texts.map(() => vector));
+    deps = { ...deps, router: { embed } as never };
+    const ago = (ms: number) => new Date(now.getTime() - ms);
+    const put = (collection: string, row: Record<string, unknown> & { id: string }) =>
+      store.doc(collection, row.id).set(encodeRecord(row));
+    await put('modelRoles', {
+      id: 'embed',
+      role: 'embed',
+      primaryModel: 'synthetic/sweep-fixture',
+      fallbackModel: 'synthetic/sweep-fixture',
+      params: {},
+    });
+    const conversationId = randomUUID();
+    await put('conversations', {
+      id: conversationId,
+      agentId,
+      channel: 'chat',
+      trust: 'owner',
+      title: null,
+      isPrimary: true,
+      archivedAt: null,
+      createdAt: ago(40 * 86_400_000),
+      updatedAt: ago(86_400_000),
+    });
+    await store.doc('primaryConversations', agentId).set({ agentId, conversationId });
+    const suggestion = randomUUID();
+    await put('suggestions', { id: suggestion, agentId, status: 'pending', expiresAt: ago(1) });
+    const stalled = randomUUID();
+    await put('tasks', {
+      id: stalled,
+      agentId,
+      conversationId: null,
+      trust: 'assistant',
+      title: 'Nightly import',
+      status: 'needs_attention',
+      progress: 'provider refused the upload',
+      attentionNotifiedAt: null,
+      updatedAt: ago(10 * 60_000),
+    });
+    const message = randomUUID();
+    await put('messages', {
+      id: message,
+      conversationId,
+      role: 'user',
+      text: 'where did we land on the lease renewal',
+      embedding: null,
+      channelMessageId: null,
+      createdAt: ago(10 * 60_000),
+    });
+    const aged = randomUUID();
+    await put('messages', {
+      id: aged,
+      conversationId,
+      role: 'assistant',
+      text: 'ok',
+      embedding: null,
+      channelMessageId: null,
+      createdAt: ago(31 * 86_400_000),
+    });
+    await store
+      .doc('toolCache', 'expired')
+      .set(encodeRecord({ cacheKey: 'expired', expiresAt: now }));
+    await persistence().costs.record({ source: 'model', usd: 0.85, description: 'spend' });
+
+    const result = await runFirestoreSweep(deps);
+    expect(result).toMatchObject({
+      ready: true,
+      report: {
+        expiredSuggestions: 1,
+        renotifiedAttention: 1,
+        budgetNotices: 1,
+        messagesEmbedded: 1,
+        purgedExpired: 1,
+        agedHistory: 1,
+      },
+    });
+    expect((await store.doc('suggestions', suggestion).get()).get('status')).toBe('expired');
+    expect((await store.doc('tasks', stalled).get()).get('attentionNotifiedAt')).not.toBeNull();
+    const texts = (await store.collection('messages').get()).docs.map((doc) => doc.get('text'));
+    expect(texts).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('A task stopped and needs you — "Nightly import".'),
+        expect.stringContaining('Budget: 85% of the daily cap used'),
+      ]),
+    );
+    const embedded = (await store.doc('messages', message).get()).data();
+    expect(embedded?.embeddingSpace).toBe(
+      embeddingSpaceKey({
+        provider: 'synthetic',
+        model: 'sweep-fixture',
+        dimensions: 1536,
+        revision: '1',
+      }),
+    );
+    expect(embed).toHaveBeenCalledWith(['where did we land on the lease renewal']);
+    expect((await store.doc('messages', aged).get()).exists).toBe(false);
+    expect((await store.doc('toolCache', 'expired').get()).exists).toBe(false);
+
+    // A second pass has nothing new to send or embed.
+    expect(await runFirestoreSweep(deps)).toMatchObject({
+      report: { renotifiedAttention: 0, budgetNotices: 0, messagesEmbedded: 0 },
+    });
+    expect(sqlAccesses).toEqual([]);
+  });
+
+  it('writes no vectors when the embed role no longer produces the configured space', async () => {
+    const embed = vi.fn(async (texts: string[]) => texts.map(() => [1]));
+    deps = { ...deps, router: { embed } as never };
+    await store.doc('modelRoles', 'embed').set({
+      role: 'embed',
+      primaryModel: 'other/model',
+      fallbackModel: 'other/model',
+      params: {},
+    });
+    await store.doc('messages', 'm').set({
+      id: 'm',
+      conversationId: 'c',
+      role: 'user',
+      text: 'a message long enough to embed here',
+      embedding: null,
+      createdAt: new Date(now.getTime() - 600_000),
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(await runFirestoreSweep(deps)).toMatchObject({ report: { messagesEmbedded: 0 } });
+    expect(embed).not.toHaveBeenCalled();
+    expect(errors.mock.calls.flat().join(' ')).toContain(
+      'Firestore memory embedding role must use synthetic/sweep-fixture',
+    );
+    expect((await store.doc('messages', 'm').get()).get('embedding')).toBeNull();
     expect(sqlAccesses).toEqual([]);
   });
 

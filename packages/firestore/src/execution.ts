@@ -14,6 +14,7 @@ import { FirestoreGoalRuntimeRepository } from './goal-runtime.js';
 import { FirestoreGraphRecallRepository } from './graph-recall.js';
 import { FirestoreHistoryRecallRepository } from './history-recall.js';
 import { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
+import { FirestoreMaintenanceRepository } from './maintenance.js';
 import { FirestoreMemoryConsolidationRepository } from './memory-consolidation.js';
 import { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 import { FirestoreMemoryToolRepository } from './memory-tools.js';
@@ -36,7 +37,10 @@ export function createFirestoreExecutionPersistence(
   store: InstallationStore,
   agentId: string,
   skillEmbeddingSpace: EmbeddingSpace,
-): ExecutionPersistence & { tasks: FirestoreTaskRepository } {
+): ExecutionPersistence & {
+  tasks: FirestoreTaskRepository;
+  maintenance: FirestoreMaintenanceRepository;
+} {
   return {
     driver: 'firestore',
     tasks: new FirestoreTaskRepository(store),
@@ -64,6 +68,7 @@ export function createFirestoreExecutionPersistence(
     watches: new FirestoreWatchRepository(store),
     assistantHealth: new FirestoreAssistantHealthRepository(store, agentId),
     reminderDelivery: new FirestoreReminderDeliveryRepository(store, agentId),
+    maintenance: new FirestoreMaintenanceRepository(store, agentId, skillEmbeddingSpace),
     notifications: new FirestoreOwnerNoticeRepository(store, agentId),
     goals: new FirestoreGoalRuntimeRepository(store, agentId),
     missions: new FirestoreMissionRepository(store, agentId),

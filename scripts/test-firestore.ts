@@ -37,6 +37,8 @@ const child = spawn(
     'apps/agent/src/firestore-boot-cloudtasks.test.ts',
     'apps/agent/src/firestore-full-composition.test.ts',
     'apps/agent/src/firestore-sweep.test.ts',
+    'apps/agent/src/firestore-maintenance-parity.test.ts',
+    'apps/agent/src/firestore-job-callbacks.test.ts',
     'apps/agent/src/firestore-health-monitor.test.ts',
     'apps/agent/src/firestore-reminder-delivery.test.ts',
     'apps/agent/src/firestore-ambient-refresh.test.ts',

@@ -1,12 +1,14 @@
-import type {
-  ExecutionJobInput,
-  ExecutionJobRepository,
-  ExecutionJobSettleResult,
-  TaskLease,
+import {
+  EXECUTION_JOB_CALLBACK_STATES,
+  type ExecutionJobCallbackOutcome,
+  type ExecutionJobInput,
+  type ExecutionJobRepository,
+  type ExecutionJobSettleResult,
+  type TaskLease,
 } from '@assistant/persistence';
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
-import { approvals, tasks, toolCalls } from './schema.js';
+import { approvals, files, tasks, toolCalls } from './schema.js';
 import { activeLease } from './task-lease-repository.js';
 
 const PENDING_KINDS = new Set(['browser_job_pending', 'code_job_pending', 'document_job_pending']);
@@ -194,6 +196,51 @@ export function createPostgresExecutionJobRepository(db: Db): ExecutionJobReposi
           decision: row.decision,
         };
       }) as Promise<ExecutionJobSettleResult>;
+    },
+    async recordCallback(input, decide) {
+      return db.transaction(async (tx): Promise<ExecutionJobCallbackOutcome> => {
+        // Serialize callback vs. administrative cancellation, executor claim,
+        // and the executor's timeout settlement, which locks the same row.
+        const [task] = await tx
+          .select()
+          .from(tasks)
+          .where(eq(tasks.id, input.taskId))
+          .for('update');
+        const decision = decide(task ?? null);
+        if (!decision.accept) return { ok: false, status: decision.status, error: decision.error };
+        if (!task) throw new Error('execution job callback accepted a missing task');
+
+        await tx
+          .update(toolCalls)
+          .set({ status: 'succeeded', result: input.result, finishedAt: sql`now()` })
+          .where(eq(toolCalls.id, decision.toolCallId));
+        if (input.files.length > 0) {
+          await tx.insert(files).values(
+            input.files.map((file) => ({
+              agentId: task.agentId,
+              taskId: task.id,
+              workspacePath: file.workspacePath,
+              mime: file.mime,
+            })),
+          );
+        }
+        const [woken] = await tx
+          .update(tasks)
+          .set({
+            status: 'pending',
+            runAfter: null,
+            lockedUntil: null,
+            queueGeneration: sql`${tasks.queueGeneration} + 1`,
+            updatedAt: sql`now()`,
+          })
+          .where(
+            and(eq(tasks.id, task.id), inArray(tasks.status, [...EXECUTION_JOB_CALLBACK_STATES])),
+          )
+          .returning({ id: tasks.id, queueGeneration: tasks.queueGeneration });
+        return woken
+          ? { ok: true, taskId: task.id, queueGeneration: woken.queueGeneration }
+          : { ok: false, status: 409, error: 'task is no longer waiting for this callback' };
+      });
     },
   };
 }
