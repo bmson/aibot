@@ -102,13 +102,60 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       );
     });
 
-    it('refuses model routing side effects and foreign owner mutations', async () => {
+    it('swaps an evidence-backed model role to enabled models only', async () => {
       await store.doc('agents', agentId).set({ id: agentId, name: 'Owner' });
-      await seed('routing');
-      await expect(repository.applyAction(agentId, 'routing', 'apply')).rejects.toThrow(
-        'model_role improvements require PostgreSQL model and role records',
+      await Promise.all([
+        store.doc('modelRoles', 'draft').set({
+          role: 'draft',
+          primaryModel: 'old/primary',
+          fallbackModel: 'old/fallback',
+          params: {},
+          updatedAt: new Date('2026-09-01T00:00:00Z'),
+        }),
+        store.doc('models', 'new/primary').set({ id: 'new/primary', enabled: true }),
+        store.doc('models', 'disabled/fallback').set({ id: 'disabled/fallback', enabled: false }),
+      ]);
+      await seed('routing', {
+        change: {
+          role: 'draft',
+          primaryModel: 'new/primary',
+          fallbackModel: 'disabled/fallback',
+          suggestion: 'Use the newer draft model',
+        },
+      });
+      await repository.applyAction(agentId, 'routing', 'apply');
+      expect((await store.doc('improvementProposals', 'routing').get()).get('status')).toBe(
+        'applied',
       );
-      expect((await store.doc('improvementProposals', 'routing').get()).get('status')).toBe('open');
+      expect((await store.doc('modelRoles', 'draft').get()).data()).toMatchObject({
+        primaryModel: 'new/primary',
+        fallbackModel: 'old/fallback',
+      });
+
+      // Unknown roles and models are recorded only.
+      await seed('unknown', { change: { role: 'draft', primaryModel: 'missing/model' } });
+      await repository.applyAction(agentId, 'unknown', 'apply');
+      expect((await store.doc('improvementProposals', 'unknown').get()).get('status')).toBe(
+        'applied',
+      );
+      expect((await store.doc('modelRoles', 'draft').get()).get('primaryModel')).toBe(
+        'new/primary',
+      );
+    });
+
+    it('leaves an unevidenced routing proposal open and refuses foreign owners', async () => {
+      await store.doc('agents', agentId).set({ id: agentId, name: 'Owner' });
+      await store.doc('modelRoles', 'draft').set({ role: 'draft', primaryModel: 'old/primary' });
+      await store.doc('models', 'new/primary').set({ id: 'new/primary', enabled: true });
+      await seed('opinion', {
+        evidenceIds: [],
+        change: { role: 'draft', primaryModel: 'new/primary' },
+      });
+      await repository.applyAction(agentId, 'opinion', 'apply');
+      expect((await store.doc('improvementProposals', 'opinion').get()).get('status')).toBe('open');
+      expect((await store.doc('modelRoles', 'draft').get()).get('primaryModel')).toBe(
+        'old/primary',
+      );
 
       await seed('foreign', { agentId: 'another-owner' });
       await expect(repository.applyAction(agentId, 'foreign', 'dismiss')).rejects.toThrow(

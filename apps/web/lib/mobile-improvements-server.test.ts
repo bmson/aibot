@@ -44,7 +44,11 @@ describe.skipIf(!localEmulator)(
       vi.unstubAllEnvs();
     });
 
-    async function seed(kind: string, taskAgentId = agentId) {
+    async function seed(
+      kind: string,
+      taskAgentId = agentId,
+      change: Record<string, unknown> = { suggestion: 'Change the setting' },
+    ) {
       const id = randomUUID();
       await store.doc('improvementProposals', id).set({
         id,
@@ -53,7 +57,7 @@ describe.skipIf(!localEmulator)(
         kind,
         title: 'Suggested change',
         rationale: 'A tested suggestion',
-        change: { suggestion: 'Change the setting' },
+        change,
         evidenceIds: ['task-one'],
         createdAt: new Date(),
       });
@@ -109,10 +113,18 @@ describe.skipIf(!localEmulator)(
       );
     });
 
-    it('fails closed for model routing changes, foreign proposals, and active erasure', async () => {
-      const routingId = await seed('model_role');
-      expect((await decide(routingId, 'apply')).status).toBe(409);
-      expect((await store.doc('improvementProposals', routingId).get()).get('status')).toBe('open');
+    it('applies model routing changes and fails closed for foreign proposals and erasure', async () => {
+      await store.doc('modelRoles', 'reason').set({ role: 'reason', primaryModel: 'old/model' });
+      await store.doc('models', 'new/model').set({ id: 'new/model', enabled: true });
+      const routingId = await seed('model_role', agentId, {
+        role: 'reason',
+        primaryModel: 'new/model',
+      });
+      expect((await decide(routingId, 'apply')).status).toBe(200);
+      expect((await store.doc('improvementProposals', routingId).get()).get('status')).toBe(
+        'applied',
+      );
+      expect((await store.doc('modelRoles', 'reason').get()).get('primaryModel')).toBe('new/model');
 
       const foreignId = await seed('note', randomUUID());
       expect((await decide(foreignId, 'dismiss')).status).toBe(409);

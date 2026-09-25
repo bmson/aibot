@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   resumeResolvedApprovalTasks: vi.fn(),
   renotifyStalledApprovals: vi.fn(),
   runDueSchedules: vi.fn(),
+  releaseStaleReservations: vi.fn(),
   executeSqlOnlySweep: vi.fn(),
   notifyApproval: vi.fn(),
 }));
@@ -24,6 +25,9 @@ vi.mock('@assistant/core', () => ({
   renotifyStalledApprovals: mocks.renotifyStalledApprovals,
   renotifyStalledAttention: mocks.executeSqlOnlySweep,
   runDueSchedules: mocks.runDueSchedules,
+  releaseStaleReservations: mocks.releaseStaleReservations,
+  isCodeJobEnabled: () => true,
+  firestoreCodeJobUnavailable: (job: string) => (job === 'dream.run' ? 'unavailable' : null),
   backfillMessageEmbeddings: mocks.executeSqlOnlySweep,
   emitBudgetNotices: mocks.executeSqlOnlySweep,
   getAgent: mocks.executeSqlOnlySweep,
@@ -80,7 +84,8 @@ function fixture() {
       throw new Error('SQL must not run');
     }),
   };
-  const persistence = { approvals, messages, watches };
+  const costs = { kind: 'cost-repository' };
+  const persistence = { driver: 'firestore', approvals, messages, watches, costs };
   const deps = {
     config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: 'agent-1' },
     db,
@@ -103,6 +108,7 @@ beforeEach(() => {
   mocks.renotifyStalledApprovals.mockResolvedValue(2);
   mocks.runDueSchedules.mockResolvedValue([{ schedule: 'morning', taskId: 'task-fired' }]);
   mocks.firestoreMaintenanceReady.mockResolvedValue(true);
+  mocks.releaseStaleReservations.mockResolvedValue(4);
 });
 
 describe('POST /internal/sweep in Firestore mode', () => {
@@ -120,7 +126,9 @@ describe('POST /internal/sweep in Firestore mode', () => {
       renotifiedApprovals: 2,
       expiredWatches: 3,
       schedulesFired: 1,
+      releasedReservations: 4,
     });
+    expect(mocks.releaseStaleReservations).toHaveBeenCalledWith(f.persistence.costs, 120, 500);
     expect(mocks.expireStaleApprovals).toHaveBeenCalledWith(f.persistence.approvals);
     expect(mocks.resumeResolvedApprovalTasks).toHaveBeenCalledWith(f.persistence.approvals);
     expect(mocks.renotifyStalledApprovals).toHaveBeenCalledWith(
@@ -131,7 +139,15 @@ describe('POST /internal/sweep in Firestore mode', () => {
     expect(mocks.runDueSchedules).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'schedule-repository', store: f.store }),
       'America/Los_Angeles',
+      expect.objectContaining({ prepareGoal: expect.any(Function) }),
     );
+    const options = mocks.runDueSchedules.mock.calls[0]?.[2] as {
+      isJobEnabled: (job: string) => boolean;
+      prepareGoal: () => Promise<unknown>;
+    };
+    expect(options.isJobEnabled('dream.run')).toBe(false);
+    expect(options.isJobEnabled('memory.consolidate')).toBe(true);
+    await expect(options.prepareGoal()).resolves.toEqual({ action: 'skip' });
     expect(f.db.execute).not.toHaveBeenCalled();
     expect(mocks.executeSqlOnlySweep).not.toHaveBeenCalled();
   });
@@ -157,6 +173,28 @@ describe('POST /internal/sweep in Firestore mode', () => {
 
     expect(response.status).toBe(503);
     expect(mocks.expireStaleApprovals).not.toHaveBeenCalled();
+    expect(f.db.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /internal/tasks/execute in Firestore mode', () => {
+  it('answers 503 so Cloud Tasks retries while the installation is not ready', async () => {
+    const f = fixture();
+    mocks.buildDeps.mockReturnValue(f.deps);
+    mocks.firestoreMaintenanceReady.mockResolvedValue(false);
+
+    const response = await internal.request(
+      '/tasks/execute',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ taskId: 'task-1', generation: 0 }),
+      },
+      { INTERNAL_AUTH_MODE: 'shared-secret' },
+    );
+
+    expect(response.status).toBe(503);
+    expect(mocks.firestoreMaintenanceReady).toHaveBeenCalledWith(f.deps);
     expect(f.db.execute).not.toHaveBeenCalled();
   });
 });

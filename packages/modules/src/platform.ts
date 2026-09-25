@@ -141,6 +141,11 @@ export interface ModuleSweepStep {
   name: string;
   /** Key under which /internal/sweep reports this step's count; defaults to name. */
   reportKey?: string;
+  /**
+   * True when the step reaches storage only through `services.persistence`
+   * ports. Only portable steps run in the Firestore composition.
+   */
+  portable?: boolean;
   run(services: ModuleServices): Promise<number>;
 }
 
@@ -148,6 +153,8 @@ export interface ModuleSweepStep {
 export interface ModuleTick {
   name: string;
   everyTicks: number;
+  /** As for sweep steps: only portable ticks run in the Firestore composition. */
+  portable?: boolean;
   run(services: ModuleServices): Promise<void>;
 }
 

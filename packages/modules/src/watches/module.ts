@@ -32,6 +32,7 @@ export const watchesModule = defineModule({
             name: 'reapExpiredWatches',
             // Preserves the /internal/sweep response key from the hardcoded era.
             reportKey: 'expiredInboxWatches',
+            portable: true,
             run: (services) => reapExpiredWatches({ watches: services.persistence.watches }),
           },
           {
@@ -39,6 +40,7 @@ export const watchesModule = defineModule({
             // through the SSRF-guarded fetch and notify the owner on a change.
             name: 'pollWebWatches',
             reportKey: 'webWatchFires',
+            portable: true,
             run: (services) =>
               pollDueWebWatches({
                 watches: services.persistence.watches,

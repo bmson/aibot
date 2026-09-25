@@ -400,8 +400,11 @@ export function validateAgentPersistenceConfig(
   }
   if (config.ASSISTANT_MODULES.some((module) => module !== 'reminders' && module !== 'calendar'))
     problems.push('only ASSISTANT_MODULES=reminders,calendar is supported in Firestore agent mode');
-  if (config.QUEUE_DRIVER !== 'local')
-    problems.push('QUEUE_DRIVER=local is required in Firestore agent mode');
+  // Cloud Tasks is supported: the scheduled /internal/sweep dispatches the
+  // durable Firestore outbox. The shared-secret internal auth refuses
+  // cloudtasks deployments on its own, so OIDC is required in practice.
+  if (config.QUEUE_DRIVER === 'cloudtasks' && config.INTERNAL_AUTH_MODE !== 'oidc')
+    problems.push('INTERNAL_AUTH_MODE=oidc is required for Firestore agent mode with Cloud Tasks');
   if (config.CANARY_ENABLED) problems.push('CANARY_ENABLED must be false in Firestore agent mode');
   if (config.VERTEX_MODEL_PROBE_ENABLED && config.LLM_PROVIDER !== 'vertex')
     problems.push('VERTEX_MODEL_PROBE_ENABLED requires LLM_PROVIDER=vertex');
