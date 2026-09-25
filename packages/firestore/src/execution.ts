@@ -27,6 +27,7 @@ import { FirestoreModelRoutingRepository } from './model-routing.js';
 import { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 import { FirestoreOwnerContextRepository } from './owner-context.js';
 import { FirestoreOwnerNoticeRepository, firestoreOwnerNotices } from './owner-notices.js';
+import { FirestorePulseRepository } from './pulse.js';
 import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 import { FirestoreReminderDeliveryRepository } from './reminders.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
@@ -83,6 +84,7 @@ export function createFirestoreExecutionPersistence(
     ownerNotices: firestoreOwnerNotices(notifications),
     suggestions: new FirestoreSuggestionRepository(store),
     briefing: new FirestoreBriefingRepository(store),
+    pulse: new FirestorePulseRepository(store),
     conversationSegmentation: new FirestoreConversationSegmentationRepository(
       store,
       skillEmbeddingSpace,

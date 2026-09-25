@@ -28,6 +28,7 @@ import type {
 } from './notifications.js';
 import type { OwnerCardCompilationRepository } from './owner-card-compilation.js';
 import type { AmbientSnapshotRepository, OwnerContextRepository } from './owner-context.js';
+import type { PulseRepository } from './pulse.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
 import type { SkillContextRepository } from './skill-context.js';
@@ -89,6 +90,8 @@ export interface ExecutionPersistence {
   readonly suggestions?: SuggestionRepository;
   /** Present where the `briefing.compose` job has a portable adapter. */
   readonly briefing?: BriefingRepository;
+  /** Present where the `pulse.check` job has a portable adapter. */
+  readonly pulse?: PulseRepository;
   /** Present where the `chat.segment` job has a portable adapter. */
   readonly conversationSegmentation?: ConversationSegmentationRepository;
 }
