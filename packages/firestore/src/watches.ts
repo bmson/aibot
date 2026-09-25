@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Records, WatchCreateInput, WatchRepository } from '@assistant/persistence';
 import type { QueryDocumentSnapshot } from '@google-cloud/firestore';
+import { isEmulatorClosedTransaction } from './emulator-transaction.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 type Watch = Records['watches'];
@@ -21,18 +22,6 @@ function isAlreadyExists(error: unknown): boolean {
 
 function isPreconditionFailed(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 9;
-}
-
-function isEmulatorClosedTransaction(error: unknown): boolean {
-  return (
-    Boolean(process.env.FIRESTORE_EMULATOR_HOST) &&
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    error.code === 3 &&
-    'details' in error &&
-    error.details === 'Transaction is invalid or closed.'
-  );
 }
 
 function watchRecord(

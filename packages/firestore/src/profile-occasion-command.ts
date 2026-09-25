@@ -5,6 +5,7 @@ import type {
   Records,
 } from '@assistant/persistence';
 import type { DocumentSnapshot, Transaction } from '@google-cloud/firestore';
+import { isEmulatorClosedTransaction } from './emulator-transaction.js';
 import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
@@ -90,94 +91,106 @@ export class FirestoreProfileOccasionCommandRepository implements ProfileOccasio
       .where('contactId', '==', input.contactId)
       .limit(MAX_CONTACT_OCCASIONS + 1);
 
-    await this.store.db.runTransaction(async (tx) => {
-      const owners = await tx.get(ownerQuery);
-      const owner = owners.docs[0];
-      if (
-        owners.size !== 1 ||
-        !owner ||
-        owner.get('id') !== this.configuredAgentId ||
-        owner.id !== documentKey(this.configuredAgentId)
-      )
-        throw new Error('Occasion creation requires exactly one configured owner');
-      const [contact, erasure, keyedOccasion, contactOccasionPage] = await Promise.all([
-        tx.get(contactRef),
-        tx.get(erasureRef),
-        tx.get(occasionRef),
-        tx.get(contactOccasions),
-      ]);
-      if (!contact?.exists) throw new Error('Person not found.');
-      const person = decodeRecord<Records['contacts']>(contact.data());
-      if (person.id !== input.contactId || documentKey(person.id) !== contact.id)
-        throw new Error('Person record is malformed');
-      const contactAgentId = contact.get('agentId');
-      if (contactAgentId !== undefined && contactAgentId !== this.configuredAgentId)
-        throw new Error('Person not found.');
+    // Concurrent creates dedupe by owner/person/date, so a retry resolves to the winner.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await this.store.db.runTransaction(async (tx) => {
+          const owners = await tx.get(ownerQuery);
+          const owner = owners.docs[0];
+          if (
+            owners.size !== 1 ||
+            !owner ||
+            owner.get('id') !== this.configuredAgentId ||
+            owner.id !== documentKey(this.configuredAgentId)
+          )
+            throw new Error('Occasion creation requires exactly one configured owner');
+          const [contact, erasure, keyedOccasion, contactOccasionPage] = await Promise.all([
+            tx.get(contactRef),
+            tx.get(erasureRef),
+            tx.get(occasionRef),
+            tx.get(contactOccasions),
+          ]);
+          if (!contact?.exists) throw new Error('Person not found.');
+          const person = decodeRecord<Records['contacts']>(contact.data());
+          if (person.id !== input.contactId || documentKey(person.id) !== contact.id)
+            throw new Error('Person record is malformed');
+          const contactAgentId = contact.get('agentId');
+          if (contactAgentId !== undefined && contactAgentId !== this.configuredAgentId)
+            throw new Error('Person not found.');
 
-      if (
-        erasure?.exists &&
-        (erasure.get('agentId') !== this.configuredAgentId ||
-          privacyErasureIsActive(erasure.get('status')))
-      )
-        throw new Error('Privacy erasure is in progress');
+          if (
+            erasure?.exists &&
+            (erasure.get('agentId') !== this.configuredAgentId ||
+              privacyErasureIsActive(erasure.get('status')))
+          )
+            throw new Error('Privacy erasure is in progress');
 
-      if (contactOccasionPage.size > MAX_CONTACT_OCCASIONS)
-        throw new Error('Person has too many occasions to update safely.');
+          if (contactOccasionPage.size > MAX_CONTACT_OCCASIONS)
+            throw new Error('Person has too many occasions to update safely.');
 
-      const matches = contactOccasionPage.docs.filter((snapshot) => {
-        const row = decodeRecord<Partial<Occasion>>(snapshot.data());
-        return row.kind === input.kind && row.month === input.month && row.day === input.day;
-      });
-      if (keyedOccasion?.exists && !matches.some((snapshot) => snapshot.id === keyedOccasion.id))
-        throw new Error('Existing occasion record is malformed');
-      if (matches.length > 1) throw new Error('Matching occasion records are ambiguous');
+          const matches = contactOccasionPage.docs.filter((snapshot) => {
+            const row = decodeRecord<Partial<Occasion>>(snapshot.data());
+            return row.kind === input.kind && row.month === input.month && row.day === input.day;
+          });
+          if (
+            keyedOccasion?.exists &&
+            !matches.some((snapshot) => snapshot.id === keyedOccasion.id)
+          )
+            throw new Error('Existing occasion record is malformed');
+          if (matches.length > 1) throw new Error('Matching occasion records are ambiguous');
 
-      const now = this.store.now();
-      const existing = matches[0];
-      if (existing) {
-        const row = validExisting(
-          existing,
-          this.configuredAgentId,
-          input.contactId,
-          input.kind,
-          input.month,
-          input.day,
-        );
-        const notes =
-          !input.notes || row.notes.includes(input.notes)
-            ? row.notes
-            : row.notes
-              ? `${row.notes}; ${input.notes}`
-              : input.notes;
-        tx.update(existing.ref, {
-          year: row.year ?? input.year,
-          notes,
-          updatedAt: now,
+          const now = this.store.now();
+          const existing = matches[0];
+          if (existing) {
+            const row = validExisting(
+              existing,
+              this.configuredAgentId,
+              input.contactId,
+              input.kind,
+              input.month,
+              input.day,
+            );
+            const notes =
+              !input.notes || row.notes.includes(input.notes)
+                ? row.notes
+                : row.notes
+                  ? `${row.notes}; ${input.notes}`
+                  : input.notes;
+            tx.update(existing.ref, {
+              year: row.year ?? input.year,
+              notes,
+              updatedAt: now,
+            });
+            return;
+          }
+
+          const row: Occasion = {
+            id,
+            agentId: this.configuredAgentId,
+            contactId: input.contactId,
+            kind: input.kind,
+            label: input.label,
+            month: input.month,
+            day: input.day,
+            year: input.year,
+            recurrence: 'annual',
+            leadDays: input.leadDays,
+            notes: input.notes,
+            originTrust: 'owner',
+            quarantined: false,
+            ownerConfirmed: true,
+            source: 'profile',
+            createdAt: now,
+            updatedAt: now,
+          };
+          tx.create(occasionRef, encodeRecord(row));
         });
-        return;
+        break;
+      } catch (error) {
+        if (!isEmulatorClosedTransaction(error) || attempt >= 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
       }
-
-      const row: Occasion = {
-        id,
-        agentId: this.configuredAgentId,
-        contactId: input.contactId,
-        kind: input.kind,
-        label: input.label,
-        month: input.month,
-        day: input.day,
-        year: input.year,
-        recurrence: 'annual',
-        leadDays: input.leadDays,
-        notes: input.notes,
-        originTrust: 'owner',
-        quarantined: false,
-        ownerConfirmed: true,
-        source: 'profile',
-        createdAt: now,
-        updatedAt: now,
-      };
-      tx.create(occasionRef, encodeRecord(row));
-    });
+    }
   }
 
   async update(

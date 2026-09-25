@@ -1,6 +1,4 @@
-import { loadConfig } from '@assistant/config';
-import { FirestoreWorkspaceImprovementRepository } from '@assistant/firestore';
-import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
+import { decideOwnerImprovement } from '@/lib/workspace-reviews';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -18,13 +16,7 @@ export async function POST(
   try {
     if (body?.action !== 'apply' && body?.action !== 'dismiss')
       return mobileJson({ error: 'action must be apply or dismiss' }, { status: 400 });
-    if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
-      const { FIRESTORE_AGENT_ID: agentId } = loadConfig();
-      await new FirestoreWorkspaceImprovementRepository(
-        getFirestoreInstallationStore(),
-      ).applyAction(agentId, id, body.action);
-    } else if (body.action === 'apply') await getApplication().applyImprovementProposal(id);
-    else await getApplication().dismissImprovementProposal(id);
+    await decideOwnerImprovement(id, body.action);
     return mobileJson({ ok: true });
   } catch (error) {
     return mobileJson(

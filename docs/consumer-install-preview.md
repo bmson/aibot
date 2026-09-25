@@ -97,6 +97,46 @@ Repeat the identical command to resume from persisted stages. Terraform state is
 
 The foundation apply uses one Terraform operation at a time because concurrent Firestore field-exemption creates against the same database can fail with a transient 409 contention error. The saved remote state lets the same install command resume after any interrupted apply.
 
+### Passkey runtime (no Google OAuth client)
+
+New installations should use [owner passkeys](consumer-owner-passkeys.md). Add `"ownerAuth": "passkey"` to the runtime config and omit `webAuthUrl`, `authSecretVersion`, and both Google client versions:
+
+```json
+{
+  "firestoreAgentId": "11111111-1111-4111-8111-111111111111",
+  "firestoreEmbeddingSpace": { "provider": "vertex", "model": "gemini-embedding-001", "dimensions": 1536, "revision": "customer-seed-v1" },
+  "vertexLocation": "global",
+  "ownerEmail": "owner@example.com",
+  "ownerAuth": "passkey"
+}
+```
+
+On the runtime apply the installer then:
+
+1. creates `<installation_id>-auth-secret` (labelled `installation=<id>`, `managed-by=assistant-installer`) if absent and adds one random 48-byte version through a mode-0600 temporary file. The value is never printed, passed to Terraform, or stored in installer state; only the version number is recorded. A resumed run reuses the lowest enabled version, and an existing secret without those labels is refused rather than adopted;
+2. uses the deterministic origin `https://<installation_id>-web-<project_number>.<region>.run.app` as `AUTH_URL` and passkey relying party (supply `webAuthUrl` only for a custom domain you already route);
+3. deploys web with `OWNER_AUTH_MODE=passkey` and public invocation in the same apply. The agent stays IAM-private. An unclaimed installation cannot be taken over: every owner route needs a session, and `/setup` needs the claim code.
+
+Then issue the one-time owner setup link and open it on the device that should hold the first passkey:
+
+```sh
+pnpm consumer:install ... --runtime-config ./runtime-config.json --images ./image-manifest.json \
+  --issue-owner-claim --apply
+```
+
+The result's `ownerClaim.setupUrl` is printed once (valid 24 hours) and is not written to state. Rerunning replaces an unused link; once an owner exists the step is skipped. For later cloud-owner recovery use `pnpm consumer:owner-claim --recover`. `--owner-access-callback` is rejected for passkey installs because there is no OAuth callback.
+
+## Final verification (`ready`)
+
+After the owner has registered a passkey (or, for Google OAuth installs, signed in) and sent a first chat message, run:
+
+```sh
+pnpm consumer:install ... --runtime-config ./runtime-config.json --images ./image-manifest.json --verify
+pnpm consumer:install ... --runtime-config ./runtime-config.json --images ./image-manifest.json --verify --apply
+```
+
+Checks, each reported with a pass/fail detail: both Cloud Run services serve the recorded digests on a ready revision; web is publicly invocable while the agent has no public invoker; `/api/health` on the service URL and the owner origin reports the installation's release commit; the owner is claimed (`/api/owner/status`), or `--owner-signed-in` is passed for Google OAuth installs; the Firestore runtime data preflight passes; and at least one completed model call is recorded, proving an authenticated Vertex response through the service identity. Without `--apply` nothing changes; with `--apply` a full pass advances the installation to `ready` and reports `runtimeReady: true`. A failed check leaves the stage at `initialized` and exits with status 2. `--gcloud-auth` is accepted for the Firestore reads.
+
 For the optional runtime, create three enabled, numbered owner-auth Secret Manager versions and configure the owner Google OAuth client for the intended HTTPS origin. For native iOS access, also create an enabled, numbered `<installation_id>-mobile-api-token` version in the same customer project. Then supply a JSON runtime config containing these fields (omit `mobileApiTokenVersion` if native access is not being configured):
 
 ```json
@@ -129,3 +169,9 @@ After the foundation reaches `provisioned`, pass `--build-images --runtime-confi
 To make the initialized web service reachable for owner sign-in, finish the customer-owned Google Auth Platform setup first. In **Google Auth Platform → Clients**, create a **Web application** client in the same customer project, configure its consent screen and owner/test-user access, and add the exact authorized redirect URI `https://assistant.example.com/api/auth/callback/google` (substitute the `webAuthUrl` origin). Store its client ID and secret in the numbered `<installation_id>-google-client-id` and `<installation_id>-google-client-secret` Secret Manager versions referenced by the unchanged runtime config. Route the configured HTTPS origin to the deployed web service and verify the certificate and host routing; the installer reports the service's `run.app` URL so the customer can establish the mapping. This OAuth client and domain setup is a customer console step, not a single-click installer action. Google requires an [exact redirect URI match](https://developers.google.com/identity/protocols/oauth2/web-server), and its [Web client setup](https://developers.google.com/workspace/guides/create-credentials) is performed in Google Auth Platform.
 
 Resume the same install command with `--owner-access-callback https://assistant.example.com/api/auth/callback/google`. Without `--apply`, this is a read-only preview: it verifies the matching initialized runtime, enabled numbered secret versions, web URL, owner auth environment, and service IAM, and returns the URL/callback handoff. After checking the OAuth client configuration and HTTPS routing, add `--apply`; the installer reapplies the verified customer Terraform archive with `allow_public_web_invoker=true`, grants `allUsers` Cloud Run invocation to **web only**, and checks that the agent has no service-level public invoker binding. The agent's own Cloud Run IAM check stays enabled. This follows Google's [service-specific public invoker binding](https://cloud.google.com/run/docs/authenticating/public) and [IAM policy inspection](https://cloud.google.com/run/docs/securing/managing-access). Audit inherited project-level grants separately. The step is safe to retry, never reads secret payloads, keeps the installation at `initialized`, and continues to report `runtimeReady: false` until owner sign-in and an authenticated chat/model response are verified.
+
+## Update, rollback, and uninstall
+
+**Update or roll back** to another release with `pnpm consumer:update --state STATE --state-bucket BUCKET --archive NEW.tar.gz --commit-sha SHA [--apply]`, run from a clean checkout of that exact commit. It verifies the archive digest, uploads the release receipt to the customer state bucket, writes `install-manifest-<sha>.json` beside the state, and moves the installation back to `bootstrapped` through the reviewed `release-rebase` state transition (only the release may change; bootstrap-owned records such as the generated auth secret are kept). The printed next commands reapply the foundation and indexes, build and deploy the new images, and rerun `--verify --apply`; the installation is not `ready` again until verification passes. For a rollback, deploy the earlier release with `--images image-manifest-<old sha>.json` instead of `--build-images` (registry tags are immutable). Firestore PITR keeps seven days of history for data recovery; there is no automatic data-schema downgrade, so keep the previous release compatible for the rollback window.
+
+**Uninstall** with `pnpm consumer:uninstall --state STATE --state-bucket BUCKET [--apply]`. It works from the recorded inventory and installer names only, in this order: the Scheduler sweep and Cloud Tasks queue, both Cloud Run services, the runtime service accounts and their project grants, and installer-generated secrets. By default the Firestore database, buckets, image repository, and state bucket are kept and listed with their ongoing charges. `--delete-data --confirm-installation ID` also deletes the image repository, the database (after disabling delete protection), and the assets/source buckets; `--delete-state` then deletes the state bucket. Already-deleted resources count as done, so a failed run resumes. The project, enabled APIs, and customer-created secrets are never deleted. Export first if the data should outlive the installation (`pnpm exec tsx scripts/firestore-managed-backup.ts --backup ... --execute` writes a checksummed PITR-consistent export to a bucket you keep; see the [pilot runbook](consumer-fresh-account-pilot.md#9-backup-restore-and-export)); existing managed backups keep billing until they expire.

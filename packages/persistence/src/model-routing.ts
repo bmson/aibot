@@ -11,6 +11,18 @@ export type ModelAuditWrite = Omit<
 > &
   Partial<Pick<Records['modelCallAudit'], OptionalAuditFields>>;
 
+/** Every routed model role an installation must configure. */
+export const MODEL_ROLE_NAMES = [
+  'plan',
+  'classify',
+  'extract',
+  'draft',
+  'reason',
+  'rewrite',
+  'embed',
+  'batch',
+] as const;
+
 /** Routing configuration and telemetry within one installation's accounting boundary. */
 export interface ModelRoutingRepository {
   readonly kind: 'model-routing-repository';

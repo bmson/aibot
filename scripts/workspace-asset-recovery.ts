@@ -173,7 +173,7 @@ export async function recoverWorkspaceAssets(
   };
 }
 
-async function createGcsStorage(token: string): Promise<AssetRecoveryStorage> {
+export async function createGcsStorage(token: string): Promise<AssetRecoveryStorage> {
   const headers = { authorization: `Bearer ${token}` };
   const metadataUrl = (bucket: string, name: string, generation?: string) => {
     const url = new URL(

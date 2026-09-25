@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -35,18 +35,57 @@ export interface ConsumerInstallOptions {
   runtime?: { images: unknown; config: unknown };
   /** Exact Google OAuth redirect URI confirmed in the customer's Web client. */
   ownerAccessCallback?: string;
+  /**
+   * Final readiness verification of an initialized runtime. Without `apply`
+   * it only reports; with `apply` a fully passing check advances to `ready`.
+   */
+  verify?: {
+    /** Customer-side Firestore evidence gathered by the caller. */
+    evidence: (context: ConsumerVerifyContext) => Promise<ConsumerReadinessEvidence>;
+    /** Google OAuth installs only: the operator confirms the owner signed in. */
+    ownerSignInConfirmed?: boolean;
+  };
   now?: () => string;
+}
+
+export interface ConsumerVerifyContext {
+  ownerAuth: 'google' | 'passkey';
+  webUrl: string;
+  authOrigin: string;
+  agentId: string;
+  embeddingSpace: { provider: string; model: string; dimensions: number; revision: string };
+}
+
+export interface ConsumerReadinessEvidence {
+  /** Result of the read-only runtime data preflight (agent, budget, roles, catalog). */
+  runtimeData: { ready: boolean; issues: readonly string[] };
+  /** A successful model call has been recorded, i.e. the owner got a model response. */
+  modelResponseObserved: boolean;
+}
+
+export interface ConsumerVerificationCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
 }
 
 export interface ConsumerInstallResult {
   manifest: InstallationManifest;
   applied: boolean;
-  runtimeReady: false;
+  runtimeReady: boolean;
   completed: readonly InstallationStage[];
   pending: readonly InstallationStage[];
   note: string;
   disabledApis?: readonly string[];
-  ownerAccess?: { webUrl: string; authOrigin: string; callback: string; publicInvoker: boolean };
+  ownerAccess?: {
+    webUrl: string;
+    authOrigin: string;
+    ownerAuth: 'google' | 'passkey';
+    /** Google OAuth redirect URI; absent for passkey installations. */
+    callback?: string;
+    publicInvoker: boolean;
+  };
+  verification?: { passed: boolean; checks: readonly ConsumerVerificationCheck[] };
 }
 
 export interface ConsumerInstallDependencies {
@@ -616,13 +655,26 @@ type RuntimeInput = {
     };
     vertexLocation?: string;
     ownerEmail: string;
-    webAuthUrl: string;
-    authSecretVersion: number;
-    googleClientIdVersion: number;
-    googleClientSecretVersion: number;
+    /** `passkey` needs no Google OAuth client; absent means `google`. */
+    ownerAuth?: 'passkey';
+    /** Required for Google OAuth; passkey defaults to the deterministic Cloud Run URL. */
+    webAuthUrl?: string;
+    /** Passkey installs may omit this; the installer then generates the secret. */
+    authSecretVersion?: number;
+    googleClientIdVersion?: number;
+    googleClientSecretVersion?: number;
     mobileApiTokenVersion?: number;
   };
   fingerprint: string;
+};
+
+/** Runtime input with installer-derived values that are not part of the fingerprint. */
+type ResolvedRuntime = RuntimeInput & {
+  ownerAuth: 'google' | 'passkey';
+  authUrl: string;
+  /** Null only during a preview before the installer has generated the secret. */
+  authSecretVersion: number | null;
+  generatedAuthSecret: boolean;
 };
 
 function record(value: unknown, label: string, keys: readonly string[]): Record<string, unknown> {
@@ -694,6 +746,7 @@ function validateRuntimeInput(
     'firestoreEmbeddingSpace',
     'vertexLocation',
     'ownerEmail',
+    'ownerAuth',
     'webAuthUrl',
     'authSecretVersion',
     'googleClientIdVersion',
@@ -727,17 +780,29 @@ function validateRuntimeInput(
       !/^(?:global|[a-z][a-z0-9-]*[0-9])$/.test(config.vertexLocation))
   )
     throw new Error('Runtime config requires an explicit Vertex region or global');
+  if (config.ownerAuth !== undefined && config.ownerAuth !== 'passkey')
+    throw new Error('Runtime config ownerAuth must be "passkey" or omitted for Google OAuth');
+  const passkey = config.ownerAuth === 'passkey';
   if (
     typeof config.ownerEmail !== 'string' ||
     !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(config.ownerEmail) ||
-    typeof config.webAuthUrl !== 'string' ||
-    !/^https:\/\/[A-Za-z0-9.-]+(?::443)?$/.test(config.webAuthUrl)
+    ((!passkey || config.webAuthUrl !== undefined) &&
+      (typeof config.webAuthUrl !== 'string' ||
+        !/^https:\/\/[A-Za-z0-9.-]+(?::443)?$/.test(config.webAuthUrl)))
   )
     throw new Error('Runtime config requires an owner email and HTTPS OAuth origin');
-  for (const key of ['authSecretVersion', 'googleClientIdVersion', 'googleClientSecretVersion']) {
+  const numbered = passkey
+    ? (['authSecretVersion'] as const).filter((key) => config[key] !== undefined)
+    : (['authSecretVersion', 'googleClientIdVersion', 'googleClientSecretVersion'] as const);
+  for (const key of numbered) {
     if (!Number.isSafeInteger(config[key]) || (config[key] as number) < 1)
       throw new Error(`Runtime config requires a positive numbered ${key}`);
   }
+  if (
+    passkey &&
+    (config.googleClientIdVersion !== undefined || config.googleClientSecretVersion !== undefined)
+  )
+    throw new Error('Passkey owner auth does not use Google OAuth client secrets; remove them');
   if (
     config.mobileApiTokenVersion !== undefined &&
     (!Number.isSafeInteger(config.mobileApiTokenVersion) ||
@@ -769,7 +834,7 @@ async function runRuntimeCheck(
 async function verifyRuntimePrerequisites(
   runner: CommandRunner,
   manifest: InstallationManifest,
-  input: RuntimeInput,
+  input: ResolvedRuntime,
 ): Promise<void> {
   const project = manifest.identity.projectId;
   const region = manifest.identity.region;
@@ -792,14 +857,16 @@ async function verifyRuntimePrerequisites(
       `${name} image lookup`,
     );
   }
-  for (const [suffix, version] of [
-    ['auth-secret', input.config.authSecretVersion],
-    ['google-client-id', input.config.googleClientIdVersion],
-    ['google-client-secret', input.config.googleClientSecretVersion],
-    ...(input.config.mobileApiTokenVersion === undefined
-      ? []
-      : ([['mobile-api-token', input.config.mobileApiTokenVersion]] as const)),
-  ] as const) {
+  const secrets: Array<readonly [string, number]> = [];
+  if (input.authSecretVersion !== null) secrets.push(['auth-secret', input.authSecretVersion]);
+  if (input.ownerAuth === 'google')
+    secrets.push(
+      ['google-client-id', input.config.googleClientIdVersion as number],
+      ['google-client-secret', input.config.googleClientSecretVersion as number],
+    );
+  if (input.config.mobileApiTokenVersion !== undefined)
+    secrets.push(['mobile-api-token', input.config.mobileApiTokenVersion]);
+  for (const [suffix, version] of secrets) {
     const result = await runRuntimeCheck(
       runner,
       [
@@ -818,18 +885,27 @@ async function verifyRuntimePrerequisites(
   }
 }
 
-function runtimeVars(input: RuntimeInput): string[] {
+function runtimeVars(input: ResolvedRuntime): string[] {
+  if (input.authSecretVersion === null)
+    throw new Error('The generated auth secret version must exist before runtime apply');
   const vars: Record<string, string> = {
     web_image_digest: input.webDigest,
     agent_image_digest: input.agentDigest,
     firestore_agent_id: input.config.firestoreAgentId,
     firestore_embedding_space: JSON.stringify(input.config.firestoreEmbeddingSpace),
     owner_email: input.config.ownerEmail,
-    web_auth_url: input.config.webAuthUrl,
-    auth_secret_version: String(input.config.authSecretVersion),
-    google_client_id_version: String(input.config.googleClientIdVersion),
-    google_client_secret_version: String(input.config.googleClientSecretVersion),
+    web_auth_url: input.authUrl,
+    auth_secret_version: String(input.authSecretVersion),
   };
+  if (input.ownerAuth === 'google') {
+    vars.google_client_id_version = String(input.config.googleClientIdVersion);
+    vars.google_client_secret_version = String(input.config.googleClientSecretVersion);
+  } else {
+    // Passkey sign-in is claim-protected by the application, so web is public
+    // from the first deploy; the agent stays IAM-private.
+    vars.owner_auth_mode = 'passkey';
+    vars.allow_public_web_invoker = 'true';
+  }
   if (input.config.vertexLocation !== undefined) vars.vertex_location = input.config.vertexLocation;
   if (input.config.mobileApiTokenVersion !== undefined)
     vars.mobile_api_token_version = String(input.config.mobileApiTokenVersion);
@@ -839,7 +915,7 @@ function runtimeVars(input: RuntimeInput): string[] {
 async function verifyRuntimeServices(
   runner: CommandRunner,
   manifest: InstallationManifest,
-  input: RuntimeInput,
+  input: ResolvedRuntime,
 ): Promise<void> {
   const { projectId: project, region, installationId: id } = manifest.identity;
   for (const [name, digest] of [
@@ -902,7 +978,7 @@ async function verifyRuntimeServices(
 async function inspectOwnerAccess(
   runner: CommandRunner,
   manifest: InstallationManifest,
-  input: RuntimeInput,
+  input: ResolvedRuntime,
   expectedPublic: boolean,
 ): Promise<NonNullable<ConsumerInstallResult['ownerAccess']>> {
   const { projectId, region, installationId } = manifest.identity;
@@ -954,7 +1030,8 @@ async function inspectOwnerAccess(
     iamDisabled(web) ||
     iamDisabled(agent) ||
     env.get('OWNER_EMAIL') !== input.config.ownerEmail ||
-    env.get('AUTH_URL') !== input.config.webAuthUrl ||
+    env.get('AUTH_URL') !== input.authUrl ||
+    (input.ownerAuth === 'passkey' && env.get('OWNER_AUTH_MODE') !== 'passkey') ||
     env.get('AUTH_DEV_BYPASS') !== 'false' ||
     env.get('AUTH_LOCALHOST_BYPASS') !== 'false' ||
     env.get('VERTEX_LOCATION') !== (input.config.vertexLocation ?? region)
@@ -999,10 +1076,258 @@ async function inspectOwnerAccess(
     throw new Error('Web public invoker binding was not verified');
   return {
     webUrl: url,
-    authOrigin: input.config.webAuthUrl,
-    callback: `${input.config.webAuthUrl}/api/auth/callback/google`,
+    authOrigin: input.authUrl,
+    ownerAuth: input.ownerAuth,
+    ...(input.ownerAuth === 'google'
+      ? { callback: `${input.authUrl}/api/auth/callback/google` }
+      : {}),
     publicInvoker: webPolicy.allUsers,
   };
+}
+
+async function projectNumber(runner: CommandRunner, project: string): Promise<string> {
+  const result = await runRuntimeCheck(
+    runner,
+    ['projects', 'describe', project, '--format=value(projectNumber)'],
+    'Customer project number lookup',
+  );
+  if (!/^\d+$/.test(result.stdout)) throw new Error('Customer project number is malformed');
+  return result.stdout;
+}
+
+const generatedSecretLabel = 'assistant-installer';
+
+function recordedAuthSecretVersion(manifest: InstallationManifest): number | null {
+  const prefix = `projects/${manifest.identity.projectId}/secrets/${manifest.identity.installationId}-auth-secret/versions/`;
+  const recorded = manifest.resources.find(
+    (resource) => resource.kind === 'auth-secret-version' && resource.name.startsWith(prefix),
+  );
+  if (!recorded) return null;
+  const version = Number(recorded.name.slice(prefix.length));
+  if (!Number.isSafeInteger(version) || version < 1)
+    throw new Error('Recorded auth secret version is malformed');
+  return version;
+}
+
+/**
+ * Passkey installs need only a session-signing secret, which the installer
+ * generates in the customer's Secret Manager. The value is written to a
+ * private temporary file for `gcloud --data-file` and never printed. A
+ * resumed run reuses the lowest enabled version of the installer-labelled
+ * secret, so a crash after creation does not rotate the key.
+ */
+async function ensureGeneratedAuthSecret(
+  runner: CommandRunner,
+  manifest: InstallationManifest,
+): Promise<number> {
+  const { projectId: project, installationId: id } = manifest.identity;
+  const secret = `${id}-auth-secret`;
+  const described = await runner.run('gcloud', [
+    'secrets',
+    'describe',
+    secret,
+    `--project=${project}`,
+    '--format=json',
+  ]);
+  if (described.ok) {
+    const value = jsonOutput(described, 'Auth secret metadata') as {
+      labels?: Record<string, unknown>;
+    } | null;
+    if (
+      value?.labels?.installation !== id ||
+      value?.labels?.['managed-by'] !== generatedSecretLabel
+    )
+      throw new Error(
+        `Refusing to adopt existing secret ${secret}; supply its authSecretVersion explicitly or remove it`,
+      );
+  } else if (/(not.?found|404|does not exist)/i.test(described.stderr)) {
+    await runRuntimeCheck(
+      runner,
+      [
+        'secrets',
+        'create',
+        secret,
+        `--project=${project}`,
+        '--replication-policy=automatic',
+        `--labels=installation=${id},managed-by=${generatedSecretLabel}`,
+      ],
+      'Auth secret creation',
+    );
+  } else {
+    throw new Error('Auth secret lookup failed; check Secret Manager access and retry');
+  }
+  const versions = jsonOutput(
+    await runRuntimeCheck(
+      runner,
+      [
+        'secrets',
+        'versions',
+        'list',
+        secret,
+        `--project=${project}`,
+        '--filter=state:ENABLED',
+        '--format=json',
+      ],
+      'Auth secret version lookup',
+    ),
+    'Auth secret versions',
+  );
+  if (!Array.isArray(versions)) throw new Error('Auth secret version list is malformed');
+  const enabled = versions
+    .map((row) =>
+      Number(
+        String((row as { name?: unknown })?.name ?? '')
+          .split('/')
+          .at(-1),
+      ),
+    )
+    .filter((version) => Number.isSafeInteger(version) && version > 0)
+    .sort((a, b) => a - b);
+  if (enabled[0] !== undefined) return enabled[0];
+  const scratch = await mkdtemp(join(tmpdir(), 'assistant-auth-secret-'));
+  const file = join(scratch, 'value');
+  try {
+    await writeFile(file, randomBytes(48).toString('base64url'), { mode: 0o600 });
+    const added = jsonOutput(
+      await runRuntimeCheck(
+        runner,
+        [
+          'secrets',
+          'versions',
+          'add',
+          secret,
+          `--project=${project}`,
+          `--data-file=${file}`,
+          '--format=json',
+        ],
+        'Auth secret version creation',
+      ),
+      'Auth secret version',
+    ) as { name?: unknown } | null;
+    const version = Number(
+      String(added?.name ?? '')
+        .split('/')
+        .at(-1),
+    );
+    if (!Number.isSafeInteger(version) || version < 1)
+      throw new Error('Auth secret version creation returned a malformed version');
+    return version;
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+async function resolveRuntime(
+  runner: CommandRunner,
+  manifest: InstallationManifest,
+  input: RuntimeInput,
+): Promise<ResolvedRuntime> {
+  const ownerAuth = input.config.ownerAuth === 'passkey' ? 'passkey' : 'google';
+  const { projectId, installationId, region } = manifest.identity;
+  const authUrl =
+    input.config.webAuthUrl ??
+    `https://${installationId}-web-${await projectNumber(runner, projectId)}.${region}.run.app`;
+  const recorded = input.config.authSecretVersion ?? recordedAuthSecretVersion(manifest);
+  return {
+    ...input,
+    ownerAuth,
+    authUrl,
+    authSecretVersion: recorded,
+    generatedAuthSecret: input.config.authSecretVersion === undefined,
+  };
+}
+
+async function fetchJson(
+  fetcher: typeof fetch,
+  url: string,
+): Promise<{ ok: boolean; body: Record<string, unknown> | null }> {
+  try {
+    const response = await fetcher(url, {
+      method: 'GET',
+      redirect: 'manual',
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(20_000),
+    });
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    return { ok: response.ok, body: body && typeof body === 'object' ? body : null };
+  } catch {
+    return { ok: false, body: null };
+  }
+}
+
+/** Every final check is recorded; none of them reads or prints secret material. */
+async function verifyReadiness(
+  dependencies: ConsumerInstallDependencies,
+  manifest: InstallationManifest,
+  input: ResolvedRuntime,
+  verify: NonNullable<ConsumerInstallOptions['verify']>,
+): Promise<{ checks: ConsumerVerificationCheck[]; access: ConsumerInstallResult['ownerAccess'] }> {
+  const checks: ConsumerVerificationCheck[] = [];
+  const add = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail });
+  await verifyRuntimeServices(dependencies.runner, manifest, input);
+  add('cloud-run-revisions', true, 'web and agent serve the recorded image digests');
+  const access = await inspectOwnerAccess(dependencies.runner, manifest, input, false);
+  add(
+    'owner-access',
+    access.publicInvoker,
+    access.publicInvoker
+      ? 'web is publicly invocable and the agent has no public invoker'
+      : 'web is still private; complete the owner-access step first',
+  );
+  const fetcher = dependencies.fetcher ?? globalThis.fetch;
+  const release = manifest.identity.release.commitSha;
+  for (const base of [...new Set([access.webUrl, access.authOrigin])]) {
+    const health = await fetchJson(fetcher, `${base}/api/health`);
+    add(
+      `health ${base}`,
+      health.ok && health.body?.sha === release,
+      health.ok
+        ? health.body?.sha === release
+          ? 'serves the installation release'
+          : 'serves a different release'
+        : 'health endpoint unreachable',
+    );
+  }
+  if (input.ownerAuth === 'passkey') {
+    const status = await fetchJson(fetcher, `${access.authOrigin}/api/owner/status`);
+    add(
+      'owner-claimed',
+      status.ok && status.body?.claimed === true,
+      status.body?.claimed === true
+        ? 'an owner passkey is registered'
+        : 'no owner passkey yet; open the setup link from --issue-owner-claim',
+    );
+  } else {
+    add(
+      'owner-signed-in',
+      verify.ownerSignInConfirmed === true,
+      verify.ownerSignInConfirmed
+        ? 'operator confirmed Google sign-in as the owner'
+        : 'sign in as the owner, then rerun with --owner-signed-in',
+    );
+  }
+  const evidence = await verify.evidence({
+    ownerAuth: input.ownerAuth,
+    webUrl: access.webUrl,
+    authOrigin: access.authOrigin,
+    agentId: input.config.firestoreAgentId,
+    embeddingSpace: input.config.firestoreEmbeddingSpace,
+  });
+  add(
+    'runtime-data',
+    evidence.runtimeData.ready,
+    evidence.runtimeData.ready
+      ? 'agent, budget, model roles, and catalog are consistent'
+      : `runtime data issues: ${evidence.runtimeData.issues.join(', ') || 'unknown'}`,
+  );
+  add(
+    'model-response',
+    evidence.modelResponseObserved,
+    evidence.modelResponseObserved
+      ? 'a completed model call is recorded'
+      : 'send a first chat message as the owner, then rerun verification',
+  );
+  return { checks, access };
 }
 
 /** Provision the customer-owned foundation in resumable, verified stages. */
@@ -1012,12 +1337,18 @@ export async function provisionConsumerInstallation(
 ): Promise<ConsumerInstallResult> {
   const input = validateInstallationManifest(options.manifest);
   if (input.status !== 'active') throw new Error('Cannot provision an invalidated installation');
-  const runtime = options.runtime ? validateRuntimeInput(options.runtime, input) : null;
-  if (options.ownerAccessCallback && !runtime)
+  const runtimeInput = options.runtime ? validateRuntimeInput(options.runtime, input) : null;
+  if (options.ownerAccessCallback && !runtimeInput)
     throw new Error('Owner access requires the matching runtime images and config');
+  if (options.verify && !runtimeInput)
+    throw new Error('Verification requires the matching runtime images and config');
+  if (options.ownerAccessCallback && runtimeInput?.config.ownerAuth === 'passkey')
+    throw new Error(
+      'Passkey installations need no OAuth callback; web is public from the runtime deploy',
+    );
   if (
     options.ownerAccessCallback &&
-    options.ownerAccessCallback !== `${runtime?.config.webAuthUrl}/api/auth/callback/google`
+    options.ownerAccessCallback !== `${runtimeInput?.config.webAuthUrl}/api/auth/callback/google`
   )
     throw new Error('Confirmed OAuth callback must exactly match the configured AUTH_URL callback');
   const now = options.now ?? (() => new Date().toISOString());
@@ -1029,7 +1360,7 @@ export async function provisionConsumerInstallation(
   const verifiedFoundation = await verifyTrustedFoundationArchive(
     options.archivePath,
     input.identity.release.archiveDigest,
-    runtime !== null,
+    runtimeInput !== null,
   );
   const trustedIndexSpec = verifiedFoundation.get(indexSpecPath);
   if (!trustedIndexSpec) throw new Error('Verified Firestore index specification is missing');
@@ -1048,21 +1379,34 @@ export async function provisionConsumerInstallation(
   if (persisted && JSON.stringify(persisted.selection) !== JSON.stringify(input.selection)) {
     throw new Error('Persisted installation selection does not match the supplied manifest');
   }
-  if (current.stage.current === 'initialized' && !runtime)
+  if (
+    (current.stage.current === 'initialized' || current.stage.current === 'ready') &&
+    !runtimeInput
+  )
     throw new Error(
       'An initialized runtime requires the same image manifest and runtime config to resume',
     );
   if (
-    runtime &&
-    current.stage.current === 'initialized' &&
+    runtimeInput &&
+    (current.stage.current === 'initialized' || current.stage.current === 'ready') &&
     !current.resources.some(
-      (resource) => resource.kind === 'runtime-config' && resource.name === runtime.fingerprint,
+      (resource) =>
+        resource.kind === 'runtime-config' && resource.name === runtimeInput.fingerprint,
     )
   )
     throw new Error('Runtime config differs from the initialized checkpoint');
   if (options.ownerAccessCallback && current.stage.current !== 'initialized')
     throw new Error('Deploy and verify the private runtime before enabling owner access');
+  if (
+    options.verify &&
+    current.stage.current !== 'initialized' &&
+    current.stage.current !== 'ready'
+  )
+    throw new Error('Deploy the runtime before running the final verification');
   await verifyCustomerBilling(dependencies.runner, current.identity.projectId);
+  let runtime = runtimeInput
+    ? await resolveRuntime(dependencies.runner, current, runtimeInput)
+    : null;
   if (current.stage.current === 'previewed' || current.stage.current === 'authorized') {
     const missingApis = await verifyProjectAndDatabase(dependencies.runner, current, options.apply);
     if (!options.apply) {
@@ -1088,10 +1432,31 @@ export async function provisionConsumerInstallation(
       await verifyRuntimeServices(dependencies.runner, current, runtime);
       ownerAccess = await inspectOwnerAccess(dependencies.runner, current, runtime, false);
     }
+    if (runtime && options.verify) {
+      const { checks, access } = await verifyReadiness(
+        dependencies,
+        current,
+        runtime,
+        options.verify,
+      );
+      const passed = checks.every((check) => check.ok);
+      return {
+        manifest: current,
+        applied: false,
+        runtimeReady: passed && current.stage.current === 'ready',
+        completed: current.stage.completed,
+        pending: cloudStages.filter((stage) => !current.stage.completed.includes(stage)),
+        ownerAccess: access,
+        verification: { passed, checks },
+        note: passed
+          ? 'All readiness checks passed. No state was changed; rerun with --apply to record the ready stage.'
+          : 'Readiness checks did not all pass. No state was changed.',
+      };
+    }
     return {
       manifest: current,
       applied: false,
-      runtimeReady: false,
+      runtimeReady: current.stage.current === 'ready',
       completed: current.stage.completed,
       pending: cloudStages.filter(
         (stage) => !current.stage.completed.includes(stage as InstallationStage),
@@ -1191,13 +1556,23 @@ export async function provisionConsumerInstallation(
       resources: [...current.resources, ...foundationResources(outputValues, current)],
     });
     await persistInstallationProgress(options.statePath, current, previous);
-  } else if (current.stage.current === 'provisioned' || current.stage.current === 'initialized') {
+  } else if (
+    current.stage.current === 'provisioned' ||
+    current.stage.current === 'initialized' ||
+    current.stage.current === 'ready'
+  ) {
     // Older provisioned manifests did not attest live index readiness. Recheck
     // on resume, and also detect an index removed after an earlier successful run.
     await verifyConsumerIndexReadiness(dependencies.runner, current.identity, trustedIndexSpec);
   }
   if (runtime && current.stage.current === 'provisioned') {
-    await verifyRuntimePrerequisites(dependencies.runner, current, runtime);
+    if (runtime.authSecretVersion === null)
+      runtime = {
+        ...runtime,
+        authSecretVersion: await ensureGeneratedAuthSecret(dependencies.runner, current),
+      };
+    const deploying = runtime;
+    await verifyRuntimePrerequisites(dependencies.runner, current, deploying);
     const workspace = await prepareTerraformWorkspace(verifiedFoundation, true);
     const terraformOptions = { ...options, terraformDir: workspace.terraformDir };
     const initialized = await terraformRunner.run('terraform', [
@@ -1214,7 +1589,7 @@ export async function provisionConsumerInstallation(
       throw new Error('Runtime Terraform init failed; check state bucket access and retry');
     const runtimeVarsForApply = [
       ...terraformVars(current, options.stateBucket),
-      ...runtimeVars(runtime),
+      ...runtimeVars(deploying),
     ];
     const identities = await terraformRunner.run('terraform', [
       `-chdir=${workspace.terraformDir}`,
@@ -1261,16 +1636,38 @@ export async function provisionConsumerInstallation(
       if ((values[key] as { value?: unknown } | undefined)?.value !== name)
         throw new Error(`Runtime Terraform output ${key} does not match installation`);
     }
-    await verifyRuntimeServices(dependencies.runner, current, runtime);
+    await verifyRuntimeServices(dependencies.runner, current, deploying);
+    if (deploying.ownerAuth === 'passkey')
+      await inspectOwnerAccess(dependencies.runner, current, deploying, true);
     await rm(workspace.root, { recursive: true, force: true });
     const previous = current;
+    const secretName = `projects/${current.identity.projectId}/secrets/${current.identity.installationId}-auth-secret`;
     current = validateInstallationManifest({
       ...advanceInstallationStage(previous, 'initialized', now()),
       resources: [
         ...previous.resources,
+        // A release rebase keeps the bootstrap-owned secret records.
+        ...(deploying.generatedAuthSecret && recordedAuthSecretVersion(previous) === null
+          ? [
+              {
+                kind: 'secret',
+                name: secretName,
+                scope: 'installation' as const,
+                owner: 'bootstrap' as const,
+                installationId: current.identity.installationId,
+              },
+              {
+                kind: 'auth-secret-version',
+                name: `${secretName}/versions/${deploying.authSecretVersion}`,
+                scope: 'installation' as const,
+                owner: 'bootstrap' as const,
+                installationId: current.identity.installationId,
+              },
+            ]
+          : []),
         {
           kind: 'runtime-config',
-          name: runtime.fingerprint,
+          name: deploying.fingerprint,
           scope: 'installation',
           owner: 'terraform',
           installationId: current.identity.installationId,
@@ -1285,10 +1682,42 @@ export async function provisionConsumerInstallation(
       ],
     });
     await persistInstallationProgress(options.statePath, current, previous);
-  } else if (runtime && current.stage.current === 'initialized') {
+  } else if (runtime && current.stage.current === 'initialized' && !options.verify) {
     await verifyRuntimeServices(dependencies.runner, current, runtime);
   }
   let ownerAccess: ConsumerInstallResult['ownerAccess'];
+  if (
+    runtime?.ownerAuth === 'passkey' &&
+    (current.stage.current === 'initialized' || current.stage.current === 'ready') &&
+    !options.verify
+  )
+    ownerAccess = await inspectOwnerAccess(dependencies.runner, current, runtime, true);
+  if (runtime && options.verify) {
+    const { checks, access } = await verifyReadiness(
+      dependencies,
+      current,
+      runtime,
+      options.verify,
+    );
+    const passed = checks.every((check) => check.ok);
+    if (passed && current.stage.current === 'initialized') {
+      const previous = current;
+      current = advanceInstallationStage(previous, 'ready', now());
+      await persistInstallationProgress(options.statePath, current, previous);
+    }
+    return {
+      manifest: current,
+      applied: true,
+      runtimeReady: passed && current.stage.current === 'ready',
+      completed: current.stage.completed,
+      pending: cloudStages.filter((stage) => !current.stage.completed.includes(stage)),
+      ownerAccess: access,
+      verification: { passed, checks },
+      note: passed
+        ? 'All readiness checks passed and the installation is recorded as ready.'
+        : 'Readiness checks did not all pass; the installation stays initialized. Fix the failing checks and rerun.',
+    };
+  }
   if (runtime && options.ownerAccessCallback && current.stage.current === 'initialized') {
     await verifyRuntimePrerequisites(dependencies.runner, current, runtime);
     const before = await inspectOwnerAccess(dependencies.runner, current, runtime, false);
@@ -1366,14 +1795,17 @@ export async function provisionConsumerInstallation(
   return {
     manifest: current,
     applied: true,
-    runtimeReady: false,
+    runtimeReady: current.stage.current === 'ready',
     completed: current.stage.completed,
-    pending: current.stage.current === 'initialized' ? ['ready'] : ['initialized', 'ready'],
+    pending: cloudStages.filter((stage) => !current.stage.completed.includes(stage)),
     ownerAccess,
-    note: ownerAccess
-      ? 'Web invocation is public for the operator-confirmed OAuth callback. Verify the customer OAuth client, owner sign-in, and an authenticated model response before claiming runtime readiness.'
-      : current.stage.current === 'initialized'
-        ? 'Customer-owned Cloud Run services and revisions verified. Owner sign-in, model response, and end-to-end readiness remain gated.'
-        : 'Customer-owned foundation and READY indexes verified. Runtime services, owner authentication, and end-to-end readiness remain gated.',
+    note:
+      ownerAccess?.ownerAuth === 'passkey'
+        ? 'Passkey web is public and claim-protected. Issue the one-time setup link (--issue-owner-claim), register the owner passkey, send a first chat message, then run --verify.'
+        : ownerAccess
+          ? 'Web invocation is public for the operator-confirmed OAuth callback. Verify the customer OAuth client, owner sign-in, and an authenticated model response before claiming runtime readiness.'
+          : current.stage.current === 'initialized'
+            ? 'Customer-owned Cloud Run services and revisions verified. Owner sign-in, model response, and end-to-end readiness remain gated.'
+            : 'Customer-owned foundation and READY indexes verified. Runtime services, owner authentication, and end-to-end readiness remain gated.',
   };
 }

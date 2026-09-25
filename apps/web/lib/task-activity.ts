@@ -4,12 +4,20 @@ import {
   archiveActivityWithRepository,
   archiveOldActivity,
   archiveOldActivityWithRepository,
+  cancelActivity,
+  cancelActivityWithRepository,
   getTaskDetail,
   getTaskDetailWithRepository,
   listActivity,
   listActivityWithRepository,
+  raiseTaskBudget,
+  raiseTaskBudgetWithRepository,
   restoreActivity,
   restoreActivityWithRepository,
+  retryActivity,
+  retryActivityWithRepository,
+  revokeTaskAutonomy,
+  revokeTaskAutonomyWithRepository,
   type TaskDetail,
 } from '@assistant/application/tasks';
 import { loadConfig } from '@assistant/config';
@@ -49,37 +57,64 @@ export function getTaskActivityDetail(
   return getTaskDetail(getDb(), taskId, options);
 }
 
+/** Owner-scoped task commands for the configured driver; null outside Firestore mode. */
+function firestoreActivityCommands() {
+  if (loadConfig().PERSISTENCE_DRIVER !== 'firestore') return null;
+  const { agentId } = firestoreActivity();
+  return {
+    repository: new FirestoreTaskActivityCommandRepository(getFirestoreInstallationStore()),
+    agentId,
+  };
+}
+
 export function archiveTaskActivity(taskId: string): Promise<void> {
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
-    const { agentId } = firestoreActivity();
-    return archiveActivityWithRepository(
-      new FirestoreTaskActivityCommandRepository(getFirestoreInstallationStore()),
-      agentId,
-      taskId,
-    );
-  }
+  const firestore = firestoreActivityCommands();
+  if (firestore)
+    return archiveActivityWithRepository(firestore.repository, firestore.agentId, taskId);
   return archiveActivity(getDb(), taskId);
 }
 
 export function restoreTaskActivity(taskId: string): Promise<void> {
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
-    const { agentId } = firestoreActivity();
-    return restoreActivityWithRepository(
-      new FirestoreTaskActivityCommandRepository(getFirestoreInstallationStore()),
-      agentId,
-      taskId,
-    );
-  }
+  const firestore = firestoreActivityCommands();
+  if (firestore)
+    return restoreActivityWithRepository(firestore.repository, firestore.agentId, taskId);
   return restoreActivity(getDb(), taskId);
 }
 
 export function archiveOldTaskActivity(): Promise<void> {
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
-    const { agentId } = firestoreActivity();
-    return archiveOldActivityWithRepository(
-      new FirestoreTaskActivityCommandRepository(getFirestoreInstallationStore()),
-      agentId,
-    );
-  }
+  const firestore = firestoreActivityCommands();
+  if (firestore) return archiveOldActivityWithRepository(firestore.repository, firestore.agentId);
   return archiveOldActivity(getDb());
+}
+
+/** Re-queue a stalled task (needs_attention → pending). */
+export async function retryTaskActivity(taskId: string): Promise<void> {
+  const firestore = firestoreActivityCommands();
+  if (firestore)
+    return retryActivityWithRepository(firestore.repository, firestore.agentId, taskId);
+  await retryActivity(getDb(), taskId);
+}
+
+/** Cancel owner work; the executor observes the terminal state at its next checkpoint. */
+export async function cancelTaskActivity(taskId: string): Promise<void> {
+  const firestore = firestoreActivityCommands();
+  if (firestore)
+    return cancelActivityWithRepository(firestore.repository, firestore.agentId, taskId);
+  await cancelActivity(getDb(), taskId);
+}
+
+/** Revoke a task's autonomy grant so its next gated call parks for approval. */
+export function revokeTaskActivityAutonomy(taskId: string): Promise<void> {
+  const firestore = firestoreActivityCommands();
+  if (firestore)
+    return revokeTaskAutonomyWithRepository(firestore.repository, firestore.agentId, taskId);
+  return revokeTaskAutonomy(getDb(), taskId);
+}
+
+/** Raise a stalled task's hard cap and re-queue it in the same state change. */
+export function raiseTaskActivityBudget(taskId: string, limit: number): Promise<void> {
+  const firestore = firestoreActivityCommands();
+  if (firestore)
+    return raiseTaskBudgetWithRepository(firestore.repository, firestore.agentId, taskId, limit);
+  return raiseTaskBudget(getDb(), taskId, limit);
 }

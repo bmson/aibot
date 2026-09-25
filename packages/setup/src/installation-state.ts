@@ -155,6 +155,13 @@ export async function persistInstallationProgress(
   path: string,
   manifest: InstallationManifest,
   expected: InstallationManifest | null,
+  /**
+   * `release-rebase` is the reviewed update/rollback transition: an
+   * initialized or ready installation selects another verified release and
+   * returns to `bootstrapped` so the normal stages reapply it. Nothing else in
+   * the identity or selection may change.
+   */
+  transition: 'advance' | 'release-rebase' = 'advance',
 ): Promise<InstallationManifest> {
   const next = validateInstallationManifest(manifest);
   if (next.status !== 'active') throw stateError(path, 'cloud progress must remain active');
@@ -193,7 +200,20 @@ export async function persistInstallationProgress(
       ) {
         throw stateError(path, 'conflict: persisted state changed since it was read');
       }
-      if (
+      if (transition === 'release-rebase') {
+        if (
+          !sameJson({ ...current.identity, release: null }, { ...next.identity, release: null }) ||
+          !sameJson(current.selection, next.selection)
+        )
+          throw stateError(path, 'a release rebase may change only the release');
+        if (current.stage.current !== 'initialized' && current.stage.current !== 'ready')
+          throw stateError(path, 'only an initialized or ready installation can change release');
+        if (
+          next.stage.current !== 'bootstrapped' ||
+          next.stage.completed.join('\0') !== 'previewed\0authorized\0bootstrapped'
+        )
+          throw stateError(path, 'a release rebase must return to the bootstrapped stage');
+      } else if (
         !sameJson(current.identity, next.identity) ||
         !sameJson(current.selection, next.selection)
       ) {
@@ -202,9 +222,10 @@ export async function persistInstallationProgress(
       const currentIndex = installationStages.indexOf(current.stage.current);
       const nextIndex = installationStages.indexOf(next.stage.current);
       if (
-        nextIndex !== currentIndex + 1 ||
-        next.stage.completed.length !== current.stage.completed.length + 1 ||
-        next.stage.completed.slice(0, -1).join('\0') !== current.stage.completed.join('\0')
+        transition === 'advance' &&
+        (nextIndex !== currentIndex + 1 ||
+          next.stage.completed.length !== current.stage.completed.length + 1 ||
+          next.stage.completed.slice(0, -1).join('\0') !== current.stage.completed.join('\0'))
       ) {
         throw stateError(path, 'cloud progress must advance to the immediate next stage');
       }

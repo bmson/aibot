@@ -122,9 +122,9 @@ The consumer Terraform foundation now permits explicit creation of `(default)` i
 | P1 | Partial | Complete command contracts and remove remaining SDK imports from business logic; select adapters at composition roots |
 | P2 | Partial | Chat reads/cursors, remaining approval decision lookups, external-delivery fences, and Firestore application/dispatcher composition |
 | P3 | Pending | All remaining domain/module queries, graph/recall, imports, erasure/export, and operational parity across all current table families |
-| P4–P6 | Partial | Vertex configuration and portable model metering implemented; live feasibility, embedding migration, passkeys/recovery and device pairing remain |
-| P7–P8 | Partial | Authenticated foundation provisioning implemented; runtime build/deployment, owner onboarding and optional Workspace wizard pending |
-| P9–P11 | Partial | Limited snapshot/import rehearsal implemented; full coverage, activation, update/restore/uninstall and fresh-account pilot remain |
+| P4–P6 | Partial | Vertex configuration and portable model metering implemented. Passkey owner claim, offline and cloud-owner recovery, session revocation, and per-device mobile keys implemented ([owner passkeys](consumer-owner-passkeys.md)); live WebAuthn on a deployed origin, embedding migration, and a QR pairing exchange in iOS remain |
+| P7–P8 | Partial | Guided installer covers foundation, seed, image build, passkey runtime (no OAuth client, generated session secret), owner claim link, and a final `--verify` that records `ready`; least-privilege runtime IAM and an opt-in Cloud Tasks/Scheduler profile are in Terraform. Fresh-account live run ([pilot runbook](consumer-fresh-account-pilot.md)), Cloud Shell entry, Cloud Tasks agent support, and the optional Workspace wizard remain |
+| P9–P11 | Partial | Limited snapshot/import rehearsal implemented; `consumer:update` (release rebase and rollback) and `consumer:uninstall` implemented and offline-tested; restore into a new database is scripted, but promotion is manual. Full coverage, activation, and the owner-executed fresh-account pilot remain |
 
 Do not advertise an install button or enable `DATABASE_DRIVER=firestore` until the relevant runtime and installation gates pass. The Firestore package intentionally does not pretend to implement arbitrary Drizzle queries or a complete application database.
 

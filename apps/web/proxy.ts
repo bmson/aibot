@@ -37,6 +37,9 @@ export function proxy(request: NextRequest) {
     /^\/api\/mobile\/v1\/chats\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (
     path.startsWith('/api/auth/') ||
+    // Passkey owner auth; each route returns 404 unless OWNER_AUTH_MODE=passkey.
+    (path.startsWith('/api/owner/') && ['GET', 'POST', 'DELETE'].includes(request.method)) ||
+    (['/setup', '/signin', '/security'].includes(path) && request.method === 'GET') ||
     (path === '/api/health' && request.method === 'GET') ||
     (path === '/' && request.method === 'GET') ||
     (path === '/profile/memories' && request.method === 'GET') ||
@@ -47,6 +50,9 @@ export function proxy(request: NextRequest) {
     (path === '/api/profile-export' && request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/export' && request.method === 'GET') ||
     (path === '/capabilities' && request.method === 'GET') ||
+    // Anomaly and improvement review: owner-authenticated pages and actions.
+    ((path === '/anomalies' || path === '/improvements') &&
+      ['GET', 'POST'].includes(request.method)) ||
     // The POST is the costs page's Server Action; it performs its own owner
     // authentication and Firestore persistence checks before changing caps.
     (path === '/costs' && ['GET', 'POST'].includes(request.method)) ||
@@ -77,6 +83,7 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/activity' && request.method === 'GET') ||
     (path === '/api/mobile/v1/activity' && request.method === 'POST') ||
     (path === '/api/mobile/v1/activity/foreground' && request.method === 'POST') ||
+    (path === '/api/mobile/v1/location' && request.method === 'POST') ||
     (path === '/api/mobile/v1/goals' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/mobile/v1/mcp' && ['GET', 'POST'].includes(request.method)) ||
     (/^\/api\/mobile\/v1\/mcp\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
@@ -101,7 +108,17 @@ export function proxy(request: NextRequest) {
     (improvementIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/memory/profile' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/mobile/v1/memory/people' && request.method === 'POST') ||
-    (memoryPersonPath.test(path) && request.method === 'PATCH') ||
+    (memoryPersonPath.test(path) && ['GET', 'PATCH'].includes(request.method)) ||
+    // Owner memory commands: create, correct, confirm, forget, and review.
+    (path === '/api/mobile/v1/memory' && request.method === 'POST') ||
+    (/^\/api\/mobile\/v1\/memory\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      ['PATCH', 'POST'].includes(request.method)) ||
+    (/^\/api\/mobile\/v1\/knowledge\/sources\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      ['PATCH', 'DELETE'].includes(request.method)) ||
     (memoryOccasionPath.test(path) && ['POST', 'PATCH', 'DELETE'].includes(request.method)) ||
     (personOccasionsPath.test(path) && request.method === 'POST') ||
     (path === '/api/card-image' && request.method === 'GET') ||

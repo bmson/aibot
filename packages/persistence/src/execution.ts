@@ -17,6 +17,7 @@ import type { ModelRoutingRepository } from './model-routing.js';
 import type { OwnerCardCompilationRepository } from './owner-card-compilation.js';
 import type { OwnerContextRepository } from './owner-context.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
+import type { ReminderDeliveryRepository } from './reminders.js';
 import type { SkillContextRepository } from './skill-context.js';
 import type { TaskRepository } from './task-lifecycle.js';
 import type { WatchRepository } from './watches.js';
@@ -48,4 +49,9 @@ export interface ExecutionPersistence {
   readonly cardRefresh: CardRefreshRepository;
   readonly recallMetrics: RecallMetricsRepository;
   readonly watches: WatchRepository;
+  /**
+   * Present where scheduled reminder delivery has a portable adapter. Without
+   * it the `reminder.notify` job keeps its PostgreSQL delivery path.
+   */
+  readonly reminderDelivery?: ReminderDeliveryRepository;
 }
