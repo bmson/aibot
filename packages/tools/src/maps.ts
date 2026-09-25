@@ -1,12 +1,18 @@
 import { latestLocation, loadConfig } from '@assistant/core';
 import { appleDirections, type MapKitCredentials, type MapsFetch } from '@assistant/core/maps';
+import type { OwnerContextRepository } from '@assistant/persistence';
 import { z } from 'zod';
 import { register } from './register.js';
 import type { ToolRegistry } from './registry.js';
 
 export function registerMapsTools(
   registry: ToolRegistry,
-  deps: { credentials: MapKitCredentials; fetchImpl?: MapsFetch },
+  deps: {
+    credentials: MapKitCredentials;
+    fetchImpl?: MapsFetch;
+    /** Current-location origin source; defaults to the tool context's database. */
+    ownerContext?: OwnerContextRepository;
+  },
 ) {
   register(
     registry,
@@ -37,7 +43,7 @@ export function registerMapsTools(
           originLabel = args.origin;
         } else {
           const ping = await latestLocation(
-            ctx.db,
+            deps.ownerContext ?? ctx.db,
             ctx.agentId,
             loadConfig().LOCATION_RETENTION_DAYS,
           );

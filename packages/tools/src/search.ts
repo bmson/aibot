@@ -1,4 +1,5 @@
 import { recordCostEvent } from '@assistant/core';
+import type { CostRepository } from '@assistant/persistence';
 import { z } from 'zod';
 import type { ToolRegistry } from './registry.js';
 import type { AssistantTool, ToolFlags } from './types.js';
@@ -18,6 +19,8 @@ export interface SearchToolDeps {
   apiKey: string;
   /** Injected in tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
+  /** Where the per-search cost is recorded; defaults to the tool context's database. */
+  costs?: CostRepository;
 }
 
 /** Conservative per-call cost estimate (USD) by provider, for the ledger. */
@@ -137,7 +140,7 @@ export function registerSearchTools(registry: ToolRegistry, deps: SearchToolDeps
           AbortSignal.any([ctx.signal, AbortSignal.timeout(15000)]),
         );
         // Fractions of a cent — record after the fact, no pre-flight reservation.
-        await recordCostEvent(ctx.db, {
+        await recordCostEvent(deps.costs ?? ctx.db, {
           source: 'external_api',
           usd: PROVIDER_COST_USD[deps.provider],
           taskId: ctx.taskId,
