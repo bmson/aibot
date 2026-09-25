@@ -63,6 +63,16 @@
       ]
     },
     {
+      "collectionGroup": "proactivePings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "urgency", "order": "ASCENDING" },
+        { "fieldPath": "delivered", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "memories",
       "queryScope": "COLLECTION",
       "fields": [

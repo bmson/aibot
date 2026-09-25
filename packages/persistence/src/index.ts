@@ -39,6 +39,7 @@ export * from './missions.js';
 export * from './model-routing.js';
 export * from './money.js';
 export * from './notifications.js';
+export * from './nudge-policy.js';
 export * from './owner-card-compilation.js';
 export * from './owner-context.js';
 export * from './owner-knowledge-graph-fact.js';
