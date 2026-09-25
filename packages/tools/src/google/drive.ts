@@ -5,6 +5,7 @@ import {
   startDocumentIngest,
 } from '@assistant/core';
 import type { Db } from '@assistant/db';
+import type { DocumentCatalogRepository } from '@assistant/persistence';
 import { z } from 'zod';
 import type { ToolRegistry } from '../registry.js';
 import type { AssistantTool, ToolFlags } from '../types.js';
@@ -61,8 +62,11 @@ interface DriveFile {
 export interface DriveToolDeps {
   client: GoogleClient;
   workspace: WorkspaceStore;
-  /** Present enables drive.ingest (routes a Drive file into document search). */
-  db?: Db;
+  /**
+   * Present enables drive.ingest (routes a Drive file into document search):
+   * the portable document catalog, or a PostgreSQL client.
+   */
+  catalog?: Db | DocumentCatalogRepository;
 }
 
 function register<S extends z.ZodType, Out>(
@@ -261,8 +265,8 @@ export function registerDriveTools(registry: ToolRegistry, deps: DriveToolDeps):
   // File a Drive file into the searchable document library (Phase 11). Only
   // registered when a db is wired. Google-native types import as text; PDFs and
   // Office files keep their bytes (extracted in-process or by the doc processor).
-  if (deps.db) {
-    const db = deps.db;
+  if (deps.catalog) {
+    const catalog = deps.catalog;
     register(
       registry,
       {
@@ -290,7 +294,7 @@ export function registerDriveTools(registry: ToolRegistry, deps: DriveToolDeps):
           const workspacePath = safeRelPath(`documents/drive/${file.id}-${named}`);
           await deps.workspace.writeBytes(workspacePath, bytes, mime);
           try {
-            const result = await startDocumentIngest(db, {
+            const result = await startDocumentIngest(catalog, {
               agentId: ctx.agentId,
               title: (args.title || file.name || named).slice(0, 300),
               workspacePath,

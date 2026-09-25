@@ -10,8 +10,11 @@ import { documentsMeta } from './meta.js';
 
 export const documentsModule = defineModule<DocumentProcessorConfig | undefined>({
   meta: documentsMeta,
-  create: ({ config, registry, repoRoot, router, workspacePrefix, workspaceRoot }) => {
-    registerDocumentTools(registry, { embed: (texts) => router.embed(texts) });
+  create: ({ config, registry, repoRoot, router, workspacePrefix, workspaceRoot, persistence }) => {
+    registerDocumentTools(registry, {
+      embed: (texts) => router.embed(texts),
+      ...(persistence.documentSearch ? { search: persistence.documentSearch } : {}),
+    });
 
     const hooks: ModuleHooks = {
       /**

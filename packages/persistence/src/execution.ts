@@ -7,7 +7,7 @@ import type { CommitmentMaintenanceRepository } from './commitment-maintenance.j
 import type { CostRepository, MessageRepository } from './contracts.js';
 import type { DeviceTokenRepository } from './device-tokens.js';
 import type { ToolExecutionRepository } from './dispatch.js';
-import type { DocumentCatalogRepository } from './document-catalog.js';
+import type { DocumentCatalogRepository, DocumentSearchRepository } from './document-catalog.js';
 import type { EmailSyncRepository } from './email-sync.js';
 import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
@@ -89,4 +89,6 @@ export interface ExecutionPersistence {
   readonly emailSync?: EmailSyncRepository;
   /** Present where documents are catalogued portably (uploads, email attachments). */
   readonly documentCatalog?: DocumentCatalogRepository;
+  /** Present where document passages are searched portably. */
+  readonly documentSearch?: DocumentSearchRepository;
 }

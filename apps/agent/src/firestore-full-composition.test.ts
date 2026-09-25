@@ -51,7 +51,9 @@ const PORTABLE_TOOLS = [
   'docs.get',
   'docs.replace_text',
   'docs.share',
+  'documents.search',
   'drive.download',
+  'drive.ingest',
   'drive.read',
   'drive.search',
   'gmail.create_draft',
@@ -98,11 +100,7 @@ const PORTABLE_TOOLS = [
   'workspace.read',
   'workspace.write',
 ];
-const SQL_DEPENDENT_TOOLS = [
-  // Document library ingest and chunk search.
-  'drive.ingest',
-  'documents.search',
-];
+const SQL_DEPENDENT_TOOLS: string[] = [];
 
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
   'Firestore agent composition with every production module',
