@@ -118,6 +118,7 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.sweep_loops',
   'memory.consolidate',
   'memory.graph_sync',
+  'briefing.compose',
   'ambient.refresh',
   'health.monitor',
   'documents.extract',
@@ -387,7 +388,12 @@ export async function runCodeJob(
     }
     case 'briefing.compose': {
       await deps.heartbeat?.();
-      return { done: true, summary: briefingSummary(await runBriefing(deps, { taskId: task.id })) };
+      return {
+        done: true,
+        summary: briefingSummary(
+          await runBriefing(deps, { taskId: task.id, agentId: task.agentId }),
+        ),
+      };
     }
     case 'memory.consolidate': {
       await deps.heartbeat?.();

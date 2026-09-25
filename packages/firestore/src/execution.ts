@@ -3,6 +3,7 @@ import { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
 import { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 import { FirestoreApprovalRepository } from './approvals.js';
 import { FirestoreAssistantHealthRepository } from './assistant-health.js';
+import { FirestoreBriefingRepository } from './briefing.js';
 import { createFirestoreCardRefreshRepository } from './card-refresh.js';
 import { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import { FirestoreCostRepository } from './costs.js';
@@ -23,11 +24,12 @@ import { FirestoreMissionRepository } from './missions.js';
 import { FirestoreModelRoutingRepository } from './model-routing.js';
 import { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 import { FirestoreOwnerContextRepository } from './owner-context.js';
-import { FirestoreOwnerNoticeRepository } from './owner-notices.js';
+import { FirestoreOwnerNoticeRepository, firestoreOwnerNotices } from './owner-notices.js';
 import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 import { FirestoreReminderDeliveryRepository } from './reminders.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
 import type { InstallationStore } from './store.js';
+import { FirestoreSuggestionRepository } from './suggestions.js';
 import { FirestoreTaskRepository } from './task-lifecycle.js';
 import { FirestoreToolExecutionRepository } from './tool-execution.js';
 import { FirestoreWatchRepository } from './watches.js';
@@ -41,6 +43,7 @@ export function createFirestoreExecutionPersistence(
   tasks: FirestoreTaskRepository;
   maintenance: FirestoreMaintenanceRepository;
 } {
+  const notifications = new FirestoreOwnerNoticeRepository(store, agentId);
   return {
     driver: 'firestore',
     tasks: new FirestoreTaskRepository(store),
@@ -69,10 +72,13 @@ export function createFirestoreExecutionPersistence(
     assistantHealth: new FirestoreAssistantHealthRepository(store, agentId),
     reminderDelivery: new FirestoreReminderDeliveryRepository(store, agentId),
     maintenance: new FirestoreMaintenanceRepository(store, agentId, skillEmbeddingSpace),
-    notifications: new FirestoreOwnerNoticeRepository(store, agentId),
+    notifications,
     goals: new FirestoreGoalRuntimeRepository(store, agentId),
     missions: new FirestoreMissionRepository(store, agentId),
     ambientSnapshots: new FirestoreAmbientSnapshotRepository(store),
     commitmentMaintenance: new FirestoreCommitmentMaintenanceRepository(store),
+    ownerNotices: firestoreOwnerNotices(notifications),
+    suggestions: new FirestoreSuggestionRepository(store),
+    briefing: new FirestoreBriefingRepository(store),
   };
 }

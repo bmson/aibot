@@ -4,6 +4,7 @@ export { FirestoreApplicationChatPersistence } from './application-chat.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 export { FirestoreApprovalRepository } from './approvals.js';
 export { FirestoreAssistantHealthRepository } from './assistant-health.js';
+export { FirestoreBriefingRepository } from './briefing.js';
 export { FirestoreBudgetCapsRepository } from './budget-caps.js';
 export { createFirestoreCardRefreshRepository } from './card-refresh.js';
 export { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
@@ -83,7 +84,7 @@ export {
 export { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 export { FirestoreOwnerContextRepository } from './owner-context.js';
 export { FirestoreOwnerKnowledgeGraphFactRepository } from './owner-knowledge-graph-fact.js';
-export { FirestoreOwnerNoticeRepository } from './owner-notices.js';
+export { FirestoreOwnerNoticeRepository, firestoreOwnerNotices } from './owner-notices.js';
 export {
   getFirestoreMobilePeopleDirectory,
   getFirestorePeopleDirectory,
@@ -128,6 +129,7 @@ export { FirestoreSkillContextRepository } from './skill-context.js';
 export { FirestoreSkillMutationRepository } from './skill-mutations.js';
 export { createInstallationStore, InstallationStore } from './store.js';
 export { FirestoreSuggestionDecisionRepository } from './suggestion-decisions.js';
+export { FirestoreSuggestionRepository, suggestionIdFor } from './suggestions.js';
 export { FirestoreTaskActivityRepository } from './task-activity.js';
 export { FirestoreTaskActivityCommandRepository } from './task-activity-commands.js';
 export { FirestoreTaskRepository } from './task-lifecycle.js';
