@@ -1,12 +1,21 @@
+import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import type {
-  ExecutionJobInput,
-  ExecutionJobRepository,
-  ExecutionJobSettleResult,
-  Records,
-  TaskLease,
+import {
+  EXECUTION_JOB_CALLBACK_STATES,
+  type ExecutionJobCallbackDecision,
+  type ExecutionJobCallbackInput,
+  type ExecutionJobCallbackOutcome,
+  type ExecutionJobInput,
+  type ExecutionJobRepository,
+  type ExecutionJobSettleResult,
+  type Records,
+  type TaskLease,
 } from '@assistant/persistence';
-import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
+import { createWakeIntent } from './outbox.js';
+import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
+
+/** Artifact rows one callback transaction inventories before it fails explicitly. */
+const CALLBACK_FILE_LIMIT = 400;
 
 const PENDING_KINDS = new Set(['browser_job_pending', 'code_job_pending', 'document_job_pending']);
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -204,6 +213,68 @@ export class FirestoreExecutionJobRepository implements ExecutionJobRepository {
         startedAt: (toolRow.startedAt as Date | null) ?? null,
         decision: toolRow.decision,
       };
+    });
+  }
+
+  async recordCallback(
+    input: ExecutionJobCallbackInput,
+    decide: (task: Records['tasks'] | null) => ExecutionJobCallbackDecision,
+  ): Promise<ExecutionJobCallbackOutcome> {
+    if (input.files.length > CALLBACK_FILE_LIMIT)
+      throw new Error('Job reported more artifacts than one callback records');
+    return this.store.db.runTransaction(async (tx): Promise<ExecutionJobCallbackOutcome> => {
+      // The executor's settle reads this task and tool call in its own
+      // transaction, so whichever commits first wins and the other retries
+      // against the committed state: a result recorded here is never
+      // overwritten by a timeout, and a settled timeout is never revived.
+      const taskRef = this.store.doc('tasks', input.taskId);
+      const snapshot = await tx.get(taskRef);
+      const task = snapshot.exists ? decodeRecord<Records['tasks']>(snapshot.data()) : null;
+      const owned =
+        task !== null && task.id === input.taskId && documentKey(task.id) === snapshot.id;
+      const decision = decide(owned ? task : null);
+      if (!decision.accept) return { ok: false, status: decision.status, error: decision.error };
+      if (!owned || !task) throw new Error('execution job callback accepted a missing task');
+      if (!EXECUTION_JOB_CALLBACK_STATES.includes(task.status))
+        return { ok: false, status: 409, error: 'task is no longer waiting for this callback' };
+      const generation = task.queueGeneration + 1;
+      if (!Number.isSafeInteger(generation) || generation < 1)
+        throw new Error('Invalid task queue generation');
+      const toolRef = this.store.doc('toolCalls', decision.toolCallId);
+      const tool = await tx.get(toolRef);
+      const now = this.store.now();
+      if (tool.exists && tool.get('id') === decision.toolCallId && tool.get('taskId') === task.id)
+        tx.update(
+          toolRef,
+          encodeRecord({ status: 'succeeded', result: input.result, finishedAt: now }),
+        );
+      for (const file of input.files) {
+        const id = randomUUID();
+        tx.create(
+          this.store.doc('files', id),
+          encodeRecord({
+            id,
+            createdAt: now,
+            agentId: task.agentId,
+            taskId: task.id,
+            workspacePath: file.workspacePath,
+            mime: file.mime,
+            bytes: 0,
+            sha256: null,
+          }),
+        );
+      }
+      // Moving a running task to pending fences out the launching run's lease.
+      tx.update(taskRef, {
+        status: 'pending',
+        runAfter: null,
+        lockedUntil: null,
+        leaseToken: null,
+        queueGeneration: generation,
+        updatedAt: now,
+      });
+      createWakeIntent(tx, this.store, { taskId: task.id, generation, availableAt: now });
+      return { ok: true, taskId: task.id, queueGeneration: generation };
     });
   }
 }

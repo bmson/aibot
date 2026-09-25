@@ -1,6 +1,6 @@
 # Firestore agent runtime inventory
 
-Updated 2026-09-24. This lists every capability the production agent (`apps/agent`) enables and records whether it runs with zero SQL access when `PERSISTENCE_DRIVER=firestore` selects the Firestore composition in `apps/agent/src/deps.ts`. **Production still runs on PostgreSQL.** This inventory covers the agent only. Web and mobile routes are tracked separately.
+Updated 2026-09-25. This lists every capability the production agent (`apps/agent`) enables and records whether it runs with zero SQL access when `PERSISTENCE_DRIVER=firestore` selects the Firestore composition in `apps/agent/src/deps.ts`. **Production still runs on PostgreSQL.** This inventory covers the agent only. Web and mobile routes are tracked separately.
 
 Production composition: `assistant.config.ts` composes 11 modules, and `infra/gcp/deploy.sh` defaults `ASSISTANT_MODULES=all`. The agent runs with `QUEUE_DRIVER=cloudtasks`, one Cloud Scheduler `/internal/sweep` job per minute, Gmail sync/watch scheduler jobs, and optional canary jobs. `packages/db/src/seed.ts` seeds 19 proactive schedules.
 
@@ -32,7 +32,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | Seed/context window, owner replies while parked | Ready | `executionContext`. |
 | Planner, owner card, ambient, commitments, skills, history/graph recall, recall metrics | Ready | `firestore-executor.test.ts`, `firestore-chat.test.ts`. |
 | Tool dispatch, approvals, policies, cost reservations, idempotency, cache | Ready | `dispatcher.firestore.test.ts`, `firestore-approval.test.ts`. |
-| Browser/code job staging and settle | Ready | `executionJobs`. |
+| Browser/code job staging, callback, and settle | Ready | `executionJobs`. The `/webhooks/{browser,code}/callback` command keeps the hashed sentinel check, callback-versus-timeout ordering, lease fencing, and pending reservation settlement (`firestore-job-callbacks.test.ts`). |
 | Final delivery to the task's own chat, generated cards, response checks | Ready | |
 | Full composition with all 11 modules (construction + maintenance) | Ready in #387 | `firestore-full-composition.test.ts` checks that `createDb` is never called and every tool is classified. |
 | Final delivery for a conversation-less assistant task (e.g. seeded `tomorrow-check`) | SQL | `getOrCreateNotificationsConversation(db)` in `executor/finalize.ts`. |
@@ -76,8 +76,11 @@ Imported installations carry these schedules. On `main`, an SQL job's task fails
 | `expireStaleApprovals`, `resumeResolvedApprovalTasks`, `renotifyStalledApprovals` | Ready |
 | Watch expiry (`persistence.watches.expire`) | Ready |
 | `runDueSchedules` (portable runner) | Ready. Goal-linked schedules reject without a goal adapter. |
-| Stale cost-reservation release | Ready in #374 (`firestore-sweep.test.ts`). On `main`, held reservations are never released in Firestore mode. |
-| `expireStaleSuggestions`, `renotifyStalledAttention`, `emitBudgetNotices`, `backfillMessageEmbeddings`, `purgeExpired` (rest), `purgeAgedHistory`, `findDueTasks` backstop | SQL. The local drain covers `findDueTasks`. |
+| Stale cost-reservation release | Ready (`firestore-sweep.test.ts`). Runs inside `purgeExpired`, as in PostgreSQL. |
+| `expireStaleSuggestions`, `renotifyStalledAttention`, `emitBudgetNotices` | Ready (`MaintenanceRepository`, `firestore-sweep.test.ts`, `maintenance.test.ts`). Stalled-attention scans walk a durable cursor, so tasks whose notice fails cannot starve later ones. A budget notice and its dedupe key commit together. |
+| `backfillMessageEmbeddings` | Ready. Vectors are written only in `FIRESTORE_EMBEDDING_SPACE`, with matching space metadata, and only while the embed role produces that space. Messages are read in creation order behind a durable cursor that advances after the vectors are stored. A vector from another space is re-embedded. |
+| `purgeExpired`, `purgeAgedHistory` | Ready. They delete the same data classes as PostgreSQL, including its foreign-key effects: graph provenance for expired memories, recall feedback and card or commitment provenance for messages, captured prompts for model calls, and freed idempotency keys. They keep the same rows: segment anchors, and tool calls referenced by an approval or a retained cost event. Kept rows stay behind a durable cursor that rescans at most daily. `firestore-maintenance-parity.test.ts` runs both drivers on the same rows. |
+| `findDueTasks` backstop | Not needed. Every Firestore transition that makes a task runnable commits a durable wake intent. The local drain claims due tasks, and in Cloud Tasks mode the sweep reclaims expired leases and dispatches the outbox. |
 | Module sweep steps: watches `reapExpiredWatches`, `pollWebWatches` | Ready in #374. Steps marked `portable` run under Firestore. |
 | Module sweep step: google `reapExpiredApplicationWatches` | SQL |
 | Module poller ticks: google `email-sync` | SQL. Skipped under Firestore by #374, which runs only ticks marked `portable`. |
@@ -89,10 +92,10 @@ Imported installations carry these schedules. On `main`, an SQL job's task fails
 | reminders | Ready | `reminder.create/list/cancel` Ready | Delivery Ready (#368) | **Ready** (allowed) |
 | calendar | Ready | `calendar.*` reads (HTTP only) Ready | none | **Ready** (allowed) |
 | watches | Ready | `watch.create/list/cancel/web` Ready | email observers need google; sweep steps portable but not run | Disabled (config) |
-| search | Ready | `web.search` Ready in #381 (`CostRepository.record`) | none | Disabled (config) |
-| maps | Ready | `maps.directions` Ready in #381 (`ownerContext.getLatestLocation`) | none | Disabled (config) |
-| browser | Ready | `browser.plan/execute` staging Ready | `/webhooks/browser/callback` → `recordBrowserJobResult(db)` SQL | Disabled (config) |
-| code | Ready | `code.execute` staging Ready | `/webhooks/code/callback` → `recordCodeJobResult(db)` SQL | Disabled (config) |
+| search | Ready | `web.search` Ready in #381 (`CostRepository.record`) | none | Disabled (config); every row Ready |
+| maps | Ready | `maps.directions` Ready in #381 (`ownerContext.getLatestLocation`) | none | Disabled (config); every row Ready |
+| browser | Ready | `browser.plan/execute` staging Ready | `/webhooks/browser/callback` Ready (`executionJobs.recordCallback`) | Disabled (config); every row Ready |
+| code | Ready | `code.execute` staging Ready | `/webhooks/code/callback` Ready (`executionJobs.recordCallback`) | Disabled (config); every row Ready |
 | documents | Ready | `documents.search` SQL (pgvector chunks) | `/webhooks/document/callback`, `documents.process` SQL; `documents.extract` Ready | Disabled (config) |
 | push | Ready | none | owner notifier: device tokens via `getAgent`/`listActiveDeviceTokens(db)` SQL | Disabled (config) |
 | sms | Ready | `sms.send` voice rewrite (`loadVoiceContext(db)`) SQL | inbound `/webhooks/twilio/sms`, approval codes, final delivery, notifier: SQL | Disabled (config) |
@@ -119,8 +122,7 @@ The Firestore composition registers `memory.save`, `memory.recall`, `task.schedu
 Done in open PRs: portable sweep and reservation release (#374), explicit SQL-job skipping (#378), keyless lookup tools (#381), Cloud Tasks dispatch (#383), and the full-composition proof (#387).
 
 1. Port the Notifications-conversation final delivery and the goal-blocked write in the executor.
-2. Port the browser/code job callbacks (`recordBrowserJobResult`, `recordCodeJobResult`) to an execution-jobs callback command. Their launches already stage through execution persistence.
-3. Port the lightweight SQL code jobs next (`memory.sweep_loops`, `ambient.refresh`, `health.monitor`, `memory.graph_date_backfill`), then the model-backed proactive jobs.
-4. Large domains, each needing its own repository family: Gmail sync/ingest/delivery (google), SMS channel and approval codes, push device tokens and nudge policy, documents search/processor, missions, goals list/create, occasions/contacts/conversation search, situations, the remaining proactive code jobs, location ingest, and canaries.
+2. Port the lightweight SQL code jobs next (`memory.sweep_loops`, `ambient.refresh`, `health.monitor`, `memory.graph_date_backfill`), then the model-backed proactive jobs.
+3. Large domains, each needing its own repository family: Gmail sync/ingest/delivery (google), SMS channel and approval codes, push device tokens and nudge policy, documents search/processor, missions, goals list/create, occasions/contacts/conversation search, situations, the remaining proactive code jobs, location ingest, and canaries.
 
-Relaxing `validateAgentPersistenceConfig` for a module is safe only once every row for that module above is Ready.
+Relaxing `validateAgentPersistenceConfig` for a module is safe only once every row for that module above is Ready. Every row for search, maps, browser, and code is now Ready, so those modules are eligible; the allowlist still refuses them until it is relaxed deliberately.

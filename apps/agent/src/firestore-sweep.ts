@@ -1,17 +1,28 @@
+import { parseFirestoreEmbeddingSpace } from '@assistant/config';
 import {
+  backfillMessageEmbeddings,
   dispatchOutbox,
+  emitBudgetNotices,
   expireStaleApprovals,
+  expireStaleSuggestions,
   firestoreCodeJobUnavailable,
   getTaskQueue,
   isCodeJobEnabled,
-  releaseStaleReservations,
+  purgeAgedHistory,
+  purgeExpired,
   renotifyStalledApprovals,
+  renotifyStalledAttention,
   resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
 import { FirestoreOutbox, FirestoreScheduleRepository } from '@assistant/firestore';
 import type { TaskQueue } from '@assistant/persistence';
-import { type AgentDeps, agentServices, firestoreMaintenanceReady } from './deps.js';
+import {
+  type AgentDeps,
+  agentServices,
+  firestoreMaintenanceReady,
+  pinnedMemoryEmbed,
+} from './deps.js';
 import { executorDeps } from './executor-deps.js';
 
 export type FirestoreSweepResult =
@@ -25,6 +36,10 @@ export type FirestoreSweepResult =
  * steps that run on portable repositories are here. Module steps and ticks
  * that still need PostgreSQL are skipped until they declare themselves
  * portable.
+ *
+ * PostgreSQL's `findDueTasks` backstop has no counterpart: every Firestore
+ * transition that makes a task runnable commits a durable wake intent, which
+ * the local drain or the Cloud Tasks dispatch below delivers.
  */
 export async function runFirestoreSweep(
   deps: AgentDeps,
@@ -40,7 +55,8 @@ export async function runFirestoreSweep(
 
   const store = deps.firestoreStore;
   const persistence = deps.persistence;
-  if (!store || persistence?.driver !== 'firestore')
+  const maintenance = persistence?.maintenance;
+  if (!store || persistence?.driver !== 'firestore' || !maintenance)
     return { ready: false, error: 'Firestore maintenance persistence is unavailable' };
   let timezone: string | undefined;
   try {
@@ -66,10 +82,14 @@ export async function runFirestoreSweep(
       return 0;
     }
   };
+  let releasedReservations = 0;
   const report: Record<string, number> = {
     expiredApprovalsWoke: await step(
       'expireStaleApprovals',
       async () => (await expireStaleApprovals(persistence.approvals)).length,
+    ),
+    expiredSuggestions: await step('expireStaleSuggestions', () =>
+      expireStaleSuggestions(maintenance),
     ),
     resumedApprovalTasks: await step(
       'resumeResolvedApprovalTasks',
@@ -77,6 +97,12 @@ export async function runFirestoreSweep(
     ),
     renotifiedApprovals: await step('renotifyStalledApprovals', () =>
       renotifyStalledApprovals(persistence, executorDeps(deps).notifyApproval),
+    ),
+    renotifiedAttention: await step('renotifyStalledAttention', () =>
+      renotifyStalledAttention(
+        { maintenance, tasks: persistence.tasks },
+        executorDeps(deps).notifyOwner,
+      ),
     ),
     expiredWatches: await step('expireWatches', () =>
       persistence.watches.expire(deps.config.FIRESTORE_AGENT_ID, new Date()),
@@ -94,12 +120,43 @@ export async function runFirestoreSweep(
         console.log(`schedule fired: ${item.schedule} → ${item.taskId.slice(0, 8)}`);
       return fired.length;
     }),
-    // A held reservation whose task died before settling would otherwise keep
-    // counting against the budget forever. PostgreSQL does this in purgeExpired.
-    releasedReservations: await step('releaseStaleReservations', () =>
-      releaseStaleReservations(persistence.costs, 120, 500),
+    budgetNotices: await step(
+      'emitBudgetNotices',
+      async () =>
+        (
+          await emitBudgetNotices(
+            { costs: persistence.costs, maintenance },
+            deps.config.FIRESTORE_AGENT_ID,
+          )
+        ).length,
+    ),
+    // Vectors are written only in the configured Firestore embedding space,
+    // and only while the embed role still produces that space.
+    messagesEmbedded: await step('backfillMessageEmbeddings', () =>
+      backfillMessageEmbeddings(maintenance, {
+        embed: pinnedMemoryEmbed(
+          parseFirestoreEmbeddingSpace(deps.config.FIRESTORE_EMBEDDING_SPACE),
+          persistence.modelRouting,
+          (texts) => deps.router.embed(texts),
+        ),
+      }),
+    ),
+    // Expiry includes releasing held reservations whose task died before
+    // settling, which would otherwise count against the budget forever.
+    purgedExpired: await step('purgeExpired', async () => {
+      const { reservations, ...rest } = await purgeExpired({
+        maintenance,
+        costs: persistence.costs,
+        recallMetrics: persistence.recallMetrics,
+      });
+      releasedReservations = reservations;
+      return Object.values(rest).reduce((sum, count) => sum + count, 0);
+    }),
+    agedHistory: await step('purgeAgedHistory', async () =>
+      Object.values(await purgeAgedHistory(maintenance)).reduce((sum, count) => sum + count, 0),
     ),
   };
+  report.releasedReservations = releasedReservations;
   for (const sweepStep of deps.modules.sweepSteps) {
     if (!sweepStep.portable) continue;
     report[sweepStep.reportKey ?? sweepStep.name] = await step(sweepStep.name, () =>

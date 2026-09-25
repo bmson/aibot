@@ -10,6 +10,7 @@ import { FirestoreGeneratedCardRepository } from './generated-cards.js';
 import { FirestoreGraphRecallRepository } from './graph-recall.js';
 import { FirestoreHistoryRecallRepository } from './history-recall.js';
 import { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
+import { FirestoreMaintenanceRepository } from './maintenance.js';
 import { FirestoreMemoryConsolidationRepository } from './memory-consolidation.js';
 import { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 import { FirestoreMemoryToolRepository } from './memory-tools.js';
@@ -30,7 +31,10 @@ export function createFirestoreExecutionPersistence(
   store: InstallationStore,
   agentId: string,
   skillEmbeddingSpace: EmbeddingSpace,
-): ExecutionPersistence & { tasks: FirestoreTaskRepository } {
+): ExecutionPersistence & {
+  tasks: FirestoreTaskRepository;
+  maintenance: FirestoreMaintenanceRepository;
+} {
   return {
     driver: 'firestore',
     tasks: new FirestoreTaskRepository(store),
@@ -57,5 +61,6 @@ export function createFirestoreExecutionPersistence(
     recallMetrics: new FirestoreRecallMetricsRepository(store),
     watches: new FirestoreWatchRepository(store),
     reminderDelivery: new FirestoreReminderDeliveryRepository(store, agentId),
+    maintenance: new FirestoreMaintenanceRepository(store, agentId, skillEmbeddingSpace),
   };
 }

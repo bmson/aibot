@@ -10,6 +10,12 @@ import {
   toolCache,
   toolCalls,
 } from '@assistant/db';
+import type {
+  AgedHistoryCounts,
+  CostRepository,
+  MaintenanceRepository,
+  RecallMetricsRepository,
+} from '@assistant/persistence';
 import { and, eq, inArray, isNotNull, isNull, lt, lte, notExists, or, sql } from 'drizzle-orm';
 import { loadConfig } from '../config.js';
 import { releaseStaleReservations } from '../cost.js';
@@ -25,10 +31,16 @@ import { purgeStaleDreamNotes } from './dream.js';
  * sweep; small batches keep cost negligible (~$0.02 per MILLION tokens).
  */
 export async function backfillMessageEmbeddings(
-  db: Db,
-  router: ModelRouter,
+  store: Db | MaintenanceRepository,
+  router: Pick<ModelRouter, 'embed'>,
   batch = 20,
 ): Promise<number> {
+  if ('kind' in store && store.kind === 'maintenance-repository')
+    return (store as MaintenanceRepository).embedMissingMessages({
+      batch,
+      embed: (texts) => router.embed(texts.map((text) => text.slice(0, 4000))),
+    });
+  const db = store as Db;
   const rows = await db
     .select({ id: messages.id, text: messages.text })
     .from(messages)
@@ -80,9 +92,16 @@ export async function purgeStaleModelCallAudit(
   return deleted.length;
 }
 
+/** The portable stores the expiry pass needs. */
+export interface ExpiryStores {
+  maintenance: MaintenanceRepository;
+  costs: CostRepository;
+  recallMetrics: RecallMetricsRepository;
+}
+
 /** Purge expired tool-cache rows and expired memories. */
 export async function purgeExpired(
-  db: Db,
+  store: Db | ExpiryStores,
   batch = 500,
 ): Promise<{
   cache: number;
@@ -94,6 +113,22 @@ export async function purgeExpired(
   proactivePings: number;
   modelCallAudit: number;
 }> {
+  if ('maintenance' in store) {
+    const config = loadConfig();
+    // The same retention windows as the PostgreSQL purges below.
+    const [purged, reservations, recallMetrics] = await Promise.all([
+      store.maintenance.purgeExpired({
+        batch,
+        locationRetentionDays: config.LOCATION_RETENTION_DAYS,
+        proactivePingRetentionDays: 90,
+        auditRetentionDays: config.LLM_AUDIT_RETENTION_DAYS,
+      }),
+      releaseStaleReservations(store.costs, 120, batch),
+      purgeStaleRecallMetrics(store.recallMetrics, 90, batch),
+    ]);
+    return { ...purged, reservations, recallMetrics };
+  }
+  const db = store as Db;
   const expiredCache = db
     .select({ id: toolCache.cacheKey })
     .from(toolCache)
@@ -144,12 +179,7 @@ export async function purgeExpired(
   };
 }
 
-export interface AgedHistoryCounts {
-  messages: number;
-  toolCalls: number;
-  modelCalls: number;
-  costEvents: number;
-}
+export type { AgedHistoryCounts } from '@assistant/persistence';
 
 /**
  * Age-based retention for the four tables that otherwise grow without bound:
@@ -166,13 +196,16 @@ export interface AgedHistoryCounts {
  *   own retention passes.
  */
 export async function purgeAgedHistory(
-  db: Db,
+  store: Db | MaintenanceRepository,
   overrides?: { historyDays?: number; costDays?: number; batch?: number },
 ): Promise<AgedHistoryCounts> {
   const config = loadConfig();
   const historyDays = overrides?.historyDays ?? config.HISTORY_RETENTION_DAYS;
   const costDays = overrides?.costDays ?? config.COST_RETENTION_DAYS;
   const batch = overrides?.batch ?? 1000;
+  if ('kind' in store && store.kind === 'maintenance-repository')
+    return (store as MaintenanceRepository).purgeAgedHistory({ historyDays, costDays, batch });
+  const db = store as Db;
   const counts: AgedHistoryCounts = { messages: 0, toolCalls: 0, modelCalls: 0, costEvents: 0 };
 
   // Cost first: deleting an aged cost event frees its tool_call for the

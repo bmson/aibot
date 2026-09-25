@@ -177,8 +177,8 @@ export async function resumePendingJob(rc: RunContext): Promise<void> {
   // check below puts the task back to sleep until the job's timeout.
   if (state.pendingJob) {
     const pending = state.pendingJob;
-    // Settle under a task-row lock. recordBrowserJobResult also locks the task
-    // FOR UPDATE before replacing the sentinel, so serializing here closes the
+    // Settle under a task-row lock. The job callback reads the task under the
+    // same lock before replacing the sentinel, so serializing here closes the
     // window where a late callback commits the real result between our read and
     // a timeout write that would otherwise clobber it. The timeout failure is
     // written only while the sentinel is still present; a real result wins.
