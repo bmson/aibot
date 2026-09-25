@@ -32,12 +32,14 @@ vi.mock('@assistant/core', async (importOriginal) => {
 import { notifyApprovalsBySms, notifyOwnerBySms, type SmsChannelDeps } from './channel.js';
 
 function fakeDeps(): SmsChannelDeps {
-  // The channel rate-limit lookup runs before every send; an empty result
-  // means "no limit configured", which keeps these tests about budgeting.
-  const noRows = { from: () => ({ where: async () => [] }) };
+  // The channel rate-limit check runs before every send; an open channel keeps
+  // these tests about budgeting.
   return {
     config: { OWNER_PHONE: '+14155550100' } as SmsChannelDeps['config'],
-    db: { select: () => noRows } as unknown as SmsChannelDeps['db'],
+    persistence: {
+      smsChannel: { underChannelLimit: async () => true },
+    } as unknown as SmsChannelDeps['persistence'],
+    owner: async () => ({ id: 'owner' }),
     twilio: {
       configured: () => true,
       send: async () => ({ sid: 'SM-fake' }),

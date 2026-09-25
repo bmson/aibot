@@ -35,7 +35,7 @@ const unconfiguredGoogleClient = () =>
 export const googleModule = defineModule<GoogleClient>({
   meta: googleMeta,
   absent: unconfiguredGoogleClient,
-  create: ({ config, db, registry, router, workspace }) => {
+  create: ({ config, db, registry, router, workspace, persistence }) => {
     const client = new GoogleClient({
       clientId: config.GOOGLE_OAUTH_CLIENT_ID,
       clientSecret: config.GOOGLE_OAUTH_CLIENT_SECRET,
@@ -174,7 +174,7 @@ export const googleModule = defineModule<GoogleClient>({
       text: string,
       register: 'email_casual' | 'email_professional',
     ) => {
-      const voice = await loadVoiceContext(db, router, register, text);
+      const voice = await loadVoiceContext(persistence.voiceContext ?? db, router, register, text);
       const result = await rewriteInVoice(router, { draft: text, register, context: voice });
       return { text: appendSignature(result.text, voice.signature), flagged: result.flagged };
     };

@@ -49,9 +49,11 @@ const PORTABLE_TOOLS = [
   'drive.download',
   'drive.read',
   'drive.search',
+  'gmail.create_draft',
   'gmail.modify',
   'gmail.read_thread',
   'gmail.search',
+  'gmail.send',
   'goals.create',
   'goals.list',
   'goals.update_progress',
@@ -76,6 +78,7 @@ const PORTABLE_TOOLS = [
   'situations.sources',
   'slides.append',
   'slides.create',
+  'sms.send',
   'sports.scores',
   'task.schedule',
   'tools.read_result',
@@ -91,10 +94,6 @@ const PORTABLE_TOOLS = [
   'workspace.write',
 ];
 const SQL_DEPENDENT_TOOLS = [
-  // Voice rewrite reads the writing-sample corpus (loadVoiceContext).
-  'gmail.create_draft',
-  'gmail.send',
-  'sms.send',
   // Document library ingest and chunk search.
   'drive.ingest',
   'documents.search',
@@ -204,7 +203,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
           ASSISTANT_WORKSPACE_ID: installationId,
         }),
       ).toContain(
-        'ASSISTANT_MODULES=documents,google,sms still needs PostgreSQL; Firestore agent mode supports reminders,calendar,browser,code,search,maps,watches,push',
+        'ASSISTANT_MODULES=documents,google still needs PostgreSQL; Firestore agent mode supports reminders,calendar,browser,code,search,maps,watches,push,sms',
       );
     });
   },

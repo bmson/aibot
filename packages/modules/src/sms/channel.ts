@@ -2,7 +2,6 @@ import type { Config } from '@assistant/config';
 import {
   BudgetReservationError,
   enqueueTask,
-  getAgent,
   getRate,
   persistMessage,
   reconcileReservation,
@@ -11,20 +10,10 @@ import {
   resolveApproval,
 } from '@assistant/core';
 import { truncateAtBoundary } from '@assistant/core/owner-text';
-import {
-  approvals,
-  channelBindings,
-  conversations,
-  costEvents,
-  type Db,
-  rateLimits,
-  type TaskRow,
-  toolCalls,
-} from '@assistant/db';
+import type { ExecutionPersistence, Records, SmsChannelRepository } from '@assistant/persistence';
 import { isAmbiguousTwilioDeliveryError, parseApprovalReply } from '@assistant/tools';
 import type { TwilioClient } from '@assistant/tools/modules/sms';
 import type { ToolRegistry } from '@assistant/tools/registry';
-import { and, eq, gte, sql } from 'drizzle-orm';
 
 /**
  * What the SMS channel actually consumes — the module builds this from its
@@ -33,9 +22,14 @@ import { and, eq, gte, sql } from 'drizzle-orm';
  */
 export interface SmsChannelDeps {
   config: Config;
-  db: Db;
   registry: ToolRegistry;
   twilio: TwilioClient;
+  /** Metering, approvals, messages, and tasks, plus the channel's own state. */
+  persistence: Pick<ExecutionPersistence, 'costs' | 'approvals' | 'messages' | 'tasks'> & {
+    smsChannel: SmsChannelRepository;
+  };
+  /** The owner an inbound SMS belongs to. */
+  owner: () => Promise<{ id: string }>;
 }
 
 export interface InboundSms {
@@ -57,29 +51,8 @@ export type SmsHandled =
  * `tool:sms.send` limit alone misses the channel deliverers, which is how a
  * notification loop could otherwise spend without a ceiling.
  */
-async function underSmsChannelLimit(deps: SmsChannelDeps): Promise<boolean> {
-  const [limit] = await deps.db
-    .select()
-    .from(rateLimits)
-    .where(eq(rateLimits.scope, 'channel:sms'));
-  if (!limit) return true;
-
-  const countSince = async (interval: string) => {
-    const [row] = await deps.db
-      .select({ n: sql<number>`count(*)` })
-      .from(costEvents)
-      .where(
-        and(
-          eq(costEvents.source, 'twilio_sms'),
-          gte(costEvents.createdAt, sql`now() - ${interval}::interval`),
-        ),
-      );
-    return Number(row?.n ?? 0);
-  };
-
-  if (limit.maxPerHour !== null && (await countSince('1 hour')) >= limit.maxPerHour) return false;
-  if (limit.maxPerDay !== null && (await countSince('1 day')) >= limit.maxPerDay) return false;
-  return true;
+function underSmsChannelLimit(deps: SmsChannelDeps): Promise<boolean> {
+  return deps.persistence.smsChannel.underChannelLimit(new Date());
 }
 
 class SmsChannelRateLimitError extends Error {
@@ -104,8 +77,9 @@ async function sendMeteredSms(
     // re-running the model, so failing here is safe and visible.
     throw new SmsChannelRateLimitError();
   }
-  const rate = await getRate(deps.db, 'twilio_sms');
-  const reservation = await reserveCost(deps.db, {
+  const costs = deps.persistence.costs;
+  const rate = await getRate(costs, 'twilio_sms');
+  const reservation = await reserveCost(costs, {
     source: 'twilio_sms',
     estimatedUsd: rate.unitPriceUsd,
     taskId: input.taskId,
@@ -116,7 +90,7 @@ async function sendMeteredSms(
     throw new BudgetReservationError(reservation.reason, reservation.resumeAt);
   }
   const reconcileAttempt = () =>
-    reconcileReservation(deps.db, reservation.reservationId, {
+    reconcileReservation(costs, reservation.reservationId, {
       usd: rate.unitPriceUsd,
       quantity: 1,
       unit: rate.unit,
@@ -137,7 +111,7 @@ async function sendMeteredSms(
       console.error('SMS delivery outcome is unknown; automatic retry suppressed', error);
       return { deliveryStatus: 'unknown' };
     }
-    await releaseReservation(deps.db, reservation.reservationId).catch(() => {});
+    await releaseReservation(costs, reservation.reservationId).catch(() => {});
     throw error;
   }
 
@@ -166,30 +140,6 @@ export async function sendCanarySms(
   });
 }
 
-async function conversationForPeer(
-  deps: SmsChannelDeps,
-  agentId: string,
-  peer: string,
-  trust: 'owner' | 'unknown',
-): Promise<string> {
-  const [binding] = await deps.db
-    .select()
-    .from(channelBindings)
-    .where(and(eq(channelBindings.channel, 'sms'), eq(channelBindings.externalId, peer)));
-  if (binding) return binding.conversationId;
-
-  const [conversation] = await deps.db
-    .insert(conversations)
-    .values({ agentId, channel: 'sms', trust, title: `SMS ${peer}` })
-    .returning();
-  if (!conversation) throw new Error('failed to create sms conversation');
-  await deps.db
-    .insert(channelBindings)
-    .values({ conversationId: conversation.id, channel: 'sms', externalId: peer })
-    .onConflictDoNothing();
-  return conversation.id;
-}
-
 /**
  * Inbound SMS → approval resolution ("YES A7", owner only) or an sms_turn
  * workflow. Idempotent on MessageSid.
@@ -202,7 +152,7 @@ export async function handleInboundSms(deps: SmsChannelDeps, sms: InboundSms): P
   // enqueue model work, or obtain an automated response.
   if (!isOwner) return { kind: 'ignored', reason: 'sms sender is not paired owner' };
 
-  const agent = await getAgent(deps.db);
+  const agent = await deps.owner();
 
   const approvalReply = parseApprovalReply(sms.body);
   if (approvalReply) {
@@ -211,13 +161,10 @@ export async function handleInboundSms(deps: SmsChannelDeps, sms: InboundSms): P
     // writes durable memory must be reviewed on the authenticated dashboard,
     // where the exact arguments are visible. Enforced server-side here, not
     // just in the notification copy.
-    const [pending] = await deps.db
-      .select({ toolName: toolCalls.toolName })
-      .from(approvals)
-      .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
-      .where(and(eq(approvals.shortCode, approvalReply.shortCode), eq(approvals.status, 'pending')))
-      .limit(1);
-    if (pending && !deps.registry.smsApprovable(pending.toolName)) {
+    const pendingTool = await deps.persistence.smsChannel.pendingApprovalTool(
+      approvalReply.shortCode,
+    );
+    if (pendingTool && !deps.registry.smsApprovable(pendingTool)) {
       await notifyOwnerBySms(deps, {
         text: `Approval ${approvalReply.shortCode} can only be confirmed on the dashboard — it sends, spends, or stores something, so I need you to review the exact details on the Approvals page.`,
       }).catch((err) => console.error('sms restricted-approval notice failed', err));
@@ -228,7 +175,7 @@ export async function handleInboundSms(deps: SmsChannelDeps, sms: InboundSms): P
         decision: approvalReply.decision,
       };
     }
-    const result = await resolveApproval(deps.db, {
+    const result = await resolveApproval(deps.persistence.approvals, {
       shortCode: approvalReply.shortCode,
       decision: approvalReply.decision,
       via: 'sms',
@@ -242,8 +189,12 @@ export async function handleInboundSms(deps: SmsChannelDeps, sms: InboundSms): P
   }
 
   const trust = 'owner' as const;
-  const conversationId = await conversationForPeer(deps, agent.id, sms.from, trust);
-  await persistMessage(deps.db, {
+  const conversationId = await deps.persistence.smsChannel.conversationForPeer(
+    agent.id,
+    sms.from,
+    trust,
+  );
+  await persistMessage(deps.persistence.messages, {
     conversationId,
     role: 'user',
     origin: 'owner',
@@ -252,7 +203,7 @@ export async function handleInboundSms(deps: SmsChannelDeps, sms: InboundSms): P
     channelMessageId: `sms:${sms.messageSid}`,
   });
 
-  const { task, created } = await enqueueTask(deps.db, {
+  const { task, created } = await enqueueTask(deps.persistence.tasks, {
     type: 'sms_turn',
     event: {
       source: 'sms',
@@ -269,27 +220,15 @@ export async function handleInboundSms(deps: SmsChannelDeps, sms: InboundSms): P
 /** Executor hook: deliver a finished sms_turn's final text back to the peer. */
 export async function deliverSmsFinal(
   deps: SmsChannelDeps,
-  task: Pick<TaskRow, 'id' | 'conversationId' | 'trust'>,
+  task: Pick<Records['tasks'], 'id' | 'conversationId' | 'trust'>,
   text: string,
 ): Promise<void> {
   if (task.trust !== 'owner' || !task.conversationId || !deps.twilio.configured()) return;
-  const [conversation] = await deps.db
-    .select()
-    .from(conversations)
-    .where(eq(conversations.id, task.conversationId));
-  if (conversation?.channel !== 'sms' || conversation.trust !== 'owner') return;
-  const [binding] = await deps.db
-    .select()
-    .from(channelBindings)
-    .where(
-      and(
-        eq(channelBindings.conversationId, task.conversationId),
-        eq(channelBindings.channel, 'sms'),
-      ),
-    );
-  if (!binding || binding.externalId !== deps.config.OWNER_PHONE) return;
+  const destination = await deps.persistence.smsChannel.finalDestination(task.conversationId);
+  if (destination?.channel !== 'sms' || destination.trust !== 'owner') return;
+  if (!destination.externalId || destination.externalId !== deps.config.OWNER_PHONE) return;
   await sendMeteredSms(deps, {
-    to: binding.externalId,
+    to: destination.externalId,
     text: truncateAtBoundary(text, 1500),
     taskId: task.id,
     description: 'owner SMS task reply',

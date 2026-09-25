@@ -159,11 +159,15 @@ export const composedModuleMetas: readonly ModuleMeta[] = collectModuleMetas(com
  * else consumes the owner-notifier port.
  */
 export function smsDeps(deps: AgentDeps): SmsChannelDeps {
+  const persistence = deps.persistence ?? createPostgresExecutionPersistence(deps.db);
+  const { smsChannel } = persistence;
+  if (!smsChannel) throw new Error('sms: persistence has no SMS channel repository');
   return {
     config: deps.config,
-    db: deps.db,
     registry: deps.registry,
     twilio: deps.modules.requireExports(smsModule),
+    persistence: { ...persistence, smsChannel },
+    owner: () => getAgent(deps.db),
   };
 }
 
