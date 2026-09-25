@@ -1,6 +1,7 @@
 import { getAgent } from '@assistant/core/chat';
-import { DeviceTokenRegistrationSchema, upsertDeviceToken } from '@assistant/core/push/devices';
-import type { Db } from '@assistant/db';
+import { DeviceTokenRegistrationSchema } from '@assistant/core/push/devices';
+import { createPostgresDeviceTokenRepository, type Db } from '@assistant/db';
+import type { DeviceTokenRepository } from '@assistant/persistence';
 
 export type DeviceTokenResult = { ok: true } | { ok: false; error: string; status: 400 };
 
@@ -14,6 +15,18 @@ export async function registerDeviceToken(db: Db, body: unknown): Promise<Device
   const parsed = DeviceTokenRegistrationSchema.safeParse(body);
   if (!parsed.success) return { ok: false, error: 'invalid device token', status: 400 };
   const agent = await getAgent(db);
-  await upsertDeviceToken(db, agent.id, parsed.data);
+  await createPostgresDeviceTokenRepository(db).register(agent.id, parsed.data);
+  return { ok: true };
+}
+
+/** The same validation and idempotent registration through a portable repository. */
+export async function registerDeviceTokenWithRepository(
+  repository: DeviceTokenRepository,
+  agentId: string,
+  body: unknown,
+): Promise<DeviceTokenResult> {
+  const parsed = DeviceTokenRegistrationSchema.safeParse(body);
+  if (!parsed.success) return { ok: false, error: 'invalid device token', status: 400 };
+  await repository.register(agentId, parsed.data);
   return { ok: true };
 }
