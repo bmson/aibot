@@ -41,6 +41,7 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
   const fileId = randomUUID();
   const otherFileId = randomUUID();
   let uploadedDocumentId: string | undefined;
+  let uploadedTaskId: string | undefined;
   const store = createInstallationStore({
     projectId: 'demo-assistant-test',
     installationId,
@@ -262,8 +263,12 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
     const task = tasks.docs[0];
     if (!task) throw new Error('document task was not persisted');
     expect(task?.get('trigger.payload.job')).toBe('documents.extract');
+    // The Firestore document key is an encoding of the record id; the wake
+    // intent is keyed by the task record id.
+    const taskId = String(task.get('id'));
+    uploadedTaskId = taskId;
     const wake = await store
-      .doc('outbox', wakeIntentId(task.id, Number(task.get('queueGeneration'))))
+      .doc('outbox', wakeIntentId(taskId, Number(task.get('queueGeneration'))))
       .get();
     expect(wake.exists).toBe(true);
     expect(wake.get('status')).toBe('pending');
@@ -325,7 +330,11 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
       expect.arrayContaining([documentId, uploadedDocumentId]),
     );
     expect(overview.documents.stats).toEqual({ total: 2, ready: 1, pending: 1, chunks: 2 });
-    expect(overview.activity).toEqual({ items: [], archivedCount: 0 });
+    // The extraction task queued by the text upload above is ordinary activity.
+    expect(overview.activity).toMatchObject({
+      items: [{ id: uploadedTaskId, status: 'pending', type: 'adhoc', trust: 'assistant' }],
+      archivedCount: 0,
+    });
     expect(overview.goals).toEqual({ items: [], archivedCount: 0 });
     expect(overview.approvals).toEqual({ pending: [], resolved: [] });
   });
