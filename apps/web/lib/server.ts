@@ -53,6 +53,7 @@ import {
   purgeImportedSource,
   recordOwnerForeground,
   recordOwnerLocationPing,
+  recordOwnerLocationPingWithRepository,
   recordRecallFeedback,
   recordRecallFeedbackWithRepository,
   registerDeviceToken,
@@ -105,6 +106,7 @@ import {
   createInstallationStore,
   FirestoreApplicationChatPersistence,
   FirestoreGoalMutationRepository,
+  FirestoreLocationPingRepository,
   FirestoreMcpConnectionMutationRepository,
   FirestoreOwnerKnowledgeGraphFactRepository,
   FirestoreRecallFeedbackRepository,
@@ -519,6 +521,7 @@ function createFirestoreChatApplication() {
     embed: (texts: string[]) =>
       router.embed(texts, { expectedModelId: embeddingModelId(embeddingSpace) }),
   };
+  const locationPings = new FirestoreLocationPingRepository(store);
   const chatReads = { chat, generatedCards: persistence.generatedCards };
   const settings = createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID);
   const skillMutations = new FirestoreSkillMutationRepository(store, embeddingSpace);
@@ -554,6 +557,15 @@ function createFirestoreChatApplication() {
     return embedSkillText(skillEmbeddingText(input));
   };
   return {
+    recordOwnerLocationPing: async (body: unknown) => {
+      const agent = await chat.resolveAgent();
+      return recordOwnerLocationPingWithRepository(
+        locationPings,
+        persistence.tasks,
+        { id: agent.id, timezone: agent.timezone || 'UTC' },
+        body,
+      );
+    },
     addOwnerKnowledgeGraphFact: (input: {
       subjectLabel: string;
       subjectKind: string;
@@ -694,4 +706,9 @@ export function getWorkspaceSettings() {
   return loadConfig().PERSISTENCE_DRIVER === 'firestore'
     ? getFirestoreChatApplication().getWorkspaceSettings()
     : getApplication().getSettings();
+}
+
+/** Record an owner location ping and run the arrival hook with the configured driver. */
+export function recordOwnerLocation(body: unknown) {
+  return getChatApplication().recordOwnerLocationPing(body);
 }

@@ -27,6 +27,7 @@ export {
 } from './knowledge-graph-read.js';
 export { FirestoreKnowledgeGraphRelationMutationRepository } from './knowledge-graph-relation-mutations.js';
 export { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
+export { FirestoreLocationPingRepository } from './location-pings.js';
 export type { McpDiscoveryResult } from './mcp-connections.js';
 export {
   FirestoreMcpConnectionMutationRepository,
