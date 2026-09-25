@@ -4,11 +4,9 @@ import {
   addPersonOccasion,
   createPerson,
   deletePerson,
-  forgetLongTermMemoryWithRepository,
   forgetPersonOccasion,
   mergePeople,
   type OrganizeMemoryState,
-  organizeMemoryNow,
   type PersonOccasionInput,
   type ProminenceLevel,
   purgeProfileVoiceSamples,
@@ -22,7 +20,6 @@ import {
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import {
   FirestoreOwnerCardCompilationRepository,
-  FirestorePrivacyErasureRepository,
   FirestoreVoiceProfileRepository,
   readPrivacyErasureFence,
 } from '@assistant/firestore';
@@ -32,7 +29,14 @@ import {
   getFirestoreProfileCommands,
   recompileFirestoreProfileCard,
 } from '@/lib/firestore-profile-commands';
-import { getApplication, getDb, getFirestoreInstallationStore, getWorkspace } from '@/lib/server';
+import { forgetOwnerLongTermMemory } from '@/lib/memory-erasure';
+import {
+  getApplication,
+  getDb,
+  getFirestoreInstallationStore,
+  getWorkspace,
+  organizeOwnerMemoryNow,
+} from '@/lib/server';
 
 export type { OrganizeMemoryState, ProminenceLevel } from '@assistant/application/profile';
 
@@ -198,7 +202,7 @@ export async function consolidateNow(
   _formData: FormData,
 ): Promise<OrganizeMemoryState> {
   await requireOwner();
-  const result = await organizeMemoryNow(getDb());
+  const result = await organizeOwnerMemoryNow();
   revalidateProfile();
   return result;
 }
@@ -224,22 +228,7 @@ export async function purgeVoiceSamplesAction(): Promise<void> {
 /** Irreversible owner control for the data that drives recall and voice imitation. */
 export async function forgetLongTermMemoryAction(): Promise<void> {
   await requireOwner();
-  const config = loadConfig();
-  if (config.PERSISTENCE_DRIVER === 'firestore') {
-    const problems = validateAgentPersistenceConfig(config);
-    if (config.FILES_DRIVER === 'gcs' && !config.WORKSPACE_BUCKET.trim())
-      problems.push('WORKSPACE_BUCKET is required for Firestore memory erasure');
-    if (problems.length) throw new Error(problems.join('; '));
-    await forgetLongTermMemoryWithRepository(
-      new FirestorePrivacyErasureRepository(
-        getFirestoreInstallationStore(),
-        config.FIRESTORE_AGENT_ID,
-      ),
-      getWorkspace(),
-    );
-  } else {
-    await getApplication().forgetLongTermMemory();
-  }
+  await forgetOwnerLongTermMemory();
   revalidateProfile();
   revalidatePath('/chat', 'layout');
 }

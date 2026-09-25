@@ -17,6 +17,7 @@ export { FirestoreGeneratedCardRepository } from './generated-cards.js';
 export { FirestoreGoalMutationRepository } from './goal-mutations.js';
 export { FirestoreGoalProgressRepository } from './goal-progress.js';
 export { FirestoreGoalReadRepository } from './goals.js';
+export { FirestoreActiveJobLookup } from './active-jobs.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { FirestoreImportOverviewRepository } from './import-overview.js';

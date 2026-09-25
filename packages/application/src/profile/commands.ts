@@ -6,6 +6,7 @@ import { purgeVoiceSamples } from '@assistant/core/memory/voice-ingest';
 import { enqueueTask } from '@assistant/core/workflow/machine';
 import {
   contacts,
+  createPostgresActiveJobLookup,
   createPostgresOwnerCardCompilationRepository,
   createPostgresProfileMemoryMaintenance,
   createPostgresProfileMemoryManagementRepository,
@@ -15,11 +16,11 @@ import {
   normalizeContactAliases,
   normalizeContactName,
   occasions,
-  tasks,
   updateContactIdentity,
   voiceProfile,
 } from '@assistant/db';
 import {
+  type ActiveJobLookup,
   isOwnerCardCompilationRepository,
   isProfileOccasionCommandRepository,
   isProfilePeopleCommandRepository,
@@ -28,8 +29,9 @@ import {
   type ProfileOccasionCommandInput,
   type ProfileOccasionCommandRepository,
   type ProfilePeopleCommandRepository,
+  type TaskRepository,
 } from '@assistant/persistence';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   type CreateProfileMemoryInput,
   createProfileMemoryCommands,
@@ -269,18 +271,19 @@ export interface OrganizeMemoryState {
 
 export async function organizeMemoryNow(db: Db): Promise<OrganizeMemoryState> {
   const agent = await getAgent(db);
-  const [active] = await db
-    .select({ id: tasks.id, status: tasks.status })
-    .from(tasks)
-    .where(
-      and(
-        eq(tasks.agentId, agent.id),
-        inArray(tasks.status, ['pending', 'running']),
-        sql`${tasks.trigger} #>> '{payload,job}' = 'memory.consolidate'`,
-      ),
-    )
-    .orderBy(desc(tasks.createdAt))
-    .limit(1);
+  return organizeMemoryNowWithRepository(createPostgresActiveJobLookup(db), db, agent.id);
+}
+
+/**
+ * Queue one owner-requested consolidation pass, or report the one already
+ * queued or running. The task goes through the configured task repository.
+ */
+export async function organizeMemoryNowWithRepository(
+  jobs: ActiveJobLookup,
+  taskStore: Db | TaskRepository,
+  agentId: string,
+): Promise<OrganizeMemoryState> {
+  const active = await jobs.findActive(agentId, 'memory.consolidate');
   if (active) {
     return {
       taskId: active.id,
@@ -294,11 +297,11 @@ export async function organizeMemoryNow(db: Db): Promise<OrganizeMemoryState> {
   const event = InboundEventSchema.parse({
     source: 'internal',
     externalEventId: `profile:consolidate:${new Date().toISOString().slice(0, 16)}`,
-    agentId: agent.id,
+    agentId,
     trust: 'assistant',
     payload: { job: 'memory.consolidate', instruction: 'owner-requested memory consolidation' },
   });
-  const { task } = await enqueueTask(db, {
+  const { task } = await enqueueTask(taskStore, {
     event,
     type: 'scheduled',
     budgetUsdLimit: '0.10',
