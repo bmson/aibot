@@ -77,7 +77,8 @@ describe.skipIf(!localEmulator)(
           .status,
       ).toBe(200);
       auth.allowed.mockResolvedValue(true);
-      const response = await post({ action: 'forget-all', confirm: 'forget-all' });
+      // Voice-sample purge still needs the PostgreSQL voice corpus.
+      const response = await post({ action: 'purge-voice' });
       expect(response.status).toBe(503);
     });
 

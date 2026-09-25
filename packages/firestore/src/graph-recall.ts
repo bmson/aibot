@@ -2,6 +2,8 @@ import {
   type EmbeddingSpace,
   type GraphRecallRepository,
   type GraphRelation,
+  type GraphSnapshotRelation,
+  type GraphSnapshotRepository,
   historyLimit,
   type Records,
   validateEmbedding,
@@ -14,13 +16,25 @@ import { decodeRecord, documentKey, type InstallationStore } from './store.js';
 
 const RELATION_BOUND = 1000;
 type Relation = Records['knowledgeGraphRelations'];
+/** Entity and source-memory fields only the graph snapshot tool reports. */
+type Detailed = GraphRelation & {
+  detail: Pick<
+    GraphSnapshotRelation,
+    'subjectKind' | 'objectKind' | 'source' | 'ownerConfirmed'
+  > & {
+    memoryConfidence: string;
+  };
+};
+const plain = ({ detail: _, ...row }: Detailed): GraphRelation => row;
 
 function identity(snapshot: DocumentSnapshot, id: string): boolean {
   return snapshot.exists && typeof id === 'string' && documentKey(id) === snapshot.id;
 }
 
 /** Two-hop traversal over verified current sources, without exposing foreign or erased evidence. */
-export class FirestoreGraphRecallRepository implements GraphRecallRepository {
+export class FirestoreGraphRecallRepository
+  implements GraphRecallRepository, GraphSnapshotRepository
+{
   readonly kind = 'graph-recall-repository' as const;
   constructor(
     readonly store: InstallationStore,
@@ -46,7 +60,7 @@ export class FirestoreGraphRecallRepository implements GraphRecallRepository {
     agentId: string,
     extractionVersion: number,
     similarities?: Map<string, { similarity: number; updateTime: DocumentSnapshot['updateTime'] }>,
-  ): Promise<GraphRelation[]> {
+  ): Promise<Detailed[]> {
     const relations = candidates.flatMap((doc) => {
       const row = decodeRecord<Relation>(doc.data());
       if (
@@ -162,12 +176,49 @@ export class FirestoreGraphRecallRepository implements GraphRecallRepository {
           validFrom: row.validFrom,
           validUntil: row.validUntil,
           ...(score ? { similarity: score.similarity } : {}),
+          detail: {
+            subjectKind: subject.kind,
+            objectKind: object.kind,
+            source: memory.source,
+            memoryConfidence: memory.confidence,
+            ownerConfirmed: memory.ownerConfirmed,
+          },
         },
       ];
     });
   }
 
   async seeds(input: Parameters<GraphRecallRepository['seeds']>[0]): Promise<GraphRelation[]> {
+    return (await this.nearest(input)).map(plain);
+  }
+
+  /** The graph snapshot tool's view: the same verified seeds, with entity kinds and memory trust. */
+  async snapshot(
+    input: Parameters<GraphSnapshotRepository['snapshot']>[0],
+  ): Promise<GraphSnapshotRelation[]> {
+    return (await this.nearest(input)).map((row) => ({
+      id: row.relationId,
+      subjectId: row.subjectEntityId,
+      subjectLabel: row.subjectLabel,
+      subjectKind: row.detail.subjectKind,
+      predicate: row.predicate,
+      objectId: row.objectEntityId,
+      objectLabel: row.objectLabel,
+      objectKind: row.detail.objectKind,
+      sourceMemoryId: row.sourceMemoryId,
+      sourceMemory: row.content,
+      source: row.detail.source,
+      memoryConfidence: row.detail.memoryConfidence,
+      ownerConfirmed: row.detail.ownerConfirmed,
+      evidenceQuote: row.evidenceQuote,
+      relationshipConfidence: row.confidence,
+      validFrom: row.validFrom,
+      validUntil: row.validUntil,
+      similarity: Number(row.similarity),
+    }));
+  }
+
+  private async nearest(input: Parameters<GraphRecallRepository['seeds']>[0]): Promise<Detailed[]> {
     historyLimit(input.limit);
     validateEmbedding(this.space, input.embedding);
     const candidateLimit = Math.min(200, Math.max(40, input.limit * 8));
@@ -254,6 +305,7 @@ export class FirestoreGraphRecallRepository implements GraphRecallRepository {
         );
         const rows = await this.hydrate(tx, candidates, input.agentId, input.extractionVersion);
         return rows
+          .map(plain)
           .sort(
             (a, b) =>
               Number(b.confidence) - Number(a.confidence) ||

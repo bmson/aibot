@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type {
   EmbeddingSpace,
   MemoryRecallInput,
@@ -6,17 +6,10 @@ import type {
   MemorySaveInput,
   MemorySaveResult,
   MemoryToolRepository,
-  Records,
 } from '@assistant/persistence';
+import { resolveFirestoreSubjectContact } from './contact-lookup.js';
 import { FirestoreMemoryRepository } from './memory.js';
-import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
-
-const ASSISTANT_ALIASES = new Set(['assistant', 'ai bot', 'b bot', 'the assistant', 'bot']);
-
-function namePrefixMatch(left: string, right: string): boolean {
-  const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left];
-  return shorter.length >= 3 && (shorter === longer || longer.startsWith(`${shorter} `));
-}
+import type { InstallationStore } from './store.js';
 
 function lexicalTerms(query: string): string[] {
   return query
@@ -51,60 +44,18 @@ export class FirestoreMemoryToolRepository implements MemoryToolRepository {
     this.vectors = new FirestoreMemoryRepository(store, embeddingSpace);
   }
 
-  private async resolveSubject(subject: string, relationship?: string): Promise<string | null> {
-    const name = subject.trim();
-    if (!name || ASSISTANT_ALIASES.has(name.toLowerCase())) return null;
-    const snapshots = await this.store.collection('contacts').get();
-    const rows = snapshots.docs.map((doc) => decodeRecord<Records['contacts']>(doc.data()));
-    const owner = rows.find((row) => row.trust === 'owner');
-    const lower = name.toLowerCase();
-    const ownerMatch = owner
-      ? [owner.name, ...owner.aliases].find((candidate) =>
-          namePrefixMatch(lower, candidate.toLowerCase()),
-        )
-      : undefined;
-    if (lower === 'owner' || ownerMatch) return owner?.id ?? null;
-    const match = rows
-      .filter((row) => row.trust !== 'owner')
-      .find((row) =>
-        [row.name, ...row.aliases].some((candidate) =>
-          namePrefixMatch(lower, candidate.toLowerCase()),
-        ),
-      );
-    if (match) return match.id;
-
-    const key = createHash('sha256').update(lower).digest('hex');
-    const keyRef = this.store.doc('contactNames', key);
-    return this.store.db.runTransaction(async (tx) => {
-      const existing = await tx.get(keyRef);
-      if (existing.exists) return String(existing.get('contactId'));
-      const now = this.store.now();
-      const id = randomUUID();
-      const contact: Records['contacts'] = {
-        id,
-        name,
-        createdAt: now,
-        updatedAt: now,
-        trust: 'unknown',
-        aliases: [],
-        emails: [],
-        phones: [],
-        relationship: relationship?.trim() ?? '',
-        notes: '',
-      };
-      tx.create(this.store.doc('contacts', id), encodeRecord(contact));
-      tx.create(keyRef, { contactId: id, createdAt: now });
-      return id;
-    });
-  }
-
   async save(input: MemorySaveInput): Promise<MemorySaveResult> {
     validateSave(input);
     const tombstone = await this.store.doc('memoryTombstones', input.contentHash).get();
     if (tombstone.exists)
       return { saved: false, duplicate: false, tombstoned: true, quarantined: input.quarantined };
     const subjectContactId = input.subject
-      ? await this.resolveSubject(input.subject, input.subjectRelationship)
+      ? await resolveFirestoreSubjectContact(
+          this.store,
+          input.agentId,
+          input.subject,
+          input.subjectRelationship,
+        )
       : null;
     const now = this.store.now();
     const id = randomUUID();
