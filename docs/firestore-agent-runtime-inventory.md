@@ -52,7 +52,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `memory.extract` (+ commitments) | memory-extraction | Ready (`firestore-memory-extraction.test.ts`). Each conversation's facts, occasions, and open loops commit with a per-task checkpoint under the task lease, so a reclaimed run resumes after the last committed conversation. |
 | `memory.sweep_loops` | open-loop-sweep | SQL |
 | `email.extract` | email-extraction | SQL |
-| `briefing.compose` | daily-briefing | SQL |
+| `briefing.compose` | daily-briefing | Ready (`firestore-briefing.test.ts`). Reads the same inputs through `persistence.briefing`, proposes dates through `persistence.suggestions` (one per source, UUID-shaped ids), and posts through `persistence.ownerNotices`. |
 | `pulse.check` | pulse (every 20 min) | SQL |
 | `graph.curiosity` | knowledge-graph-curiosity | SQL |
 | `memory.graph_date_backfill` | knowledge-graph-date-backfill | SQL |

@@ -7,6 +7,7 @@ import {
   watches,
   watchFires,
 } from '@assistant/db';
+import type { BriefingInputs, ExecutionPersistence } from '@assistant/persistence';
 import { and, desc, eq, gt, gte, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { getAgent, postOwnerNotice } from '../chat.js';
@@ -509,6 +510,86 @@ function upcomingFrom(
   return found.sort((a, b) => a.iso.localeCompare(b.iso)).slice(0, MAX_UPCOMING);
 }
 
+/** The PostgreSQL reads behind the briefing: the same inputs the portable repository returns. */
+async function briefingInputsFromSql(
+  db: Db,
+  agentId: string,
+  since: Date,
+  now: Date,
+): Promise<BriefingInputs> {
+  const [mail, attention, pending, goalDeltas, watchHits] = await Promise.all([
+    db
+      .select({
+        fromEmail: emailIngest.fromEmail,
+        // Nullable until the sender-name backfill lands; falls back to the
+        // address itself wherever it renders.
+        fromName: emailIngest.fromName,
+        subject: emailIngest.subject,
+        category: emailIngest.category,
+        importance: emailIngest.importance,
+        dates: emailIngest.dates,
+        channelMessageId: emailIngest.channelMessageId,
+      })
+      .from(emailIngest)
+      .where(and(eq(emailIngest.agentId, agentId), gte(emailIngest.createdAt, since)))
+      .orderBy(desc(emailIngest.importance)),
+    db
+      .select({ title: taskTable.title, progress: taskTable.progress })
+      .from(taskTable)
+      .where(
+        and(
+          eq(taskTable.agentId, agentId),
+          eq(taskTable.status, 'needs_attention'),
+          isNull(taskTable.archivedAt),
+          gte(taskTable.updatedAt, since),
+        ),
+      )
+      .orderBy(desc(taskTable.updatedAt))
+      .limit(10),
+    db
+      .select({ shortCode: approvals.shortCode, summary: approvals.summary })
+      .from(approvals)
+      .innerJoin(taskTable, eq(approvals.taskId, taskTable.id))
+      .where(
+        and(
+          eq(taskTable.agentId, agentId),
+          eq(approvals.status, 'pending'),
+          gt(approvals.expiresAt, now),
+          isNull(taskTable.archivedAt),
+        ),
+      )
+      .limit(10),
+    // Goals that moved in the window — progress, a new next step, a status
+    // change. The standing state is on the Goals page; the digest carries only
+    // what changed.
+    db
+      .select({
+        title: goalsTable.title,
+        status: goalsTable.status,
+        nextAction: goalsTable.nextAction,
+        updatedAt: goalsTable.updatedAt,
+      })
+      .from(goalsTable)
+      .where(and(eq(goalsTable.agentId, agentId), gte(goalsTable.updatedAt, since)))
+      .orderBy(desc(goalsTable.updatedAt))
+      .limit(MAX_GOAL_DELTAS),
+    db
+      .select({ name: watches.name, summary: watchFires.summary })
+      .from(watchFires)
+      .innerJoin(watches, eq(watchFires.watchId, watches.id))
+      .where(and(eq(watchFires.agentId, agentId), gte(watchFires.createdAt, since)))
+      .orderBy(desc(watchFires.createdAt))
+      .limit(MAX_WATCH_HITS),
+  ]);
+  return { mail, attention, pending, goalDeltas, watchHits };
+}
+
+/** The briefing's portable stores; without them it reads and writes PostgreSQL. */
+type BriefingPersistence = Pick<
+  ExecutionPersistence,
+  'executionContext' | 'ownerContext' | 'briefing' | 'suggestions' | 'ownerNotices'
+>;
+
 export async function runBriefing(
   deps: {
     db: Db;
@@ -516,15 +597,32 @@ export async function runBriefing(
     calendarReader?: BriefingCalendarReader;
     notifyOwner?: ProactiveNotifier;
     heartbeat?: () => Promise<void>;
+    persistence?: BriefingPersistence;
   },
-  opts: { taskId?: string; now?: Date } = {},
+  opts: { taskId?: string; now?: Date; agentId?: string } = {},
 ): Promise<BriefingResult> {
   const { db, router } = deps;
   const now = opts.now ?? new Date();
   const since = new Date(now.getTime() - WINDOW_HOURS * 3600 * 1000);
+  const portable =
+    deps.persistence?.briefing && deps.persistence.suggestions && deps.persistence.ownerNotices
+      ? {
+          context: deps.persistence.executionContext,
+          ownerContext: deps.persistence.ownerContext,
+          briefing: deps.persistence.briefing,
+          suggestions: deps.persistence.suggestions,
+          notices: deps.persistence.ownerNotices,
+        }
+      : undefined;
 
   return withSpan('workflow.briefing', {}, async () => {
-    const agent = await getAgent(db);
+    let agent: Pick<Awaited<ReturnType<typeof getAgent>>, 'id' | 'name' | 'email' | 'timezone'>;
+    if (portable) {
+      if (!opts.agentId) throw new Error('briefing: portable runs need the task owner');
+      const owner = await portable.context.getAgent(opts.agentId);
+      if (!owner) throw new Error('briefing: owner row gone');
+      agent = owner;
+    } else agent = await getAgent(db);
     const result: BriefingResult = {
       delivered: false,
       pinged: false,
@@ -557,73 +655,24 @@ export async function runBriefing(
           })
       : Promise.resolve(null);
 
-    const [mail, attention, pending, calendar, goalDeltas, watchHits, openSuggestions] =
-      await Promise.all([
-        db
-          .select({
-            fromEmail: emailIngest.fromEmail,
-            // Nullable until the sender-name backfill lands; falls back to the
-            // address itself wherever it renders.
-            fromName: emailIngest.fromName,
-            subject: emailIngest.subject,
-            category: emailIngest.category,
-            importance: emailIngest.importance,
-            dates: emailIngest.dates,
-            channelMessageId: emailIngest.channelMessageId,
+    const [inputs, calendar, openSuggestions] = await Promise.all([
+      portable
+        ? portable.briefing.inputs(agent.id, {
+            since,
+            now,
+            attentionLimit: 10,
+            pendingLimit: 10,
+            goalLimit: MAX_GOAL_DELTAS,
+            watchLimit: MAX_WATCH_HITS,
           })
-          .from(emailIngest)
-          .where(and(eq(emailIngest.agentId, agent.id), gte(emailIngest.createdAt, since)))
-          .orderBy(desc(emailIngest.importance)),
-        db
-          .select({ title: taskTable.title, progress: taskTable.progress })
-          .from(taskTable)
-          .where(
-            and(
-              eq(taskTable.agentId, agent.id),
-              eq(taskTable.status, 'needs_attention'),
-              isNull(taskTable.archivedAt),
-              gte(taskTable.updatedAt, since),
-            ),
-          )
-          .orderBy(desc(taskTable.updatedAt))
-          .limit(10),
-        db
-          .select({ shortCode: approvals.shortCode, summary: approvals.summary })
-          .from(approvals)
-          .innerJoin(taskTable, eq(approvals.taskId, taskTable.id))
-          .where(
-            and(
-              eq(taskTable.agentId, agent.id),
-              eq(approvals.status, 'pending'),
-              gt(approvals.expiresAt, now),
-              isNull(taskTable.archivedAt),
-            ),
-          )
-          .limit(10),
-        calendarPromise,
-        // Goals that moved in the window — progress, a new next step, a
-        // status change. The standing state is on the Goals page; the digest
-        // carries only what changed.
-        db
-          .select({
-            title: goalsTable.title,
-            status: goalsTable.status,
-            nextAction: goalsTable.nextAction,
-            updatedAt: goalsTable.updatedAt,
-          })
-          .from(goalsTable)
-          .where(and(eq(goalsTable.agentId, agent.id), gte(goalsTable.updatedAt, since)))
-          .orderBy(desc(goalsTable.updatedAt))
-          .limit(MAX_GOAL_DELTAS),
-        db
-          .select({ name: watches.name, summary: watchFires.summary })
-          .from(watchFires)
-          .innerJoin(watches, eq(watchFires.watchId, watches.id))
-          .where(and(eq(watchFires.agentId, agent.id), gte(watchFires.createdAt, since)))
-          .orderBy(desc(watchFires.createdAt))
-          .limit(MAX_WATCH_HITS),
-        listOpenSuggestions(db, agent.id, { limit: MAX_OPEN_SUGGESTIONS, now }),
-      ]);
+        : briefingInputsFromSql(db, agent.id, since, now),
+      calendarPromise,
+      listOpenSuggestions(portable?.suggestions ?? db, agent.id, {
+        limit: MAX_OPEN_SUGGESTIONS,
+        now,
+      }),
+    ]);
+    const { mail, attention, pending, goalDeltas, watchHits } = inputs;
 
     const highlights = mail.filter((row) => row.importance >= 3).slice(0, MAX_HIGHLIGHTS);
     const upcoming = upcomingFrom(mail, now);
@@ -817,7 +866,9 @@ export async function runBriefing(
     }
     const lead = result.composedFallback ? briefingHeadline(result) : (draft as string).trim();
 
-    const ambient = await getAmbientBlock(db, agent.id, { now }).catch(() => undefined);
+    const ambient = await getAmbientBlock(portable?.ownerContext ?? db, agent.id, { now }).catch(
+      () => undefined,
+    );
     const sections = [
       calendar
         ? agendaSection({
@@ -923,7 +974,7 @@ export async function runBriefing(
       if (!proposal) continue;
       const deadline = Date.parse(entry.iso) - (PAYABLE.has(entry.category) ? 2 * 86_400_000 : 0);
       if (deadline <= now.getTime()) continue;
-      const created = await createSuggestion(db, {
+      const created = await createSuggestion(portable?.suggestions ?? db, {
         agentId: agent.id,
         summary: proposal.summary,
         proposedAction: proposal.action,
@@ -943,7 +994,7 @@ export async function runBriefing(
       result.suggested += 1;
     }
 
-    const { conversationId } = await postOwnerNotice(db, {
+    const { conversationId } = await postOwnerNotice(portable?.notices ?? db, {
       agentId: agent.id,
       text: body,
       ...(opts.taskId ? { taskId: opts.taskId } : {}),

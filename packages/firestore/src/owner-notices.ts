@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { NotificationsConversationRepository, Records } from '@assistant/persistence';
+import type {
+  NotificationsConversationRepository,
+  OwnerNoticeRepository,
+  Records,
+} from '@assistant/persistence';
 import type { DocumentSnapshot, Timestamp, Transaction } from '@google-cloud/firestore';
 import { messageRecord } from './messages.js';
 import { privacyErasureIsActive, readPrivacyErasureFence } from './privacy-erasure.js';
@@ -402,4 +406,26 @@ export class FirestoreOwnerNoticeRepository implements NotificationsConversation
       return { conversationId: destination.row.id };
     });
   }
+}
+
+/** Background producers' notices through the owner-notice sink: primary chat, else Notifications. */
+export function firestoreOwnerNotices(
+  notices: FirestoreOwnerNoticeRepository,
+): OwnerNoticeRepository {
+  return {
+    kind: 'owner-notice-repository',
+    async post(input) {
+      if (input.agentId !== notices.agentId)
+        throw new Error('Owner notice is outside the configured owner');
+      const posted = await notices.post({
+        text: input.text,
+        ...(input.taskId ? { taskId: input.taskId } : {}),
+        ...(input.extraParts ? { extraParts: input.extraParts } : {}),
+      });
+      // Only a notice mirrored from its own conversation is skipped, and a
+      // producer's notice has no source conversation.
+      if (!posted) throw new Error('Owner notice was not posted');
+      return posted;
+    },
+  };
 }

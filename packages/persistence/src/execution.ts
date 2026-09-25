@@ -1,6 +1,7 @@
 import type { ApprovalPolicyRepository } from './approval-policies.js';
 import type { ApprovalRepository } from './approvals.js';
 import type { AssistantHealthRepository } from './assistant-health.js';
+import type { BriefingRepository } from './briefing.js';
 import type { CardRefreshRepository } from './card-refresh.js';
 import type { CommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import type { CostRepository, MessageRepository } from './contracts.js';
@@ -21,12 +22,16 @@ import type { MemorySupersedeRepository } from './memory-supersede.js';
 import type { MemoryToolRepository } from './memory-tools.js';
 import type { MissionRepository } from './missions.js';
 import type { ModelRoutingRepository } from './model-routing.js';
-import type { NotificationsConversationRepository } from './notifications.js';
+import type {
+  NotificationsConversationRepository,
+  OwnerNoticeRepository,
+} from './notifications.js';
 import type { OwnerCardCompilationRepository } from './owner-card-compilation.js';
 import type { AmbientSnapshotRepository, OwnerContextRepository } from './owner-context.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
 import type { SkillContextRepository } from './skill-context.js';
+import type { SuggestionRepository } from './suggestions.js';
 import type { TaskRepository } from './task-lifecycle.js';
 import type { WatchRepository } from './watches.js';
 
@@ -78,6 +83,12 @@ export interface ExecutionPersistence {
   readonly ambientSnapshots?: AmbientSnapshotRepository;
   /** Present where the open-loop sweep has a portable adapter. */
   readonly commitmentMaintenance?: CommitmentMaintenanceRepository;
+  /** Present where background producers post their dashboard copy portably. */
+  readonly ownerNotices?: OwnerNoticeRepository;
+  /** Present where producers record one-tap suggestions portably. */
+  readonly suggestions?: SuggestionRepository;
+  /** Present where the `briefing.compose` job has a portable adapter. */
+  readonly briefing?: BriefingRepository;
   /** Present where the `chat.segment` job has a portable adapter. */
   readonly conversationSegmentation?: ConversationSegmentationRepository;
 }
