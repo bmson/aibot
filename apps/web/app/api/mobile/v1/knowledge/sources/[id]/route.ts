@@ -1,5 +1,5 @@
 import { getKnowledgeSourceImpact } from '@assistant/application';
-import { getApplication, getDb } from '@/lib/server';
+import { getDb, getOwnerMemoryCommands } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -35,7 +35,7 @@ export async function PATCH(
   const id = sourceId((await params).id);
   if (!id) return notFound();
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-  const result = await getApplication().correctMemory(
+  const result = await getOwnerMemoryCommands().correctMemory(
     id,
     typeof body?.content === 'string' ? body.content : '',
   );
@@ -49,6 +49,6 @@ export async function DELETE(
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const id = sourceId((await params).id);
   if (!id) return notFound();
-  await getApplication().forgetMemory(id);
+  await getOwnerMemoryCommands().forgetMemory(id);
   return mobileJson({ ok: true });
 }
