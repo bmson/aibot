@@ -118,6 +118,7 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'memory.sweep_loops',
   'memory.consolidate',
   'memory.graph_sync',
+  'ambient.refresh',
   'health.monitor',
   'documents.extract',
   'watch.suggest',
@@ -526,8 +527,15 @@ export async function runCodeJob(
       );
     case 'ambient.refresh': {
       await deps.heartbeat?.();
+      const snapshots = deps.persistence?.ambientSnapshots;
       const r = await refreshAmbientSnapshot(
-        { db: deps.db, heartbeat: deps.heartbeat },
+        {
+          db: deps.db,
+          heartbeat: deps.heartbeat,
+          ...(snapshots && deps.persistence
+            ? { portable: { ownerContext: deps.persistence.ownerContext, snapshots } }
+            : {}),
+        },
         { agentId: task.agentId },
       );
       return {

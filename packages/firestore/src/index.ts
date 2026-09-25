@@ -1,3 +1,4 @@
+export { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
 export { FirestoreApplicationChatPersistence } from './application-chat.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 export { FirestoreApprovalRepository } from './approvals.js';
