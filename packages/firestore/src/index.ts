@@ -9,6 +9,8 @@ export { createFirestoreCardRefreshRepository } from './card-refresh.js';
 export { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
 export { FirestoreCommitmentMutationRepository } from './commitment-mutations.js';
 export { getFirestoreCommitmentOverview } from './commitment-overview.js';
+export { FirestoreContactLookupRepository } from './contact-lookup.js';
+export { FirestoreConversationSearchRepository } from './conversation-search.js';
 export { FirestoreCostRepository } from './costs.js';
 export { FirestoreDeviceTokenRepository } from './device-tokens.js';
 export { FirestoreDocumentCatalogRepository } from './document-catalog.js';
@@ -45,6 +47,7 @@ export { FirestoreMemoryToolRepository } from './memory-tools.js';
 export { FirestoreMessageRepository } from './messages.js';
 export { getFirestoreMobileCosts } from './mobile-costs.js';
 export { FirestoreModelRoutingRepository } from './model-routing.js';
+export { FirestoreOccasionToolRepository } from './occasion-tools.js';
 export {
   createWakeIntent,
   FirestoreOutbox,
@@ -115,6 +118,7 @@ export { FirestoreShellPresenceRepository } from './shell-presence.js';
 export { FirestoreShellStatusRepository } from './shell-status.js';
 export { FirestoreSituationPackMutationRepository } from './situation-pack-mutations.js';
 export { FirestoreSituationPackReadRepository } from './situation-packs.js';
+export { FirestoreSituationToolRepository } from './situation-tools.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { FirestoreSkillMutationRepository } from './skill-mutations.js';
 export { createInstallationStore, InstallationStore } from './store.js';

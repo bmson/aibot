@@ -6,11 +6,19 @@ import {
   PackCommandSchema,
   recallSituationDecisions,
 } from '@assistant/core/situations';
+import type { SituationToolRepository } from '@assistant/persistence';
 import { z } from 'zod';
 import { register } from '../register.js';
 import type { ToolRegistry } from '../registry.js';
 
-export function registerSituationTools(registry: ToolRegistry) {
+/**
+ * Situation pack tools. Without a repository they use the task's PostgreSQL
+ * handle; a portable composition passes its situation repository instead.
+ */
+export function registerSituationTools(
+  registry: ToolRegistry,
+  repository?: SituationToolRepository,
+): ToolRegistry {
   register(
     registry,
     {
@@ -21,7 +29,9 @@ export function registerSituationTools(registry: ToolRegistry) {
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => ({
-        decisions: await recallSituationDecisions(ctx.db, ctx.agentId, args.query, args.packId),
+        decisions: repository
+          ? await repository.decisions(ctx.agentId, args.query, args.packId)
+          : await recallSituationDecisions(ctx.db, ctx.agentId, args.query, args.packId),
       }),
     },
     { confidentialRead: true, returnsUntrustedContent: true },
@@ -37,8 +47,16 @@ export function registerSituationTools(registry: ToolRegistry) {
       acceptsUntrustedInput: false,
       execute: async (args, ctx) =>
         args.packId
-          ? { pack: await getSituationPack(ctx.db, ctx.agentId, args.packId) }
-          : { packs: await listSituationPacks(ctx.db, ctx.agentId) },
+          ? {
+              pack: repository
+                ? await repository.get(ctx.agentId, args.packId)
+                : await getSituationPack(ctx.db, ctx.agentId, args.packId),
+            }
+          : {
+              packs: repository
+                ? await repository.list(ctx.agentId)
+                : await listSituationPacks(ctx.db, ctx.agentId),
+            },
     },
     { confidentialRead: true, returnsUntrustedContent: true },
   );
@@ -51,7 +69,11 @@ export function registerSituationTools(registry: ToolRegistry) {
       inputSchema: z.object({}),
       risk: 'autonomous',
       acceptsUntrustedInput: false,
-      execute: async (_, ctx) => ({ sources: await listPackSources(ctx.db, ctx.agentId) }),
+      execute: async (_, ctx) => ({
+        sources: repository
+          ? await repository.sources(ctx.agentId)
+          : await listPackSources(ctx.db, ctx.agentId),
+      }),
     },
     { confidentialRead: true, returnsUntrustedContent: true },
   );
@@ -72,8 +94,12 @@ export function registerSituationTools(registry: ToolRegistry) {
             : args.action === 'decision'
               ? `${args.decision.outcome === 'rejected' ? 'Reject' : 'Choose'} “${args.decision.option}”: ${args.decision.reason}`
               : `${args.action === 'preview' ? 'Prepare a preview for' : 'Update'} situation pack ${args.packId}`,
-      execute: async (args, ctx) => commandSituationPack(ctx.db, ctx.agentId, args),
+      execute: async (args, ctx) =>
+        repository
+          ? repository.command(ctx.agentId, args)
+          : commandSituationPack(ctx.db, ctx.agentId, args),
     },
     { privateWrite: true, writesMemory: true, blanketAllowIneligible: true, autonomyFloor: true },
   );
+  return registry;
 }
