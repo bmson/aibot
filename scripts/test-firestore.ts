@@ -49,6 +49,7 @@ const child = spawn(
     'apps/web/app/tasks/actions.firestore.test.ts',
     'apps/web/app/chat/actions.firestore.test.ts',
     'apps/web/app/profile/actions.firestore.test.ts',
+    'apps/web/app/profile/about/page.test.tsx',
     'apps/web/app/api/mobile/v1/memory/library/route.test.ts',
     'apps/web/app/api/mobile/v1/memory/profile/route.firestore.test.ts',
     'apps/web/app/api/mobile/v1/mcp/route.test.ts',
