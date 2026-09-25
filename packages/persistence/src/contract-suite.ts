@@ -5,6 +5,7 @@ import type { CostRepository, MessageRepository, ReminderRepository } from './co
 import type { Records } from './records.js';
 import type { TaskRepository } from './task-lifecycle.js';
 
+export { type NudgePolicyFixture, nudgePolicyContract } from './nudge-policy-contract.js';
 export { type ScheduleFixture, scheduleContract } from './schedule-contract.js';
 
 export interface CommandFixture {

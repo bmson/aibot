@@ -22,6 +22,7 @@ export { createPostgresMemoryToolRepository } from './memory-tool-repository.js'
 export { createPostgresMessageRepository } from './message-repository.js';
 export * from './model-config.js';
 export { createPostgresModelRoutingRepository } from './model-routing-repository.js';
+export { createPostgresNudgePolicyRepository } from './nudge-policy-repository.js';
 export { createPostgresOwnerCardCompilationRepository } from './owner-card-compilation-repository.js';
 export { createPostgresOwnerContextRepository } from './owner-context-repository.js';
 export { createPostgresPrivacyErasureRepository } from './privacy-erasure-repository.js';
