@@ -1,11 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { resetConfigForTest } from '@assistant/config';
-import { createInstallationStore, FirestoreDocumentReadRepository } from '@assistant/firestore';
+import {
+  createInstallationStore,
+  FirestoreDocumentReadRepository,
+  wakeIntentId,
+} from '@assistant/firestore';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const auth = vi.hoisted(() => ({ mobile: vi.fn(), store: null as unknown }));
+const auth = vi.hoisted(() => ({
+  mobile: vi.fn(),
+  store: null as unknown,
+  workspace: null as unknown,
+}));
 vi.mock('@/lib/server', () => ({
   getFirestoreInstallationStore: () => auth.store,
+  getWorkspace: () => auth.workspace,
   getDb: () => {
     throw new Error('PostgreSQL-backed web surface is unavailable');
   },
@@ -22,7 +31,7 @@ vi.mock('@/mobile-auth', () => ({
 
 const emulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(process.env.FIRESTORE_EMULATOR_HOST ?? '');
 
-describe.skipIf(!emulator)('Firestore mobile Documents reads with PostgreSQL offline', () => {
+describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline', () => {
   const installationId = `mobile-documents-${randomUUID()}`;
   const agentId = randomUUID();
   const otherAgentId = randomUUID();
@@ -31,7 +40,23 @@ describe.skipIf(!emulator)('Firestore mobile Documents reads with PostgreSQL off
   const primaryConversationId = randomUUID();
   const fileId = randomUUID();
   const otherFileId = randomUUID();
-  const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+  let uploadedDocumentId: string | undefined;
+  let uploadedTaskId: string | undefined;
+  const store = createInstallationStore({
+    projectId: 'demo-assistant-test',
+    installationId,
+    databaseId: 'assistant-mobile-documents-test',
+  });
+  const staged = new Map<string, Buffer>();
+  const workspace = {
+    async writeBytes(path: string, bytes: Buffer) {
+      staged.set(path, Buffer.from(bytes));
+      return { bytes: bytes.length };
+    },
+    async delete(path: string) {
+      staged.delete(path);
+    },
+  };
   const now = new Date('2026-09-20T10:00:00.000Z');
   const url = 'http://localhost/api/mobile/v1/documents';
 
@@ -53,6 +78,8 @@ describe.skipIf(!emulator)('Firestore mobile Documents reads with PostgreSQL off
     resetConfigForTest();
     auth.mobile.mockResolvedValue(true);
     auth.store = store;
+    auth.workspace = workspace;
+    staged.clear();
     await Promise.all([
       store.doc('agents', agentId).set({ id: agentId }),
       store.doc('conversations', primaryConversationId).set({
@@ -186,7 +213,7 @@ describe.skipIf(!emulator)('Firestore mobile Documents reads with PostgreSQL off
     const { DELETE } = await import('./[id]/route.js');
     auth.mobile.mockResolvedValueOnce(false);
     expect((await GET(new Request(url))).status).toBe(401);
-    expect((await POST(new Request(url, { method: 'POST' }))).status).toBe(501);
+    expect((await POST(new Request(url, { method: 'POST' }))).status).toBe(400);
     expect(
       (
         await DELETE(new Request(`${url}/${documentId}`, { method: 'DELETE' }), {
@@ -196,16 +223,118 @@ describe.skipIf(!emulator)('Firestore mobile Documents reads with PostgreSQL off
     ).toBe(501);
   });
 
+  it('stages and catalogs owner text atomically with its extraction wake while PostgreSQL is offline', async () => {
+    const { POST } = await import('./route.js');
+    const bytes = Buffer.from('The owner has a text document.');
+    const form = new FormData();
+    form.set('file', new File([bytes], 'owner-notes.txt', { type: 'text/plain' }));
+    form.set('title', '  Owner notes  ');
+    const response = await POST(new Request(url, { method: 'POST', body: form }));
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ ok: true, duplicate: false });
+
+    const docs = await store.collection('documents').where('agentId', '==', agentId).get();
+    const snapshot = docs.docs.find((row) => row.get('title') === 'Owner notes');
+    expect(snapshot).toBeDefined();
+    const documentIdFromRecord = String(snapshot?.get('id'));
+    uploadedDocumentId = documentIdFromRecord;
+    const document = snapshot?.data();
+    expect(document).toMatchObject({
+      agentId,
+      title: 'Owner notes',
+      source: 'upload',
+      trust: 'owner',
+      mime: 'text/plain',
+      status: 'pending',
+      extractor: 'text',
+      chunkCount: 0,
+      charCount: 0,
+    });
+    const file = await store.doc('files', String(document?.fileId)).get();
+    const workspacePath = String(file.get('workspacePath'));
+    expect(staged.get(workspacePath)).toEqual(bytes);
+    expect(file.get('sha256')).toBe(document?.sha256);
+
+    const tasks = await store
+      .collection('tasks')
+      .where('trigger.payload.documentId', '==', documentIdFromRecord)
+      .get();
+    expect(tasks.size).toBe(1);
+    const task = tasks.docs[0];
+    if (!task) throw new Error('document task was not persisted');
+    expect(task?.get('trigger.payload.job')).toBe('documents.extract');
+    // The Firestore document key is an encoding of the record id; the wake
+    // intent is keyed by the task record id.
+    const taskId = String(task.get('id'));
+    uploadedTaskId = taskId;
+    const wake = await store
+      .doc('outbox', wakeIntentId(taskId, Number(task.get('queueGeneration'))))
+      .get();
+    expect(wake.exists).toBe(true);
+    expect(wake.get('status')).toBe('pending');
+    const duplicateForm = new FormData();
+    duplicateForm.set('file', new File([bytes], 'duplicate.txt', { type: 'text/plain' }));
+    const duplicateResponse = await POST(new Request(url, { method: 'POST', body: duplicateForm }));
+    expect(duplicateResponse.status).toBe(201);
+    expect(await duplicateResponse.json()).toEqual({ ok: true, duplicate: true });
+    expect(staged.size).toBe(1);
+    expect((await store.collection('documents').where('agentId', '==', agentId).get()).size).toBe(
+      2,
+    );
+    expect(
+      (
+        await store
+          .collection('tasks')
+          .where('trigger.payload.documentId', '==', documentIdFromRecord)
+          .get()
+      ).size,
+    ).toBe(1);
+  });
+
+  it('rejects non-text Firestore files before staging, and cleans staged text bytes when the erasure fence rejects commit', async () => {
+    const { POST } = await import('./route.js');
+    const pdf = new FormData();
+    pdf.set('file', new File(['%PDF'], 'scan.pdf', { type: 'application/pdf' }));
+    expect((await POST(new Request(url, { method: 'POST', body: pdf }))).status).toBe(415);
+    const mislabeledImage = new FormData();
+    mislabeledImage.set('file', new File(['image bytes'], 'notes.txt', { type: 'image/png' }));
+    expect((await POST(new Request(url, { method: 'POST', body: mislabeledImage }))).status).toBe(
+      415,
+    );
+    const stagedBaseline = staged.size;
+    const documentsBaseline = (await store.collection('documents').get()).size;
+    const filesBaseline = (await store.collection('files').get()).size;
+    const tasksBaseline = (await store.collection('tasks').get()).size;
+    const outboxBaseline = (await store.collection('outbox').get()).size;
+    expect(staged.size).toBe(stagedBaseline);
+
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+    const form = new FormData();
+    form.set('file', new File(['private text'], 'private.txt', { type: 'text/plain' }));
+    const response = await POST(new Request(url, { method: 'POST', body: form }));
+    expect(response.status).toBe(409);
+    expect(staged.size).toBe(stagedBaseline);
+    expect((await store.collection('documents').get()).size).toBe(documentsBaseline);
+    expect((await store.collection('files').get()).size).toBe(filesBaseline);
+    expect((await store.collection('tasks').get()).size).toBe(tasksBaseline);
+    expect((await store.collection('outbox').get()).size).toBe(outboxBaseline);
+    await store.doc('privacyErasureJobs', agentId).delete();
+  });
+
   it('supplies the overview Documents panel from Firestore', async () => {
     const { GET } = await import('../overview/route.js');
     const response = await GET(new Request('http://localhost/api/mobile/v1/overview'));
     expect(response.status).toBe(200);
     const overview = await response.json();
-    expect(overview.documents.documents.map((document: { id: string }) => document.id)).toEqual([
-      documentId,
-    ]);
-    expect(overview.documents.stats).toEqual({ total: 1, ready: 1, pending: 0, chunks: 2 });
-    expect(overview.activity).toEqual({ items: [], archivedCount: 0 });
+    expect(overview.documents.documents.map((document: { id: string }) => document.id)).toEqual(
+      expect.arrayContaining([documentId, uploadedDocumentId]),
+    );
+    expect(overview.documents.stats).toEqual({ total: 2, ready: 1, pending: 1, chunks: 2 });
+    // The extraction task queued by the text upload above is ordinary activity.
+    expect(overview.activity).toMatchObject({
+      items: [{ id: uploadedTaskId, status: 'pending', type: 'adhoc', trust: 'assistant' }],
+      archivedCount: 0,
+    });
     expect(overview.goals).toEqual({ items: [], archivedCount: 0 });
     expect(overview.approvals).toEqual({ pending: [], resolved: [] });
   });

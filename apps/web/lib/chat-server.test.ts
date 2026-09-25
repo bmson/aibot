@@ -211,7 +211,7 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
     expect(proxy(request('/chat')).status).toBe(200);
     expect(proxy(request(`/chat/${randomUUID()}`)).status).toBe(200);
     expect(proxy(request('/chat/all')).status).toBe(200);
-    expect(proxy(request('/tasks')).status).toBe(503);
+    expect(proxy(request('/tasks')).status).toBe(200);
     expect(proxy(request('/api/mobile/v1/chats', 'POST')).status).toBe(200);
     expect(proxy(request('/api/chat', 'POST')).status).toBe(200);
     expect(proxy(request('/api/mobile/v1/chat/status')).status).toBe(200);
@@ -287,7 +287,6 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
     expect(index.props).toMatchObject({
       conversationId: primaryId,
       isPrimary: true,
-      firestorePreview: true,
     });
 
     const ChatListPage = (await import('../app/chat/all/page.js')).default;

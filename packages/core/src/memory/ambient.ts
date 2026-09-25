@@ -1,5 +1,9 @@
 import { type AmbientSnapshotRow, ambientSnapshots, type Db } from '@assistant/db';
-import { isOwnerContextRepository, type OwnerContextRepository } from '@assistant/persistence';
+import {
+  type AmbientSnapshotRepository,
+  isOwnerContextRepository,
+  type OwnerContextRepository,
+} from '@assistant/persistence';
 import { eq } from 'drizzle-orm';
 import { loadConfig } from '../config.js';
 import { withSpan } from '../otel.js';
@@ -470,19 +474,32 @@ export interface AmbientSnapshotResult {
  * stale. Weather failures degrade to a location-only block (never old weather).
  */
 export async function refreshAmbientSnapshot(
-  deps: { db: Db; fetchImpl?: FetchLike; heartbeat?: () => Promise<void> },
+  deps: {
+    db: Db;
+    fetchImpl?: FetchLike;
+    heartbeat?: () => Promise<void>;
+    /** Portable location read and snapshot writer; both or neither. */
+    portable?: { ownerContext: OwnerContextRepository; snapshots: AmbientSnapshotRepository };
+  },
   opts: { agentId: string; now?: Date } = { agentId: '' },
 ): Promise<AmbientSnapshotResult> {
-  const { db } = deps;
+  const { db, portable } = deps;
   const now = opts.now ?? new Date();
 
   return withSpan('ambient.refresh', {}, async () => {
     await deps.heartbeat?.();
     const retentionDays = loadConfig().LOCATION_RETENTION_DAYS;
-    const ping = await latestLocation(db, opts.agentId, retentionDays, undefined, now);
+    const ping = await latestLocation(
+      portable?.ownerContext ?? db,
+      opts.agentId,
+      retentionDays,
+      undefined,
+      now,
+    );
     if (!ping) {
       // No fresh location — clear any stale snapshot so nothing outdated is served.
-      await db.delete(ambientSnapshots).where(eq(ambientSnapshots.agentId, opts.agentId));
+      if (portable) await portable.snapshots.clear(opts.agentId);
+      else await db.delete(ambientSnapshots).where(eq(ambientSnapshots.agentId, opts.agentId));
       return { computed: false, hasLocation: false, hasWeather: false, flags: {} };
     }
 
@@ -530,6 +547,20 @@ export async function refreshAmbientSnapshot(
       lines.push('Weather is unavailable right now.');
     }
     const block = lines.filter(Boolean).join('\n');
+    const sources = {
+      location: { capturedAt: ping.capturedAt.toISOString(), label: ping.label },
+      weather: weather ? { ...persistableWeather(weather), fetchedAt: now.toISOString() } : null,
+    };
+    if (portable) {
+      await portable.snapshots.save({
+        agentId: opts.agentId,
+        block,
+        flags,
+        sources,
+        computedAt: now,
+      });
+      return { computed: true, hasLocation: true, hasWeather: weather !== null, flags };
+    }
 
     await db
       .insert(ambientSnapshots)
@@ -537,12 +568,7 @@ export async function refreshAmbientSnapshot(
         agentId: opts.agentId,
         block,
         flags,
-        sources: {
-          location: { capturedAt: ping.capturedAt.toISOString(), label: ping.label },
-          weather: weather
-            ? { ...persistableWeather(weather), fetchedAt: now.toISOString() }
-            : null,
-        },
+        sources,
         computedAt: now,
       })
       .onConflictDoUpdate({
@@ -550,12 +576,7 @@ export async function refreshAmbientSnapshot(
         set: {
           block,
           flags,
-          sources: {
-            location: { capturedAt: ping.capturedAt.toISOString(), label: ping.label },
-            weather: weather
-              ? { ...persistableWeather(weather), fetchedAt: now.toISOString() }
-              : null,
-          },
+          sources,
           computedAt: now,
         },
       });

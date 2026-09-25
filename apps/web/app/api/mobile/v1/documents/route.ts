@@ -1,6 +1,13 @@
+import {
+  isSupportedFirestoreTextDocument,
+  uploadFirestoreTextDocument,
+} from '@assistant/application/documents';
 import { isModuleEnabled, loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import { FirestoreDocumentReadRepository } from '@assistant/firestore';
-import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
+import {
+  FirestoreDocumentCatalogRepository,
+  FirestoreDocumentReadRepository,
+} from '@assistant/firestore';
+import { getApplication, getFirestoreInstallationStore, getWorkspace } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -38,10 +45,11 @@ export async function POST(request: Request): Promise<Response> {
     return mobileJson({ error: 'documents module disabled' }, { status: 404 });
   }
   if (config.PERSISTENCE_DRIVER === 'firestore') {
-    return mobileJson(
-      { error: 'document uploads are not supported by Firestore persistence' },
-      { status: 501 },
-    );
+    const problems = validateAgentPersistenceConfig({
+      ...config,
+      ASSISTANT_MODULES: config.ASSISTANT_MODULES.filter((module) => module !== 'documents'),
+    });
+    if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
   }
   const contentLength = Number(request.headers.get('content-length') ?? 0);
   if (Number.isFinite(contentLength) && contentLength > MAX_MULTIPART_BYTES) {
@@ -56,6 +64,28 @@ export async function POST(request: Request): Promise<Response> {
     return mobileJson({ error: 'file too large for upload' }, { status: 413 });
   }
   try {
+    if (config.PERSISTENCE_DRIVER === 'firestore') {
+      if (!isSupportedFirestoreTextDocument(file.type, file.name)) {
+        return mobileJson(
+          { error: 'Firestore uploads currently support text documents only' },
+          { status: 415 },
+        );
+      }
+      const bytes = Buffer.from(await file.arrayBuffer());
+      const result = await uploadFirestoreTextDocument({
+        catalog: new FirestoreDocumentCatalogRepository(
+          getFirestoreInstallationStore(),
+          config.FIRESTORE_AGENT_ID,
+        ),
+        workspace: getWorkspace(),
+        agentId: config.FIRESTORE_AGENT_ID,
+        name: file.name,
+        title: String(form?.get('title') ?? ''),
+        mime: file.type,
+        bytes,
+      });
+      return mobileJson({ ok: true, duplicate: result.duplicate }, { status: 201 });
+    }
     await getApplication().uploadDocument({
       name: file.name,
       title: String(form?.get('title') ?? ''),
