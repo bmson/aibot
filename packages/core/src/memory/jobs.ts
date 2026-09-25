@@ -71,6 +71,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'email.extract',
   'reminder.notify',
   'briefing.compose',
+  'pulse.check',
   'memory.consolidate',
   'memory.sweep_loops',
   'memory.graph_sync',
@@ -384,7 +385,10 @@ export async function runCodeJob(
     }
     case 'pulse.check': {
       await deps.heartbeat?.();
-      return { done: true, summary: pulseSummary(await runPulse(deps, { taskId: task.id })) };
+      return {
+        done: true,
+        summary: pulseSummary(await runPulse(deps, { taskId: task.id, agentId: task.agentId })),
+      };
     }
     case 'briefing.compose': {
       await deps.heartbeat?.();
