@@ -55,6 +55,8 @@ export function proxy(request: NextRequest) {
       request.method === 'GET') ||
     (path === '/' && request.method === 'GET') ||
     (path === '/profile/memories' && request.method === 'GET') ||
+    // The memory hub and its owner-authenticated Server Actions.
+    (path === '/profile' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/people' && request.method === 'GET') ||
     (/^\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path) &&
       request.method === 'GET') ||
