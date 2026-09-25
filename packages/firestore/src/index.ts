@@ -1,3 +1,4 @@
+export { FirestoreActiveJobLookup } from './active-jobs.js';
 export { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
 export { FirestoreApplicationChatPersistence } from './application-chat.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
@@ -101,6 +102,7 @@ export { FirestoreProfileOccasionCommandRepository } from './profile-occasion-co
 export { FirestoreProfileVoiceOverviewRepository } from './profile-overview.js';
 export { FirestoreProfilePeopleCommandRepository } from './profile-people-command.js';
 export { FirestoreProfilePeopleReadRepository } from './profile-people-read.js';
+export { FirestoreProfilePeopleRemovalRepository } from './profile-people-removal.js';
 export { FirestoreRecallFeedbackRepository } from './recall-feedback.js';
 export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 export { FirestoreReminderDeliveryRepository, FirestoreReminderRepository } from './reminders.js';
@@ -130,4 +132,5 @@ export { FirestoreVoiceProfileRepository } from './voice-profile.js';
 export { FirestoreWatchRepository } from './watches.js';
 export { FirestoreWorkspaceAnomalyRepository } from './workspace-anomalies.js';
 export { FirestoreWorkspaceCapabilityRepository } from './workspace-capabilities.js';
+export { FirestoreWorkspaceFileLookup } from './workspace-files.js';
 export { FirestoreWorkspaceImprovementRepository } from './workspace-improvements.js';

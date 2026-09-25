@@ -1,3 +1,4 @@
+export * from './active-jobs.js';
 export * from './application-chat.js';
 export * from './approval-policies.js';
 export * from './approvals.js';
@@ -6,6 +7,7 @@ export * from './budget-caps.js';
 export * from './builtin-tools.js';
 export * from './card-refresh.js';
 export * from './commitment-maintenance.js';
+export * from './contact-names.js';
 export * from './contracts.js';
 export * from './cost-policy.js';
 export * from './device-tokens.js';
@@ -60,4 +62,5 @@ export * from './voice-profile.js';
 export * from './watches.js';
 export * from './workspace-anomalies.js';
 export * from './workspace-capabilities.js';
+export * from './workspace-files.js';
 export * from './workspace-improvements.js';

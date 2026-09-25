@@ -15,3 +15,23 @@ export function isProfilePeopleCommandRepository(
     (value as { kind?: unknown }).kind === 'profile-people-command-repository'
   );
 }
+
+/**
+ * Destructive person commands that touch more records than one transaction
+ * may hold. Facts are moved or forgotten in bounded steps first; the final
+ * step re-checks that none remain before it removes the contact, so an
+ * interrupted command can simply be retried.
+ */
+export interface ProfilePeopleRemovalRepository {
+  readonly kind: 'profile-people-removal-repository';
+  /** Throws `Person not found.` or `The owner profile cannot be deleted.`. */
+  assertRemovable(contactId: string): Promise<void>;
+  /** Up to `limit` of the owner's fact IDs about this person. */
+  subjectMemoryIds(contactId: string, limit: number): Promise<string[]>;
+  /** Re-attribute up to `limit` facts from source to target; returns how many moved. */
+  reassignSubjectMemories(sourceId: string, targetId: string, limit: number): Promise<number>;
+  /** Remove the person's occasions and graph links, then the person. */
+  finishDelete(contactId: string): Promise<{ deletedOccasions: number }>;
+  /** Move occasions, union identity fields into the target, then remove the source. */
+  finishMerge(sourceId: string, targetId: string): Promise<{ movedOccasions: number }>;
+}
