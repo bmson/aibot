@@ -75,21 +75,20 @@ describe.skipIf(!localEmulator)('Firestore owner import page with PostgreSQL off
     resetConfigForTest();
   });
 
-  it('allows GET only and renders import history and local workspace files without actions', async () => {
+  it('renders import history, local workspace files, and their actions', async () => {
     const { proxy } = await import('../../proxy.js');
     expect(proxy(new NextRequest('http://localhost/import')).status).toBe(200);
-    expect(proxy(new NextRequest('http://localhost/import', { method: 'POST' })).status).toBe(503);
+    expect(proxy(new NextRequest('http://localhost/import', { method: 'POST' })).status).toBe(200);
     expect(
       proxy(new NextRequest('http://localhost/api/import/upload', { method: 'POST' })).status,
-    ).toBe(503);
+    ).toBe(200);
     const html = renderToStaticMarkup(await page.default());
     expect(html).toContain('Old notes');
     expect(html).toContain('ready.txt');
     expect(workspace.list).toHaveBeenCalledWith('import');
     expect(html).toContain('1 need review');
-    expect(html).not.toContain('<form');
-    expect(html).not.toContain('<button');
-    expect(html).not.toContain('/tasks/');
+    expect(html).toContain('action="/api/import/upload"');
+    expect(html).toContain('Approve all');
   });
 
   it('requires owner authentication', async () => {

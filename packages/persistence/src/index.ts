@@ -22,6 +22,7 @@ export * from './generated-cards.js';
 export * from './goals.js';
 export * from './graph-recall.js';
 export * from './history-recall.js';
+export * from './import-jobs.js';
 export * from './import-overview.js';
 export * from './knowledge-graph-curation.js';
 export * from './knowledge-graph-sync.js';

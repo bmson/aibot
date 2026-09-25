@@ -65,7 +65,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `self.maintain` | self-maintain | SQL |
 | `health.monitor` | assistant-health-monitor | SQL |
 | `documents.process` | document-processing (every 15 min) | SQL |
-| `import.run`, `voice.ingest` | on demand | SQL |
+| `import.run`, `voice.ingest` | on demand | Ready (`firestore-imports.test.ts`). Window commits and the voice checkpoint are lease-fenced. |
 
 Imported installations carry these schedules. The SQL jobs are **Disabled** (`firestoreCodeJobUnavailable`): the sweep advances their schedules without creating tasks, and an already-queued SQL job completes benignly. Goal sessions run through the portable goal gate. Unlike PostgreSQL, the Firestore sweep does not re-sync goal cadences each tick; the firing's instruction is rebuilt from the goal's current progress, and the cadence is the one the goal's last mobile or tool mutation wrote.
 

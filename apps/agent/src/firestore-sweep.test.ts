@@ -326,6 +326,8 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
       'memory.graph_sync',
       'documents.extract',
       'watch.suggest',
+      'import.run',
+      'voice.ingest',
     ])
       expect(firestoreCodeJobUnavailable(job)).toBeNull();
     // Unknown names are not code jobs; the executor treats them as model tasks.
