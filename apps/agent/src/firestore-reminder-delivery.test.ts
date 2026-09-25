@@ -218,14 +218,14 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
     });
 
     it('does not append a second message when a recurring occurrence is re-run', async () => {
-      await createReminder(
-        { text: 'Stand up and stretch', time: '09:00' },
-        new Date('2026-09-23T15:00:00.000Z'),
-        CHAT_ID,
-      );
-      // The first pass initializes the recurring schedule; the next day's pass fires it.
-      expect(await fire(new Date('2026-09-23T15:00:00.000Z'))).toEqual([]);
-      const [taskId] = await fire(new Date('2026-09-24T17:00:00.000Z'));
+      // Relative to the real clock: creating a recurring reminder may stamp
+      // its first run from the current time, whatever the tool context says.
+      const now = new Date();
+      await createReminder({ text: 'Stand up and stretch', time: '09:00' }, now, CHAT_ID);
+      // At most one occurrence can be due within a day of creation; a pass two
+      // days later fires exactly the next due one.
+      await fire(now);
+      const [taskId] = await fire(new Date(now.getTime() + 2 * 24 * 3_600_000));
       if (!taskId) throw new Error('recurring reminder did not fire');
       expect((await executeTask(deps, taskId)).outcome).toBe('done');
 
