@@ -351,6 +351,16 @@ export function pinnedMemoryEmbed(
 function buildFirestoreDeps(config: Config): AgentDeps {
   const problems = validateAgentPersistenceConfig(config);
   if (problems.length) throw new Error(problems.join('; '));
+  return composeFirestoreAgent(config);
+}
+
+/**
+ * The Firestore composition itself, without the runtime policy that narrows
+ * which modules may be enabled. `buildDeps` always validates first. This is
+ * exported so a test can compose every production module and prove that
+ * construction opens no SQL client.
+ */
+export function composeFirestoreAgent(config: Config): AgentDeps {
   const store = createInstallationStore({
     projectId: config.GCP_PROJECT,
     installationId: config.ASSISTANT_WORKSPACE_ID,
