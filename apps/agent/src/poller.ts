@@ -12,9 +12,9 @@ import {
   resumeResolvedApprovalTasks,
   runDueSchedules,
 } from '@assistant/core';
-import { FirestoreScheduleRepository } from '@assistant/firestore';
 import { type AgentDeps, agentServices, firestoreOwnerReady } from './deps.js';
 import { executorDeps } from './executor-deps.js';
+import { runFirestoreSweep } from './firestore-sweep.js';
 import { executeAgentTask } from './task-runner.js';
 
 const POLL_INTERVAL_MS = 2000;
@@ -63,37 +63,9 @@ export function startPoller(deps: AgentDeps): () => void {
     };
     try {
       if (deps.config.PERSISTENCE_DRIVER === 'firestore') {
-        // Keep Firestore approval lifecycles alive in the local queue runtime.
-        // These repository operations atomically update approvals and their
-        // parked task checkpoints; invoking SQL maintenance here would hit the
-        // Firestore mode's deliberate PostgreSQL tripwire.
-        if (!(await firestoreOwnerReady(deps))) return;
-        const approvals = deps.persistence?.approvals;
-        if (!approvals) throw new Error('Firestore approval persistence is unavailable');
-        const persistence = deps.persistence;
-        if (!persistence?.messages) throw new Error('Firestore message persistence is unavailable');
-        await runStep('expireStaleApprovals', () => approvals.expireStale());
-        await runStep('resumeResolvedApprovalTasks', () => approvals.resumeResolved());
-        await runStep('renotifyStalledApprovals', () =>
-          renotifyStalledApprovals(persistence, executorDeps(deps).notifyApproval),
-        );
-        const watches = deps.persistence?.watches;
-        if (watches) {
-          await runStep('expireWatches', () =>
-            watches.expire(deps.config.FIRESTORE_AGENT_ID, new Date()),
-          );
-        }
-        const store = deps.firestoreStore;
-        if (!store) throw new Error('Firestore schedule persistence is unavailable');
-        const owner = await store.doc('agents', deps.config.FIRESTORE_AGENT_ID).get();
-        const timezone = owner.get('timezone');
-        if (typeof timezone !== 'string' || !timezone.trim())
-          throw new Error('Firestore agent timezone is unavailable');
-        await runStep('runDueSchedules', async () => {
-          const fired = await runDueSchedules(new FirestoreScheduleRepository(store), timezone);
-          for (const item of fired)
-            console.log(`schedule fired: ${item.schedule} → ${item.taskId.slice(0, 8)}`);
-        });
+        // The same repository-only pass as /internal/sweep. Invoking the SQL
+        // maintenance below would hit the Firestore mode's PostgreSQL tripwire.
+        await runFirestoreSweep(deps);
         return;
       }
       await runStep('expireStaleApprovals', async () => {
@@ -202,7 +174,10 @@ export function startPoller(deps: AgentDeps): () => void {
     if (tick % SWEEP_EVERY_TICKS === 0) void sweep();
     // Module-declared recurring work (google's mail sync, most notably).
     // Cadence is the module's everyTicks against the shared 2s tick.
+    const firestore = deps.config.PERSISTENCE_DRIVER === 'firestore';
     for (const moduleTick of deps.modules.ticks) {
+      // A tick that still needs PostgreSQL must not run against the tripwire.
+      if (firestore && !moduleTick.portable) continue;
       if (tick % moduleTick.everyTicks === 0) {
         void moduleTick
           .run(agentServices(deps))

@@ -9,6 +9,7 @@ const firestoreOwnerReady = vi.hoisted(() => vi.fn());
 const runDueSchedules = vi.hoisted(() => vi.fn());
 const renotifyStalledApprovals = vi.hoisted(() => vi.fn(async () => 0));
 const notifyApproval = vi.hoisted(() => vi.fn(async () => {}));
+const runFirestoreSweep = vi.hoisted(() => vi.fn(async () => ({ ready: true, report: {} })));
 
 vi.mock('@assistant/core', () => ({
   findDueTasks,
@@ -24,12 +25,7 @@ vi.mock('@assistant/core', () => ({
   resumeResolvedApprovalTasks: vi.fn(async () => []),
   runDueSchedules,
 }));
-vi.mock('@assistant/firestore', () => ({
-  FirestoreScheduleRepository: class {
-    readonly kind = 'schedule-repository';
-    constructor(readonly store: unknown) {}
-  },
-}));
+vi.mock('./firestore-sweep.js', () => ({ runFirestoreSweep }));
 vi.mock('./task-runner.js', () => ({ executeAgentTask }));
 vi.mock('./executor-deps.js', () => ({
   executorDeps: () => ({ notifyApproval, notifyOwner: vi.fn() }),
@@ -63,6 +59,7 @@ beforeEach(() => {
   runDueSchedules.mockReset();
   renotifyStalledApprovals.mockReset();
   notifyApproval.mockReset();
+  runFirestoreSweep.mockClear();
   findDueTasks.mockResolvedValue([]);
   executeAgentTask.mockResolvedValue({ outcome: 'done' });
   firestoreOwnerReady.mockResolvedValue(true);
@@ -140,92 +137,47 @@ describe('startPoller', () => {
     stop();
   });
 
-  it('runs Firestore approval maintenance without entering PostgreSQL sweeps', async () => {
-    const expireStale = vi.fn(async () => []);
-    const resumeResolved = vi.fn(async () => []);
-    const expireWatches = vi.fn(async () => 0);
-    const firestorePersistence = {
-      approvals: { expireStale, resumeResolved },
-      messages: { append: vi.fn() },
-      watches: { expire: expireWatches },
-    };
+  it('runs the shared Firestore sweep without entering PostgreSQL sweeps', async () => {
     const firestoreDeps = {
       config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: 'owner-agent' },
       db: {},
       router: {},
-      modules: { sweepSteps: [], ticks: [] },
-      persistence: firestorePersistence,
+      modules: { sweepSteps: [{ name: 'sql', run: sweepStep }], ticks: [] },
     } as never;
 
     const stop = startPoller(firestoreDeps);
     await vi.advanceTimersByTimeAsync(62_000);
 
-    expect(firestoreOwnerReady).toHaveBeenCalled();
-    expect(expireStale).toHaveBeenCalled();
-    expect(resumeResolved).toHaveBeenCalled();
-    expect(renotifyStalledApprovals).toHaveBeenCalledWith(firestorePersistence, notifyApproval);
-    expect(expireWatches).toHaveBeenCalledWith('owner-agent', expect.any(Date));
+    expect(runFirestoreSweep).toHaveBeenCalledTimes(1);
+    expect(runFirestoreSweep).toHaveBeenCalledWith(firestoreDeps);
     expect(sweepStep).not.toHaveBeenCalled();
-    stop();
-  });
-
-  it('ticks due Firestore schedules with the stored owner timezone', async () => {
-    const ownerTimezone = 'America/Los_Angeles';
-    const firestoreStore = {
-      doc: () => ({
-        get: async () => ({
-          get: (field: string) =>
-            ({ id: 'owner-agent', timezone: ownerTimezone })[field as 'id' | 'timezone'],
-        }),
-      }),
-    };
-    const firestoreDeps = {
-      config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: 'owner-agent' },
-      db: {},
-      router: {},
-      modules: { sweepSteps: [], ticks: [] },
-      firestoreStore,
-      persistence: {
-        approvals: { expireStale: vi.fn(async () => []), resumeResolved: vi.fn(async () => []) },
-        messages: { append: vi.fn() },
-        watches: { expire: vi.fn(async () => 0) },
-      },
-    } as never;
-    runDueSchedules.mockResolvedValue([{ schedule: 'daily-briefing', taskId: 'task-12345678' }]);
-
-    const stop = startPoller(firestoreDeps);
-    await vi.advanceTimersByTimeAsync(62_000);
-
-    expect(runDueSchedules).toHaveBeenCalledTimes(1);
-    const [repository, timezone] = runDueSchedules.mock.calls[0] as [
-      { kind: string; store: unknown },
-      string,
-    ];
-    expect(repository.kind).toBe('schedule-repository');
-    expect(repository.store).toBe(firestoreStore);
-    expect(timezone).toBe(ownerTimezone);
-    stop();
-  });
-
-  it('does not tick Firestore schedules until the configured owner is ready', async () => {
-    firestoreOwnerReady.mockResolvedValue(false);
-    const firestoreDeps = {
-      config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: 'owner-agent' },
-      db: {},
-      router: {},
-      modules: { sweepSteps: [], ticks: [] },
-      firestoreStore: {},
-      persistence: {
-        approvals: { expireStale: vi.fn(async () => []), resumeResolved: vi.fn(async () => []) },
-        watches: { expire: vi.fn(async () => 0) },
-      },
-    } as never;
-
-    const stop = startPoller(firestoreDeps);
-    await vi.advanceTimersByTimeAsync(62_000);
-
-    expect(firestoreOwnerReady).toHaveBeenCalled();
     expect(runDueSchedules).not.toHaveBeenCalled();
+    expect(renotifyStalledApprovals).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('runs only portable module ticks in Firestore mode', async () => {
+    firestoreOwnerReady.mockResolvedValue(false);
+    const sqlTick = vi.fn(async () => {});
+    const portableTick = vi.fn(async () => {});
+    const firestoreDeps = {
+      config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: 'owner-agent' },
+      db: {},
+      router: {},
+      modules: {
+        sweepSteps: [],
+        ticks: [
+          { name: 'sql-tick', everyTicks: 1, run: sqlTick },
+          { name: 'portable-tick', everyTicks: 1, portable: true, run: portableTick },
+        ],
+      },
+    } as never;
+
+    const stop = startPoller(firestoreDeps);
+    await vi.advanceTimersByTimeAsync(4_100);
+
+    expect(portableTick).toHaveBeenCalledTimes(2);
+    expect(sqlTick).not.toHaveBeenCalled();
     stop();
   });
 });

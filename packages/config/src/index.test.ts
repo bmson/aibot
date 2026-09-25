@@ -107,15 +107,26 @@ describe('config', () => {
     ).toContain('FIRESTORE_DATABASE_ID must be explicit in production Firestore mode');
     expect(
       validateAgentPersistenceConfig(
-        { ...loadConfig(env), QUEUE_DRIVER: 'cloudtasks', CANARY_ENABLED: true },
+        {
+          ...loadConfig(env),
+          QUEUE_DRIVER: 'cloudtasks',
+          INTERNAL_AUTH_MODE: 'shared-secret',
+          CANARY_ENABLED: true,
+        },
         env,
       ),
     ).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('QUEUE_DRIVER=local'),
+        expect.stringContaining('INTERNAL_AUTH_MODE=oidc'),
         expect.stringContaining('CANARY_ENABLED'),
       ]),
     );
+    expect(
+      validateAgentPersistenceConfig(
+        { ...loadConfig(env), QUEUE_DRIVER: 'cloudtasks', INTERNAL_AUTH_MODE: 'oidc' },
+        env,
+      ),
+    ).toEqual([]);
   });
 
   it('bounds and explicitly opts into real canary side effects', () => {
