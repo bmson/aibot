@@ -24,15 +24,24 @@ import { z } from 'zod';
 import { register } from '../register.js';
 import type { ToolRegistry } from '../registry.js';
 import type { WorkspaceStore } from '../workspace-store.js';
+import {
+  registerPortableWebFetchTool,
+  registerPortableWorkspaceTools,
+} from './portable-web-workspace.js';
 import { registerSituationTools } from './situations.js';
 import { registerSportsTools } from './sports.js';
 import { registerPortableTaskTools } from './task-schedule.js';
 import { registerWeatherTool } from './weather.js';
-import { extractWebText, fetchPublicWebPage, looksLikeBotChallenge } from './web-fetch.js';
+import type { WebFetchIo } from './web-fetch.js';
 
 export { registerPortableGoalProgressTool } from './goal-progress.js';
 export { registerPortableGoalTools } from './goals.js';
 export { registerPortableOwnerNotifyTool } from './owner-notify.js';
+export {
+  registerPortableWebFetchTool,
+  registerPortableWebWorkspaceTools,
+  registerPortableWorkspaceTools,
+} from './portable-web-workspace.js';
 export { registerSportsTools } from './sports.js';
 export { registerPortableTaskTools } from './task-schedule.js';
 export * from './weather.js';
@@ -69,6 +78,8 @@ export interface BuiltinDeps {
   }) => Promise<{ superseded: string[] }>;
   /** Injected in tests; defaults to global fetch (used by `weather.lookup`). */
   fetchImpl?: (url: string, init?: { signal?: AbortSignal }) => Promise<Response>;
+  /** Injected web.fetch transport for deterministic boundary tests. */
+  webFetchIo?: WebFetchIo;
   /** Task lifecycle port used by future-self scheduling. */
   tasks?: TaskRepository;
   /** Durable memory port used by memory.save and memory.recall. */
@@ -466,102 +477,13 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
   );
 
   // ── web ────────────────────────────────────────────────────────────────────
-  register(
-    registry,
-    {
-      name: 'web.fetch',
-      description:
-        'Fetch a public web page over HTTP GET and return its text content. For reading only — no forms, no logins.',
-      inputSchema: z.object({ url: z.string().url() }),
-      risk: 'autonomous',
-      acceptsUntrustedInput: true,
-      // Shown when a tainted session tries to fetch (networkEgress routes it to
-      // approval): the exact URL matters because a fetch to an attacker URL is
-      // itself the egress/exfiltration channel.
-      approvalSummary: (args) => `Fetch the public web page ${args.url}`,
-      cacheTtlSeconds: 900,
-      execute: async (args, ctx) => {
-        const fetched = await fetchPublicWebPage(
-          args.url,
-          AbortSignal.any([ctx.signal, AbortSignal.timeout(15000)]),
-        );
-        const text = extractWebText(fetched.contentType, fetched.body);
-        if (looksLikeBotChallenge(fetched.status, text)) {
-          throw new Error(
-            `bot-challenge wall instead of content: ${fetched.finalUrl} answered HTTP ${fetched.status} with a CAPTCHA/verification page. ` +
-              'This site blocks automated fetches — do not retry this URL; go to a different source (the target site directly, its API or RSS feed).',
-          );
-        }
-        return {
-          status: fetched.status,
-          contentType: fetched.contentType,
-          text: text.slice(0, 20000),
-          truncated: fetched.truncated || text.length > 20000,
-          finalUrl: fetched.finalUrl,
-        };
-      },
-    },
-    {
-      returnsUntrustedContent: true,
-      networkEgress: true,
-      blanketAllowIneligible: true,
-    },
-  );
+  registerPortableWebFetchTool(registry, deps.webFetchIo ? { io: deps.webFetchIo } : {});
 
   // ── weather ────────────────────────────────────────────────────────────────
   registerWeatherTool(registry, deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {});
 
   // ── workspace files ────────────────────────────────────────────────────────
-  register(
-    registry,
-    {
-      name: 'workspace.write',
-      description: "Write a text file into the assistant's workspace.",
-      inputSchema: z.object({
-        path: z.string().min(1).max(300),
-        content: z.string().max(200_000),
-      }),
-      risk: 'autonomous',
-      acceptsUntrustedInput: true,
-      execute: async (args) => {
-        const { bytes } = await deps.workspace.write(args.path, args.content);
-        return { written: args.path, bytes };
-      },
-    },
-    { writesWorkspace: true },
-  );
-
-  register(
-    registry,
-    {
-      name: 'workspace.read',
-      description: "Read a text file from the assistant's workspace.",
-      inputSchema: z.object({ path: z.string().min(1).max(300) }),
-      risk: 'autonomous',
-      acceptsUntrustedInput: true,
-      execute: async (args) => {
-        const content = await deps.workspace.read(args.path);
-        return { path: args.path, content: content.slice(0, 100_000) };
-      },
-    },
-    { confidentialRead: true, returnsUntrustedContent: true },
-  );
-
-  register(
-    registry,
-    {
-      name: 'workspace.list',
-      description: 'List files in a workspace directory.',
-      inputSchema: z.object({ path: z.string().max(300).default('.') }),
-      risk: 'autonomous',
-      acceptsUntrustedInput: true,
-      execute: async (args) => {
-        const entries = await deps.workspace.list(args.path || '.');
-        return { entries };
-      },
-    },
-    { confidentialRead: true, returnsUntrustedContent: true },
-  );
+  registerPortableWorkspaceTools(registry, deps.workspace);
 
   // ── conversation search ────────────────────────────────────────────────────
   register(
