@@ -1,5 +1,10 @@
-import { listCommitmentOverview } from '@assistant/application/commitments';
+import { type CommitmentView, listCommitmentOverview } from '@assistant/application/commitments';
 import { getMemoryHubOverview, type MemorySnapshot } from '@assistant/application/profile';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import {
+  FirestoreProfileMemoryHubRepository,
+  getFirestoreCommitmentOverview,
+} from '@assistant/firestore';
 import {
   ArrowRight,
   CheckCircle2,
@@ -20,7 +25,7 @@ import { FactRow, type FactView } from '@/app/profile/fact-row';
 import { MemoryOrganizer } from '@/app/profile/memory-organizer';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getDb, getFirestoreInstallationStore } from '@/lib/server';
 import {
   CountBadge,
   cardInteractiveClass,
@@ -114,9 +119,33 @@ function toFactView(m: MemorySnapshot, now: Date): FactView {
   };
 }
 
+/** The memory hub projection for the configured driver. */
+async function readMemoryHub() {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER !== 'firestore') return getMemoryHubOverview(getDb());
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  return getMemoryHubOverview(
+    new FirestoreProfileMemoryHubRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    ),
+  );
+}
+
+/** Open loops for the configured driver, in the shape the panel renders. */
+async function readOpenCommitments(now: Date): Promise<CommitmentView[]> {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER !== 'firestore') return listCommitmentOverview(getDb());
+  return getFirestoreCommitmentOverview(
+    getFirestoreInstallationStore(),
+    config.FIRESTORE_AGENT_ID,
+    now,
+  );
+}
+
 export default async function ProfilePage() {
   await requireOwner();
-  const db = getDb();
   const now = new Date();
   const {
     owner,
@@ -127,8 +156,8 @@ export default async function ProfilePage() {
     card,
     ownerFactCount,
     peopleCount,
-  } = await getMemoryHubOverview(db);
-  const openCommitments = await listCommitmentOverview(db);
+  } = await readMemoryHub();
+  const openCommitments = await readOpenCommitments(now);
 
   // Memory state only changes nightly or from an action on this page (which
   // revalidates on its own). The one thing that updates in the background is a

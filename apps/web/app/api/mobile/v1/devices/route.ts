@@ -1,4 +1,4 @@
-import { getApplication } from '@/lib/server';
+import { registerOwnerDeviceToken } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const body = await request.json().catch(() => null);
-  const result = await getApplication().registerDeviceToken(body);
+  const result = await registerOwnerDeviceToken(body);
   if (!result.ok) return mobileJson({ error: result.error }, { status: result.status });
   return mobileJson({ ok: true });
 }
