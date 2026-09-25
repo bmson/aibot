@@ -37,13 +37,17 @@ export const documentsModule = defineModule<DocumentProcessorConfig | undefined>
               return { status: 400, json: { error: 'bad request' } };
             }
             const r = body.result;
-            const outcome = await recordDocumentProcessorResult(services.db, {
-              documentId: body.documentId,
-              token: body.token,
-              result: r
-                ? { ok: r.ok === true, kind: r.kind, chars: r.chars, error: r.error }
-                : { ok: false, error: 'job reported no result' },
-            });
+            const processor = services.persistence.documentProcessor;
+            const outcome = await recordDocumentProcessorResult(
+              processor ? { processor, tasks: services.persistence.tasks } : services.db,
+              {
+                documentId: body.documentId,
+                token: body.token,
+                result: r
+                  ? { ok: r.ok === true, kind: r.kind, chars: r.chars, error: r.error }
+                  : { ok: false, error: 'job reported no result' },
+              },
+            );
             if (!outcome.ok) return { status: outcome.status, json: { error: outcome.error } };
             return { status: 200, json: { ok: true } };
           },

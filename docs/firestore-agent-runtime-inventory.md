@@ -64,7 +64,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `dream.run` | dream | SQL |
 | `self.maintain` | self-maintain | SQL |
 | `health.monitor` | assistant-health-monitor | SQL |
-| `documents.process` | document-processing (every 15 min) | SQL |
+| `documents.process` | document-processing (every 15 min) | Ready (`firestore-document-processing.test.ts`). |
 | `import.run`, `voice.ingest` | on demand | SQL |
 
 Imported installations carry these schedules. The SQL jobs are **Disabled** (`firestoreCodeJobUnavailable`): the sweep advances their schedules without creating tasks, and an already-queued SQL job completes benignly. Goal sessions run through the portable goal gate. Unlike PostgreSQL, the Firestore sweep does not re-sync goal cadences each tick; the firing's instruction is rebuilt from the goal's current progress, and the cadence is the one the goal's last mobile or tool mutation wrote.
@@ -93,7 +93,7 @@ Imported installations carry these schedules. The SQL jobs are **Disabled** (`fi
 | maps | Ready | `maps.directions` Ready in #381 (`ownerContext.getLatestLocation`) | none | **Ready** (allowed) |
 | browser | Ready | `browser.plan/execute` staging Ready | `/webhooks/browser/callback` through the execution-jobs callback command (#400) | **Ready** (allowed) |
 | code | Ready | `code.execute` staging Ready | `/webhooks/code/callback` through the execution-jobs callback command (#400) | **Ready** (allowed) |
-| documents | Ready | `documents.search` through `persistence.documentSearch` (native vector search in `FIRESTORE_EMBEDDING_SPACE`, `firestore-document-search.test.ts`) | `/webhooks/document/callback`, `documents.process` SQL; `documents.extract` Ready | Disabled (config) |
+| documents | Ready | `documents.search` through `persistence.documentSearch` (native vector search in `FIRESTORE_EMBEDDING_SPACE`, `firestore-document-search.test.ts`) | `documents.extract` Ready; `documents.process` and `/webhooks/document/callback` through `persistence.documentProcessor` (`firestore-document-processing.test.ts`) | **Ready** (allowed) |
 | push | Ready | none | Owner notifier through `persistence.deviceTokens` (list, invalidate on APNs 410), behind the Firestore nudge policy (`firestore-push-notifier.test.ts`) | **Ready** (allowed) |
 | sms | Ready | `sms.send` voice rewrite through `persistence.voiceContext` | Inbound `/webhooks/twilio/sms`, approval codes, final delivery, metering and the `channel:sms` limit, and the notifier leg through `persistence.smsChannel` and the shared cost, approval, message and task repositories (`firestore-sms-channel.test.ts`) | **Ready** (allowed) |
 | google | Ready | Gmail/Docs/Sheets/Slides/Calendar HTTP tools; `gmail.send`/`gmail.create_draft` voice rewrite through `persistence.voiceContext`; `drive.ingest` through `persistence.documentCatalog`; `applications.*` through `persistence.applications` (`firestore-application-confirmations.test.ts`) | Gmail Pub/Sub + sync + watch renewal through `persistence.emailSync` (leased mailbox lock, `firestore-email-sync.test.ts`), attachments through `persistence.documentCatalog`, application confirmations Ready; email thread replies through `persistence.emailSync.replyThread` (`firestore-email-channel.test.ts`) | Disabled (config) |
@@ -126,4 +126,4 @@ Done in open PRs: portable sweep and reservation release (#374), explicit SQL-jo
 2. Port the lightweight SQL code jobs next (`memory.sweep_loops`, `ambient.refresh`, `health.monitor`, `memory.graph_date_backfill`), then the model-backed proactive jobs.
 3. Large domains, each needing its own repository family: Gmail sync/ingest/delivery (google), SMS channel and approval codes, documents search/processor, the remaining proactive code jobs, location ingest, and canaries.
 
-`validateAgentPersistenceConfig` admits the modules in `FIRESTORE_PORTABLE_MODULES` (reminders, calendar, browser, code, search, maps, watches, push, sms). Add a module there only once every row for it above is Ready.
+`validateAgentPersistenceConfig` admits the modules in `FIRESTORE_PORTABLE_MODULES` (reminders, calendar, browser, code, search, maps, watches, push, sms, documents). Add a module there only once every row for it above is Ready.

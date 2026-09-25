@@ -16,6 +16,7 @@ export { FirestoreCostRepository } from './costs.js';
 export { FirestoreDeviceTokenRepository } from './device-tokens.js';
 export { FirestoreDocumentCatalogRepository } from './document-catalog.js';
 export { FirestoreDocumentExtractionRepository } from './document-extraction.js';
+export { FirestoreDocumentProcessorRepository } from './document-processor.js';
 export { FirestoreDocumentSearchRepository } from './document-search.js';
 export { FirestoreDocumentReadRepository } from './documents.js';
 export { FirestoreEmailSyncRepository } from './email-sync.js';

@@ -48,6 +48,7 @@ const child = spawn(
     'apps/agent/src/firestore-email-sync.test.ts',
     'apps/agent/src/firestore-email-channel.test.ts',
     'apps/agent/src/firestore-document-search.test.ts',
+    'apps/agent/src/firestore-document-processing.test.ts',
     'apps/agent/src/firestore-goals-missions.test.ts',
     'apps/agent/src/firestore-builtin-tools.test.ts',
     'apps/web/app/costs/page.test.tsx',

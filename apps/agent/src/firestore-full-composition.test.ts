@@ -200,7 +200,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
           ASSISTANT_WORKSPACE_ID: installationId,
         }),
       ).toContain(
-        'ASSISTANT_MODULES=documents,google still needs PostgreSQL; Firestore agent mode supports reminders,calendar,browser,code,search,maps,watches,push,sms',
+        'ASSISTANT_MODULES=google still needs PostgreSQL; Firestore agent mode supports reminders,calendar,browser,code,search,maps,watches,push,sms,documents',
       );
     });
   },

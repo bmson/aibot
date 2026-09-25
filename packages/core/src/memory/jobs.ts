@@ -88,6 +88,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'self.maintain',
   'health.monitor',
   'watch.suggest',
+  'documents.process',
   'pulse.check',
   'graph.curiosity',
 ]);
@@ -520,6 +521,9 @@ export async function runCodeJob(
       return runDocumentProcessing(
         {
           db: deps.db,
+          ...(deps.persistence?.documentProcessor
+            ? { processorStore: deps.persistence.documentProcessor }
+            : {}),
           documentProcessor: deps.documentProcessor,
           heartbeat: deps.heartbeat,
         },

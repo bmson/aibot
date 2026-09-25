@@ -9,6 +9,7 @@ import { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenan
 import { FirestoreCostRepository } from './costs.js';
 import { FirestoreDeviceTokenRepository } from './device-tokens.js';
 import { FirestoreDocumentCatalogRepository } from './document-catalog.js';
+import { FirestoreDocumentProcessorRepository } from './document-processor.js';
 import { FirestoreDocumentSearchRepository } from './document-search.js';
 import { FirestoreEmailSyncRepository } from './email-sync.js';
 import { FirestoreExecutionContextRepository } from './execution-context.js';
@@ -85,5 +86,6 @@ export function createFirestoreExecutionPersistence(
     emailSync: new FirestoreEmailSyncRepository(store, agentId),
     documentCatalog: new FirestoreDocumentCatalogRepository(store, agentId),
     documentSearch: new FirestoreDocumentSearchRepository(store, agentId, skillEmbeddingSpace),
+    documentProcessor: new FirestoreDocumentProcessorRepository(store, agentId),
   };
 }

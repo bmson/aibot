@@ -76,7 +76,7 @@ describe('config', () => {
         expect.stringContaining('ASSISTANT_WORKSPACE_ID'),
         expect.stringContaining('FIRESTORE_AGENT_ID'),
         expect.stringContaining('FIRESTORE_EMBEDDING_SPACE'),
-        expect.stringContaining('ASSISTANT_MODULES=documents,google still needs PostgreSQL'),
+        expect.stringContaining('ASSISTANT_MODULES=google still needs PostgreSQL'),
       ]),
     );
     expect(() => parseFirestoreEmbeddingSpace('{"provider":"test"}')).toThrow(
@@ -96,9 +96,9 @@ describe('config', () => {
     resetConfigForTest();
     expect(validateAgentPersistenceConfig(loadConfig(env), env)).toEqual([]);
     expect(
-      validateAgentPersistenceConfig({ ...loadConfig(env), ASSISTANT_MODULES: ['documents'] }, env),
+      validateAgentPersistenceConfig({ ...loadConfig(env), ASSISTANT_MODULES: ['google'] }, env),
     ).toContain(
-      'ASSISTANT_MODULES=documents still needs PostgreSQL; Firestore agent mode supports reminders,calendar,browser,code,search,maps,watches,push,sms',
+      'ASSISTANT_MODULES=google still needs PostgreSQL; Firestore agent mode supports reminders,calendar,browser,code,search,maps,watches,push,sms,documents',
     );
     expect(
       validateAgentPersistenceConfig(loadConfig(env), {
