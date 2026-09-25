@@ -8,6 +8,7 @@ import { createFirestoreCardRefreshRepository } from './card-refresh.js';
 import { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import { FirestoreConversationSegmentationRepository } from './conversation-segmentation.js';
 import { FirestoreCostRepository } from './costs.js';
+import { FirestoreEmailExtractionRepository } from './email-extraction.js';
 import { FirestoreExecutionContextRepository } from './execution-context.js';
 import { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 import { FirestoreExecutionJobRepository } from './execution-jobs.js';
@@ -80,6 +81,7 @@ export function createFirestoreExecutionPersistence(
     missions: new FirestoreMissionRepository(store, agentId),
     ambientSnapshots: new FirestoreAmbientSnapshotRepository(store),
     commitmentMaintenance: new FirestoreCommitmentMaintenanceRepository(store),
+    emailExtraction: new FirestoreEmailExtractionRepository(store, agentId, skillEmbeddingSpace),
     ownerNotices: firestoreOwnerNotices(notifications),
     suggestions: new FirestoreSuggestionRepository(store),
     briefing: new FirestoreBriefingRepository(store),

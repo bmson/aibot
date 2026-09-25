@@ -7,6 +7,7 @@ import type { CommitmentMaintenanceRepository } from './commitment-maintenance.j
 import type { CostRepository, MessageRepository } from './contracts.js';
 import type { ConversationSegmentationRepository } from './conversation-segmentation.js';
 import type { ToolExecutionRepository } from './dispatch.js';
+import type { EmailExtractionRepository } from './email-extraction.js';
 import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
 import type { ExecutionJobRepository } from './execution-jobs.js';
@@ -83,6 +84,8 @@ export interface ExecutionPersistence {
   readonly ambientSnapshots?: AmbientSnapshotRepository;
   /** Present where the open-loop sweep has a portable adapter. */
   readonly commitmentMaintenance?: CommitmentMaintenanceRepository;
+  /** Present where the `email.extract` job has a portable adapter. */
+  readonly emailExtraction?: EmailExtractionRepository;
   /** Present where background producers post their dashboard copy portably. */
   readonly ownerNotices?: OwnerNoticeRepository;
   /** Present where producers record one-tap suggestions portably. */

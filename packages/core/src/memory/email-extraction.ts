@@ -7,6 +7,7 @@ import {
   messages,
   resolveSubjectContact,
 } from '@assistant/db';
+import type { EmailExtractionRepository } from '@assistant/persistence';
 import { asc, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
@@ -105,6 +106,99 @@ export interface EmailExtractionDeps {
   db: Db;
   router: ModelRouter;
   heartbeat?: () => Promise<void>;
+  /** The portable ledger and memory writer; without it the job reads and writes PostgreSQL. */
+  store?: EmailExtractionRepository;
+}
+
+/** The job's PostgreSQL reads and writes, with the queries it has always run. */
+function postgresEmailExtraction(db: Db): EmailExtractionRepository {
+  return {
+    kind: 'email-extraction-repository',
+    pending: (limit) =>
+      db
+        .select({
+          id: emailIngest.id,
+          agentId: emailIngest.agentId,
+          channelMessageId: emailIngest.channelMessageId,
+          fromEmail: emailIngest.fromEmail,
+          subject: emailIngest.subject,
+          category: emailIngest.category,
+          importance: emailIngest.importance,
+        })
+        .from(emailIngest)
+        .where(isNull(emailIngest.extractedAt))
+        .orderBy(asc(emailIngest.createdAt))
+        .limit(limit),
+    async messageText(channelMessageId) {
+      const [message] = await db
+        .select({ text: messages.text })
+        .from(messages)
+        .where(eq(messages.channelMessageId, channelMessageId))
+        .limit(1);
+      return message?.text ?? null;
+    },
+    async stamp(id, now) {
+      await db
+        .update(emailIngest)
+        .set({ extractedAt: now, updatedAt: now })
+        .where(eq(emailIngest.id, id));
+    },
+    async saveFact({ agentId, taskId, fact, quarantined }) {
+      if (await isTombstoned(db, fact.contentHash)) return 'tombstoned';
+      const resolved = await resolveSubjectContact(db, {
+        subject: fact.subject,
+        relationship: fact.relationship,
+      });
+      const [saved] = await db
+        .insert(memories)
+        .values({
+          agentId,
+          category: fact.category,
+          kind: fact.kind,
+          content: fact.content,
+          contentHash: fact.contentHash,
+          embedding: fact.embedding,
+          importance: fact.importance,
+          confidence: fact.confidence,
+          originTrust: 'unknown',
+          quarantined,
+          subjectContactId: resolved?.contactId,
+          domain: fact.domain,
+          validFrom: fact.validFrom,
+          source: 'email-ingest',
+          sourceTaskId: taskId,
+          expiresAt: fact.expiresAt ?? undefined,
+        })
+        .onConflictDoNothing({ target: memories.contentHash })
+        .returning({ id: memories.id });
+      return saved ? 'saved' : 'duplicate';
+    },
+    async saveOccasion(input) {
+      const resolved = await resolveSubjectContact(db, { subject: input.subject });
+      if (!resolved) return null;
+      const saved = await saveOccasion(db, {
+        agentId: input.agentId,
+        contactId: resolved.contactId,
+        kind: input.kind,
+        label: input.label,
+        month: input.month,
+        day: input.day,
+        year: input.year,
+        notes: input.notes,
+        originTrust: 'unknown',
+        quarantined: true,
+        source: 'email-ingest',
+      });
+      return saved.saved;
+    },
+    async pendingCount() {
+      const [row] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(emailIngest)
+        .where(isNull(emailIngest.extractedAt));
+      return Number(row?.n ?? 0);
+    },
+  };
 }
 
 export interface EmailExtractionResult {
@@ -123,7 +217,8 @@ export async function runEmailIngestExtraction(
   deps: EmailExtractionDeps,
   opts: { taskId?: string } = {},
 ): Promise<EmailExtractionResult> {
-  const { db, router } = deps;
+  const { router } = deps;
+  const store = deps.store ?? postgresEmailExtraction(deps.db);
 
   return withSpan('memory.email-extract', {}, async () => {
     const result: EmailExtractionResult = {
@@ -138,31 +233,14 @@ export async function runEmailIngestExtraction(
       skippedLowImportance: 0,
     };
 
-    const pending = await db
-      .select({
-        id: emailIngest.id,
-        agentId: emailIngest.agentId,
-        channelMessageId: emailIngest.channelMessageId,
-        fromEmail: emailIngest.fromEmail,
-        subject: emailIngest.subject,
-        category: emailIngest.category,
-        importance: emailIngest.importance,
-      })
-      .from(emailIngest)
-      .where(isNull(emailIngest.extractedAt))
-      .orderBy(asc(emailIngest.createdAt))
-      .limit(MAX_ROWS_PER_RUN);
+    const pending = await store.pending(MAX_ROWS_PER_RUN);
 
     let extractions = 0;
     for (const row of pending) {
       await deps.heartbeat?.();
       result.rowsVisited += 1;
 
-      const stamp = () =>
-        db
-          .update(emailIngest)
-          .set({ extractedAt: new Date(), updatedAt: new Date() })
-          .where(eq(emailIngest.id, row.id));
+      const stamp = () => store.stamp(row.id, new Date());
 
       // Routine mail is kept and stays searchable, but it is not worth an
       // extraction call. Stamp it so the ledger drains instead of re-reading
@@ -174,12 +252,7 @@ export async function runEmailIngestExtraction(
       }
       if (extractions >= MAX_EXTRACTIONS_PER_RUN) break;
 
-      const [message] = await db
-        .select({ text: messages.text })
-        .from(messages)
-        .where(eq(messages.channelMessageId, row.channelMessageId))
-        .limit(1);
-      const body = (message?.text ?? '').slice(0, MAX_BODY_CHARS);
+      const body = ((await store.messageText(row.channelMessageId)) ?? '').slice(0, MAX_BODY_CHARS);
       if (body.trim().length < 40) {
         await stamp();
         continue;
@@ -228,25 +301,15 @@ export async function runEmailIngestExtraction(
         if (!fact || !embedding) continue;
 
         const contentHash = createHash('sha256').update(fact.content).digest('hex');
-        if (await isTombstoned(db, contentHash)) {
-          result.tombstoned += 1;
-          continue;
-        }
-
-        const resolved = await resolveSubjectContact(db, {
-          subject: fact.subject,
-          relationship: fact.relationship,
-        });
         const quarantined = ingestFactQuarantined({
           category: row.category,
           subject: fact.subject,
           kind: fact.kind,
         });
-
-        const [saved] = await db
-          .insert(memories)
-          .values({
-            agentId: row.agentId,
+        const saved = await store.saveFact({
+          agentId: row.agentId,
+          ...(opts.taskId ? { taskId: opts.taskId } : {}),
+          fact: {
             category: fact.category,
             kind: fact.kind,
             content: fact.content,
@@ -256,22 +319,17 @@ export async function runEmailIngestExtraction(
             // Third-party mail is not a first-hand source, however plausible it
             // reads, so its facts never carry full confidence.
             confidence: Math.min(fact.confidence, 0.8).toFixed(2),
-            originTrust: 'unknown',
-            quarantined,
-            subjectContactId: resolved?.contactId,
+            subject: fact.subject,
+            ...(fact.relationship ? { relationship: fact.relationship } : {}),
             domain: fact.domain,
-            validFrom: parseValidFrom(fact.validFrom),
-            source: 'email-ingest',
-            sourceTaskId: opts.taskId,
+            validFrom: parseValidFrom(fact.validFrom) ?? null,
             expiresAt:
-              fact.category === 'experience'
-                ? new Date(Date.now() + 90 * 24 * 3600 * 1000)
-                : undefined,
-          })
-          .onConflictDoNothing({ target: memories.contentHash })
-          .returning({ id: memories.id });
-
-        if (!saved) result.duplicates += 1;
+              fact.category === 'experience' ? new Date(Date.now() + 90 * 24 * 3600 * 1000) : null,
+          },
+          quarantined,
+        });
+        if (saved === 'tombstoned') result.tombstoned += 1;
+        else if (saved === 'duplicate') result.duplicates += 1;
         else {
           result.saved += 1;
           if (quarantined) result.quarantined += 1;
@@ -282,23 +340,18 @@ export async function runEmailIngestExtraction(
       // An occasion is a claim about a named person's life — unfalsifiable and
       // long-lived — so it always waits for review, whatever the message was.
       for (const occ of outcome.object.occasions ?? []) {
-        const resolvedContact = await resolveSubjectContact(db, { subject: occ.subject });
-        if (!resolvedContact) continue;
         try {
-          const savedOccasion = await saveOccasion(db, {
+          const saved = await store.saveOccasion({
             agentId: row.agentId,
-            contactId: resolvedContact.contactId,
+            subject: occ.subject,
             kind: occ.kind,
-            label: occ.label,
+            label: occ.label ?? '',
             month: occ.month,
             day: occ.day,
-            year: occ.year,
-            notes: occ.notes,
-            originTrust: 'unknown',
-            quarantined: true,
-            source: 'email-ingest',
+            year: occ.year ?? null,
+            notes: occ.notes ?? '',
           });
-          if (savedOccasion.saved) result.occasionsSaved += 1;
+          if (saved) result.occasionsSaved += 1;
         } catch (err) {
           console.error('email extraction: skipping unsavable occasion', err);
         }
@@ -312,10 +365,10 @@ export async function runEmailIngestExtraction(
 }
 
 /** How many ingested messages are still waiting to be read into memory. */
-export async function pendingEmailExtractionCount(db: Db): Promise<number> {
-  const [row] = await db
-    .select({ n: sql<number>`count(*)` })
-    .from(emailIngest)
-    .where(isNull(emailIngest.extractedAt));
-  return Number(row?.n ?? 0);
+export function pendingEmailExtractionCount(
+  store: Db | EmailExtractionRepository,
+): Promise<number> {
+  return 'kind' in store && store.kind === 'email-extraction-repository'
+    ? store.pendingCount()
+    : postgresEmailExtraction(store as Db).pendingCount();
 }
