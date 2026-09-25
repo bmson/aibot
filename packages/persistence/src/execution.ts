@@ -4,6 +4,7 @@ import type { AssistantHealthRepository } from './assistant-health.js';
 import type { CardRefreshRepository } from './card-refresh.js';
 import type { CommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import type { CostRepository, MessageRepository } from './contracts.js';
+import type { DeviceTokenRepository } from './device-tokens.js';
 import type { ToolExecutionRepository } from './dispatch.js';
 import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
@@ -19,6 +20,7 @@ import type { MemoryToolRepository } from './memory-tools.js';
 import type { MissionRepository } from './missions.js';
 import type { ModelRoutingRepository } from './model-routing.js';
 import type { NotificationsConversationRepository } from './notifications.js';
+import type { NudgePolicyRepository } from './nudge-policy.js';
 import type { OwnerCardCompilationRepository } from './owner-card-compilation.js';
 import type { AmbientSnapshotRepository, OwnerContextRepository } from './owner-context.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
@@ -68,4 +70,8 @@ export interface ExecutionPersistence {
   readonly ambientSnapshots?: AmbientSnapshotRepository;
   /** Present where the open-loop sweep has a portable adapter. */
   readonly commitmentMaintenance?: CommitmentMaintenanceRepository;
+  /** Present where the push channel reads and invalidates device tokens portably. */
+  readonly deviceTokens?: DeviceTokenRepository;
+  /** Present where out-of-band pings consult quiet hours and the daily cap portably. */
+  readonly nudgePolicy?: NudgePolicyRepository;
 }

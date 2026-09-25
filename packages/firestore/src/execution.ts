@@ -6,6 +6,7 @@ import { FirestoreAssistantHealthRepository } from './assistant-health.js';
 import { createFirestoreCardRefreshRepository } from './card-refresh.js';
 import { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import { FirestoreCostRepository } from './costs.js';
+import { FirestoreDeviceTokenRepository } from './device-tokens.js';
 import { FirestoreExecutionContextRepository } from './execution-context.js';
 import { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 import { FirestoreExecutionJobRepository } from './execution-jobs.js';
@@ -20,6 +21,7 @@ import { FirestoreMemoryToolRepository } from './memory-tools.js';
 import { FirestoreMessageRepository } from './messages.js';
 import { FirestoreMissionRepository } from './missions.js';
 import { FirestoreModelRoutingRepository } from './model-routing.js';
+import { FirestoreNudgePolicyRepository } from './nudge-policy.js';
 import { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 import { FirestoreOwnerContextRepository } from './owner-context.js';
 import { FirestoreOwnerNoticeRepository } from './owner-notices.js';
@@ -69,5 +71,7 @@ export function createFirestoreExecutionPersistence(
     missions: new FirestoreMissionRepository(store, agentId),
     ambientSnapshots: new FirestoreAmbientSnapshotRepository(store),
     commitmentMaintenance: new FirestoreCommitmentMaintenanceRepository(store),
+    deviceTokens: new FirestoreDeviceTokenRepository(store),
+    nudgePolicy: new FirestoreNudgePolicyRepository(store, agentId),
   };
 }

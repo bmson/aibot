@@ -99,7 +99,6 @@
   "packages/modules/src/google/email-channel.ts",
   "packages/modules/src/google/email-sync.ts",
   "packages/modules/src/platform.ts",
-  "packages/modules/src/push/channel.ts",
   "packages/modules/src/sms/channel.ts",
   "packages/modules/src/watches/email-watches.ts",
   "packages/modules/src/watches/fire.ts",

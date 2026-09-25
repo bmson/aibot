@@ -61,6 +61,7 @@ import {
   embeddingModelId,
   type GoalToolRepository,
   type ModelRoutingRepository,
+  type NudgePolicyRepository,
   type Records,
 } from '@assistant/persistence';
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
@@ -297,11 +298,14 @@ function firestoreDashboardOwnerNotifier(deps: AgentDeps): OwnerNotifier {
  * leg, which is composed separately and never gated. Approvals bypass the
  * policy entirely: the owner is the one waiting on them.
  */
-function policyGatedOutOfBand(db: Db, inner: OwnerNotifier): OwnerNotifier {
+function policyGatedOutOfBand(
+  policy: Db | NudgePolicyRepository,
+  owner: () => Promise<{ id: string; timezone: string }>,
+  inner: OwnerNotifier,
+): OwnerNotifier {
   return {
     notifyOwner: async (input) => {
-      const agent = await getAgent(db);
-      const decision = await evaluateOutOfBandPing(db, agent, {
+      const decision = await evaluateOutOfBandPing(policy, await owner(), {
         urgency: input.urgency ?? 'interrupt',
       });
       if (!decision.deliver) return;
@@ -333,10 +337,12 @@ export function agentServices(deps: AgentDeps): ModuleServices {
     registry: deps.registry,
     dispatcher: deps.dispatcher,
     workspace: deps.workspace,
-    ownerNotifier:
+    ownerNotifier: composeOwnerNotifiers([
       deps.config.PERSISTENCE_DRIVER === 'firestore'
         ? firestoreDashboardOwnerNotifier(deps)
-        : composeOwnerNotifiers([dashboardOwnerNotifier(deps), deps.outOfBandNotifier]),
+        : dashboardOwnerNotifier(deps),
+      deps.outOfBandNotifier,
+    ]),
     emailObservers: deps.modules.emailObservers,
     persistence: deps.persistence ?? createPostgresExecutionPersistence(deps.db),
   };
@@ -461,6 +467,9 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
   // portable repositories.
   // MCP tools can use their Firestore adapter, but remain explicitly opt-in here.
   const notices = new FirestoreOwnerNoticeRepository(store, config.FIRESTORE_AGENT_ID);
+  // Late-bound like the PostgreSQL composition: owner.notify registers before
+  // the modules that supply the phone legs are installed.
+  let outOfBandNotifier: OwnerNotifier = noopOwnerNotifier;
   const registry = registerFirestoreMcpTools(
     registerPortableOwnerNotifyTool(
       registerPortableGoalProgressTool(
@@ -500,6 +509,7 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
             throw new Error('Owner notice is outside the configured Firestore agent');
           return notices.postToolNotice(input);
         },
+        notifyOwner: (input) => outOfBandNotifier.notifyOwner(input),
       },
     ),
     store,
@@ -552,6 +562,16 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
       getTimezone: ownerTimezone,
     },
   });
+  const nudgePolicy = persistence.nudgePolicy;
+  if (!nudgePolicy) throw new Error('Firestore persistence has no nudge policy');
+  outOfBandNotifier = policyGatedOutOfBand(
+    nudgePolicy,
+    async () => ({
+      id: config.FIRESTORE_AGENT_ID,
+      timezone: await ownerTimezone(config.FIRESTORE_AGENT_ID),
+    }),
+    modules.ownerNotifier,
+  );
   return {
     config,
     db,
@@ -571,7 +591,7 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
     ),
     workspace,
     modules,
-    outOfBandNotifier: noopOwnerNotifier,
+    outOfBandNotifier,
   };
 }
 
@@ -642,7 +662,7 @@ export function buildDeps(): AgentDeps {
     workspaceRoot,
     persistence,
   });
-  outOfBandNotifier = policyGatedOutOfBand(db, modules.ownerNotifier);
+  outOfBandNotifier = policyGatedOutOfBand(db, () => getAgent(db), modules.ownerNotifier);
 
   const browserLauncher = modules.exportsOf(browserModule);
   const documentProcessor = modules.exportsOf(documentsModule);

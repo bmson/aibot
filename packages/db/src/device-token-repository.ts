@@ -1,4 +1,5 @@
 import type { DeviceTokenRepository } from '@assistant/persistence';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { deviceTokens } from './schema.js';
 
@@ -25,6 +26,23 @@ export function createPostgresDeviceTokenRepository(db: Db): DeviceTokenReposito
             invalidatedAt: null,
           },
         });
+    },
+    async listActive(agentId) {
+      const rows = await db
+        .select({ token: deviceTokens.token, environment: deviceTokens.environment })
+        .from(deviceTokens)
+        .where(and(eq(deviceTokens.agentId, agentId), isNull(deviceTokens.invalidatedAt)))
+        .orderBy(asc(deviceTokens.lastSeenAt));
+      return rows.map((row) => ({
+        token: row.token,
+        environment: row.environment === 'sandbox' ? 'sandbox' : 'production',
+      }));
+    },
+    async invalidate(token) {
+      await db
+        .update(deviceTokens)
+        .set({ invalidatedAt: new Date() })
+        .where(eq(deviceTokens.token, token));
     },
   };
 }
