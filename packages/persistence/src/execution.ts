@@ -13,6 +13,7 @@ import type { KnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 import type { MemoryConsolidationRepository } from './memory-consolidation.js';
 import type { MemorySupersedeRepository } from './memory-supersede.js';
 import type { MemoryToolRepository } from './memory-tools.js';
+import type { MessageEmbeddingRepository } from './message-embeddings.js';
 import type { ModelRoutingRepository } from './model-routing.js';
 import type { OwnerCardCompilationRepository } from './owner-card-compilation.js';
 import type { OwnerContextRepository } from './owner-context.js';
@@ -49,6 +50,8 @@ export interface ExecutionPersistence {
   readonly cardRefresh: CardRefreshRepository;
   readonly recallMetrics: RecallMetricsRepository;
   readonly watches: WatchRepository;
+  /** Present where new chat messages are embedded for recall by a portable backfill. */
+  readonly messageEmbeddings?: MessageEmbeddingRepository;
   /**
    * Present where scheduled reminder delivery has a portable adapter. Without
    * it the `reminder.notify` job keeps its PostgreSQL delivery path.

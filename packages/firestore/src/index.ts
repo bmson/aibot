@@ -37,6 +37,10 @@ export { embeddingSpaceKey, FirestoreMemoryRepository } from './memory.js';
 export { FirestoreMemoryConsolidationRepository } from './memory-consolidation.js';
 export { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 export { FirestoreMemoryToolRepository } from './memory-tools.js';
+export {
+  FirestoreMessageEmbeddingRepository,
+  messageEmbeddingMarker,
+} from './message-embeddings.js';
 export { FirestoreMessageRepository } from './messages.js';
 export { getFirestoreMobileCosts } from './mobile-costs.js';
 export { FirestoreModelRoutingRepository } from './model-routing.js';

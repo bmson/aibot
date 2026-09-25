@@ -1,3 +1,4 @@
+import { parseFirestoreEmbeddingSpace } from '@assistant/config';
 import {
   dispatchOutbox,
   expireStaleApprovals,
@@ -10,8 +11,13 @@ import {
   runDueSchedules,
 } from '@assistant/core';
 import { FirestoreOutbox, FirestoreScheduleRepository } from '@assistant/firestore';
-import type { TaskQueue } from '@assistant/persistence';
-import { type AgentDeps, agentServices, firestoreMaintenanceReady } from './deps.js';
+import type { MessageEmbeddingRepository, TaskQueue } from '@assistant/persistence';
+import {
+  type AgentDeps,
+  agentServices,
+  firestoreMaintenanceReady,
+  pinnedMemoryEmbed,
+} from './deps.js';
 import { executorDeps } from './executor-deps.js';
 
 export type FirestoreSweepResult =
@@ -99,6 +105,18 @@ export async function runFirestoreSweep(
     releasedReservations: await step('releaseStaleReservations', () =>
       releaseStaleReservations(persistence.costs, 120, 500),
     ),
+    messagesEmbedded: await step('backfillMessageEmbeddings', async () => {
+      const embeddings = persistence.messageEmbeddings;
+      if (!embeddings) return 0;
+      // Built only when a message is waiting, so an idle pass needs no model.
+      return backfillFirestoreMessageEmbeddings(embeddings, (texts) =>
+        pinnedMemoryEmbed(
+          parseFirestoreEmbeddingSpace(deps.config.FIRESTORE_EMBEDDING_SPACE),
+          persistence.modelRouting,
+          (batch) => deps.router.embed(batch),
+        )(texts),
+      );
+    }),
   };
   for (const sweepStep of deps.modules.sweepSteps) {
     if (!sweepStep.portable) continue;
@@ -139,4 +157,25 @@ export async function runFirestoreSweep(
     report.wakeIntentErrors = dispatched ? dispatched.errors + dispatched.leaseLost : 1;
   }
   return { ready: true, report };
+}
+
+/**
+ * New chat messages become recall candidates once embedded, as the PostgreSQL
+ * sweep's backfill does. One bounded, newest-agnostic batch per pass; a
+ * message edited mid-pass stays pending for the next one.
+ */
+export async function backfillFirestoreMessageEmbeddings(
+  embeddings: MessageEmbeddingRepository,
+  embed: (texts: string[]) => Promise<number[][]>,
+  batch = 20,
+): Promise<number> {
+  const pending = await embeddings.pending(batch);
+  if (pending.length === 0) return 0;
+  const vectors = await embed(pending.map((message) => message.text.slice(0, 4000)));
+  let stored = 0;
+  for (const [index, message] of pending.entries()) {
+    const vector = vectors[index];
+    if (vector && (await embeddings.record(message.id, message.text, vector))) stored += 1;
+  }
+  return stored;
 }

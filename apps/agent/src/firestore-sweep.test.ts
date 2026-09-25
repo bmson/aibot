@@ -130,6 +130,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
         expiredWatches: 0,
         schedulesFired: 0,
         releasedReservations: 1,
+        messagesEmbedded: 0,
         expiredInboxWatches: 0,
         webWatchFires: 0,
         portableStep: 1,

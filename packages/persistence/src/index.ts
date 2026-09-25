@@ -22,6 +22,7 @@ export * from './location-pings.js';
 export * from './memory-consolidation.js';
 export * from './memory-supersede.js';
 export * from './memory-tools.js';
+export * from './message-embeddings.js';
 export * from './migration.js';
 export * from './model-routing.js';
 export * from './money.js';

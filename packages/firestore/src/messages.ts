@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AppendMessageInput, MessageRepository, Records } from '@assistant/persistence';
+import { messageEmbeddingMarker } from './message-embeddings.js';
 import { encodeRecord, type InstallationStore } from './store.js';
 
 export function messageRecord(
@@ -15,6 +16,7 @@ export function messageRecord(
     channelMessageId: input.channelMessageId ?? null,
     embedding: null,
     hiddenAt: null,
+    ...messageEmbeddingMarker(input.role, input.text),
   };
   // Leave room for Firestore's field-name/type overhead. Oversize content must go through
   // the forthcoming GCS payload adapter; never silently truncate or split a transaction.

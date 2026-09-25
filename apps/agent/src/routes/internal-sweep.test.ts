@@ -127,6 +127,7 @@ describe('POST /internal/sweep in Firestore mode', () => {
       expiredWatches: 3,
       schedulesFired: 1,
       releasedReservations: 4,
+      messagesEmbedded: 0,
     });
     expect(mocks.releaseStaleReservations).toHaveBeenCalledWith(f.persistence.costs, 120, 500);
     expect(mocks.expireStaleApprovals).toHaveBeenCalledWith(f.persistence.approvals);

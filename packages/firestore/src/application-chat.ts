@@ -14,6 +14,7 @@ import {
 } from '@assistant/persistence';
 import { type Query, type QueryDocumentSnapshot, Timestamp } from '@google-cloud/firestore';
 import { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
+import { messageEmbeddingMarker } from './message-embeddings.js';
 import { createWakeIntent } from './outbox.js';
 import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
 
@@ -750,6 +751,7 @@ export class FirestoreApplicationChatPersistence implements ApplicationChatPersi
         channelMessageId: input.channelMessageId ?? null,
         embedding: null,
         hiddenAt: null,
+        ...messageEmbeddingMarker(input.role, input.text),
       };
       if (Buffer.byteLength(JSON.stringify(row), 'utf8') > 900_000) {
         throw new Error('Message exceeds inline storage limit; store its payload in Cloud Storage');
@@ -859,6 +861,7 @@ export class FirestoreApplicationChatPersistence implements ApplicationChatPersi
           channelMessageId: message.channelMessageId ?? null,
           embedding: null,
           hiddenAt: null,
+          ...messageEmbeddingMarker(message.role, message.text),
         };
         tx.create(this.store.doc('messages', id), encodeRecord(row));
       }

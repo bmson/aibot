@@ -13,6 +13,7 @@ import { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js
 import { FirestoreMemoryConsolidationRepository } from './memory-consolidation.js';
 import { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 import { FirestoreMemoryToolRepository } from './memory-tools.js';
+import { FirestoreMessageEmbeddingRepository } from './message-embeddings.js';
 import { FirestoreMessageRepository } from './messages.js';
 import { FirestoreModelRoutingRepository } from './model-routing.js';
 import { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
@@ -56,6 +57,7 @@ export function createFirestoreExecutionPersistence(
     cardRefresh: createFirestoreCardRefreshRepository(store),
     recallMetrics: new FirestoreRecallMetricsRepository(store),
     watches: new FirestoreWatchRepository(store),
+    messageEmbeddings: new FirestoreMessageEmbeddingRepository(store, skillEmbeddingSpace),
     reminderDelivery: new FirestoreReminderDeliveryRepository(store, agentId),
   };
 }
