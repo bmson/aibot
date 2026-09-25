@@ -51,7 +51,9 @@ export type DependencyClass =
   | 'operator-script'
   | 'tests'
   | 'local-development'
-  | 'documentation';
+  | 'documentation'
+  | 'postgres-only'
+  | 'guard';
 
 /** Classes whose presence means deleting Neon would break something still in use. */
 const BLOCKING_CLASSES = new Set<DependencyClass>([
@@ -78,7 +80,117 @@ const CLASS_NOTES: Record<DependencyClass, string> = {
   tests: 'Tests against a local or disposable PostgreSQL database.',
   'local-development': 'Local development defaults (docker compose, .env.example).',
   documentation: 'Documentation references; update wording after retirement.',
+  'postgres-only':
+    'Runs only on the PostgreSQL path. Proven unreachable from the Firestore release path (and guarded where noted); delete with the database.',
+  guard:
+    'Code that rejects a database setting (marked `retirement-scan: forbids`); it enforces the Firestore path rather than depending on the database.',
 };
+
+/**
+ * Files that run only while the installation is on PostgreSQL. Each is
+ * reported as postgres-only only while the proof holds: it is unreachable from
+ * the Firestore release entry point, and its guard (when listed) is present.
+ * Otherwise it falls back to its blocking class.
+ */
+export const POSTGRES_ONLY_FILES: ReadonlyArray<{ path: string; reason: string; guard?: string }> =
+  [
+    {
+      path: 'infra/gcp/release-postgres.sh',
+      reason:
+        'PostgreSQL release; infra/gcp/release.sh runs it only for PERSISTENCE_DRIVER=postgres.',
+    },
+    {
+      path: 'infra/gcp/release-diagnostics.sh',
+      reason: 'Migration-job diagnostics sourced only by release-postgres.sh.',
+    },
+    {
+      path: 'infra/gcp/deploy.sh',
+      reason: 'PostgreSQL provisioner; refuses to run once assistant-agent uses Firestore.',
+      guard: 'refuse_firestore_installation || exit 1',
+    },
+    {
+      path: 'infra/docker/backup.sh',
+      reason: 'pg_dump entrypoint of the backup image, which only release-postgres.sh runs.',
+    },
+    {
+      path: 'infra/docker/database-admin.sh',
+      reason: 'Direct-connection helper used by the PostgreSQL backup and migration jobs.',
+    },
+  ];
+
+/** What deploy.yml's release job runs, and what it hands over to on Firestore. */
+export const RELEASE_SELECTOR = 'infra/gcp/release.sh';
+export const FIRESTORE_RELEASE_ENTRY = 'infra/gcp/release-firestore.sh';
+const FORBIDS_MARKER = 'retirement-scan: forbids';
+const REFERENCE = /[A-Za-z0-9_./-]*[A-Za-z0-9_-]+(?:\.sh|\.ya?ml|\.Dockerfile)\b/g;
+
+/**
+ * Every tracked file transitively named by the Firestore release entry point:
+ * sourced or executed scripts, Cloud Build configs, and the Dockerfiles those
+ * build. A reference resolves by full path, or by name beside the referrer.
+ */
+export function firestoreReleaseClosure(files: Array<{ path: string; text: string }>): string[] {
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  const seen = new Set<string>();
+  const queue = [FIRESTORE_RELEASE_ENTRY];
+  while (queue.length) {
+    const path = queue.shift() as string;
+    if (seen.has(path) || !byPath.has(path)) continue;
+    seen.add(path);
+    const directory = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
+    // Comments name other scripts for the reader; only code lines are followed.
+    const code = (byPath.get(path)?.text ?? '')
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#'))
+      .join('\n');
+    for (const match of code.match(REFERENCE) ?? []) {
+      const name = match.replace(/^\.?\//, '');
+      const candidates = [name, `${directory}${name.split('/').at(-1)}`];
+      for (const candidate of candidates) if (byPath.has(candidate)) queue.push(candidate);
+    }
+  }
+  return [...seen].sort();
+}
+
+export type FirestorePathResult = {
+  ok: boolean;
+  closure: string[];
+  problems: string[];
+  postgresOnly: Array<{ path: string; reason: string; proven: boolean }>;
+};
+
+/** Static proof that the Firestore release path has no PostgreSQL dependency. */
+export function verifyFirestorePath(
+  files: Array<{ path: string; text: string }>,
+): FirestorePathResult {
+  const problems: string[] = [];
+  const byPath = new Map(files.map((file) => [file.path, file]));
+  const selector = byPath.get(RELEASE_SELECTOR);
+  if (!byPath.has(FIRESTORE_RELEASE_ENTRY)) problems.push(`${FIRESTORE_RELEASE_ENTRY} is missing`);
+  if (!selector?.text.includes(FIRESTORE_RELEASE_ENTRY.split('/').at(-1) as string))
+    problems.push(`${RELEASE_SELECTOR} does not hand over to ${FIRESTORE_RELEASE_ENTRY}`);
+  const closure = firestoreReleaseClosure(files);
+  // Without a Firestore entry point that the selector hands over to, nothing
+  // can be proven PostgreSQL-only: every such file keeps its blocking class.
+  const pathExists = problems.length === 0;
+  const postgresOnly = POSTGRES_ONLY_FILES.map((entry) => {
+    const file = byPath.get(entry.path);
+    const reachable = closure.includes(entry.path);
+    // A deleted file needs no guard; an existing one must keep it.
+    const guarded = !entry.guard || !file || file.text.includes(entry.guard);
+    if (reachable) problems.push(`${entry.path} is reachable from the Firestore release path`);
+    if (!guarded) problems.push(`${entry.path} lost its guard (${entry.guard})`);
+    return { path: entry.path, reason: entry.reason, proven: pathExists && !reachable && guarded };
+  });
+  const unproven = new Set(postgresOnly.filter((item) => !item.proven).map((item) => item.path));
+  for (const finding of scanRepository(files, { unproven }))
+    if (
+      (closure.includes(finding.path) || finding.path === RELEASE_SELECTOR) &&
+      finding.class !== 'guard'
+    )
+      problems.push(`${finding.path} (Firestore release path) references the database`);
+  return { ok: problems.length === 0, closure, problems, postgresOnly };
+}
 
 const PATTERN =
   /DATABASE_URL|database-url|\bneon\b|neon\.tech|pg_dump|pg_restore|postgres(?:ql)?:\/\//i;
@@ -99,11 +211,7 @@ export function classifyPath(path: string, line: string): DependencyClass {
     /^vitest\.config|^turbo\.json$/.test(path)
   )
     return 'local-development';
-  if (
-    /^infra\/gcp\/(deploy|release|release-fast|release-diagnostics)\.sh$|^infra\/gcp\/cloudbuild/.test(
-      path,
-    )
-  )
+  if (/^infra\/gcp\/(deploy|release(-[a-z-]+)?)\.sh$|^infra\/gcp\/cloudbuild/.test(path))
     return 'release-pipeline';
   if (/^\.github\/workflows\/deploy\.ya?ml$/.test(path)) return 'release-pipeline';
   if (/^infra\/docker\/(backup|database-admin|migrate)/.test(path)) return 'backup-tooling';
@@ -121,7 +229,19 @@ export function classifyPath(path: string, line: string): DependencyClass {
 
 export type RepoFinding = { path: string; lines: number[]; class: DependencyClass };
 
-export function scanRepository(files: Array<{ path: string; text: string }>): RepoFinding[] {
+export function scanRepository(
+  files: Array<{ path: string; text: string }>,
+  options: { unproven?: ReadonlySet<string> } = {},
+): RepoFinding[] {
+  // PostgreSQL-only status needs proof; without a caller-supplied result, prove it here.
+  const unproven =
+    options.unproven ??
+    new Set(
+      verifyFirestorePath(files)
+        .postgresOnly.filter((item) => !item.proven)
+        .map((item) => item.path),
+    );
+  const postgresOnly = new Set(POSTGRES_ONLY_FILES.map((entry) => entry.path));
   const findings: RepoFinding[] = [];
   for (const file of files) {
     if (SELF.test(file.path) || file.path === 'pnpm-lock.yaml') continue;
@@ -129,7 +249,11 @@ export function scanRepository(files: Array<{ path: string; text: string }>): Re
     file.text.split('\n').forEach((line, index) => {
       // Lines that only name the cutover tooling (for example package.json scripts) are not dependencies.
       if (!PATTERN.test(line) || SELF_REFERENCE.test(line)) return;
-      const kind = classifyPath(file.path, line);
+      const kind: DependencyClass = line.includes(FORBIDS_MARKER)
+        ? 'guard'
+        : postgresOnly.has(file.path) && !unproven.has(file.path)
+          ? 'postgres-only'
+          : classifyPath(file.path, line);
       byClass.set(kind, [...(byClass.get(kind) ?? []), index + 1]);
     });
     for (const [kind, lines] of byClass) findings.push({ path: file.path, lines, class: kind });
@@ -157,6 +281,8 @@ export function buildRetirementReport(input: {
   now: Date;
   minObservationHours: number;
   liveInventory?: Inventory;
+  /** Static proof for the Firestore release path; computed by verifyFirestorePath. */
+  firestorePath?: FirestorePathResult;
 }) {
   const { config, store, decisions } = input;
   const steps = STEPS.map((step) => ({ step, evidence: store.read(step.index, step.name) }));
@@ -224,7 +350,12 @@ export function buildRetirementReport(input: {
     straySubscriptions.map((item) => item.name).join(', ') || undefined,
   );
 
-  // 4. Repository: release pipeline, backups, Terraform, CI.
+  // 4. Repository: the Firestore release path, then release, backups, Terraform, CI.
+  add(
+    'Firestore release path reaches no PostgreSQL dependency',
+    input.firestorePath?.ok === true,
+    input.firestorePath ? input.firestorePath.problems.join('; ') || undefined : 'not evaluated',
+  );
   const blockingFindings = input.findings.filter((item) => BLOCKING_CLASSES.has(item.class));
   add(
     'No release, backup, Terraform, or CI path depends on the database',
@@ -303,6 +434,7 @@ export function buildRetirementReport(input: {
     strayScheduler: strayJobs.map((item) => item.name),
     straySubscriptions: straySubscriptions.map((item) => item.name),
     repository: input.findings,
+    firestorePath: input.firestorePath ?? null,
     unresolvedAssets: unresolved.map((item) => ({
       ...item,
       decision: decided.get(item.sourceRecordId) ?? null,
@@ -349,6 +481,8 @@ const CLASS_ORDER: DependencyClass[] = [
   'operator-script',
   'tests',
   'local-development',
+  'postgres-only',
+  'guard',
   'documentation',
 ];
 
@@ -401,6 +535,18 @@ export function renderRetirementReport(report: RetirementReport): string {
       );
     lines.push('');
   }
+  if (report.firestorePath) {
+    lines.push('## Firestore release path', '');
+    lines.push(
+      `Entry \`${FIRESTORE_RELEASE_ENTRY}\` (selected by \`${RELEASE_SELECTOR}\`) reaches: ${report.firestorePath.closure.map((path) => `\`${path}\``).join(', ')}.`,
+      '',
+      '| PostgreSQL-only file | Proven | Why it cannot run on Firestore |',
+      '| --- | --- | --- |',
+    );
+    for (const item of report.firestorePath.postgresOnly)
+      lines.push(`| \`${item.path}\` | ${item.proven ? 'yes' : '**no**'} | ${item.reason} |`);
+    lines.push('');
+  }
   lines.push('## Asset references without recoverable bytes', '');
   if (report.unresolvedAssets.length === 0) lines.push('None.');
   lines.push('| Source record | Classification | Owner decision |', '| --- | --- | --- |');
@@ -442,12 +588,40 @@ async function main() {
       out: { type: 'string' },
       'min-observation-hours': { type: 'string', default: '168' },
       live: { type: 'boolean', default: false },
+      'static-only': { type: 'boolean', default: false },
     },
     strict: true,
   });
+  const files = await repositoryFiles(values.repo);
+  const firestorePath = verifyFirestorePath(files);
+  if (values['static-only']) {
+    // Repository-only proof, used by CI: needs no evidence, config, or cloud access.
+    const findings = scanRepository(files);
+    const blocking = findings.filter((item) => BLOCKING_CLASSES.has(item.class));
+    const counts = findings.reduce<Record<string, number>>((result, item) => {
+      result[item.class] = (result[item.class] ?? 0) + 1;
+      return result;
+    }, {});
+    console.log(
+      JSON.stringify(
+        {
+          firestorePath: { ok: firestorePath.ok, problems: firestorePath.problems },
+          blockingFiles: blocking.map(
+            (item) => `${item.path}:${item.lines.join(',')} (${item.class})`,
+          ),
+          filesByClass: counts,
+          postgresOnly: firestorePath.postgresOnly,
+        },
+        null,
+        2,
+      ),
+    );
+    if (!firestorePath.ok || blocking.length) process.exitCode = 1;
+    return;
+  }
   if (!values.config || !values['evidence-dir'] || !values.out)
     throw new Error(
-      'Usage: pnpm cutover:retirement-report --config cutover.json --evidence-dir DIR --out report.md [--decisions owner-decisions.json] [--live]',
+      'Usage: pnpm cutover:retirement-report --config cutover.json --evidence-dir DIR --out report.md [--decisions owner-decisions.json] [--live]\n       pnpm cutover:retirement-report --static-only',
     );
   const config = await readCutoverConfig(values.config);
   const store = new EvidenceStore(values['evidence-dir']);
@@ -464,11 +638,12 @@ async function main() {
   const report = buildRetirementReport({
     config,
     store,
-    findings: scanRepository(await repositoryFiles(values.repo)),
+    findings: scanRepository(files),
     decisions,
     now: new Date(),
     minObservationHours: Number(values['min-observation-hours']),
     liveInventory,
+    firestorePath,
   });
   await writeFile(values.out, renderRetirementReport(report), { flag: 'wx', mode: 0o600 });
   await writeFile(`${values.out}.json`, `${JSON.stringify(report, null, 2)}\n`, {

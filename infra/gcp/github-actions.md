@@ -6,6 +6,24 @@ Run Job, then updates the services and browser job. It assumes the Cloud Run
 services, service accounts, secrets, queues, and Artifact Registry already
 exist; provision or reconcile those once with `bash infra/gcp/deploy.sh`.
 
+`release.sh` selects its path from the `PERSISTENCE_DRIVER` of the live
+`assistant-agent` and `assistant-web` services (unset means `postgres`):
+
+- **PostgreSQL** runs `release-postgres.sh`, the release described below and
+  unchanged by the Firestore work.
+- **Firestore** runs `release-firestore.sh`: no database URL or secret, and no
+  backup or migration job. Before any revision changes, it checks three gates:
+  database-free service templates, a managed Firestore recovery point
+  (point-in-time recovery or a recent READY scheduled backup), and
+  `pnpm firestore:indexes verify`.
+
+`RELEASE_PERSISTENCE_DRIVER=postgres|firestore`, or the workflow's
+`PERSISTENCE_DRIVER` repository variable or `persistence` input, states the
+expected path. A release stops if that contradicts the live services, or if
+the two services disagree (a cutover in progress). `deploy.sh` provisions the
+PostgreSQL composition only and refuses to run against a Firestore
+installation.
+
 The `Deploy production` workflow releases only after the `CI` workflow
 succeeds for a push to `main`. It builds and pushes the immutable images from
 GitHub Actions, then runs the migration and Cloud Run rollout. It uses GitHub's

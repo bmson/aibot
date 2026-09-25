@@ -1,0 +1,92 @@
+# Firestore release build: cloudbuild.yaml without the PostgreSQL backup and
+# migration images, which the Firestore release path never runs. Used by
+# release-firestore.sh; scripts/cloudbuild-firestore.test.ts keeps the two in
+# step.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args:
+      [
+        build,
+        -f,
+        infra/docker/agent.Dockerfile,
+        -t,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/agent:latest',
+        -t,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/agent:${_TAG}',
+        .,
+      ]
+  - name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args:
+      [
+        build,
+        -f,
+        infra/docker/web.Dockerfile,
+        --build-arg,
+        'GIT_SHA=${_TAG}',
+        -t,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:latest',
+        -t,
+        '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:${_TAG}',
+        .,
+      ]
+  - name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        if [[ ",${_MODULES}," == *,browser,* || "${_MODULES}" == all ]]; then
+          docker build -f infra/docker/browser-job.Dockerfile \
+            -t '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/browser:latest' \
+            -t '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/browser:${_TAG}' .
+          docker push '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/browser:latest'
+          docker push '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/browser:${_TAG}'
+        fi
+  - name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        if [[ ",${_MODULES}," == *,code,* || "${_MODULES}" == all ]]; then
+          docker build -f infra/docker/code-runner.Dockerfile \
+            -t '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/code:latest' \
+            -t '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/code:${_TAG}' .
+          docker push '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/code:latest'
+          docker push '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/code:${_TAG}'
+        fi
+  - name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        if [[ ",${_MODULES}," == *,documents,* || "${_MODULES}" == all ]]; then
+          docker build -f infra/docker/document-processor.Dockerfile \
+            -t '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/processor:latest' \
+            -t '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/processor:${_TAG}' .
+          docker push '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/processor:latest'
+          docker push '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/processor:${_TAG}'
+        fi
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/agent:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/agent:${_TAG}'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/web:${_TAG}'
+substitutions:
+  _REGION: us-west1
+  _REPO: assistant
+  _TAG: manual
+  _MODULES: all
+options:
+  # Up to five images build in parallel above; eight cores would serialize them on
+  # CPU. Thirty-two keeps the wall-clock close to the slowest single image,
+  # and the per-minute premium is smaller than the minutes saved.
+  machineType: E2_HIGHCPU_32
+  logging: CLOUD_LOGGING_ONLY
+  # The Dockerfiles use RUN --mount=type=cache for the pnpm store, which needs
+  # BuildKit; the classic builder errors on the syntax.
+  env:
+    - DOCKER_BUILDKIT=1

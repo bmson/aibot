@@ -31,6 +31,15 @@ on:
         description: Commit SHA to release (defaults to the tip of main)
         required: false
         type: string
+      persistence:
+        description: Expected persistence driver; auto follows the live services
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - postgres
+          - firestore
 
 permissions:
   contents: read
@@ -81,12 +90,27 @@ jobs:
       sha: ${{ steps.release.outputs.sha }}
       images: ${{ steps.matrix.outputs.entries }}
       modules: ${{ steps.modules.outputs.modules }}
+      persistence: ${{ steps.persistence.outputs.driver }}
     steps:
       - name: Resolve the release commit
         id: release
         env:
           RESOLVED_SHA: ${{ github.event.workflow_run.head_sha || github.event.inputs.sha || github.sha }}
         run: echo "sha=${RESOLVED_SHA}" >> "$GITHUB_OUTPUT"
+      # Which release path the installation expects. A non-auto manual input wins,
+      # then the PERSISTENCE_DRIVER repository variable (set it to firestore
+      # after the cutover), then auto. release.sh always re-reads the live
+      # services and refuses an expectation they contradict, so this only
+      # narrows what is built and asserted; it never overrides production.
+      - name: Resolve the persistence path
+        id: persistence
+        env:
+          REQUESTED: ${{ (github.event.inputs.persistence != 'auto' && github.event.inputs.persistence) || vars.PERSISTENCE_DRIVER || 'auto' }}
+        run: |
+          case "$REQUESTED" in
+            auto|postgres|firestore) echo "driver=${REQUESTED}" >> "$GITHUB_OUTPUT" ;;
+            *) echo "PERSISTENCE_DRIVER must be auto, postgres, or firestore" >&2; exit 1 ;;
+          esac
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ steps.release.outputs.sha }}
@@ -114,13 +138,18 @@ jobs:
           BUILD_BROWSER: ${{ steps.modules.outputs.browser }}
           BUILD_CODE: ${{ steps.modules.outputs.code }}
           BUILD_PROCESSOR: ${{ steps.modules.outputs.processor }}
+          PERSISTENCE: ${{ steps.persistence.outputs.driver }}
         run: |
           entries='[]'
           add() {
             entries="$(jq -c --arg n "$1" --arg d "$2" '. + [{name: $n, dockerfile: $d}]' <<<"$entries")"
           }
-          add backup infra/docker/backup.Dockerfile
-          add migrate infra/docker/migrate.Dockerfile
+          # The backup and migration images exist only for the PostgreSQL
+          # release path. A Firestore release neither builds nor runs them.
+          if [ "$PERSISTENCE" != "firestore" ]; then
+            add backup infra/docker/backup.Dockerfile
+            add migrate infra/docker/migrate.Dockerfile
+          fi
           add agent infra/docker/agent.Dockerfile
           add web infra/docker/web.Dockerfile
           if [ "$BUILD_BROWSER" = "true" ]; then
@@ -249,7 +278,9 @@ jobs:
           cosign attest --yes --type spdxjson --predicate "sbom/${IMAGE_NAME}.spdx.json" "$ref"
 
   # ── release ────────────────────────────────────────────────────────────────
-  # The only job that changes production. It runs exactly as before, against
+  # The only job that changes production. release.sh picks the PostgreSQL or
+  # Firestore release path from the live services (see infra/gcp/release.sh).
+  # The PostgreSQL path runs exactly as before, against
   # images every one of which is now built, scanned, pushed and signed —
   # `needs: image` is the whole matrix, so a single failed image means no
   # rollout at all.
@@ -280,5 +311,6 @@ jobs:
         env:
           IMAGE_TAG: ${{ needs.plan.outputs.sha }}
           ASSISTANT_MODULES: ${{ needs.plan.outputs.modules }}
+          RELEASE_PERSISTENCE_DRIVER: ${{ needs.plan.outputs.persistence }}
           SKIP_IMAGE_BUILD: 'true'
         run: bash infra/gcp/release.sh

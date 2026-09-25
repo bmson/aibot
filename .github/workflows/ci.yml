@@ -66,7 +66,12 @@ jobs:
           bash -n infra/gcp/*.sh infra/docker/*.sh scripts/*.sh
           shellcheck --severity=warning infra/gcp/*.sh infra/docker/*.sh scripts/*.sh
           bash infra/gcp/release-diagnostics.test.sh
+          bash infra/gcp/release.test.sh
           bash infra/docker/database-admin.test.sh
+      # The Firestore runtime and release path must stay free of the retired
+      # PostgreSQL database; PostgreSQL-only files are listed, not counted.
+      - name: Check the Firestore path has no database dependency
+        run: pnpm cutover:retirement-report --static-only
       # The doctor validates the default configuration end to end, including
       # every module's declared readiness and production rules.
       - run: pnpm config:check
