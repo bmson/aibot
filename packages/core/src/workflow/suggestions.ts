@@ -6,6 +6,7 @@ import {
   suggestions,
   type TaskRow,
 } from '@assistant/db';
+import type { MaintenanceRepository } from '@assistant/persistence';
 import { and, asc, desc, eq, gt, isNull, lte, or, sql } from 'drizzle-orm';
 import { getOrCreatePrimaryConversation } from '../chat.js';
 import { getQueueNotifier } from '../queue.js';
@@ -292,7 +293,14 @@ export async function listOpenSuggestions(
  * owner owes anyone — it goes quiet on its own rather than accumulating into a
  * backlog that has to be cleared.
  */
-export async function expireStaleSuggestions(db: Db, now: Date = new Date()): Promise<number> {
+export async function expireStaleSuggestions(
+  store: Db | MaintenanceRepository,
+  now?: Date,
+): Promise<number> {
+  if ('kind' in store && store.kind === 'maintenance-repository')
+    return (store as MaintenanceRepository).expireSuggestions(now);
+  const db = store as Db;
+  now ??= new Date();
   const rows = await db
     .update(suggestions)
     .set({ status: 'expired', updatedAt: now })

@@ -13,6 +13,7 @@ import type { GoalRuntimeRepository } from './goals.js';
 import type { GraphRecallRepository } from './graph-recall.js';
 import type { HistoryRecallRepository } from './history-recall.js';
 import type { KnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
+import type { MaintenanceRepository } from './maintenance.js';
 import type { MemoryConsolidationRepository } from './memory-consolidation.js';
 import type { MemoryExtractionRepository } from './memory-extraction.js';
 import type { MemorySupersedeRepository } from './memory-supersede.js';
@@ -67,6 +68,11 @@ export interface ExecutionPersistence {
    * it the `reminder.notify` job keeps its PostgreSQL delivery path.
    */
   readonly reminderDelivery?: ReminderDeliveryRepository;
+  /**
+   * Present where the maintenance sweep has a portable adapter. PostgreSQL
+   * runs the same steps through the core SQL functions.
+   */
+  readonly maintenance?: MaintenanceRepository;
   /** Present where the ambient refresh job has a portable writer. */
   readonly ambientSnapshots?: AmbientSnapshotRepository;
   /** Present where the open-loop sweep has a portable adapter. */

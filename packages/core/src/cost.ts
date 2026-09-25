@@ -9,6 +9,7 @@ import type {
   CostEventInput,
   CostRepository,
   CostTotals,
+  MaintenanceRepository,
   ReservationActual,
   ReserveCostInput,
   ReserveOutcome,
@@ -101,8 +102,12 @@ async function notifyOwner(db: Db, agentId: string, text: string): Promise<void>
  * daily and monthly caps). Dedupe rides on tool_cache keys that expire with
  * the period — no extra table for a once-a-day ping.
  */
-export async function emitBudgetNotices(db: Db, agentId: string): Promise<string[]> {
-  const totals = await costTotals(db);
+export async function emitBudgetNotices(
+  store: Db | { costs: CostRepository; maintenance: MaintenanceRepository },
+  agentId: string,
+): Promise<string[]> {
+  const portable = 'maintenance' in store ? store : null;
+  const totals = await costTotals(portable ? portable.costs : (store as Db));
   const emitted: string[] = [];
 
   const periods = [
@@ -129,6 +134,22 @@ export async function emitBudgetNotices(db: Db, agentId: string): Promise<string
     if (!crossed) continue;
 
     const cacheKey = `budget-notice:${period.name}:${crossed}:${period.periodKey}`;
+    const text =
+      crossed >= 100
+        ? `Budget: the ${period.name} cap is exhausted ($${period.spent.toFixed(2)} of $${period.limit.toFixed(2)}). Non-critical work is parked as waiting_budget and resumes when the ${period.name} period resets; owner chat keeps a small carve-out. Raise the cap on the [Costs page](/costs) if you want work to continue now.`
+        : `Budget: ${Math.round(pct)}% of the ${period.name} cap used ($${period.spent.toFixed(2)} of $${period.limit.toFixed(2)}).`;
+    if (portable) {
+      // The dedupe key and the Notifications message commit together.
+      const posted = await portable.maintenance.postBudgetNotice({
+        cacheKey,
+        pct: Math.round(pct),
+        expiresAt: period.expiresAt,
+        text,
+      });
+      if (posted) emitted.push(cacheKey);
+      continue;
+    }
+    const db = store as Db;
     const [seen] = await db.select().from(toolCache).where(eq(toolCache.cacheKey, cacheKey));
     if (seen) continue;
     await db
@@ -140,11 +161,6 @@ export async function emitBudgetNotices(db: Db, agentId: string): Promise<string
         expiresAt: period.expiresAt,
       })
       .onConflictDoNothing();
-
-    const text =
-      crossed >= 100
-        ? `Budget: the ${period.name} cap is exhausted ($${period.spent.toFixed(2)} of $${period.limit.toFixed(2)}). Non-critical work is parked as waiting_budget and resumes when the ${period.name} period resets; owner chat keeps a small carve-out. Raise the cap on the [Costs page](/costs) if you want work to continue now.`
-        : `Budget: ${Math.round(pct)}% of the ${period.name} cap used ($${period.spent.toFixed(2)} of $${period.limit.toFixed(2)}).`;
     await notifyOwner(db, agentId, text);
     emitted.push(cacheKey);
   }

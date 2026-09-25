@@ -11,16 +11,19 @@ export function embeddingSpaceKey(space: EmbeddingSpace): string {
 }
 
 /**
- * The stored shape of a new memory: its vector, the embedding space recall
- * filters on, and a fresh retrieval revision. Every writer that creates a
- * memory document goes through this.
+ * The stored form of a new memory: its vector plus the embedding-space key
+ * and retrieval revision that recall and graph sync fence on.
  */
-export function encodeMemoryDocument(memory: Records['memories'], space: EmbeddingSpace) {
+export function memoryDocument(
+  space: EmbeddingSpace,
+  memory: Records['memories'],
+): FirebaseFirestore.DocumentData {
   if (!memory.embedding) throw new Error('Memory requires an embedding');
   validateEmbedding(space, memory.embedding);
+  if (!memory.contentHash) throw new Error('Memory requires a content hash');
   return encodeRecord({
     ...memory,
-    embedding: FieldValue.vector(memory.embedding as number[]),
+    embedding: FieldValue.vector(memory.embedding),
     embeddingSpace: embeddingSpaceKey(space),
     retrievalRevision: randomUUID(),
   });
@@ -34,9 +37,7 @@ export class FirestoreMemoryRepository {
   ) {}
 
   async save(memory: Records['memories']): Promise<boolean> {
-    if (!memory.embedding) throw new Error('Memory requires an embedding');
-    validateEmbedding(this.space, memory.embedding);
-    if (!memory.contentHash) throw new Error('Memory requires a content hash');
+    const document = memoryDocument(this.space, memory);
     const ref = this.store.doc('memories', memory.id);
     const hashRef = this.store.doc('memoryContentHashes', memory.contentHash);
     const tombstoneRef = this.store.doc('memoryTombstones', memory.contentHash);
@@ -51,7 +52,7 @@ export class FirestoreMemoryRepository {
         throw new Error('Privacy erasure is in progress');
       if (tombstone?.exists) return false;
       if (existing?.exists || hash?.exists) return false;
-      tx.create(ref, encodeMemoryDocument(memory, this.space));
+      tx.create(ref, document);
       tx.create(hashRef, { memoryId: memory.id });
       return true;
     });

@@ -23,7 +23,7 @@ import {
   recordCodeJobStep,
 } from './code-job-checkpoints.js';
 import { contactNameRef, matchSubjectContact, stageNewContact } from './contact-lookup.js';
-import { encodeMemoryDocument } from './memory.js';
+import { memoryDocument } from './memory.js';
 import { occasionDocumentId } from './memory-consolidation.js';
 import {
   assertPrivacyErasureFenceUnchanged,
@@ -357,7 +357,7 @@ export class FirestoreMemoryExtractionRepository implements MemoryExtractionRepo
           lastAccessedAt: null,
           lastConsolidatedAt: null,
         };
-        tx.create(this.store.doc('memories', id), encodeMemoryDocument(memory, this.space));
+        tx.create(this.store.doc('memories', id), memoryDocument(this.space, memory));
         tx.create(this.store.doc('memoryContentHashes', fact.contentHash), { memoryId: id });
         result.saved += 1;
         if (input.quarantined) result.quarantined += 1;

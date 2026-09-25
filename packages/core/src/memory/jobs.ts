@@ -1,5 +1,9 @@
 import { type Db, type ScheduleRow, schedules, type TaskRow } from '@assistant/db';
-import type { DocumentExtractionRepository, ExecutionPersistence } from '@assistant/persistence';
+import type {
+  DocumentExtractionRepository,
+  ExecutionPersistence,
+  ImportJobRepository,
+} from '@assistant/persistence';
 import { and, eq, sql } from 'drizzle-orm';
 import { getOrCreateNotificationsConversation, persistMessage } from '../chat.js';
 import { loadConfig } from '../config.js';
@@ -123,6 +127,8 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'health.monitor',
   'documents.extract',
   'watch.suggest',
+  'import.run',
+  'voice.ingest',
 ]);
 
 /** A completion summary when `job` cannot run on Firestore persistence yet, otherwise null. */
@@ -184,6 +190,8 @@ export async function runCodeJob(
     notifyOwner?: ProactiveNotifier;
     persistence?: ExecutionPersistence;
     documentExtractionRepository?: DocumentExtractionRepository;
+    /** Firestore-backed import lifecycle selected by the Firestore agent composition. */
+    importJobRepository?: ImportJobRepository;
     heartbeat?: () => Promise<void>;
     /**
      * Supplied by the composition root: returns a completion summary when the
@@ -464,9 +472,16 @@ export async function runCodeJob(
       };
     }
     case 'import.run':
-      return runImportJob(deps, task);
+      return runImportJob(
+        {
+          ...deps,
+          imports: deps.importJobRepository,
+          ownerCards: deps.persistence?.ownerCardCompilation,
+        },
+        task,
+      );
     case 'voice.ingest':
-      return runVoiceIngest(deps, task);
+      return runVoiceIngest({ ...deps, imports: deps.importJobRepository }, task);
     case 'anomaly.scan': {
       await deps.heartbeat?.();
       const r = await runAnomalyScan(deps, { agentId: task.agentId, taskId: task.id });
