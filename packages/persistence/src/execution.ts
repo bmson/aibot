@@ -1,6 +1,7 @@
 import type { ApprovalPolicyRepository } from './approval-policies.js';
 import type { ApprovalRepository } from './approvals.js';
 import type { CardRefreshRepository } from './card-refresh.js';
+import type { CommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import type { CostRepository, MessageRepository } from './contracts.js';
 import type { ToolExecutionRepository } from './dispatch.js';
 import type { ExecutionContextRepository } from './execution-context.js';
@@ -54,4 +55,6 @@ export interface ExecutionPersistence {
    * it the `reminder.notify` job keeps its PostgreSQL delivery path.
    */
   readonly reminderDelivery?: ReminderDeliveryRepository;
+  /** Present where the open-loop sweep has a portable adapter. */
+  readonly commitmentMaintenance?: CommitmentMaintenanceRepository;
 }

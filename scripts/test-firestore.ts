@@ -37,6 +37,7 @@ const child = spawn(
     'apps/agent/src/firestore-full-composition.test.ts',
     'apps/agent/src/firestore-sweep.test.ts',
     'apps/agent/src/firestore-reminder-delivery.test.ts',
+    'apps/agent/src/firestore-open-loop-sweep.test.ts',
     'apps/web/app/costs/page.test.tsx',
     'apps/web/app/packs/actions.firestore.test.ts',
     'apps/web/app/skills/actions.firestore.test.ts',
