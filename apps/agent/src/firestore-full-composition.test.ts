@@ -51,6 +51,7 @@ const PORTABLE_TOOLS = [
   'gmail.read_thread',
   'gmail.search',
   'goals.update_progress',
+  'maps.directions',
   'memory.recall',
   'memory.save',
   'owner.notify',
@@ -63,11 +64,14 @@ const PORTABLE_TOOLS = [
   'sheets.write_rows',
   'slides.append',
   'slides.create',
+  'sports.scores',
   'task.schedule',
   'watch.cancel',
   'watch.create',
   'watch.list',
   'watch.web',
+  'weather.lookup',
+  'web.search',
 ];
 const SQL_DEPENDENT_TOOLS = [
   // Voice rewrite reads the writing-sample corpus (loadVoiceContext).
@@ -77,9 +81,6 @@ const SQL_DEPENDENT_TOOLS = [
   // Document library ingest and chunk search.
   'drive.ingest',
   'documents.search',
-  // Current-location origin and per-search cost ledger (portable in #381).
-  'maps.directions',
-  'web.search',
   // Application-confirmation tracking.
   'applications.append_confirmation_doc',
   'applications.apply_confirmation',

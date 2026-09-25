@@ -85,7 +85,7 @@ describe.skipIf(!localEmulator)('Firestore About page with PostgreSQL offline', 
     resetConfigForTest();
   });
 
-  it('admits owner summary refresh and keeps other fact controls unavailable', async () => {
+  it('renders the interactive owner facts view with PostgreSQL unreachable', async () => {
     const { proxy } = await import('../../../proxy.js');
     expect(proxy(new NextRequest('http://localhost/profile/about')).status).toBe(200);
     expect(
@@ -97,8 +97,8 @@ describe.skipIf(!localEmulator)('Firestore About page with PostgreSQL offline', 
     expect(html).toContain('Private conversation summary');
     expect(html).not.toContain('Foreign fact');
     expect(html).toContain('Refresh summary');
-    expect(html).not.toContain('Correct');
-    expect(html).not.toContain('Forget');
+    // Fact commands are portable now, so the full editor renders.
+    expect(html).toContain('Add a fact');
   });
 
   it('recompiles the configured owner card with PostgreSQL unreachable', async () => {
@@ -126,7 +126,9 @@ describe.skipIf(!localEmulator)('Firestore About page with PostgreSQL offline', 
     vi.stubEnv('FIRESTORE_AGENT_ID', foreignAgentId);
     resetConfigForTest();
     try {
-      await expect(page.default()).rejects.toThrow('Configured Memory hub agent is missing');
+      await expect(page.default()).rejects.toThrow(
+        'About page requires one matching configured owner',
+      );
       await expect(recompileCard()).rejects.toThrow(
         'Owner card refresh requires exactly one configured agent',
       );
