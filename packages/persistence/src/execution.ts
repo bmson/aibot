@@ -15,7 +15,7 @@ import type { MemorySupersedeRepository } from './memory-supersede.js';
 import type { MemoryToolRepository } from './memory-tools.js';
 import type { ModelRoutingRepository } from './model-routing.js';
 import type { OwnerCardCompilationRepository } from './owner-card-compilation.js';
-import type { OwnerContextRepository } from './owner-context.js';
+import type { AmbientSnapshotRepository, OwnerContextRepository } from './owner-context.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
 import type { SkillContextRepository } from './skill-context.js';
@@ -54,4 +54,6 @@ export interface ExecutionPersistence {
    * it the `reminder.notify` job keeps its PostgreSQL delivery path.
    */
   readonly reminderDelivery?: ReminderDeliveryRepository;
+  /** Present where the ambient refresh job has a portable writer. */
+  readonly ambientSnapshots?: AmbientSnapshotRepository;
 }

@@ -41,3 +41,14 @@ export function isOwnerContextRepository(value: unknown): value is OwnerContextR
     (value as { kind?: unknown }).kind === 'owner-context-repository'
   );
 }
+
+/**
+ * Writer for the one cached "right now" block per owner (`ambient.refresh`).
+ * The snapshot is transient context, rebuilt every half hour; `clear` removes
+ * it when no fresh location exists so stale weather is never served.
+ */
+export interface AmbientSnapshotRepository {
+  readonly kind: 'ambient-snapshot-repository';
+  save(snapshot: OwnerAmbientSnapshot): Promise<void>;
+  clear(agentId: string): Promise<void>;
+}
