@@ -1,6 +1,10 @@
 import { getOwnerFactsView, type MemorySnapshot } from '@assistant/application/profile';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import { FirestoreProfilePeopleReadRepository } from '@assistant/firestore';
+import {
+  assertPrivacyErasureFenceUnchanged,
+  FirestoreProfilePeopleReadRepository,
+  readPrivacyErasureFence,
+} from '@assistant/firestore';
 import { recompileCard } from '@/app/profile/actions';
 import { AddFact } from '@/app/profile/add-fact';
 import { FactRow, type FactView } from '@/app/profile/fact-row';
@@ -57,23 +61,41 @@ function toFactView(m: MemorySnapshot, now: Date, inCard: boolean): FactView {
   };
 }
 
+/**
+ * The configured owner's facts, read only while that owner is the sole agent
+ * and no privacy erasure starts or runs during the read.
+ */
+async function readFirestoreOwnerFacts() {
+  const config = loadConfig();
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  const store = getFirestoreInstallationStore();
+  const agentId = config.FIRESTORE_AGENT_ID;
+  const assertConfiguredOwner = async () => {
+    const agents = await store.collection('agents').limit(2).get();
+    if (
+      agents.size !== 1 ||
+      agents.docs[0]?.id !== store.doc('agents', agentId).id ||
+      agents.docs[0]?.get('id') !== agentId
+    )
+      throw new Error('About page requires one matching configured owner');
+  };
+  await assertConfiguredOwner();
+  const fence = await readPrivacyErasureFence(store, agentId);
+  const view = await getOwnerFactsView(new FirestoreProfilePeopleReadRepository(store, agentId));
+  await assertConfiguredOwner();
+  await assertPrivacyErasureFenceUnchanged(store, agentId, fence);
+  return view;
+}
+
 export default async function AboutYouPage() {
   await requireOwner();
   const config = loadConfig();
   const firestore = config.PERSISTENCE_DRIVER === 'firestore';
-  if (firestore) {
-    const problems = validateAgentPersistenceConfig(config);
-    if (problems.length) throw new Error(problems.join('; '));
-  }
   const now = new Date();
-  const { owner, ownerFacts, card, cardFactIds } = await getOwnerFactsView(
-    firestore
-      ? new FirestoreProfilePeopleReadRepository(
-          getFirestoreInstallationStore(),
-          config.FIRESTORE_AGENT_ID,
-        )
-      : getDb(),
-  );
+  const { owner, ownerFacts, card, cardFactIds } = firestore
+    ? await readFirestoreOwnerFacts()
+    : await getOwnerFactsView(getDb());
   const inCard = new Set(cardFactIds);
   const byDomain = DOMAIN_ORDER.map((domain) => ({
     domain,
