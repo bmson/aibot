@@ -77,6 +77,7 @@ import {
 } from '@assistant/application';
 import type { GoalInput } from '@assistant/application/goals';
 import {
+  createProfileMemoryCommands,
   type ProfileMemoryCommandPersistence,
   profileMemoryCommands,
 } from '@assistant/application/profile';
@@ -102,9 +103,11 @@ import {
 } from '@assistant/db';
 import {
   createFirestoreExecutionPersistence,
+  createFirestoreProfileMemoryCommandPersistence,
   createFirestoreSettingsPersistence,
   createInstallationStore,
   FirestoreApplicationChatPersistence,
+  FirestoreCommitmentMutationRepository,
   FirestoreGoalMutationRepository,
   FirestoreLocationPingRepository,
   FirestoreMcpConnectionMutationRepository,
@@ -522,6 +525,19 @@ function createFirestoreChatApplication() {
       router.embed(texts, { expectedModelId: embeddingModelId(embeddingSpace) }),
   };
   const locationPings = new FirestoreLocationPingRepository(store);
+  const memoryCommands = createProfileMemoryCommands(
+    createFirestoreProfileMemoryCommandPersistence(store, embeddingSpace),
+    {
+      embed: async (texts: string[]) => {
+        const vectors = await router.embed(texts, {
+          expectedModelId: embeddingModelId(embeddingSpace),
+        });
+        for (const vector of vectors) validateEmbedding(embeddingSpace, vector);
+        return vectors;
+      },
+    },
+  );
+  const commitments = new FirestoreCommitmentMutationRepository(store, config.FIRESTORE_AGENT_ID);
   const chatReads = { chat, generatedCards: persistence.generatedCards };
   const settings = createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID);
   const skillMutations = new FirestoreSkillMutationRepository(store, embeddingSpace);
@@ -566,6 +582,19 @@ function createFirestoreChatApplication() {
         body,
       );
     },
+    ...memoryCommands,
+    resolveCommitment: (id: string, resolution: string) => commitments.resolve(id, resolution),
+    snoozeCommitment: (id: string, until: Date) => commitments.snooze(id, until),
+    dismissCommitment: (id: string) => commitments.dismiss(id),
+    correctCommitment: (
+      id: string,
+      patch: { title: string; details?: string; nextAction?: string },
+    ) =>
+      commitments.correct(id, {
+        title: patch.title,
+        details: patch.details ?? '',
+        nextAction: patch.nextAction ?? '',
+      }),
     addOwnerKnowledgeGraphFact: (input: {
       subjectLabel: string;
       subjectKind: string;
@@ -711,4 +740,29 @@ export function getWorkspaceSettings() {
 /** Record an owner location ping and run the arrival hook with the configured driver. */
 export function recordOwnerLocation(body: unknown) {
   return getChatApplication().recordOwnerLocationPing(body);
+}
+
+/**
+ * Owner memory and open-loop commands for the configured driver. Both
+ * compositions bind the same application commands; only persistence differs.
+ */
+export function getOwnerMemoryCommands() {
+  const application =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? getFirestoreChatApplication()
+      : getApplication();
+  return {
+    confirmMemory: application.confirmMemory,
+    restoreMemory: application.restoreMemory,
+    correctMemory: application.correctMemory,
+    forgetMemory: application.forgetMemory,
+    setMemoryProminence: application.setMemoryProminence,
+    approveQuarantinedMemory: application.approveQuarantinedMemory,
+    rejectQuarantinedMemory: application.rejectQuarantinedMemory,
+    createMemory: application.createMemory,
+    resolveCommitment: application.resolveCommitment,
+    snoozeCommitment: application.snoozeCommitment,
+    dismissCommitment: application.dismissCommitment,
+    correctCommitment: application.correctCommitment,
+  };
 }

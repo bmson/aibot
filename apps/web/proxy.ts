@@ -108,7 +108,17 @@ export function proxy(request: NextRequest) {
     (improvementIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/memory/profile' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/mobile/v1/memory/people' && request.method === 'POST') ||
-    (memoryPersonPath.test(path) && request.method === 'PATCH') ||
+    (memoryPersonPath.test(path) && ['GET', 'PATCH'].includes(request.method)) ||
+    // Owner memory commands: create, correct, confirm, forget, and review.
+    (path === '/api/mobile/v1/memory' && request.method === 'POST') ||
+    (/^\/api\/mobile\/v1\/memory\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      ['PATCH', 'POST'].includes(request.method)) ||
+    (/^\/api\/mobile\/v1\/knowledge\/sources\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      ['PATCH', 'DELETE'].includes(request.method)) ||
     (memoryOccasionPath.test(path) && ['POST', 'PATCH', 'DELETE'].includes(request.method)) ||
     (personOccasionsPath.test(path) && request.method === 'POST') ||
     (path === '/api/card-image' && request.method === 'GET') ||
