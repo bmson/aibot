@@ -141,7 +141,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
     expect(sqlAccesses).toEqual([]);
   });
 
-  it('fires portable schedules past SQL-only jobs and goal sessions without creating their tasks', async () => {
+  it('fires portable schedules past SQL-only jobs and a goal session whose goal is gone', async () => {
     const schedules = new FirestoreScheduleRepository(store);
     const due = new Date(Date.now() - 60_000);
     const ensure = (name: string, taskTemplate: Record<string, unknown>) =>
@@ -157,10 +157,15 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
     expect(result).toMatchObject({ ready: true, report: { schedulesFired: 1 } });
     const tasks = await store.collection('tasks').get();
     expect(tasks.docs.map((doc) => doc.get('trigger.payload.job'))).toEqual(['memory.consolidate']);
-    for (const skipped of [dream, goal, consolidation]) {
+    for (const skipped of [dream, consolidation]) {
       const row = (await store.doc('schedules', skipped.id).get()).data();
       expect(row?.nextRunAt.toDate().getTime()).toBeGreaterThan(Date.now());
     }
+    // As in PostgreSQL, a goal schedule outliving its goal is disabled.
+    expect((await store.doc('schedules', goal.id).get()).data()).toMatchObject({
+      enabled: false,
+      nextRunAt: null,
+    });
     expect(sqlAccesses).toEqual([]);
   });
 

@@ -25,6 +25,8 @@ export interface ScheduledTaskTemplate {
 export interface SchedulePreparation {
   action: 'fire' | 'skip' | 'disable';
   autonomyGrant?: AutonomyGrant;
+  /** Replaces the template's standing instruction for this firing, e.g. with a goal's latest progress. */
+  instruction?: string;
 }
 export interface ScheduleRunnerOptions {
   batch?: number;
@@ -74,7 +76,7 @@ export async function runScheduleBatch(
           trust: 'assistant',
           payload: {
             schedule: row.name,
-            instruction: template.instruction ?? row.name,
+            instruction: preparation.instruction ?? template.instruction ?? row.name,
             ...(template.goalId ? { goalId: template.goalId } : {}),
             ...(template.job ? { job: template.job } : {}),
             ...(template.reminderText ? { reminderText: template.reminderText } : {}),

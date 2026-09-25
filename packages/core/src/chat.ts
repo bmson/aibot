@@ -4,14 +4,19 @@ import {
   budgets,
   type ConversationRow,
   conversations,
+  createPostgresGoalRuntimeRepository,
   createPostgresMessageRepository,
+  createPostgresNotificationsConversationRepository,
   type Db,
-  goals,
   messages,
   tasks,
   toolCalls,
 } from '@assistant/db';
-import type { AppendMessageInput, MessageRepository } from '@assistant/persistence';
+import type {
+  AppendMessageInput,
+  ExecutionPersistence,
+  MessageRepository,
+} from '@assistant/persistence';
 import {
   and,
   asc,
@@ -427,24 +432,14 @@ export async function getOrCreateNotificationsConversation(
   db: Db,
   agentId: string,
 ): Promise<string> {
-  const [existing] = await db
-    .select({ id: conversations.id })
-    .from(conversations)
-    .where(and(eq(conversations.agentId, agentId), eq(conversations.title, 'Notifications')))
-    .limit(1);
-  if (existing) return existing.id;
-  const [created] = await db
-    .insert(conversations)
-    .values({
-      agentId,
-      channel: 'chat',
-      trust: 'assistant',
-      title: 'Notifications',
-    })
-    .returning({ id: conversations.id });
-  if (!created) throw new Error('failed to create Notifications conversation');
-  return created.id;
+  return createPostgresNotificationsConversationRepository(db).getOrCreate(agentId);
 }
+
+/** The persistence a goal update mirror writes through. */
+export type GoalUpdateMirrorStore = Pick<
+  ExecutionPersistence,
+  'goals' | 'notifications' | 'messages'
+>;
 
 /**
  * Mirror an opted-in goal's mission update into the owner's Notifications
@@ -455,7 +450,7 @@ export async function getOrCreateNotificationsConversation(
  * short labeled copy. Best-effort — callers swallow errors.
  */
 export async function mirrorGoalUpdateToNotifications(
-  db: Db,
+  store: Db | GoalUpdateMirrorStore,
   mission: {
     id: string;
     agentId: string;
@@ -465,17 +460,21 @@ export async function mirrorGoalUpdateToNotifications(
   text: string,
 ): Promise<void> {
   if (!mission.goalId) return;
-  const [goal] = await db
-    .select({ title: goals.title, mirror: goals.mirrorToPrimary })
-    .from(goals)
-    .where(eq(goals.id, mission.goalId))
-    .limit(1);
-  if (!goal?.mirror) return;
-  const conversationId = await getOrCreateNotificationsConversation(db, mission.agentId);
+  const ports =
+    'notifications' in store
+      ? store
+      : {
+          goals: createPostgresGoalRuntimeRepository(store),
+          notifications: createPostgresNotificationsConversationRepository(store),
+          messages: createPostgresMessageRepository(store),
+        };
+  const goal = await ports.goals.get(mission.agentId, mission.goalId);
+  if (!goal?.mirrorToPrimary) return;
+  const conversationId = await ports.notifications.getOrCreate(mission.agentId);
   // Skip when the mission already reports into the Notifications thread.
   if (conversationId === mission.conversationId) return;
   const labeled = `Quick update on your “${goal.title}” goal: ${text}`;
-  await persistMessage(db, {
+  await ports.messages.append({
     conversationId,
     taskId: mission.id,
     role: 'assistant',

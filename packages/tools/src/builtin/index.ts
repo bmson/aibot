@@ -31,6 +31,7 @@ import { registerWeatherTool } from './weather.js';
 import { extractWebText, fetchPublicWebPage, looksLikeBotChallenge } from './web-fetch.js';
 
 export { registerPortableGoalProgressTool } from './goal-progress.js';
+export { registerPortableGoalTools } from './goals.js';
 export { registerPortableOwnerNotifyTool } from './owner-notify.js';
 export { registerSportsTools } from './sports.js';
 export { registerPortableTaskTools } from './task-schedule.js';

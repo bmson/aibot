@@ -7,13 +7,16 @@ import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
 import type { ExecutionJobRepository } from './execution-jobs.js';
 import type { GeneratedCardRepository } from './generated-cards.js';
+import type { GoalRuntimeRepository } from './goals.js';
 import type { GraphRecallRepository } from './graph-recall.js';
 import type { HistoryRecallRepository } from './history-recall.js';
 import type { KnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 import type { MemoryConsolidationRepository } from './memory-consolidation.js';
 import type { MemorySupersedeRepository } from './memory-supersede.js';
 import type { MemoryToolRepository } from './memory-tools.js';
+import type { MissionRepository } from './missions.js';
 import type { ModelRoutingRepository } from './model-routing.js';
+import type { NotificationsConversationRepository } from './notifications.js';
 import type { OwnerCardCompilationRepository } from './owner-card-compilation.js';
 import type { OwnerContextRepository } from './owner-context.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
@@ -49,6 +52,9 @@ export interface ExecutionPersistence {
   readonly cardRefresh: CardRefreshRepository;
   readonly recallMetrics: RecallMetricsRepository;
   readonly watches: WatchRepository;
+  readonly notifications: NotificationsConversationRepository;
+  readonly goals: GoalRuntimeRepository;
+  readonly missions: MissionRepository;
   /**
    * Present where scheduled reminder delivery has a portable adapter. Without
    * it the `reminder.notify` job keeps its PostgreSQL delivery path.

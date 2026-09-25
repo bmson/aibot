@@ -11,7 +11,10 @@ import {
   type DocumentProcessorConfig,
   findPrimaryConversation,
   getAgent,
+  goalAutomationCadence,
+  goalAutomationInstruction,
   ModelRouter,
+  nextRun,
   postOwnerNotice,
 } from '@assistant/core';
 import { compileOwnerCard } from '@assistant/core/memory/consolidation';
@@ -22,8 +25,11 @@ import {
   createFirestoreExecutionPersistence,
   createInstallationStore,
   FirestoreDocumentExtractionRepository,
+  FirestoreGoalMutationRepository,
   FirestoreGoalProgressRepository,
+  FirestoreGoalReadRepository,
   FirestoreMcpConnectionReadRepository,
+  FirestoreMissionRepository,
   FirestoreOwnerNoticeRepository,
   FirestoreReminderRepository,
   FirestoreScheduleRepository,
@@ -48,12 +54,15 @@ import {
   type EmbeddingSpace,
   type ExecutionPersistence,
   embeddingModelId,
+  type GoalToolRepository,
   type ModelRoutingRepository,
+  type Records,
 } from '@assistant/persistence';
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
 import {
   registerBuiltinTools,
   registerPortableGoalProgressTool,
+  registerPortableGoalTools,
   registerPortableMemoryTools,
   registerPortableOwnerNotifyTool,
   registerPortableTaskTools,
@@ -350,6 +359,42 @@ export function pinnedMemoryEmbed(
   };
 }
 
+/** The recurring automation a goal created by goals.create runs on, as the PostgreSQL goal sync builds it. */
+function goalAutomation(goal: Records['goals']) {
+  const cadence = goalAutomationCadence(goal);
+  return {
+    cron: cadence.cron,
+    instruction: goalAutomationInstruction(goal),
+    nextRunAt: (timezone: string) => nextRun(cadence.cron, timezone),
+  };
+}
+
+/** goals.list and goals.create on the Firestore goal repositories. */
+function firestoreGoalTools(store: InstallationStore, agentId: string): GoalToolRepository {
+  const reads = new FirestoreGoalReadRepository(store, agentId);
+  const mutations = new FirestoreGoalMutationRepository(store, agentId);
+  return {
+    listStanding: (ownerId) => reads.listStanding(ownerId),
+    create: (input) => {
+      if (input.agentId !== agentId)
+        throw new Error('Goal creation is outside the configured Firestore agent');
+      return mutations.createFromTool(
+        {
+          title: input.title,
+          description: input.description,
+          priority: input.priority,
+          targetDate: input.targetDate,
+          progress: '',
+          nextAction: '',
+          mirrorToPrimary: false,
+          taintedOrigin: input.taintedOrigin,
+        },
+        goalAutomation,
+      );
+    },
+  };
+}
+
 function buildFirestoreDeps(config: Config): AgentDeps {
   const problems = validateAgentPersistenceConfig(config);
   if (problems.length) throw new Error(problems.join('; '));
@@ -400,7 +445,7 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
       throw new Error('Firestore owner timezone is unavailable');
     return timezone;
   };
-  // Memory, scheduling, goal progress, owner notices, and keyless lookups use
+  // Memory, scheduling, goals, missions, owner notices, and keyless lookups use
   // portable repositories.
   // MCP tools can use their Firestore adapter, but remain explicitly opt-in here.
   const notices = new FirestoreOwnerNoticeRepository(store, config.FIRESTORE_AGENT_ID);
@@ -445,6 +490,10 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
     store,
     config.FIRESTORE_AGENT_ID,
   );
+  registerPortableGoalTools(registry, {
+    goals: firestoreGoalTools(store, config.FIRESTORE_AGENT_ID),
+    missions: new FirestoreMissionRepository(store, config.FIRESTORE_AGENT_ID),
+  });
   const modules = installModules(composition.modules, {
     config,
     db,
