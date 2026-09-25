@@ -183,13 +183,10 @@ describe.skipIf(!localEmulator)('Firestore owner memory commands with PostgreSQL
       [`/api/mobile/v1/memory/people/${id}`, 'GET'],
       [`/api/mobile/v1/knowledge/sources/${id}`, 'PATCH'],
       [`/api/mobile/v1/knowledge/sources/${id}`, 'DELETE'],
+      [`/api/mobile/v1/knowledge/sources/${id}`, 'GET'],
     ];
     for (const [path, method] of allowed)
       expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(200);
-    // Source impact still reads PostgreSQL projection tables.
-    expect(
-      proxy(new NextRequest(`http://localhost/api/mobile/v1/knowledge/sources/${id}`)).status,
-    ).toBe(503);
   });
 
   it('renders the interactive About page from Firestore', async () => {

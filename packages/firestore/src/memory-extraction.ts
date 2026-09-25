@@ -22,9 +22,9 @@ import {
   readCodeJobSteps,
   recordCodeJobStep,
 } from './code-job-checkpoints.js';
+import { contactNameRef, matchSubjectContact, stageNewContact } from './contact-lookup.js';
 import { encodeMemoryDocument } from './memory.js';
 import { occasionDocumentId } from './memory-consolidation.js';
-import { contactNameRef, matchSubjectContact, stageNewContact } from './memory-tools.js';
 import {
   assertPrivacyErasureFenceUnchanged,
   assertPrivacyErasureInactiveInTransaction,

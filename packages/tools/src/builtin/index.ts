@@ -85,6 +85,15 @@ export interface BuiltinDeps {
   memory?: MemoryToolRepository;
 }
 
+// Repository-backed record tools for portable compositions. The SQL built-ins
+// in registerBuiltinTools keep their own registrations.
+export { registerPortableContactLookupTool } from './contacts.js';
+export { registerPortableConversationSearchTool } from './conversation-search.js';
+export { registerPortableGraphSnapshotTool } from './graph-snapshot.js';
+export { registerPortableOccasionTools } from './occasions.js';
+export { registerPortableReadResultTool } from './read-result.js';
+export { registerSituationTools } from './situations.js';
+
 /** Memory tools use persistence ports and can be installed without the SQL-only built-ins. */
 export function registerPortableMemoryTools(
   registry: ToolRegistry,

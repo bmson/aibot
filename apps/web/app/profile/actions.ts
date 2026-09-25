@@ -4,11 +4,9 @@ import {
   addPersonOccasion,
   createPerson,
   deletePerson,
-  forgetLongTermMemoryWithRepository,
   forgetPersonOccasion,
   mergePeople,
   type OrganizeMemoryState,
-  organizeMemoryNow,
   type PersonOccasionInput,
   type ProminenceLevel,
   purgeProfileVoiceSamples,
@@ -22,22 +20,24 @@ import {
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import {
   FirestoreOwnerCardCompilationRepository,
-  FirestorePrivacyErasureRepository,
   FirestoreVoiceProfileRepository,
   readPrivacyErasureFence,
 } from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import {
+  deleteFirestorePerson,
   getFirestoreProfileCommands,
+  mergeFirestorePeople,
   recompileFirestoreProfileCard,
 } from '@/lib/firestore-profile-commands';
+import { forgetOwnerLongTermMemory } from '@/lib/memory-erasure';
 import {
-  getApplication,
   getDb,
   getFirestoreInstallationStore,
   getOwnerMemoryCommands,
   getWorkspace,
+  organizeOwnerMemoryNow,
 } from '@/lib/server';
 
 export type { OrganizeMemoryState, ProminenceLevel } from '@assistant/application/profile';
@@ -165,9 +165,10 @@ export async function updateContactIdentityAction(
 
 export async function deleteContactAction(contactId: string): Promise<{ error?: string }> {
   await requireOwner();
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-    return { error: 'Deleting people is unavailable with Firestore persistence.' };
-  const result = await deletePerson(getDb(), contactId);
+  const result =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? await deleteFirestorePerson(contactId)
+      : await deletePerson(getDb(), contactId);
   revalidateProfile();
   return result;
 }
@@ -204,7 +205,7 @@ export async function consolidateNow(
   _formData: FormData,
 ): Promise<OrganizeMemoryState> {
   await requireOwner();
-  const result = await organizeMemoryNow(getDb());
+  const result = await organizeOwnerMemoryNow();
   revalidateProfile();
   return result;
 }
@@ -214,9 +215,10 @@ export async function mergeContactAction(
   targetId: string,
 ): Promise<{ error?: string }> {
   await requireOwner();
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-    return { error: 'Merging people is unavailable with Firestore persistence.' };
-  const result = await mergePeople(getDb(), sourceId, targetId);
+  const result =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? await mergeFirestorePeople(sourceId, targetId)
+      : await mergePeople(getDb(), sourceId, targetId);
   revalidateProfile();
   return result;
 }
@@ -230,22 +232,7 @@ export async function purgeVoiceSamplesAction(): Promise<void> {
 /** Irreversible owner control for the data that drives recall and voice imitation. */
 export async function forgetLongTermMemoryAction(): Promise<void> {
   await requireOwner();
-  const config = loadConfig();
-  if (config.PERSISTENCE_DRIVER === 'firestore') {
-    const problems = validateAgentPersistenceConfig(config);
-    if (config.FILES_DRIVER === 'gcs' && !config.WORKSPACE_BUCKET.trim())
-      problems.push('WORKSPACE_BUCKET is required for Firestore memory erasure');
-    if (problems.length) throw new Error(problems.join('; '));
-    await forgetLongTermMemoryWithRepository(
-      new FirestorePrivacyErasureRepository(
-        getFirestoreInstallationStore(),
-        config.FIRESTORE_AGENT_ID,
-      ),
-      getWorkspace(),
-    );
-  } else {
-    await getApplication().forgetLongTermMemory();
-  }
+  await forgetOwnerLongTermMemory();
   revalidateProfile();
   revalidatePath('/chat', 'layout');
 }

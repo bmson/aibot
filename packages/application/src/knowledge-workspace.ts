@@ -1,5 +1,5 @@
 import { getAgent } from '@assistant/core/chat';
-import { getMemoryHealth, type MemoryHealth } from '@assistant/core/memory/health';
+import { getMemoryHealth } from '@assistant/core/memory/health';
 import { removeOrphanedKnowledgeGraphEntities } from '@assistant/core/memory/knowledge-graph';
 import {
   type Db,
@@ -16,104 +16,17 @@ import {
   getKnowledgeGraphOverview,
   type KnowledgeGraphReviewStatus,
 } from './knowledge-graph.js';
-import { correctMemory, type EmbeddingPort, forgetMemory } from './profile/commands.js';
 import {
-  presentKnowledgeGraphRelation,
-  type RelationshipPresentation,
-} from './relationship-presentation.js';
-
-export type KnowledgeCleanupKind =
-  | 'quarantined'
-  | 'expired'
-  | 'superseded'
-  | 'unreviewed_connection'
-  | 'rejected_connection'
-  | 'projection_orphan'
-  | 'projection_failed';
-
-export interface KnowledgeCleanupFinding {
-  id: string;
-  kind: KnowledgeCleanupKind;
-  title: string;
-  detail: string;
-  memoryId: string | null;
-  relationId: string | null;
-  count: number;
-  /** Extra source-level work folded into this card instead of duplicated beside it. */
-  relatedKinds?: KnowledgeCleanupKind[];
-}
-
-export interface KnowledgeWorkspaceOverview {
-  memory: MemoryHealth;
-  graph: {
-    activeEntities: number;
-    activeRelations: number;
-    orphanedEntities: number;
-    pendingSources: number;
-    failedSources: number;
-  };
-  cleanupCount: number;
-}
-
-export interface KnowledgeMapNode {
-  id: string;
-  contactId?: string | null;
-  label: string;
-  kind: string;
-  component: number;
-  degree: number;
-}
-
-export interface KnowledgeMapEdge {
-  id: string;
-  subjectId: string;
-  objectId: string;
-  predicate: string;
-  reviewStatus: KnowledgeGraphReviewStatus;
-  sourceMemoryId: string;
-  sourceContent: string;
-  evidenceQuote: string | null;
-  presentation: RelationshipPresentation;
-  validFrom: string | null;
-  validUntil: string | null;
-}
-
-export interface KnowledgeMapComponent {
-  id: number;
-  nodes: number;
-  edges: number;
-  label: string;
-}
-
-export interface KnowledgeMapSnapshot {
-  nodes: KnowledgeMapNode[];
-  edges: KnowledgeMapEdge[];
-  components: KnowledgeMapComponent[];
-  totalEdges: number;
-  truncated: boolean;
-  filters: {
-    query: string;
-    kind: string;
-    predicates: string[];
-    review: 'all' | KnowledgeGraphReviewStatus;
-    sourceMemoryId: string;
-  };
-}
-
-export interface KnowledgeSourceImpact {
-  memoryId: string;
-  content: string;
-  /** Legacy total of all stored projections removed with this source. */
-  connectionCount: number;
-  /** Connections currently visible on the map and eligible for graph recall. */
-  activeConnectionCount: number;
-  /** Retired, rejected, or stale derived rows that are cleared alongside the source. */
-  retiredProjectionCount: number;
-  orphanedItems: Array<{ id: string; label: string }>;
-}
-
-const MAP_NODE_LIMIT = 200;
-const MAP_EDGE_FETCH_LIMIT = 500;
+  assembleKnowledgeMapSnapshot,
+  buildKnowledgeCleanupFindings,
+  type KnowledgeCleanupFinding,
+  type KnowledgeMapSnapshot,
+  type KnowledgeSourceImpact,
+  type KnowledgeWorkspaceOverview,
+  knowledgeMapFilters,
+  MAP_EDGE_FETCH_LIMIT,
+} from './knowledge-workspace-queries.js';
+import { correctMemory, type EmbeddingPort, forgetMemory } from './profile/commands.js';
 
 function asRows<T>(result: unknown): T[] {
   if (Array.isArray(result)) return result as T[];
@@ -196,77 +109,12 @@ export async function getKnowledgeCleanupFindings(db: Db): Promise<KnowledgeClea
       .limit(50),
     orphanedEntityCount(db, agent.id),
   ]);
-  const findings: KnowledgeCleanupFinding[] = memoryRows.map((memory) => {
-    const kind: KnowledgeCleanupKind = memory.quarantined
-      ? 'quarantined'
-      : memory.supersededById
-        ? 'superseded'
-        : 'expired';
-    return {
-      id: `${kind}:${memory.id}`,
-      kind,
-      title:
-        kind === 'quarantined'
-          ? 'Review an unverified memory'
-          : kind === 'superseded'
-            ? 'Remove an older version'
-            : 'Review expired knowledge',
-      detail: memory.content,
-      memoryId: memory.id,
-      relationId: null,
-      count: 1,
-      relatedKinds: [],
-    };
+  return buildKnowledgeCleanupFindings({
+    memories: memoryRows,
+    relations: rejectedRows,
+    sources: sourceRows,
+    orphanedEntities: orphanCount,
   });
-  for (const relation of rejectedRows) {
-    const unreviewed = relation.reviewStatus === 'unreviewed';
-    findings.push({
-      id: `${unreviewed ? 'unreviewed_connection' : 'rejected_connection'}:${relation.id}`,
-      kind: unreviewed ? 'unreviewed_connection' : 'rejected_connection',
-      title: unreviewed ? 'Review a new connection' : 'Retire a rejected connection source',
-      detail: relation.content,
-      memoryId: relation.memoryId,
-      relationId: relation.id,
-      count: 1,
-    });
-  }
-  for (const source of sourceRows) {
-    const relatedSourceFinding = findings.find(
-      (finding) => finding.memoryId === source.memoryId && finding.relationId === null,
-    );
-    if (relatedSourceFinding) {
-      relatedSourceFinding.relatedKinds = [
-        ...(relatedSourceFinding.relatedKinds ?? []),
-        'projection_failed',
-      ];
-      continue;
-    }
-    findings.push({
-      id: `projection_failed:${source.memoryId}`,
-      kind: 'projection_failed',
-      title: 'Graph processing needs attention',
-      detail:
-        source.status === 'quarantined'
-          ? 'Automatic retries were exhausted.'
-          : 'The latest graph extraction failed.',
-      memoryId: source.memoryId,
-      relationId: null,
-      count: 1,
-    });
-  }
-  if (orphanCount > 0) {
-    findings.unshift({
-      id: 'projection_orphan:all',
-      kind: 'projection_orphan',
-      title: 'Remove disconnected graph items',
-      detail:
-        'These derived items have no source-backed connections and are never used for recall.',
-      memoryId: null,
-      relationId: null,
-      count: orphanCount,
-    });
-  }
-  return findings;
 }
 
 /**
@@ -330,11 +178,7 @@ export async function getKnowledgeMapSnapshot(
   const agent = await getAgent(db);
   const subject = alias(knowledgeGraphEntities, 'map_subject');
   const object = alias(knowledgeGraphEntities, 'map_object');
-  const query = (input.query ?? '').trim().slice(0, 120);
-  const kind = input.kind ?? '';
-  const predicates = (input.predicates ?? []).filter(Boolean).slice(0, 20);
-  const review = input.review ?? 'all';
-  const sourceMemoryId = input.sourceMemoryId ?? '';
+  const { query, kind, predicates, review, sourceMemoryId } = knowledgeMapFilters(input);
   const subjectLabel = sql<string>`coalesce(nullif(${subject.preferredLabel}, ''), ${subject.label})`;
   const objectLabel = sql<string>`coalesce(nullif(${object.preferredLabel}, ''), ${object.label})`;
   const filters = and(
@@ -390,113 +234,23 @@ export async function getKnowledgeMapSnapshot(
       .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
       .where(filters),
   ]);
-  const nodeData = new Map<
-    string,
-    { id: string; label: string; kind: string; degree: number; contactId: string | null }
-  >();
-  const edges: KnowledgeMapEdge[] = [];
-  const edgeIds = new Set<string>();
-  const appendRow = (row: (typeof rows)[number]) => {
-    if (edgeIds.has(row.id)) return;
-    const newIds = [row.subjectId, row.objectId].filter((id) => !nodeData.has(id));
-    if (nodeData.size + new Set(newIds).size > MAP_NODE_LIMIT) return;
-    edgeIds.add(row.id);
-    nodeData.set(row.subjectId, {
-      id: row.subjectId,
-      label: row.subjectLabel,
-      kind: row.subjectKind,
-      contactId: row.subjectContactId,
-      degree: (nodeData.get(row.subjectId)?.degree ?? 0) + 1,
-    });
-    nodeData.set(row.objectId, {
-      id: row.objectId,
-      label: row.objectLabel,
-      kind: row.objectKind,
-      contactId: row.objectContactId,
-      degree: (nodeData.get(row.objectId)?.degree ?? 0) + 1,
-    });
-    edges.push({
-      id: row.id,
-      subjectId: row.subjectId,
-      objectId: row.objectId,
-      predicate: row.predicate,
-      reviewStatus: row.reviewStatus as KnowledgeGraphReviewStatus,
-      sourceMemoryId: row.sourceMemoryId,
-      sourceContent: row.sourceContent,
-      evidenceQuote: row.evidenceQuote,
-      presentation: presentKnowledgeGraphRelation(row),
-      validFrom: row.validFrom,
-      validUntil: row.validUntil,
-    });
-  };
-  rows.forEach(appendRow);
-  const overviewEdgeCount = edges.length;
-  let visibleConnectionsTruncated = false;
-  if (input.includeVisibleConnections && nodeData.size > 0) {
-    // Complete the visible topology: recent records can otherwise hide old bridges.
-    // This adds only existing eligible claims; it never infers relationships.
-    const ids = [...nodeData.keys()];
-    const interior = await mapRows(
-      and(activeKnowledgeGraphWhere(agent.id), inArray(subject.id, ids), inArray(object.id, ids)),
-    )
-      .orderBy(desc(knowledgeGraphRelations.createdAt))
-      .limit(1001);
-    for (const row of interior) {
-      if (edgeIds.has(row.id)) continue;
-      if (edges.length >= 1000) {
-        visibleConnectionsTruncated = true;
-        break;
-      }
-      appendRow(row);
-    }
-  }
-  const adjacency = new Map<string, Set<string>>();
-  for (const edge of edges) {
-    adjacency.set(edge.subjectId, (adjacency.get(edge.subjectId) ?? new Set()).add(edge.objectId));
-    adjacency.set(edge.objectId, (adjacency.get(edge.objectId) ?? new Set()).add(edge.subjectId));
-  }
-  const componentFor = new Map<string, number>();
-  let componentId = 0;
-  for (const id of nodeData.keys()) {
-    if (componentFor.has(id)) continue;
-    const queue = [id];
-    componentFor.set(id, componentId);
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (!current) break;
-      for (const next of adjacency.get(current) ?? []) {
-        if (componentFor.has(next)) continue;
-        componentFor.set(next, componentId);
-        queue.push(next);
-      }
-    }
-    componentId += 1;
-  }
-  const nodes = [...nodeData.values()].map((node) => ({
-    ...node,
-    component: componentFor.get(node.id) ?? 0,
-  }));
-  const components = Array.from({ length: componentId }, (_, id) => {
-    const members = nodes.filter((node) => node.component === id);
-    const componentEdges = edges.filter(
-      (edge) => componentFor.get(edge.subjectId) === id && componentFor.get(edge.objectId) === id,
-    );
-    return {
-      id,
-      nodes: members.length,
-      edges: componentEdges.length,
-      label: [...members].sort((a, b) => b.degree - a.degree)[0]?.label ?? 'Connected knowledge',
-    };
-  }).sort((a, b) => b.nodes - a.nodes);
-  const totalEdges = Number(totalRow?.value ?? 0);
-  return {
-    nodes,
-    edges,
-    components,
-    totalEdges,
-    truncated: totalEdges > overviewEdgeCount || visibleConnectionsTruncated,
+  return assembleKnowledgeMapSnapshot({
+    rows,
+    totalEdges: Number(totalRow?.value ?? 0),
     filters: { query, kind, predicates, review, sourceMemoryId },
-  };
+    interior: input.includeVisibleConnections
+      ? (ids, limit) =>
+          mapRows(
+            and(
+              activeKnowledgeGraphWhere(agent.id),
+              inArray(subject.id, ids),
+              inArray(object.id, ids),
+            ),
+          )
+            .orderBy(desc(knowledgeGraphRelations.createdAt))
+            .limit(limit)
+      : undefined,
+  });
 }
 
 export async function getKnowledgeSourceImpact(

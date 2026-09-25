@@ -32,3 +32,35 @@ export interface GraphRecallRepository {
     extractionVersion: number;
   }): Promise<GraphRelation[]>;
 }
+
+/** One source-backed relationship as the `memory.graph_snapshot` tool reports it. */
+export interface GraphSnapshotRelation {
+  id: string;
+  subjectId: string;
+  subjectLabel: string;
+  subjectKind: string;
+  predicate: string;
+  objectId: string;
+  objectLabel: string;
+  objectKind: string;
+  sourceMemoryId: string;
+  sourceMemory: string;
+  source: string | null;
+  memoryConfidence: string | number;
+  ownerConfirmed: boolean;
+  evidenceQuote: string | null;
+  relationshipConfidence: string | number;
+  validFrom: string | null;
+  validUntil: string | null;
+  similarity: number;
+}
+
+/** Nearest verified relationships by source-memory similarity, owner-scoped. */
+export interface GraphSnapshotRepository {
+  snapshot(input: {
+    agentId: string;
+    embedding: number[];
+    limit: number;
+    extractionVersion: number;
+  }): Promise<GraphSnapshotRelation[]>;
+}

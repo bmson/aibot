@@ -1,6 +1,5 @@
 import {
   getVoiceOverview,
-  organizeMemoryNow,
   purgeProfileVoiceSamples,
   recompileProfileCard,
   updateVoiceProfile,
@@ -14,7 +13,8 @@ import {
   FirestoreVoiceProfileRepository,
   readPrivacyErasureFence,
 } from '@assistant/firestore';
-import { getApplication, getDb, getWorkspace } from '@/lib/server';
+import { forgetOwnerLongTermMemory } from '@/lib/memory-erasure';
+import { getDb, getWorkspace, organizeOwnerMemoryNow } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -79,7 +79,7 @@ export async function POST(request: Request): Promise<Response> {
     Array.isArray(value) ? value.map(text).join('\n') : text(value);
   const config = loadConfig();
   const firestore = config.PERSISTENCE_DRIVER === 'firestore';
-  if (firestore && body?.action !== 'voice-profile' && body?.action !== 'recompile')
+  if (firestore && body?.action === 'purge-voice')
     return mobileJson(
       { error: 'This memory profile action is unavailable in Firestore mode.' },
       { status: 503 },
@@ -88,7 +88,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     switch (body?.action) {
       case 'organize':
-        return mobileJson({ ok: true, ...(await organizeMemoryNow(getDb())) });
+        return mobileJson({ ok: true, ...(await organizeOwnerMemoryNow()) });
       case 'recompile':
         if (firestore) {
           const problems = validateAgentPersistenceConfig(config);
@@ -166,7 +166,7 @@ export async function POST(request: Request): Promise<Response> {
             { status: 400 },
           );
         }
-        await getApplication().forgetLongTermMemory();
+        await forgetOwnerLongTermMemory();
         return mobileJson({ ok: true });
       default:
         return mobileJson({ error: `action must be ${ACTIONS}` }, { status: 400 });
