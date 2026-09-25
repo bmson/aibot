@@ -52,32 +52,28 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore email thread re
   async function thread(channel = 'email') {
     const conversationId = randomUUID();
     const now = new Date();
-    await store
-      .doc('conversations', conversationId)
-      .set(
-        encodeRecord({
-          id: conversationId,
-          agentId,
-          channel,
-          trust: 'owner',
-          title: 'Thread',
-          createdAt: now,
-          updatedAt: now,
-        }),
-      );
+    await store.doc('conversations', conversationId).set(
+      encodeRecord({
+        id: conversationId,
+        agentId,
+        channel,
+        trust: 'owner',
+        title: 'Thread',
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
     const bindingId = randomUUID();
-    await store
-      .doc('channelBindings', bindingId)
-      .set(
-        encodeRecord({
-          id: bindingId,
-          channel: 'email',
-          conversationId,
-          externalId: `gmail-thread-${conversationId}`,
-          createdAt: now,
-          updatedAt: now,
-        }),
-      );
+    await store.doc('channelBindings', bindingId).set(
+      encodeRecord({
+        id: bindingId,
+        channel: 'email',
+        conversationId,
+        externalId: `gmail-thread-${conversationId}`,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
     return conversationId;
   }
 
