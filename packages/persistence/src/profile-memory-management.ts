@@ -1,5 +1,5 @@
 export type MemoryProminence = 'always' | 'auto' | 'minor';
-export type MemoryForgetReason = 'owner_forget' | 'quarantine_reject';
+export type MemoryForgetReason = 'owner_forget' | 'quarantine_reject' | 'owner_delete_contact';
 
 export interface ManagedMemory {
   id: string;
