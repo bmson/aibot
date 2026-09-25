@@ -10,6 +10,22 @@ export function embeddingSpaceKey(space: EmbeddingSpace): string {
     .digest('hex');
 }
 
+/**
+ * The stored shape of a new memory: its vector, the embedding space recall
+ * filters on, and a fresh retrieval revision. Every writer that creates a
+ * memory document goes through this.
+ */
+export function encodeMemoryDocument(memory: Records['memories'], space: EmbeddingSpace) {
+  if (!memory.embedding) throw new Error('Memory requires an embedding');
+  validateEmbedding(space, memory.embedding);
+  return encodeRecord({
+    ...memory,
+    embedding: FieldValue.vector(memory.embedding as number[]),
+    embeddingSpace: embeddingSpaceKey(space),
+    retrievalRevision: randomUUID(),
+  });
+}
+
 /** Initial vector feasibility adapter; graph/lexical ranking is still owned by the SQL runtime. */
 export class FirestoreMemoryRepository {
   constructor(
@@ -35,15 +51,7 @@ export class FirestoreMemoryRepository {
         throw new Error('Privacy erasure is in progress');
       if (tombstone?.exists) return false;
       if (existing?.exists || hash?.exists) return false;
-      tx.create(
-        ref,
-        encodeRecord({
-          ...memory,
-          embedding: FieldValue.vector(memory.embedding as number[]),
-          embeddingSpace: embeddingSpaceKey(this.space),
-          retrievalRevision: randomUUID(),
-        }),
-      );
+      tx.create(ref, encodeMemoryDocument(memory, this.space));
       tx.create(hashRef, { memoryId: memory.id });
       return true;
     });

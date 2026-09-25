@@ -75,6 +75,20 @@ function eligibleQuery(store: InstallationStore, agentId: string): Query {
     .where(Filter.or(Filter.where('expiresAt', '==', null), Filter.where('expiresAt', '>', now)));
 }
 
+/** A stable UUID per (owner, person, kind, date), so writers of one occasion converge. */
+export function occasionDocumentId(
+  agentId: string,
+  contactId: string,
+  occasion: { kind: string; month: number; day: number },
+): string {
+  const key = [agentId, contactId, occasion.kind, occasion.month, occasion.day].join('\u0000');
+  const bytes = createHash('sha256').update(key).digest().subarray(0, 16);
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function reviewOrder(a: ConsolidationFact, b: ConsolidationFact): number {
   return (
     (a.lastConsolidatedAt?.getTime() ?? -Infinity) -
@@ -259,16 +273,9 @@ export class FirestoreMemoryConsolidationRepository implements MemoryConsolidati
         this.store.doc('memoryTombstones', merge.contentHash),
       ]);
       const mergeChecks = mergeRefs.length ? await tx.getAll(...mergeRefs) : [];
-      const occasionIds = (input.occasions ?? []).map((occasion) => {
-        const key = [agentId, subjectContactId, occasion.kind, occasion.month, occasion.day].join(
-          '\u0000',
-        );
-        const bytes = createHash('sha256').update(key).digest().subarray(0, 16);
-        bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50;
-        bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
-        const hex = bytes.toString('hex');
-        return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-      });
+      const occasionIds = (input.occasions ?? []).map((occasion) =>
+        occasionDocumentId(agentId, subjectContactId, occasion),
+      );
       if (new Set(occasionIds).size !== occasionIds.length)
         throw new Error('Duplicate consolidation occasions');
       const occasionRefs = occasionIds.map((id) => this.store.doc('occasions', id));

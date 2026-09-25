@@ -8,6 +8,7 @@ import type {
   MemoryToolRepository,
   Records,
 } from '@assistant/persistence';
+import type { DocumentReference, Transaction } from '@google-cloud/firestore';
 import { FirestoreMemoryRepository } from './memory.js';
 import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
 
@@ -25,6 +26,70 @@ function lexicalTerms(query: string): string[] {
     .split(/\s+/)
     .filter((term) => term.length > 2)
     .slice(0, 5);
+}
+
+/**
+ * Attribute a fact's subject to a contact: the owner, an existing person by
+ * name or alias prefix, or a new name to create. Null for no subject (blank,
+ * the assistant itself, or an owner who has no contact row).
+ */
+export function matchSubjectContact(
+  rows: Records['contacts'][],
+  subject: string,
+): { contactId: string } | { create: string } | null {
+  const name = subject.trim();
+  if (!name || ASSISTANT_ALIASES.has(name.toLowerCase())) return null;
+  const owner = rows.find((row) => row.trust === 'owner');
+  const lower = name.toLowerCase();
+  const ownerMatch = owner
+    ? [owner.name, ...owner.aliases].find((candidate) =>
+        namePrefixMatch(lower, candidate.toLowerCase()),
+      )
+    : undefined;
+  if (lower === 'owner' || ownerMatch) return owner ? { contactId: owner.id } : null;
+  const match = rows
+    .filter((row) => row.trust !== 'owner')
+    .find((row) =>
+      [row.name, ...row.aliases].some((candidate) =>
+        namePrefixMatch(lower, candidate.toLowerCase()),
+      ),
+    );
+  return match ? { contactId: match.id } : { create: name };
+}
+
+/** The uniqueness marker that makes concurrent creation of one new name converge. */
+export function contactNameRef(store: InstallationStore, name: string): DocumentReference {
+  return store.doc(
+    'contactNames',
+    createHash('sha256').update(name.trim().toLowerCase()).digest('hex'),
+  );
+}
+
+/**
+ * Stage an auto-created, untrusted contact and its name marker. The caller has
+ * already read the marker in this transaction and found it absent.
+ */
+export function stageNewContact(
+  tx: Transaction,
+  store: InstallationStore,
+  input: { name: string; relationship?: string; now: Date },
+): string {
+  const id = randomUUID();
+  const contact: Records['contacts'] = {
+    id,
+    name: input.name.trim(),
+    createdAt: input.now,
+    updatedAt: input.now,
+    trust: 'unknown',
+    aliases: [],
+    emails: [],
+    phones: [],
+    relationship: input.relationship?.trim() ?? '',
+    notes: '',
+  };
+  tx.create(store.doc('contacts', id), encodeRecord(contact));
+  tx.create(contactNameRef(store, input.name), { contactId: id, createdAt: input.now });
+  return id;
 }
 
 function validateSave(input: MemorySaveInput): void {
@@ -52,49 +117,19 @@ export class FirestoreMemoryToolRepository implements MemoryToolRepository {
   }
 
   private async resolveSubject(subject: string, relationship?: string): Promise<string | null> {
-    const name = subject.trim();
-    if (!name || ASSISTANT_ALIASES.has(name.toLowerCase())) return null;
     const snapshots = await this.store.collection('contacts').get();
     const rows = snapshots.docs.map((doc) => decodeRecord<Records['contacts']>(doc.data()));
-    const owner = rows.find((row) => row.trust === 'owner');
-    const lower = name.toLowerCase();
-    const ownerMatch = owner
-      ? [owner.name, ...owner.aliases].find((candidate) =>
-          namePrefixMatch(lower, candidate.toLowerCase()),
-        )
-      : undefined;
-    if (lower === 'owner' || ownerMatch) return owner?.id ?? null;
-    const match = rows
-      .filter((row) => row.trust !== 'owner')
-      .find((row) =>
-        [row.name, ...row.aliases].some((candidate) =>
-          namePrefixMatch(lower, candidate.toLowerCase()),
-        ),
-      );
-    if (match) return match.id;
-
-    const key = createHash('sha256').update(lower).digest('hex');
-    const keyRef = this.store.doc('contactNames', key);
+    const matched = matchSubjectContact(rows, subject);
+    if (!matched || 'contactId' in matched) return matched?.contactId ?? null;
+    const keyRef = contactNameRef(this.store, matched.create);
     return this.store.db.runTransaction(async (tx) => {
       const existing = await tx.get(keyRef);
       if (existing.exists) return String(existing.get('contactId'));
-      const now = this.store.now();
-      const id = randomUUID();
-      const contact: Records['contacts'] = {
-        id,
-        name,
-        createdAt: now,
-        updatedAt: now,
-        trust: 'unknown',
-        aliases: [],
-        emails: [],
-        phones: [],
-        relationship: relationship?.trim() ?? '',
-        notes: '',
-      };
-      tx.create(this.store.doc('contacts', id), encodeRecord(contact));
-      tx.create(keyRef, { contactId: id, createdAt: now });
-      return id;
+      return stageNewContact(tx, this.store, {
+        name: matched.create,
+        relationship,
+        now: this.store.now(),
+      });
     });
   }
 

@@ -115,6 +115,7 @@ export function isCodeJobEnabled(job: string): boolean {
  */
 const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'reminder.notify',
+  'memory.extract',
   'memory.consolidate',
   'memory.graph_sync',
   'documents.extract',
@@ -335,8 +336,18 @@ export async function runCodeJob(
     }
     case 'memory.extract': {
       await deps.heartbeat?.();
-      const r = await runMemoryExtraction(deps, { taskId: task.id });
-      const loops = await extractCommitments(deps, { agentId: task.agentId, taskId: task.id });
+      // Read at each commit: every heartbeat renewal rotates the lease token.
+      const lease = () => ({ taskId: task.id, leaseToken: task.leaseToken ?? '' });
+      const r = await runMemoryExtraction(deps, {
+        taskId: task.id,
+        agentId: task.agentId,
+        lease,
+      });
+      const loops = await extractCommitments(deps, {
+        agentId: task.agentId,
+        taskId: task.id,
+        lease,
+      });
       return {
         done: true,
         summary: `extraction: ${r.saved} saved (${r.quarantined} quarantined, ${r.contactsCreated} new people), ${r.duplicates} duplicate, ${r.tombstoned} tombstoned, ${r.occasionsSaved} occasion(s), from ${r.conversationsScanned} conversation(s); open loops ${loops.saved} saved (${loops.duplicates} duplicate)`,

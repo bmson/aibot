@@ -11,6 +11,7 @@ import type { GraphRecallRepository } from './graph-recall.js';
 import type { HistoryRecallRepository } from './history-recall.js';
 import type { KnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 import type { MemoryConsolidationRepository } from './memory-consolidation.js';
+import type { MemoryExtractionRepository } from './memory-extraction.js';
 import type { MemorySupersedeRepository } from './memory-supersede.js';
 import type { MemoryToolRepository } from './memory-tools.js';
 import type { ModelRoutingRepository } from './model-routing.js';
@@ -43,6 +44,8 @@ export interface ExecutionPersistence {
   readonly memorySupersede: MemorySupersedeRepository;
   /** Present while the bounded consolidation job is migrated off SQL. */
   readonly memoryConsolidation?: MemoryConsolidationRepository;
+  /** Present where the nightly `memory.extract` job has a portable adapter. */
+  readonly memoryExtraction?: MemoryExtractionRepository;
   readonly graph: GraphRecallRepository;
   readonly graphSync: KnowledgeGraphSyncRepository;
   readonly generatedCards: GeneratedCardRepository;
