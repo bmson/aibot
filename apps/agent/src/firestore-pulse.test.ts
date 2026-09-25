@@ -209,7 +209,9 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore pulse job', () 
     expect(await notices()).toEqual([]);
   });
 
-  it('claims each moment once under concurrency', async () => {
+  // Two transactions contend for one moment; the emulator's shared lock manager
+  // can take several seconds to settle them, as in the Notifications race test.
+  it('claims each moment once under concurrency', { timeout: 30_000 }, async () => {
     const claim = {
       agentId,
       kind: 'commitment-due',
