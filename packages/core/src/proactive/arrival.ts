@@ -1,5 +1,5 @@
-import { type Db, locationPings, tasks } from '@assistant/db';
-import { and, desc, eq, gte, lt, sql } from 'drizzle-orm';
+import { createPostgresLocationPingRepository, type Db } from '@assistant/db';
+import type { LocationPingRepository, TaskRepository } from '@assistant/persistence';
 import { InboundEventSchema } from '../events.js';
 import { enqueueTask } from '../workflow/machine.js';
 
@@ -97,8 +97,25 @@ function zonedDateKey(timeZone: string, at: Date): string {
  * arrival task. Returns true when a task was created. Never throws into the
  * ingest path — a nudge is a bonus, the ping itself is the payload.
  */
-export async function maybeEnqueueArrivalNudge(
+export function maybeEnqueueArrivalNudge(
   db: Db,
+  agent: { id: string; timezone: string },
+  ping: ArrivalPing,
+  now: Date = new Date(),
+): Promise<boolean> {
+  return maybeEnqueueArrivalNudgeWithRepository(
+    createPostgresLocationPingRepository(db),
+    db,
+    agent,
+    ping,
+    now,
+  );
+}
+
+/** The same arrival decision over portable ping and task repositories. */
+export async function maybeEnqueueArrivalNudgeWithRepository(
+  locations: LocationPingRepository,
+  tasks: Db | TaskRepository,
   agent: { id: string; timezone: string },
   ping: ArrivalPing,
   now: Date = new Date(),
@@ -106,49 +123,15 @@ export async function maybeEnqueueArrivalNudge(
   if (!accurate(ping)) return false;
 
   const windowStart = new Date(now.getTime() - ARRIVAL_WINDOW_HOURS * 3600e3);
-  const recent = await db
-    .select({
-      lat: locationPings.lat,
-      lng: locationPings.lng,
-      accuracyM: locationPings.accuracyM,
-      capturedAt: locationPings.capturedAt,
-    })
-    .from(locationPings)
-    .where(
-      and(
-        eq(locationPings.agentId, agent.id),
-        gte(locationPings.capturedAt, windowStart),
-        // Strictly before: the just-recorded ping must not veto itself.
-        lt(locationPings.capturedAt, ping.capturedAt),
-      ),
-    )
-    .orderBy(desc(locationPings.capturedAt));
-  if (
-    !hasConfirmedArrival(
-      ping,
-      recent.map((row) => ({
-        ...row,
-        lat: Number(row.lat),
-        lng: Number(row.lng),
-      })),
-      now,
-    )
-  )
-    return false;
+  // Strictly before: the just-recorded ping must not veto itself.
+  const recent = await locations.recent(agent.id, {
+    from: windowStart,
+    before: ping.capturedAt,
+  });
+  if (!hasConfirmedArrival(ping, recent, now)) return false;
 
   const cooldownStart = new Date(now.getTime() - ARRIVAL_COOLDOWN_HOURS * 3600e3);
-  const [recentNudge] = await db
-    .select({ id: tasks.id })
-    .from(tasks)
-    .where(
-      and(
-        eq(tasks.agentId, agent.id),
-        sql`${tasks.externalEventId} like 'arrival:%'`,
-        gte(tasks.createdAt, cooldownStart),
-      ),
-    )
-    .limit(1);
-  if (recentNudge) return false;
+  if (await locations.hasArrivalTaskSince(agent.id, cooldownStart)) return false;
 
   const grid = `${ping.lat.toFixed(2)},${ping.lng.toFixed(2)}`;
   const date = zonedDateKey(agent.timezone, now);
@@ -171,7 +154,7 @@ export async function maybeEnqueueArrivalNudge(
         'When you do reach out, send ONE short message via owner.notify with ping=true naming the area and the pick(s), and stop.',
     },
   });
-  const { created } = await enqueueTask(db, {
+  const { created } = await enqueueTask(tasks, {
     event,
     type: 'adhoc',
     budgetUsdLimit: '0.06',

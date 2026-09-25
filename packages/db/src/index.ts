@@ -16,6 +16,7 @@ export {
 } from './graph-recall-repository.js';
 export { createPostgresHistoryRecallRepository } from './history-recall-repository.js';
 export { createPostgresKnowledgeGraphSyncRepository } from './knowledge-graph-sync-repository.js';
+export { createPostgresLocationPingRepository } from './location-ping-repository.js';
 export { createPostgresMemorySupersedeRepository } from './memory-supersede-repository.js';
 export { createPostgresMemoryToolRepository } from './memory-tool-repository.js';
 export { createPostgresMessageRepository } from './message-repository.js';
