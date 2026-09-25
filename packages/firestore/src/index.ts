@@ -6,6 +6,7 @@ export { createFirestoreCardRefreshRepository } from './card-refresh.js';
 export { FirestoreCommitmentMutationRepository } from './commitment-mutations.js';
 export { getFirestoreCommitmentOverview } from './commitment-overview.js';
 export { FirestoreCostRepository } from './costs.js';
+export { FirestoreDeviceTokenRepository } from './device-tokens.js';
 export { FirestoreDocumentCatalogRepository } from './document-catalog.js';
 export { FirestoreDocumentExtractionRepository } from './document-extraction.js';
 export { FirestoreDocumentReadRepository } from './documents.js';

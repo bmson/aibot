@@ -10,6 +10,7 @@ import {
   archiveInactiveChats,
   changeChatModel,
   checkReadiness,
+  checkReadinessWithProbe,
   correctOwnerCommitment,
   createChatConversation,
   createMcpConnection,
@@ -57,6 +58,7 @@ import {
   recordRecallFeedback,
   recordRecallFeedbackWithRepository,
   registerDeviceToken,
+  registerDeviceTokenWithRepository,
   resolveOwnerCommitment,
   restoreChatConversation,
   reviewImportedSource,
@@ -105,6 +107,7 @@ import {
   createFirestoreSettingsPersistence,
   createInstallationStore,
   FirestoreApplicationChatPersistence,
+  FirestoreDeviceTokenRepository,
   FirestoreGoalMutationRepository,
   FirestoreLocationPingRepository,
   FirestoreMcpConnectionMutationRepository,
@@ -522,6 +525,7 @@ function createFirestoreChatApplication() {
       router.embed(texts, { expectedModelId: embeddingModelId(embeddingSpace) }),
   };
   const locationPings = new FirestoreLocationPingRepository(store);
+  const deviceTokens = new FirestoreDeviceTokenRepository(store);
   const chatReads = { chat, generatedCards: persistence.generatedCards };
   const settings = createFirestoreSettingsPersistence(store, config.FIRESTORE_AGENT_ID);
   const skillMutations = new FirestoreSkillMutationRepository(store, embeddingSpace);
@@ -566,6 +570,13 @@ function createFirestoreChatApplication() {
         body,
       );
     },
+    registerDeviceToken: (body: unknown) =>
+      registerDeviceTokenWithRepository(deviceTokens, config.FIRESTORE_AGENT_ID, body),
+    checkReadiness: () =>
+      checkReadinessWithProbe(async () => {
+        const agents = await store.collection('agents').limit(2).get();
+        return agents.size === 1 && agents.docs[0]?.get('id') === config.FIRESTORE_AGENT_ID;
+      }),
     addOwnerKnowledgeGraphFact: (input: {
       subjectLabel: string;
       subjectKind: string;
@@ -711,4 +722,14 @@ export function getWorkspaceSettings() {
 /** Record an owner location ping and run the arrival hook with the configured driver. */
 export function recordOwnerLocation(body: unknown) {
   return getChatApplication().recordOwnerLocationPing(body);
+}
+
+/** Register the owner's APNs token with the configured driver. */
+export function registerOwnerDeviceToken(body: unknown) {
+  return getChatApplication().registerDeviceToken(body);
+}
+
+/** Readiness for the configured driver; Firestore never opens a SQL connection. */
+export function checkWebReadiness() {
+  return getChatApplication().checkReadiness();
 }
