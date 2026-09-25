@@ -34,7 +34,13 @@ import {
   mergeFirestorePeople,
   recompileFirestoreProfileCard,
 } from '@/lib/firestore-profile-commands';
-import { getApplication, getDb, getFirestoreInstallationStore, getWorkspace } from '@/lib/server';
+import {
+  getApplication,
+  getDb,
+  getFirestoreInstallationStore,
+  getOwnerMemoryCommands,
+  getWorkspace,
+} from '@/lib/server';
 
 export type { OrganizeMemoryState, ProminenceLevel } from '@assistant/application/profile';
 
@@ -51,19 +57,19 @@ function revalidateProfile(): void {
 
 export async function resolveCommitmentAction(id: string): Promise<void> {
   await requireOwner();
-  await getApplication().resolveCommitment(id, 'Owner confirmed this loop is resolved.');
+  await getOwnerMemoryCommands().resolveCommitment(id, 'Owner confirmed this loop is resolved.');
   revalidateProfile();
 }
 
 export async function dismissCommitmentAction(id: string): Promise<void> {
   await requireOwner();
-  await getApplication().dismissCommitment(id);
+  await getOwnerMemoryCommands().dismissCommitment(id);
   revalidateProfile();
 }
 
 export async function snoozeCommitmentAction(id: string): Promise<void> {
   await requireOwner();
-  await getApplication().snoozeCommitment(id, new Date(Date.now() + 24 * 3600 * 1000));
+  await getOwnerMemoryCommands().snoozeCommitment(id, new Date(Date.now() + 24 * 3600 * 1000));
   revalidateProfile();
 }
 
@@ -74,7 +80,7 @@ export async function correctCommitmentAction(
   nextAction: string,
 ): Promise<void> {
   await requireOwner();
-  await getApplication().correctCommitment(id, { title, details, nextAction });
+  await getOwnerMemoryCommands().correctCommitment(id, { title, details, nextAction });
   revalidateProfile();
 }
 
@@ -89,38 +95,38 @@ export async function correctCommitmentFormAction(id: string, formData: FormData
 
 export async function confirmFact(memoryId: string): Promise<void> {
   await requireOwner();
-  await getApplication().confirmMemory(memoryId);
+  await getOwnerMemoryCommands().confirmMemory(memoryId);
   revalidateProfile();
 }
 
 export async function correctFact(memoryId: string, content: string): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await getApplication().correctMemory(memoryId, content);
+  const result = await getOwnerMemoryCommands().correctMemory(memoryId, content);
   revalidateProfile();
   return result;
 }
 
 export async function forgetFact(memoryId: string): Promise<void> {
   await requireOwner();
-  await getApplication().forgetMemory(memoryId);
+  await getOwnerMemoryCommands().forgetMemory(memoryId);
   revalidateProfile();
 }
 
 export async function setFactProminence(memoryId: string, level: ProminenceLevel): Promise<void> {
   await requireOwner();
-  await getApplication().setMemoryProminence(memoryId, level);
+  await getOwnerMemoryCommands().setMemoryProminence(memoryId, level);
   revalidateProfile();
 }
 
 export async function approveQuarantined(memoryId: string): Promise<void> {
   await requireOwner();
-  await getApplication().approveQuarantinedMemory(memoryId);
+  await getOwnerMemoryCommands().approveQuarantinedMemory(memoryId);
   revalidateProfile();
 }
 
 export async function rejectQuarantined(memoryId: string): Promise<void> {
   await requireOwner();
-  await getApplication().rejectQuarantinedMemory(memoryId);
+  await getOwnerMemoryCommands().rejectQuarantinedMemory(memoryId);
   revalidateProfile();
 }
 
@@ -292,7 +298,7 @@ export async function createMemoryAction(input: {
   subjectContactId: string;
 }): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await getApplication().createMemory(input);
+  const result = await getOwnerMemoryCommands().createMemory(input);
   revalidateProfile();
   return result;
 }
