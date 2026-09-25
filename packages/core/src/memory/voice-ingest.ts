@@ -7,6 +7,13 @@ import {
   tasks,
   writingSamples,
 } from '@assistant/db';
+import {
+  embeddingModelId,
+  type ImportCommandRepository,
+  type ImportJobFence,
+  type ImportJobRepository,
+  validateEmbedding,
+} from '@assistant/persistence';
 import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { loadConfig } from '../config.js';
 import { BudgetReservationError } from '../cost.js';
@@ -185,12 +192,19 @@ export async function runVoiceIngest(
     router: ModelRouter;
     workspace?: WorkspaceReader;
     heartbeat?: () => Promise<void>;
+    /** Portable persistence; without it the job keeps its PostgreSQL path. */
+    imports?: ImportJobRepository;
   },
   task: TaskRow,
 ): Promise<VoiceIngestOutcome> {
   const { db, router, workspace } = deps;
   if (!workspace) throw new Error('voice ingest needs a workspace store (executor deps)');
   const payload = voiceIngestPayload(task);
+  const imports = deps.imports;
+  if (imports)
+    return withSpan('voice.ingest', { source: payload.source }, () =>
+      runPortableVoiceIngest({ ...deps, imports, workspace }, task, payload),
+    );
 
   return withSpan('voice.ingest', { source: payload.source }, async () => {
     await deps.heartbeat?.();
@@ -324,6 +338,135 @@ export async function runVoiceIngest(
   });
 }
 
+function voiceIngestProgress(source: string, cursor: VoiceIngestCursor, total: number) {
+  return {
+    progress: `voice ingest ${source}: ${cursor.index}/${total}, ${cursor.saved} samples`,
+    progressPercent: total ? Math.min(100, Math.round((cursor.index / total) * 100)) : 100,
+  };
+}
+
+/**
+ * The voice ingest on portable persistence. A batch's samples and advanced
+ * cursor commit in one lease-fenced write; samples key on owner and text, so
+ * a replayed batch after a crash or reclaimed lease finds its own rows.
+ */
+async function runPortableVoiceIngest(
+  deps: {
+    imports: ImportJobRepository;
+    router: ModelRouter;
+    workspace: WorkspaceReader;
+    heartbeat?: () => Promise<void>;
+  },
+  task: TaskRow,
+  payload: VoiceIngestPayload,
+): Promise<VoiceIngestOutcome> {
+  const { imports: repository, router, workspace } = deps;
+  // Read the token at each call: every heartbeat rotates it on the lease.
+  const fence = (): ImportJobFence => {
+    if (!task.leaseToken) throw new Error('voice ingest task has no active lease token');
+    return {
+      agentId: task.agentId,
+      source: payload.source,
+      taskId: task.id,
+      queueGeneration: task.queueGeneration,
+      leaseToken: task.leaseToken,
+    };
+  };
+  const lost = () =>
+    new Error(`voice ingest ${payload.source}: task lease or source link was lost`);
+
+  await deps.heartbeat?.();
+  const loaded = await repository.load(fence());
+  if (!loaded) throw lost();
+  if (loaded.source.status === 'purged') {
+    return { done: true, summary: `voice ingest ${payload.source}: purged — nothing to do` };
+  }
+  if (loaded.source.taskId !== task.id) {
+    return { done: true, summary: `voice ingest ${payload.source}: superseded by a newer run` };
+  }
+  const identity = await repository.ownerIdentity(fence());
+  if (!identity) throw lost();
+  const isOwnerAuthored = ownerAuthoredMatcher({
+    emails: [...identity.emails, loadConfig().OWNER_EMAIL].filter(Boolean),
+    names: identity.names,
+  });
+  const content = await workspace.read(payload.path);
+  const allSamples = extractOwnerSamples(payload.kind, content, isOwnerAuthored);
+  const capped = allSamples.length > MAX_UPLOAD_SAMPLES;
+  const candidates = capped ? allSamples.slice(0, MAX_UPLOAD_SAMPLES) : allSamples;
+  await deps.heartbeat?.();
+
+  const state = (loaded.state ?? {}) as Record<string, unknown>;
+  const plannerState = (state.plannerState ?? {}) as Record<string, unknown>;
+  let cursor: VoiceIngestCursor = {
+    index: 0,
+    saved: 0,
+    duplicates: 0,
+    ...((plannerState.voiceIngest as Partial<VoiceIngestCursor>) ?? {}),
+  };
+  const describe = (current: VoiceIngestCursor) =>
+    voiceIngestProgress(payload.source, current, candidates.length);
+  if (
+    !(await repository.begin(fence(), {
+      itemsTotal: candidates.length,
+      state: { ...state, plannerState: { ...plannerState, voiceIngest: cursor } },
+      ...describe(cursor),
+    }))
+  )
+    throw lost();
+
+  const expectedModelId = embeddingModelId(repository.embeddingSpace);
+  const stopAt = Math.min(cursor.index + SAMPLES_PER_RUN, candidates.length);
+  while (cursor.index < stopAt) {
+    const batch = candidates.slice(cursor.index, stopAt);
+    // Skip texts already stored (a prior run, an overlapping re-upload, or an
+    // auto-captured sample) before paying to embed them.
+    const existing = await repository.existingSampleTexts(fence(), batch);
+    const fresh = batch.filter((text) => !existing.has(text));
+    let embeddings: number[][] = [];
+    if (fresh.length > 0) {
+      try {
+        embeddings = await router.embed(fresh, { taskId: task.id, expectedModelId });
+      } catch (err) {
+        // A budget stop never resets on its own — mark the source failed
+        // (re-runnable) and surface it as needs_attention, mirroring import.
+        if (err instanceof BudgetReservationError)
+          await repository.finish(fence(), { status: 'failed', error: err.message });
+        throw err;
+      }
+      for (const embedding of embeddings) validateEmbedding(repository.embeddingSpace, embedding);
+      await deps.heartbeat?.();
+    }
+    const committed = await repository.commitVoiceBatch(fence(), {
+      index: cursor.index,
+      nextIndex: stopAt,
+      register: payload.register,
+      context: `${UPLOAD_SAMPLE_PREFIX}${payload.source}`,
+      samples: fresh.map((text, index) => ({ text, embedding: embeddings[index] ?? [] })),
+      duplicates: batch.length - fresh.length,
+      describe,
+    });
+    if (!committed) throw lost();
+    cursor = committed;
+  }
+
+  if (cursor.index >= candidates.length) {
+    if (!(await repository.finish(fence(), { status: 'done', error: null }))) throw lost();
+    const capNote = capped
+      ? ` (${allSamples.length - MAX_UPLOAD_SAMPLES} over the cap skipped)`
+      : '';
+    return {
+      done: true,
+      summary: `voice ingest ${payload.source}: complete — ${cursor.saved} samples (${cursor.duplicates} duplicates)${capNote}`,
+    };
+  }
+  return {
+    done: false,
+    runAfter: new Date(Date.now() + RESUME_DELAY_MS),
+    summary: `voice ingest ${payload.source}: ${cursor.index}/${candidates.length} messages`,
+  };
+}
+
 // ── Lifecycle (dashboard entry points) ───────────────────────────────────────
 
 /** Normalise an owner label into a valid, voice-prefixed import source tag. */
@@ -428,6 +571,32 @@ export async function startVoiceIngest(
 
   getQueueNotifier().notify(result.task.id, result.task.queueGeneration);
   return { sourceRow: result.sourceRow, taskId: result.task.id };
+}
+
+/** startVoiceIngest on portable persistence: the source row and its task commit together. */
+export function startPortableVoiceIngest(
+  repository: ImportCommandRepository,
+  input: {
+    source: string;
+    workspacePath: string;
+    kind: ImportKind;
+    register: VoiceRegister;
+    budgetUsdLimit?: string;
+  },
+): Promise<{ sourceId: string; taskId: string }> {
+  const source = voiceImportSourceTag(input.source);
+  if (!/^[a-z0-9._-]{2,80}$/.test(source)) {
+    throw new Error('voice import source tag is invalid');
+  }
+  if (!isVoiceRegister(input.register)) throw new Error('voice import needs a valid register');
+  return repository.start({
+    source,
+    workspacePath: input.workspacePath,
+    kind: input.kind,
+    job: 'voice.ingest',
+    payload: { register: input.register },
+    budgetUsdLimit: input.budgetUsdLimit ?? DEFAULT_VOICE_INGEST_BUDGET_USD,
+  });
 }
 
 export interface VoiceSampleStats {

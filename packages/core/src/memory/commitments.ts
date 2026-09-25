@@ -35,6 +35,7 @@ export interface CommitmentExtractionDeps {
   db: Db;
   router: ModelRouter;
   heartbeat?: () => Promise<void>;
+  persistence?: import('@assistant/persistence').ExecutionPersistence;
 }
 
 export interface CommitmentExtractionResult {
@@ -95,9 +96,22 @@ function formatTranscript(rows: Array<{ role: string; text: string }>): string {
 /** Extracts commitments asynchronously; it never creates or executes a task. */
 export async function extractCommitments(
   deps: CommitmentExtractionDeps,
-  opts: { agentId: string; since?: Date; taskId?: string },
+  opts: {
+    agentId: string;
+    since?: Date;
+    taskId?: string;
+    /** The running task's current lease; portable stores commit only under it. */
+    lease?: () => import('@assistant/persistence').CodeJobLease;
+  },
 ): Promise<CommitmentExtractionResult> {
   const since = opts.since ?? new Date(Date.now() - 36 * 3600 * 1000);
+  if (deps.persistence?.driver === 'firestore') {
+    const repository = deps.persistence.memoryExtraction;
+    if (!repository)
+      throw new Error('Memory extraction repository is missing from Firestore persistence');
+    if (!opts.lease) throw new Error('Firestore commitment extraction requires a task lease');
+    return extractPortableCommitments(repository, deps, { ...opts, since, lease: opts.lease });
+  }
   const active = await deps.db
     .select({ conversationId: messages.conversationId })
     .from(messages)
@@ -236,6 +250,96 @@ export async function extractCommitments(
           );
       }
     }
+  }
+  return { conversationsScanned, saved, duplicates };
+}
+
+/**
+ * The same pass over a portable store. Each conversation's loops and
+ * resolutions commit with a per-task checkpoint, so a reclaimed task picks up
+ * after the last conversation it finished.
+ */
+async function extractPortableCommitments(
+  repository: import('@assistant/persistence').MemoryExtractionRepository,
+  deps: CommitmentExtractionDeps,
+  opts: {
+    agentId: string;
+    since: Date;
+    taskId?: string;
+    lease: () => import('@assistant/persistence').CodeJobLease;
+  },
+): Promise<CommitmentExtractionResult> {
+  const active = await repository.recentConversations({
+    agentId: opts.agentId,
+    since: opts.since,
+    maxConversations: MAX_CONVERSATIONS,
+    maxMessages: MAX_MESSAGES,
+    minTextLength: 0,
+  });
+  const done = new Set(await repository.completedSteps(opts.agentId, opts.lease()));
+  let saved = 0;
+  let duplicates = 0;
+  let conversationsScanned = 0;
+  for (const conversation of active) {
+    await deps.heartbeat?.();
+    // Owner threads only, for the reason spelled out in extractCommitments.
+    if (conversation.trust !== 'owner') continue;
+    const checkpointKey = `commitments:${conversation.conversationId}`;
+    if (done.has(checkpointKey)) continue;
+    const transcript = formatTranscript(conversation.messages);
+    if (transcript.length < 40) continue;
+    conversationsScanned += 1;
+    const outcome = await deps.router.object<z.infer<typeof CommitmentExtractionSchema>>(
+      'extract',
+      {
+        taskId: opts.taskId,
+        schema: CommitmentExtractionSchema,
+        system: EXTRACTION_SYSTEM,
+        prompt: transcript,
+      },
+    );
+    if (!outcome.ok) continue;
+    await deps.heartbeat?.();
+    const activeRows = outcome.object.resolvedTitles.length
+      ? await repository.activeCommitments(opts.agentId, 60)
+      : [];
+    const resolveIds: string[] = [];
+    for (const resolvedTitle of outcome.object.resolvedTitles) {
+      const needle = normalizedTitle(resolvedTitle);
+      if (needle.length < 3) continue;
+      const matches = activeRows.filter((row) => normalizedTitle(row.title) === needle);
+      const [match] = matches;
+      if (matches.length === 1 && match && !resolveIds.includes(match.id))
+        resolveIds.push(match.id);
+    }
+    const items = outcome.object.commitments
+      .filter((item) => item.confidence >= MIN_CONFIDENCE)
+      .map((item) => {
+        const title = item.title.trim();
+        const details = item.details.trim();
+        return {
+          kind: item.kind,
+          title,
+          details,
+          nextAction: item.nextAction.trim(),
+          dueAt: parseDueAt(item.dueAt),
+          confidence: item.confidence.toFixed(2),
+          contentHash: hashCommitment(item.kind, title, details),
+        };
+      });
+    const applied = await repository.applyCommitments({
+      agentId: opts.agentId,
+      lease: opts.lease(),
+      checkpointKey,
+      conversationId: conversation.conversationId,
+      sourceMessageId: conversation.messages.at(-1)?.id ?? null,
+      resolveIds,
+      resolution: 'Owner confirmed this loop is resolved.',
+      commitments: items,
+    });
+    if (!applied) continue;
+    saved += applied.saved;
+    duplicates += applied.duplicates;
   }
   return { conversationsScanned, saved, duplicates };
 }

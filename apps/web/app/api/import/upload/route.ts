@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { isAuthed } from '@/auth';
-import { getApplication } from '@/lib/server';
+import { getImportCommands } from '@/lib/server';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // Cloud Run request cap is 32MB — stay under it
 const MAX_MULTIPART_BYTES = MAX_UPLOAD_BYTES + 1024 * 1024; // form fields + MIME boundary overhead
@@ -42,7 +42,7 @@ export async function POST(req: Request) {
   const isVoice = String(form.get('voice') ?? '') === '1';
 
   const content = await file.text();
-  const result = await getApplication().uploadImport({
+  const result = await getImportCommands().uploadImport({
     fileName: file.name,
     content,
     source: labelField,
