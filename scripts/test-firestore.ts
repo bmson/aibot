@@ -54,6 +54,7 @@ const child = spawn(
     'apps/web/lib/chat-server.test.ts',
     'apps/web/app/api/mobile/v1/location/route.firestore.test.ts',
     'apps/web/app/api/mobile/v1/memory/people/[id]/route.firestore.test.ts',
+    'apps/web/app/api/mobile/v1/memory/profile/maintenance.firestore.test.ts',
     'apps/web/app/anomalies/actions.firestore.test.ts',
     'apps/web/lib/mobile-improvements-server.test.ts',
     'apps/web/app/tasks/actions.firestore.test.ts',
