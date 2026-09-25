@@ -1,28 +1,55 @@
 import { randomUUID } from 'node:crypto';
 import { getAgent } from '@assistant/core/chat';
+import { compileOwnerCard } from '@assistant/core/memory/consolidation';
 import {
   deleteImportSource,
   purgeImportSource,
   reviewImportSource,
   startImport,
+  startPortableImport,
 } from '@assistant/core/memory/import';
 import { detectKind } from '@assistant/core/memory/import-parsers';
 import {
   isVoiceImportSource,
   isVoiceRegister,
   registerForFilename,
+  startPortableVoiceIngest,
   startVoiceIngest,
 } from '@assistant/core/memory/voice-ingest';
 import { type Db, importSources, memories } from '@assistant/db';
 import {
+  type ImportCommandRepository,
   type ImportOverviewRepository,
   isImportOverviewRepository,
+  type OwnerCardCompilationRepository,
   type Records,
 } from '@assistant/persistence';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { safeWorkspacePath, type WorkspacePort } from './workspace.js';
 
 export type ImportSourceSnapshot = Records['importSources'];
+
+/** Portable import commands: the source commands plus the owner card they invalidate. */
+export interface ImportCommandPersistence {
+  readonly kind: 'import-command-persistence';
+  imports: ImportCommandRepository;
+  ownerCards: OwnerCardCompilationRepository;
+}
+
+function isImportCommandPersistence(value: unknown): value is ImportCommandPersistence {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'kind' in value &&
+    value.kind === 'import-command-persistence'
+  );
+}
+
+async function recompileOwnerCard(persistence: ImportCommandPersistence, agentId: string) {
+  await compileOwnerCard(persistence.ownerCards, agentId).catch((err) =>
+    console.error('card recompile failed', err),
+  );
+}
 
 export interface ImportOverview {
   sources: ImportSourceSnapshot[];
@@ -77,44 +104,85 @@ function importOverviewFrom(
 }
 
 export async function startWorkspaceImport(
-  db: Db,
+  store: Db | ImportCommandPersistence,
   workspace: WorkspacePort,
   workspacePath: string,
   source: string,
 ): Promise<{ error?: string }> {
   try {
-    const agent = await getAgent(db);
     const content = await workspace.read(workspacePath);
-    await startImport(db, {
-      agentId: agent.id,
-      source,
-      workspacePath,
-      kind: detectKind(workspacePath, content.slice(0, 4000)),
-    });
+    const kind = detectKind(workspacePath, content.slice(0, 4000));
+    if (isImportCommandPersistence(store)) {
+      await startPortableImport(store.imports, { source, workspacePath, kind });
+      return {};
+    }
+    const agent = await getAgent(store);
+    await startImport(store, { agentId: agent.id, source, workspacePath, kind });
     return {};
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
 }
 
-export function purgeImportedSource(db: Db, source: string): Promise<{ purged: number }> {
-  return purgeImportSource(db, source);
+export async function purgeImportedSource(
+  store: Db | ImportCommandPersistence,
+  source: string,
+): Promise<{ purged: number }> {
+  if (!isImportCommandPersistence(store)) return purgeImportSource(store, source);
+  const result = await store.imports.purge(source);
+  await recompileOwnerCard(store, result.agentId);
+  return { purged: result.purged };
 }
 
-export function deleteImportedSource(
-  db: Db,
+export async function deleteImportedSource(
+  store: Db | ImportCommandPersistence,
   workspace: WorkspacePort,
   source: string,
 ): Promise<{ purgedMemories: number }> {
-  return deleteImportSource(db, source, workspace);
+  if (!isImportCommandPersistence(store)) return deleteImportSource(store, source, workspace);
+  const result = await store.imports.remove(source);
+  await workspace.delete(result.workspacePath).catch((err) => {
+    console.error(`workspace delete failed for ${result.workspacePath}`, err);
+  });
+  await recompileOwnerCard(store, result.agentId);
+  return { purgedMemories: result.purgedMemories };
 }
 
-export function reviewImportedSource(
-  db: Db,
+export async function reviewImportedSource(
+  store: Db | ImportCommandPersistence,
   source: string,
   verdict: 'approve' | 'reject',
 ): Promise<{ reviewed: number }> {
-  return reviewImportSource(db, source, verdict);
+  if (!isImportCommandPersistence(store)) return reviewImportSource(store, source, verdict);
+  const result = await store.imports.review(source, verdict);
+  if (result.reviewed > 0) await recompileOwnerCard(store, result.agentId);
+  return { reviewed: result.reviewed };
+}
+
+type VoiceStart = Omit<Parameters<typeof startVoiceIngest>[1], 'agentId'>;
+type BackstoryStart = Omit<Parameters<typeof startImport>[1], 'agentId'>;
+
+function portableImportStarters(imports: ImportCommandRepository) {
+  return {
+    voice: async (input: VoiceStart) => {
+      await startPortableVoiceIngest(imports, input);
+    },
+    backstory: async (input: BackstoryStart) => {
+      await startPortableImport(imports, input);
+    },
+  };
+}
+
+async function postgresImportStarters(db: Db) {
+  const agent = await getAgent(db);
+  return {
+    voice: async (input: VoiceStart) => {
+      await startVoiceIngest(db, { ...input, agentId: agent.id });
+    },
+    backstory: async (input: BackstoryStart) => {
+      await startImport(db, { ...input, agentId: agent.id });
+    },
+  };
 }
 
 function cleanImportName(name: string): string {
@@ -122,7 +190,7 @@ function cleanImportName(name: string): string {
 }
 
 export async function uploadImport(
-  db: Db,
+  store: Db | ImportCommandPersistence,
   workspace: WorkspacePort,
   input: {
     fileName: string;
@@ -132,7 +200,9 @@ export async function uploadImport(
     register?: string;
   },
 ): Promise<{ destination: '/profile' | '/import' }> {
-  const agent = await getAgent(db);
+  const start = isImportCommandPersistence(store)
+    ? portableImportStarters(store.imports)
+    : await postgresImportStarters(store);
   const cleanName = cleanImportName(input.fileName);
   const workspacePath = safeWorkspacePath(`import/uploads/${randomUUID()}-${cleanName}`);
   const source = input.source?.trim() || cleanName.replace(/\.[a-z0-9]+$/i, '').toLowerCase();
@@ -144,8 +214,7 @@ export async function uploadImport(
       const register = isVoiceRegister(requestedRegister)
         ? requestedRegister
         : registerForFilename(input.fileName);
-      await startVoiceIngest(db, {
-        agentId: agent.id,
+      await start.voice({
         source: input.source?.trim() || cleanName,
         workspacePath,
         kind,
@@ -153,7 +222,7 @@ export async function uploadImport(
       });
       return { destination: '/profile' };
     }
-    await startImport(db, { agentId: agent.id, source, workspacePath, kind });
+    await start.backstory({ source, workspacePath, kind });
     return { destination: '/import' };
   } catch (error) {
     await workspace.delete(workspacePath).catch(() => {});

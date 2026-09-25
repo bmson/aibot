@@ -20,6 +20,7 @@ export { FirestoreGoalReadRepository } from './goals.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { FirestoreImportOverviewRepository } from './import-overview.js';
+export { FirestoreImportCommandRepository, FirestoreImportJobRepository } from './imports.js';
 export {
   getFirestoreKnowledgeGraphOverview,
   getFirestoreKnowledgeGraphRelation,

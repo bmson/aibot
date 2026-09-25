@@ -64,7 +64,11 @@ export function proxy(request: NextRequest) {
     // assistant identity and notification preference updates.
     (path === '/settings' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/goals' && ['GET', 'POST'].includes(request.method)) ||
-    (path === '/import' && request.method === 'GET') ||
+    // Import Server Actions and uploads recheck owner authentication; the
+    // uploaded bytes go to the workspace store and the records to Firestore.
+    (path === '/import' && ['GET', 'POST'].includes(request.method)) ||
+    (path === '/api/import/upload' && request.method === 'POST') ||
+    (path === '/api/mobile/v1/imports' && request.method === 'POST') ||
     (path === '/skills' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/approvals' && ['GET', 'POST'].includes(request.method)) ||
     // Activity pages and their Server Actions enforce owner authentication

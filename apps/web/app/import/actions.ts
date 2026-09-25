@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getApplication } from '@/lib/server';
+import { getImportCommands } from '@/lib/server';
 
 function revalidateImport(): void {
   revalidatePath('/import');
@@ -15,7 +15,7 @@ export async function startImportAction(
   sourceTag: string,
 ): Promise<{ error?: string }> {
   await requireOwner();
-  const result = await getApplication().startImport(workspacePath, sourceTag);
+  const result = await getImportCommands().startImport(workspacePath, sourceTag);
   if (result.error) return result;
   revalidateImport();
   return {};
@@ -24,14 +24,14 @@ export async function startImportAction(
 /** Bound form action: purge every memory this source produced. */
 export async function purgeSourceAction(source: string): Promise<void> {
   await requireOwner();
-  await getApplication().purgeImport(source);
+  await getImportCommands().purgeImport(source);
   revalidateImport();
 }
 
 /** Remove the source entirely: memories, uploaded file, and the row itself. */
 export async function deleteSourceAction(source: string): Promise<void> {
   await requireOwner();
-  await getApplication().deleteImport(source);
+  await getImportCommands().deleteImport(source);
   revalidateImport();
 }
 
@@ -40,6 +40,6 @@ export async function reviewSourceAction(
   verdict: 'approve' | 'reject',
 ): Promise<void> {
   await requireOwner();
-  await getApplication().reviewImport(source, verdict);
+  await getImportCommands().reviewImport(source, verdict);
   revalidateImport();
 }

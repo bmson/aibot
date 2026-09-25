@@ -113,6 +113,7 @@ export async function runCodeJobPhase(
         workspace: deps.workspace,
         documentProcessor: deps.documentProcessor,
         documentExtractionRepository: deps.documentExtractionRepository,
+        importJobRepository: deps.importJobRepository,
         calendarReader: deps.calendarReader,
         notifyOwner: deps.notifyOwner,
         persistence: deps.persistence,

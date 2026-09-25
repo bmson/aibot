@@ -10,6 +10,16 @@ import {
   type TaskRow,
   tasks,
 } from '@assistant/db';
+import {
+  embeddingModelId,
+  type ImportCommandRepository,
+  type ImportFactWrite,
+  type ImportJobFence,
+  type ImportJobRepository,
+  type ImportOccasionWrite,
+  type OwnerCardCompilationRepository,
+  validateEmbedding,
+} from '@assistant/persistence';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
@@ -24,7 +34,7 @@ import {
   parseArchive,
   windowUnits,
 } from './import-parsers.js';
-import { saveOccasion } from './occasions.js';
+import { isOccasionKind, saveOccasion, validMonthDay } from './occasions.js';
 
 /**
  * Backstory import (Phase 22): batch-distill an archive from the workspace
@@ -57,6 +67,7 @@ const ImportFactsSchema = z.object({
 const WINDOWS_PER_RUN = 6; // checkpoint granularity: one run ≈ one queue lease
 const RESUME_DELAY_MS = 5_000;
 const SNAPSHOT_LOCK_RETRY_MS = 30_000;
+const SNAPSHOT_SLOT_TTL_MS = 15 * 60_000;
 const BUDGET_RETRY_DELAY_MS = 6 * 3600 * 1000;
 
 interface ImportCursor {
@@ -289,18 +300,127 @@ export interface ImportRunResult {
   summary: string;
 }
 
+type ImportSnapshot = Awaited<ReturnType<typeof createImportSnapshot>>;
+
+/**
+ * The task's parsed snapshot: the checkpointed manifest, a manifest a worker
+ * published before dying, or a fresh one. Null while another task holds the
+ * bounded snapshot slot.
+ */
+async function resolveImportManifest(
+  workspace: WorkspaceReader,
+  payload: ImportPayload,
+  taskId: string,
+  cursor: ImportCursor,
+  createSnapshot: () => Promise<ImportSnapshot | null>,
+): Promise<{ manifest: ImportManifest; checkpointNeeded: boolean } | null> {
+  const snapshotBase = snapshotBasePath(payload.source, taskId);
+  if (cursor.manifestPath && cursor.manifestHash) {
+    if (cursor.manifestPath !== `${snapshotBase}/manifest.json`) {
+      throw new Error('import snapshot manifest path does not match this task');
+    }
+    const manifest = await readImportManifest(
+      workspace,
+      cursor.manifestPath,
+      cursor.manifestHash,
+      snapshotBase,
+    );
+    return { manifest, checkpointNeeded: false };
+  }
+  // If a worker died after publishing the manifest but before checkpointing
+  // its path, reuse the completed snapshot instead of reopening the source.
+  const publishedPath = `${snapshotBase}/manifest.json`;
+  try {
+    const serialized = await workspace.read(publishedPath);
+    const manifest = validateManifestTopology(
+      ImportManifestSchema.parse(JSON.parse(serialized)),
+      snapshotBase,
+    );
+    cursor.manifestPath = publishedPath;
+    cursor.manifestHash = sha256(serialized);
+    return { manifest, checkpointNeeded: true };
+  } catch (error) {
+    if (!missingWorkspaceFile(error)) throw error;
+    const snapshot = await createSnapshot();
+    if (!snapshot) return null;
+    cursor.manifestPath = snapshot.path;
+    cursor.manifestHash = snapshot.hash;
+    return { manifest: snapshot.manifest, checkpointNeeded: true };
+  }
+}
+
+function waitingForSnapshot(source: string): ImportRunResult {
+  return {
+    done: false,
+    runAfter: new Date(Date.now() + SNAPSHOT_LOCK_RETRY_MS),
+    summary: `import ${source}: waiting for the bounded snapshot worker`,
+  };
+}
+
+function importProgress(source: string, cursor: ImportCursor, windowCount: number) {
+  return {
+    progress: `import ${source}: window ${cursor.windowIndex}/${windowCount}, ${cursor.saved} memories`,
+    progressPercent: windowCount
+      ? Math.min(100, Math.round((cursor.windowIndex / windowCount) * 100))
+      : 100,
+  };
+}
+
+/**
+ * Distill one window. Null when the model cannot structure it even on the
+ * fallback: that must not fail the whole import into a dead-letter, so the
+ * caller records the window as progress. Budget stops and other errors surface.
+ */
+async function distillWindow(
+  router: ModelRouter,
+  taskId: string,
+  source: string,
+  windowIndex: number,
+  window: ImportShardWindow,
+) {
+  const windowDate = window.date ? new Date(window.date) : null;
+  const period = windowDate ? windowDate.toISOString().slice(0, 10) : 'unknown';
+  return router
+    .object<z.infer<typeof ImportFactsSchema>>('extract', {
+      taskId,
+      schema: ImportFactsSchema,
+      system: importSystem(source, period),
+      prompt: window.text,
+    })
+    .catch((err) => {
+      if (!isUnparseableObjectError(err)) throw err;
+      console.error(
+        `import ${source}: skipping window ${windowIndex} the model could not structure`,
+        err,
+      );
+      return null;
+    });
+}
+
+function completedSummary(source: string, cursor: ImportCursor, windowCount: number): string {
+  return `import ${source}: complete — ${cursor.saved} memories (${cursor.quarantined} quarantined for review), ${cursor.occasionsSaved} occasion(s), ${cursor.duplicates} duplicates, ${cursor.tombstoned} tombstoned, ${windowCount} windows`;
+}
+
 export async function runImportJob(
   deps: {
     db: Db;
     router: ModelRouter;
     workspace?: WorkspaceReader;
     heartbeat?: () => Promise<void>;
+    /** Portable persistence; without it the run keeps its PostgreSQL path. */
+    imports?: ImportJobRepository;
+    ownerCards?: OwnerCardCompilationRepository;
   },
   task: TaskRow,
 ): Promise<ImportRunResult> {
   const { db, router, workspace } = deps;
   if (!workspace) throw new Error('import job needs a workspace store (executor deps)');
   const payload = importPayload(task);
+  const imports = deps.imports;
+  if (imports)
+    return withSpan('memory.import', { source: payload.source }, () =>
+      runPortableImportJob({ ...deps, imports, workspace }, task, payload),
+    );
 
   return withSpan('memory.import', { source: payload.source }, async () => {
     await deps.heartbeat?.();
@@ -326,47 +446,12 @@ export async function runImportJob(
       ...((plannerState.import as Partial<ImportCursor>) ?? {}),
     };
 
-    let manifest: ImportManifest;
-    let manifestCheckpointNeeded = false;
-    const snapshotBase = snapshotBasePath(payload.source, task.id);
-    if (cursor.manifestPath && cursor.manifestHash) {
-      if (cursor.manifestPath !== `${snapshotBase}/manifest.json`) {
-        throw new Error('import snapshot manifest path does not match this task');
-      }
-      manifest = await readImportManifest(
-        workspace,
-        cursor.manifestPath,
-        cursor.manifestHash,
-        snapshotBase,
-      );
-    } else {
-      // If a worker died after publishing the manifest but before checkpointing
-      // its path, reuse the completed snapshot instead of reopening the source.
-      const publishedPath = `${snapshotBase}/manifest.json`;
-      try {
-        const serialized = await workspace.read(publishedPath);
-        manifest = validateManifestTopology(
-          ImportManifestSchema.parse(JSON.parse(serialized)),
-          snapshotBase,
-        );
-        cursor.manifestPath = publishedPath;
-        cursor.manifestHash = sha256(serialized);
-      } catch (error) {
-        if (!missingWorkspaceFile(error)) throw error;
-        const snapshot = await tryCreateImportSnapshot(db, workspace, payload, task.id);
-        if (!snapshot) {
-          return {
-            done: false,
-            runAfter: new Date(Date.now() + SNAPSHOT_LOCK_RETRY_MS),
-            summary: `import ${payload.source}: waiting for the bounded snapshot worker`,
-          };
-        }
-        manifest = snapshot.manifest;
-        cursor.manifestPath = snapshot.path;
-        cursor.manifestHash = snapshot.hash;
-      }
-      manifestCheckpointNeeded = true;
-    }
+    const resolved = await resolveImportManifest(workspace, payload, task.id, cursor, () =>
+      tryCreateImportSnapshot(db, workspace, payload, task.id),
+    );
+    if (!resolved) return waitingForSnapshot(payload.source);
+    const { manifest } = resolved;
+    const manifestCheckpointNeeded = resolved.checkpointNeeded;
     await deps.heartbeat?.();
 
     await db
@@ -387,10 +472,7 @@ export async function runImportJob(
         .update(tasks)
         .set({
           state,
-          progress: `import ${payload.source}: window ${cursor.windowIndex}/${manifest.windowCount}, ${cursor.saved} memories`,
-          progressPercent: manifest.windowCount
-            ? Math.min(100, Math.round((cursor.windowIndex / manifest.windowCount) * 100))
-            : 100,
+          ...importProgress(payload.source, cursor, manifest.windowCount),
           // Each window is proof of progress: clear the poison-pill reclaim
           // counter so a multi-hour import that survives a few mid-run worker
           // deaths is not falsely dead-lettered (matches checkpointTask, which
@@ -430,26 +512,14 @@ export async function runImportJob(
       const window = loadedShard.windows[cursor.windowIndex - loadedShard.start];
       if (!window) throw new Error(`import snapshot is missing window ${cursor.windowIndex}`);
       const windowDate = window.date ? new Date(window.date) : null;
-      const period = windowDate ? windowDate.toISOString().slice(0, 10) : 'unknown';
 
-      // A single window the model can't structure (even on the fallback) must
-      // not fail the whole import into a dead-letter — record it as progress and
-      // move on. Budget stops still park/throw below; other errors still surface.
-      const outcome = await router
-        .object<z.infer<typeof ImportFactsSchema>>('extract', {
-          taskId: task.id,
-          schema: ImportFactsSchema,
-          system: importSystem(payload.source, period),
-          prompt: window.text,
-        })
-        .catch((err) => {
-          if (!isUnparseableObjectError(err)) throw err;
-          console.error(
-            `import ${payload.source}: skipping window ${cursor.windowIndex} the model could not structure`,
-            err,
-          );
-          return null;
-        });
+      const outcome = await distillWindow(
+        router,
+        task.id,
+        payload.source,
+        cursor.windowIndex,
+        window,
+      );
       await deps.heartbeat?.();
       if (outcome === null) {
         // Advance past the unstructurable window and checkpoint so a resume
@@ -607,7 +677,7 @@ export async function runImportJob(
       await compileOwnerCard(db).catch((err) => console.error('card recompile failed', err));
       return {
         done: true,
-        summary: `import ${payload.source}: complete — ${cursor.saved} memories (${cursor.quarantined} quarantined for review), ${cursor.occasionsSaved} occasion(s), ${cursor.duplicates} duplicates, ${cursor.tombstoned} tombstoned, ${manifest.windowCount} windows`,
+        summary: completedSummary(payload.source, cursor, manifest.windowCount),
       };
     }
     return {
@@ -618,9 +688,249 @@ export async function runImportJob(
   });
 }
 
+/**
+ * The import run on portable persistence. Each window's memories, occasions,
+ * and advanced cursor commit in one lease-fenced write, so a retry or a
+ * reclaimed lease resumes after the last committed window and never saves a
+ * window twice. The snapshot is the same workspace artifact as on PostgreSQL.
+ */
+async function runPortableImportJob(
+  deps: {
+    imports: ImportJobRepository;
+    ownerCards?: OwnerCardCompilationRepository;
+    router: ModelRouter;
+    workspace: WorkspaceReader;
+    heartbeat?: () => Promise<void>;
+  },
+  task: TaskRow,
+  payload: ImportPayload,
+): Promise<ImportRunResult> {
+  const { imports: repository, router, workspace } = deps;
+  // Read the token at each call: every heartbeat rotates it on the lease.
+  const fence = (): ImportJobFence => {
+    if (!task.leaseToken) throw new Error('import task has no active lease token');
+    return {
+      agentId: task.agentId,
+      source: payload.source,
+      taskId: task.id,
+      queueGeneration: task.queueGeneration,
+      leaseToken: task.leaseToken,
+    };
+  };
+  const lost = () => new Error(`import ${payload.source}: task lease or source link was lost`);
+
+  await deps.heartbeat?.();
+  const loaded = await repository.load(fence());
+  if (!loaded) throw lost();
+  if (loaded.source.status === 'purged') {
+    return { done: true, summary: `import ${payload.source}: source was purged — nothing to do` };
+  }
+  if (loaded.source.taskId !== task.id) {
+    return { done: true, summary: `import ${payload.source}: superseded by a newer run` };
+  }
+  const state = (loaded.state ?? {}) as Record<string, unknown>;
+  const plannerState = (state.plannerState ?? {}) as Record<string, unknown>;
+  const cursor: ImportCursor = {
+    windowIndex: 0,
+    saved: 0,
+    duplicates: 0,
+    tombstoned: 0,
+    quarantined: 0,
+    occasionsSaved: 0,
+    ...((plannerState.import as Partial<ImportCursor>) ?? {}),
+  };
+
+  const resolved = await resolveImportManifest(workspace, payload, task.id, cursor, async () => {
+    if (!(await repository.claimSnapshotSlot(fence(), SNAPSHOT_SLOT_TTL_MS))) return null;
+    try {
+      return await createImportSnapshot(workspace, payload, task.id);
+    } finally {
+      await repository
+        .releaseSnapshotSlot(fence())
+        .catch((error) => console.error('import: failed to release snapshot slot', error));
+    }
+  });
+  if (!resolved) return waitingForSnapshot(payload.source);
+  const { manifest } = resolved;
+  await deps.heartbeat?.();
+  const describe = (current: ImportCursor) =>
+    importProgress(payload.source, current, manifest.windowCount);
+  // Persist the source status and snapshot identity before the first paid
+  // model call, so a retry after a crash stays on the cheap shard path.
+  if (
+    !(await repository.begin(fence(), {
+      itemsTotal: manifest.windowCount,
+      state: { ...state, plannerState: { ...plannerState, import: cursor } },
+      ...describe(cursor),
+    }))
+  )
+    throw lost();
+
+  const expectedModelId = embeddingModelId(repository.embeddingSpace);
+  const perRun = payload.windowsPerRun ?? WINDOWS_PER_RUN;
+  const stopAt = Math.min(cursor.windowIndex + perRun, manifest.windowCount);
+  let loadedShard: Awaited<ReturnType<typeof readImportShard>> | undefined;
+  while (cursor.windowIndex < stopAt) {
+    await deps.heartbeat?.();
+    if (
+      !loadedShard ||
+      cursor.windowIndex < loadedShard.start ||
+      cursor.windowIndex >= loadedShard.start + loadedShard.windows.length
+    ) {
+      loadedShard = await readImportShard(workspace, manifest, cursor.windowIndex);
+    }
+    const window = loadedShard.windows[cursor.windowIndex - loadedShard.start];
+    if (!window) throw new Error(`import snapshot is missing window ${cursor.windowIndex}`);
+    const windowDate = window.date ? new Date(window.date) : null;
+
+    const outcome = await distillWindow(
+      router,
+      task.id,
+      payload.source,
+      cursor.windowIndex,
+      window,
+    );
+    await deps.heartbeat?.();
+    const facts: ImportFactWrite[] = [];
+    const occasions: ImportOccasionWrite[] = [];
+    if (outcome && !outcome.ok) {
+      // Same budget handling as the PostgreSQL run: a task-budget stop fails
+      // the source and surfaces; a period cap yields. The cursor is durable.
+      if (outcome.decision.mode === 'park') {
+        await repository.finish(fence(), {
+          status: 'failed',
+          error: outcome.decision.reason,
+        });
+        throw new Error(
+          `import ${payload.source} exceeded its task budget and cannot continue (${outcome.decision.reason})`,
+        );
+      }
+      return {
+        done: false,
+        runAfter: new Date(Date.now() + BUDGET_RETRY_DELAY_MS),
+        summary: `import ${payload.source}: paused by budget at window ${cursor.windowIndex}/${manifest.windowCount} (${outcome.decision.reason})`,
+      };
+    }
+    if (outcome) {
+      const extracted = outcome.object.facts;
+      const embeddings = extracted.length
+        ? await router.embed(
+            extracted.map((fact) => fact.content),
+            { taskId: task.id, expectedModelId },
+          )
+        : [];
+      for (const embedding of embeddings) validateEmbedding(repository.embeddingSpace, embedding);
+      await deps.heartbeat?.();
+      const extractedOccasions = (outcome.object.occasions ?? []).filter((occasion) => {
+        if (isOccasionKind(occasion.kind) && validMonthDay(occasion.month, occasion.day))
+          return true;
+        console.error(`import ${payload.source}: skipping unsavable occasion`, occasion);
+        return false;
+      });
+      const contacts = await repository.resolveSubjects(fence(), [
+        ...extracted.map((fact) => ({ subject: fact.subject, relationship: fact.relationship })),
+        ...extractedOccasions.map((occasion) => ({ subject: occasion.subject })),
+      ]);
+      for (let index = 0; index < extracted.length; index++) {
+        const fact = extracted[index];
+        const embedding = embeddings[index];
+        if (!fact || !embedding) continue;
+        // Owner's own archive → origin 'owner'; but facts ABOUT third parties
+        // wait in quarantine until profile review.
+        const aboutOwner = fact.subject.trim().toLowerCase() === 'owner';
+        facts.push({
+          content: fact.content,
+          contentHash: createHash('sha256').update(fact.content).digest('hex'),
+          embedding,
+          kind: fact.kind,
+          domain: fact.domain,
+          importance: Math.min(fact.importance, 3),
+          confidence: ageScaledConfidence(fact.confidence, windowDate).toFixed(2),
+          quarantined: !aboutOwner,
+          subjectContactId: contacts[index] ?? null,
+          validFrom: parseValidFrom(fact.validFrom) ?? windowDate,
+        });
+      }
+      extractedOccasions.forEach((occasion, index) => {
+        const contactId = contacts[extracted.length + index];
+        if (!contactId) return;
+        occasions.push({
+          contactId,
+          kind: occasion.kind,
+          label: occasion.label,
+          month: occasion.month,
+          day: occasion.day,
+          year: occasion.year,
+          notes: occasion.notes,
+          quarantined: occasion.subject.trim().toLowerCase() !== 'owner',
+        });
+      });
+    }
+    // An unstructurable window commits with nothing in it, so a resume never
+    // re-blocks on it; its facts are simply not learned.
+    const committed = await repository.commitImportWindow(fence(), {
+      windowIndex: cursor.windowIndex,
+      facts,
+      occasions,
+      describe,
+    });
+    if (!committed) throw lost();
+    Object.assign(cursor, committed);
+  }
+
+  if (cursor.windowIndex >= manifest.windowCount) {
+    if (!(await repository.finish(fence(), { status: 'done', error: null }))) throw lost();
+    // the profile card must reflect what was just learned
+    if (deps.ownerCards)
+      await compileOwnerCard(deps.ownerCards, task.agentId).catch((err) =>
+        console.error('card recompile failed', err),
+      );
+    return { done: true, summary: completedSummary(payload.source, cursor, manifest.windowCount) };
+  }
+  return {
+    done: false,
+    runAfter: new Date(Date.now() + RESUME_DELAY_MS),
+    summary: `import ${payload.source}: ${cursor.windowIndex}/${manifest.windowCount} windows`,
+  };
+}
+
 // ── Lifecycle (dashboard + CLI entry points) ─────────────────────────────────
 
 const DEFAULT_IMPORT_BUDGET_USD = '0.50';
+
+/** The normalized provenance tag an import source is stored and stamped under. */
+function importSourceTag(label: string): string {
+  const source = label.trim().toLowerCase().replace(/\s+/g, '-');
+  if (!/^[a-z0-9._-]{2,80}$/.test(source)) {
+    throw new Error('source tag must be 2-80 chars of letters/digits/._-');
+  }
+  return source;
+}
+
+/** startImport on portable persistence: the source row and its task commit together. */
+export function startPortableImport(
+  repository: ImportCommandRepository,
+  input: {
+    source: string;
+    workspacePath: string;
+    kind: ImportKind;
+    budgetUsdLimit?: string;
+    windowsPerRun?: number;
+    windowChars?: number;
+  },
+): Promise<{ sourceId: string; taskId: string }> {
+  return repository.start({
+    source: importSourceTag(input.source),
+    workspacePath: input.workspacePath,
+    kind: input.kind,
+    job: 'import.run',
+    payload: {
+      ...(input.windowsPerRun ? { windowsPerRun: input.windowsPerRun } : {}),
+      ...(input.windowChars ? { windowChars: input.windowChars } : {}),
+    },
+    budgetUsdLimit: input.budgetUsdLimit ?? DEFAULT_IMPORT_BUDGET_USD,
+  });
+}
 
 /**
  * Register (or re-run) an import source and enqueue its resumable job task.
@@ -639,10 +949,7 @@ export async function startImport(
     windowChars?: number;
   },
 ): Promise<{ sourceRow: ImportSourceRow; taskId: string }> {
-  const source = input.source.trim().toLowerCase().replace(/\s+/g, '-');
-  if (!/^[a-z0-9._-]{2,80}$/.test(source)) {
-    throw new Error('source tag must be 2-80 chars of letters/digits/._-');
-  }
+  const source = importSourceTag(input.source);
 
   const result = await db.transaction(async (tx) => {
     const txDb = tx as unknown as Db;

@@ -23,6 +23,7 @@ import {
   createInstallationStore,
   FirestoreDocumentExtractionRepository,
   FirestoreGoalProgressRepository,
+  FirestoreImportJobRepository,
   FirestoreMcpConnectionReadRepository,
   FirestoreOwnerNoticeRepository,
   FirestoreReminderRepository,
@@ -48,6 +49,7 @@ import {
   type EmbeddingSpace,
   type ExecutionPersistence,
   embeddingModelId,
+  type ImportJobRepository,
   type ModelRoutingRepository,
 } from '@assistant/persistence';
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
@@ -84,6 +86,7 @@ export interface AgentDeps {
   firestoreStore?: InstallationStore;
   firestoreTasks?: FirestoreTaskRepository;
   documentExtractionRepository?: DocumentExtractionRepository;
+  importJobRepository?: ImportJobRepository;
   router: ModelRouter;
   registry: ToolRegistry;
   dispatcher: ToolDispatcher;
@@ -378,6 +381,11 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
     store,
     config.FIRESTORE_AGENT_ID,
   );
+  const importJobRepository = new FirestoreImportJobRepository(
+    store,
+    config.FIRESTORE_AGENT_ID,
+    embeddingSpace,
+  );
   const db = unavailableSqlDb();
   const router = new ModelRouter(
     persistence.modelRouting,
@@ -467,6 +475,7 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
     firestoreStore: store,
     firestoreTasks: persistence.tasks,
     documentExtractionRepository,
+    importJobRepository,
     persistence,
     router,
     registry,
