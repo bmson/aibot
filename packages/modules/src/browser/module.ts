@@ -59,7 +59,7 @@ export const browserModule = defineModule<BrowserJobLauncher | undefined>({
               }>();
               if (!body?.taskId || !body?.token)
                 return { status: 400, json: { error: 'bad request' } };
-              const outcome = await recordBrowserJobResult(services.db, {
+              const outcome = await recordBrowserJobResult(services.persistence.executionJobs, {
                 taskId: body.taskId,
                 token: body.token,
                 result: body.result ?? { ok: false, error: 'job reported no result' },

@@ -27,6 +27,7 @@ export * from './knowledge-graph-curation.js';
 export * from './knowledge-graph-sync.js';
 export * from './knowledge-workspace.js';
 export * from './location-pings.js';
+export * from './maintenance.js';
 export * from './memory-consolidation.js';
 export * from './memory-supersede.js';
 export * from './memory-tools.js';
