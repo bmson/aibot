@@ -29,7 +29,7 @@ interface FakeMessage {
   authenticated?: boolean;
 }
 
-describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore Gmail sync', () => {
+describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore Gmail sync', { timeout: 30_000 }, () => {
   const agentId = randomUUID();
   let store: InstallationStore;
   let persistence: ExecutionPersistence;
