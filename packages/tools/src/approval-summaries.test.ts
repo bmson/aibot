@@ -57,7 +57,11 @@ function fullRegistry(): ToolRegistry {
     workspace: { write: async () => {} } as never,
   });
   registerSheetsTools(registry, { client: fakeClient, ownerEmail: 'owner@example.com' });
-  registerApplicationTools(registry, { client: fakeClient });
+  registerApplicationTools(registry, {
+    client: fakeClient,
+    applications: {} as never,
+    tasks: {} as never,
+  });
   registerSlidesTools(registry, { client: fakeClient, ownerEmail: 'owner@example.com' });
   registerSmsTools(registry, {
     sender: { send: async () => ({ sid: 'x' }) } as never,

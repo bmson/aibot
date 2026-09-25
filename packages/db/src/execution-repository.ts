@@ -1,4 +1,5 @@
 import type { ExecutionPersistence } from '@assistant/persistence';
+import { createPostgresApplicationConfirmationRepository } from './application-confirmation-repository.js';
 import { createPostgresApprovalPolicyRepository } from './approval-policy-repository.js';
 import { createPostgresApprovalRepository } from './approval-repository.js';
 import { createPostgresCardRefreshRepository } from './card-refresh-repository.js';
@@ -62,5 +63,6 @@ export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence
     nudgePolicy: createPostgresNudgePolicyRepository(db),
     voiceContext: createPostgresVoiceContextRepository(db),
     smsChannel: createPostgresSmsChannelRepository(db),
+    applications: createPostgresApplicationConfirmationRepository(db),
   };
 }

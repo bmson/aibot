@@ -19,6 +19,7 @@ export { documentsModule } from './documents/module.js';
 export {
   type ApplicationConfirmationTaskDeps,
   applicationConfirmationTaskHandlers,
+  applicationPersistence,
   confirmationTokenHashes,
   executeApplicationConfirmationTask,
   processApplicationConfirmation,

@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
-import { applicationConfirmations, conversations, tasks } from '@assistant/db';
-import { and, desc, eq } from 'drizzle-orm';
+import type { ApplicationConfirmationRepository, TaskRepository } from '@assistant/persistence';
 import { z } from 'zod';
 import type { GoogleClient } from './google/client.js';
 import { buildContentRequests, type DocsDocument, endInsertIndex } from './google/docs.js';
@@ -137,6 +136,8 @@ function register<S extends z.ZodType, Out>(
 
 export interface ApplicationToolDeps {
   client: GoogleClient;
+  applications: ApplicationConfirmationRepository;
+  tasks: Pick<TaskRepository, 'getTask'>;
 }
 
 /**
@@ -175,56 +176,24 @@ export function registerApplicationTools(
           throw new Error(`application confirmation watch cannot exceed ${MAX_WATCH_DAYS} days`);
         }
 
-        const tokenHash = hashConfirmationToken(args.confirmationToken);
-        const [existing] = await ctx.db
-          .select({ id: applicationConfirmations.id })
-          .from(applicationConfirmations)
-          .where(
-            and(
-              eq(applicationConfirmations.agentId, ctx.agentId),
-              eq(applicationConfirmations.confirmationTokenHash, tokenHash),
-              eq(applicationConfirmations.status, 'awaiting_confirmation'),
-            ),
-          )
-          .limit(1);
-        if (existing) throw new Error('an active confirmation watch already uses this token');
-
-        let conversationId = ctx.conversationId;
-        if (!conversationId) {
-          const [conversation] = await ctx.db
-            .insert(conversations)
-            .values({
-              agentId: ctx.agentId,
-              channel: 'chat',
-              trust: 'owner',
-              title: `${args.company} — ${args.role}`.slice(0, 80),
-            })
-            .returning({ id: conversations.id });
-          if (!conversation) throw new Error('failed to create application follow-up chat');
-          conversationId = conversation.id;
-        }
-
-        const [record] = await ctx.db
-          .insert(applicationConfirmations)
-          .values({
-            agentId: ctx.agentId,
-            sourceTaskId: ctx.taskId,
-            conversationId,
-            company: args.company,
-            role: args.role,
-            expectedSenderEmails: args.expectedSenderEmails,
-            confirmationTokenHash: tokenHash,
-            confirmationTokenHint: args.confirmationToken.slice(-4),
-            trackerUpdate: args.trackerUpdate,
-            documentUpdate: args.documentUpdate,
-            actionState: {
-              ...(args.trackerUpdate ? { sheet: { status: 'pending' as const } } : {}),
-              ...(args.documentUpdate ? { document: { status: 'pending' as const } } : {}),
-            },
-            expiresAt,
-          })
-          .returning();
-        if (!record) throw new Error('failed to create application confirmation watch');
+        const record = await deps.applications.createWatch({
+          agentId: ctx.agentId,
+          sourceTaskId: ctx.taskId,
+          conversationId: ctx.conversationId ?? null,
+          newConversationTitle: `${args.company} — ${args.role}`.slice(0, 80),
+          company: args.company,
+          role: args.role,
+          expectedSenderEmails: args.expectedSenderEmails,
+          confirmationTokenHash: hashConfirmationToken(args.confirmationToken),
+          confirmationTokenHint: args.confirmationToken.slice(-4),
+          trackerUpdate: args.trackerUpdate,
+          documentUpdate: args.documentUpdate,
+          actionState: {
+            ...(args.trackerUpdate ? { sheet: { status: 'pending' as const } } : {}),
+            ...(args.documentUpdate ? { document: { status: 'pending' as const } } : {}),
+          },
+          expiresAt,
+        });
         return {
           applicationId: record.id,
           company: record.company,
@@ -253,19 +222,7 @@ export function registerApplicationTools(
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
-        const rows = await ctx.db
-          .select()
-          .from(applicationConfirmations)
-          .where(
-            args.status
-              ? and(
-                  eq(applicationConfirmations.agentId, ctx.agentId),
-                  eq(applicationConfirmations.status, args.status),
-                )
-              : eq(applicationConfirmations.agentId, ctx.agentId),
-          )
-          .orderBy(desc(applicationConfirmations.createdAt))
-          .limit(100);
+        const rows = await deps.applications.list(ctx.agentId, args.status);
         return {
           confirmations: rows.map((row) => {
             const tracker = row.trackerUpdate
@@ -305,33 +262,13 @@ export function registerApplicationTools(
       risk: 'autonomous',
       acceptsUntrustedInput: false,
       execute: async (args, ctx) => {
-        const [cancelled] = await ctx.db
-          .update(applicationConfirmations)
-          .set({ status: 'cancelled', updatedAt: ctx.now() })
-          .where(
-            and(
-              eq(applicationConfirmations.id, args.applicationId),
-              eq(applicationConfirmations.agentId, ctx.agentId),
-              eq(applicationConfirmations.status, 'awaiting_confirmation'),
-            ),
-          )
-          .returning({ id: applicationConfirmations.id });
-        if (cancelled) {
-          return { applicationId: cancelled.id, status: 'cancelled', cancelled: true };
-        }
-        const [current] = await ctx.db
-          .select({ id: applicationConfirmations.id, status: applicationConfirmations.status })
-          .from(applicationConfirmations)
-          .where(
-            and(
-              eq(applicationConfirmations.id, args.applicationId),
-              eq(applicationConfirmations.agentId, ctx.agentId),
-            ),
-          );
-        if (!current) throw new Error('application confirmation watch not found');
+        const result = await deps.applications.cancel(ctx.agentId, args.applicationId, ctx.now());
+        if (!result) throw new Error('application confirmation watch not found');
+        if (result.cancelled)
+          return { applicationId: result.id, status: 'cancelled', cancelled: true };
         return {
-          applicationId: current.id,
-          status: current.status,
+          applicationId: result.id,
+          status: result.status,
           cancelled: false,
           reason: 'the email was already claimed or the watch is no longer active',
         };
@@ -354,10 +291,7 @@ export function registerApplicationTools(
         return `application-confirmation-apply-${input.applicationId}`;
       },
       execute: async (args, ctx) => {
-        const [task] = await ctx.db
-          .select({ agentId: tasks.agentId, trigger: tasks.trigger })
-          .from(tasks)
-          .where(eq(tasks.id, ctx.taskId));
+        const task = await deps.tasks.getTask(ctx.taskId);
         const trigger = task?.trigger as
           | { source?: unknown; payload?: Record<string, unknown> }
           | undefined;
@@ -372,17 +306,9 @@ export function registerApplicationTools(
           );
         }
 
-        const [record] = await ctx.db
-          .select()
-          .from(applicationConfirmations)
-          .where(
-            and(
-              eq(applicationConfirmations.id, args.applicationId),
-              eq(applicationConfirmations.agentId, ctx.agentId),
-              eq(applicationConfirmations.status, 'confirmation_received'),
-            ),
-          );
-        if (!record) throw new Error('application confirmation is not ready to apply');
+        const record = await deps.applications.get(args.applicationId);
+        if (!record || record.agentId !== ctx.agentId || record.status !== 'confirmation_received')
+          throw new Error('application confirmation is not ready to apply');
         const update = ApplicationTrackerUpdateSchema.parse(record.trackerUpdate);
         const actionState = parseApplicationActionState(record.actionState);
         if (actionState.sheet?.status === 'succeeded') {
@@ -407,20 +333,12 @@ export function registerApplicationTools(
           },
         );
 
-        const [updated] = await ctx.db
-          .update(applicationConfirmations)
-          .set({
-            actionState: { ...actionState, sheet: { status: 'succeeded' } },
-            lastError: null,
-            updatedAt: ctx.now(),
-          })
-          .where(
-            and(
-              eq(applicationConfirmations.id, record.id),
-              eq(applicationConfirmations.status, 'confirmation_received'),
-            ),
-          )
-          .returning({ id: applicationConfirmations.id });
+        const updated = await deps.applications.updateActionState(record.id, {
+          actionState: { ...actionState, sheet: { status: 'succeeded' } },
+          lastError: null,
+          requireStatus: 'confirmation_received',
+          now: ctx.now(),
+        });
         if (!updated) throw new Error('application confirmation changed during tracker update');
 
         return {
@@ -458,10 +376,7 @@ export function registerApplicationTools(
         return `application-confirmation-doc-${input.applicationId}`;
       },
       execute: async (args, ctx) => {
-        const [task] = await ctx.db
-          .select({ agentId: tasks.agentId, trigger: tasks.trigger })
-          .from(tasks)
-          .where(eq(tasks.id, ctx.taskId));
+        const task = await deps.tasks.getTask(ctx.taskId);
         const trigger = task?.trigger as
           | { source?: unknown; payload?: Record<string, unknown> }
           | undefined;
@@ -476,17 +391,9 @@ export function registerApplicationTools(
           );
         }
 
-        const [record] = await ctx.db
-          .select()
-          .from(applicationConfirmations)
-          .where(
-            and(
-              eq(applicationConfirmations.id, args.applicationId),
-              eq(applicationConfirmations.agentId, ctx.agentId),
-              eq(applicationConfirmations.status, 'confirmation_received'),
-            ),
-          );
-        if (!record) throw new Error('application confirmation is not ready to apply');
+        const record = await deps.applications.get(args.applicationId);
+        if (!record || record.agentId !== ctx.agentId || record.status !== 'confirmation_received')
+          throw new Error('application confirmation is not ready to apply');
         const update = ApplicationDocumentUpdateSchema.parse(record.documentUpdate);
         const actionState = parseApplicationActionState(record.actionState);
         if (actionState.document?.status === 'succeeded') {
@@ -518,20 +425,12 @@ export function registerApplicationTools(
           body: JSON.stringify({ requests }),
         });
 
-        const [updated] = await ctx.db
-          .update(applicationConfirmations)
-          .set({
-            actionState: { ...actionState, document: { status: 'succeeded' } },
-            lastError: null,
-            updatedAt: ctx.now(),
-          })
-          .where(
-            and(
-              eq(applicationConfirmations.id, record.id),
-              eq(applicationConfirmations.status, 'confirmation_received'),
-            ),
-          )
-          .returning({ id: applicationConfirmations.id });
+        const updated = await deps.applications.updateActionState(record.id, {
+          actionState: { ...actionState, document: { status: 'succeeded' } },
+          lastError: null,
+          requireStatus: 'confirmation_received',
+          now: ctx.now(),
+        });
         if (!updated) throw new Error('application confirmation changed during document update');
 
         return {

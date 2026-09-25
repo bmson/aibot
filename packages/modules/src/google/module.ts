@@ -1,4 +1,8 @@
 import { appendSignature, loadVoiceContext, rewriteInVoice } from '@assistant/core';
+import type {
+  ApplicationConfirmationRepository,
+  ExecutionPersistence,
+} from '@assistant/persistence';
 import {
   GoogleClient,
   registerApplicationTools,
@@ -12,6 +16,7 @@ import {
 import { defineModule, type ModuleHooks, type ModuleServices } from '../platform.js';
 import {
   applicationConfirmationTaskHandlers,
+  applicationPersistence,
   reapExpiredApplicationWatches,
 } from './application-confirmations.js';
 import { deliverEmailFinal } from './email-channel.js';
@@ -23,6 +28,19 @@ import {
 } from './email-sync.js';
 import { googleMeta } from './meta.js';
 import { gmailSyncEnabled } from './runtime.js';
+
+/** The watch repository, resolved when a tool runs so a bundle without it still installs. */
+function lazyApplications(persistence: ExecutionPersistence): ApplicationConfirmationRepository {
+  return new Proxy({} as ApplicationConfirmationRepository, {
+    get(_target, property) {
+      if (property === 'kind') return 'application-confirmation-repository';
+      const repository = persistence.applications;
+      if (!repository) throw new Error('application confirmations need a persistence repository');
+      const value = repository[property as keyof ApplicationConfirmationRepository];
+      return typeof value === 'function' ? value.bind(repository) : value;
+    },
+  });
+}
 
 /**
  * A client with no credentials: `configured()` is false and every call is
@@ -45,6 +63,7 @@ export const googleModule = defineModule<GoogleClient>({
     const syncDeps = (services: ModuleServices): EmailSyncDeps => ({
       config: services.config,
       db: services.db,
+      persistence: services.persistence,
       router: services.router,
       workspace: services.workspace,
       googleClient: client,
@@ -58,7 +77,7 @@ export const googleModule = defineModule<GoogleClient>({
       },
     });
     const confirmDeps = (services: ModuleServices) => ({
-      db: services.db,
+      persistence: applicationPersistence(services.persistence),
       notifyOwner: services.ownerNotifier.notifyOwner,
     });
 
@@ -146,6 +165,7 @@ export const googleModule = defineModule<GoogleClient>({
           name: 'reapExpiredApplicationWatches',
           // Preserves the /internal/sweep response key from the hardcoded era.
           reportKey: 'expiredWatches',
+          portable: true,
           run: (services) => reapExpiredApplicationWatches(confirmDeps(services)),
         },
       ],
@@ -199,7 +219,12 @@ export const googleModule = defineModule<GoogleClient>({
     registerDriveTools(registry, { client, workspace, db });
     registerSheetsTools(registry, { client, ownerEmail: config.OWNER_EMAIL });
     registerSlidesTools(registry, { client, ownerEmail: config.OWNER_EMAIL });
-    registerApplicationTools(registry, { client });
+    registerApplicationTools(registry, {
+      client,
+      // Resolved per call so a bundle without the repository still installs.
+      applications: lazyApplications(persistence),
+      tasks: persistence.tasks,
+    });
     return { exports: client, hooks };
   },
 });

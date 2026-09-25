@@ -1,5 +1,6 @@
 import type { EmbeddingSpace, ExecutionPersistence } from '@assistant/persistence';
 import { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
+import { FirestoreApplicationConfirmationRepository } from './application-confirmations.js';
 import { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 import { FirestoreApprovalRepository } from './approvals.js';
 import { FirestoreAssistantHealthRepository } from './assistant-health.js';
@@ -77,5 +78,6 @@ export function createFirestoreExecutionPersistence(
     nudgePolicy: new FirestoreNudgePolicyRepository(store, agentId),
     voiceContext: new FirestoreVoiceContextRepository(store, agentId, skillEmbeddingSpace),
     smsChannel: new FirestoreSmsChannelRepository(store, agentId),
+    applications: new FirestoreApplicationConfirmationRepository(store, agentId),
   };
 }

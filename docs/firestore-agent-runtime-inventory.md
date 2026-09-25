@@ -79,7 +79,7 @@ Imported installations carry these schedules. The SQL jobs are **Disabled** (`fi
 | Stale cost-reservation release | Ready in #374 (`firestore-sweep.test.ts`). On `main`, held reservations are never released in Firestore mode. |
 | `expireStaleSuggestions`, `renotifyStalledAttention`, `emitBudgetNotices`, `backfillMessageEmbeddings`, `purgeExpired` (rest), `purgeAgedHistory`, `findDueTasks` backstop | SQL. The local drain covers `findDueTasks`. |
 | Module sweep steps: watches `reapExpiredWatches`, `pollWebWatches` | Ready in #374. Steps marked `portable` run under Firestore. |
-| Module sweep step: google `reapExpiredApplicationWatches` | SQL |
+| Module sweep step: google `reapExpiredApplicationWatches` | Ready (portable, `persistence.applications.expireDue`). |
 | Module poller ticks: google `email-sync` | SQL. Skipped under Firestore by #374, which runs only ticks marked `portable`. |
 
 ## Modules
@@ -96,7 +96,7 @@ Imported installations carry these schedules. The SQL jobs are **Disabled** (`fi
 | documents | Ready | `documents.search` SQL (pgvector chunks) | `/webhooks/document/callback`, `documents.process` SQL; `documents.extract` Ready | Disabled (config) |
 | push | Ready | none | Owner notifier through `persistence.deviceTokens` (list, invalidate on APNs 410), behind the Firestore nudge policy (`firestore-push-notifier.test.ts`) | **Ready** (allowed) |
 | sms | Ready | `sms.send` voice rewrite through `persistence.voiceContext` | Inbound `/webhooks/twilio/sms`, approval codes, final delivery, metering and the `channel:sms` limit, and the notifier leg through `persistence.smsChannel` and the shared cost, approval, message and task repositories (`firestore-sms-channel.test.ts`) | **Ready** (allowed) |
-| google | Ready | Gmail/Docs/Sheets/Slides/Calendar HTTP tools; `gmail.send`/`gmail.create_draft` voice rewrite through `persistence.voiceContext`; `drive.ingest` SQL; `applications.*` SQL | Gmail Pub/Sub + sync + watch renewal (distributed lock on a reserved PG connection), email channel delivery, application confirmations: SQL | Disabled (config) |
+| google | Ready | Gmail/Docs/Sheets/Slides/Calendar HTTP tools; `gmail.send`/`gmail.create_draft` voice rewrite through `persistence.voiceContext`; `drive.ingest` SQL; `applications.*` through `persistence.applications` (`firestore-application-confirmations.test.ts`) | Gmail Pub/Sub + sync + watch renewal (distributed lock on a reserved PG connection), email channel delivery, application confirmations: SQL | Disabled (config) |
 
 Owner notifications in Firestore mode post to the dashboard (`firestoreDashboardOwnerNotifier`) and fan out to the module phone legs through `persistence.nudgePolicy` (quiet hours and the ambient daily cap), exactly as PostgreSQL does. Each module leg is isolated, so a failing channel never silences the next. `owner.notify` pings through the same gate.
 

@@ -1,5 +1,6 @@
 export { createPostgresActiveJobLookup } from './active-job-lookup.js';
 export { createPostgresApplicationChatPersistence } from './application-chat-repository.js';
+export { createPostgresApplicationConfirmationRepository } from './application-confirmation-repository.js';
 export { createPostgresApprovalPolicyRepository } from './approval-policy-repository.js';
 export { createPostgresApprovalRepository } from './approval-repository.js';
 export { createPostgresCardRefreshRepository } from './card-refresh-repository.js';
