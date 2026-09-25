@@ -29,6 +29,11 @@ fi
 [ -n "$PROJECT" ] || { echo "Set GCP_PROJECT in ${ENV_FILE} or gcloud config"; exit 1; }
 REGION="${GCP_REGION:-$(envval GCP_LOCATION)}"
 REGION="${REGION:-us-west1}"
+# PostgreSQL provisioning only: stop before any change if this installation
+# already runs the Firestore composition.
+# shellcheck source=infra/gcp/release-persistence.sh
+source "$(dirname "${BASH_SOURCE[0]}")/release-persistence.sh"
+refuse_firestore_installation || exit 1
 REPO="${ARTIFACT_REPOSITORY:-$(envval ARTIFACT_REPOSITORY)}"
 REPO="${REPO:-assistant}"
 QUEUE="$(envval CLOUD_TASKS_QUEUE)"

@@ -61,9 +61,15 @@
     "workspace:import": "tsx scripts/workspace-migration-import.ts",
     "workspace:assets-audit": "tsx scripts/workspace-asset-audit.ts",
     "workspace:assets-recover": "tsx scripts/workspace-asset-recovery.ts",
+    "cutover": "tsx scripts/cutover.ts",
+    "cutover:neon-fence": "tsx scripts/cutover-neon-fence.ts",
+    "cutover:retirement-report": "tsx scripts/cutover-retirement-report.ts",
     "consumer:install": "tsx scripts/consumer-install.ts",
     "consumer:prepare": "tsx scripts/consumer-prepare.ts",
     "consumer:seed-runtime": "tsx scripts/consumer-runtime-seed.ts",
+    "consumer:owner-claim": "tsx scripts/consumer-owner-claim.ts",
+    "consumer:update": "tsx scripts/consumer-update.ts",
+    "consumer:uninstall": "tsx scripts/consumer-uninstall.ts",
     "consumer:publish-images": "tsx scripts/consumer-publish-images.ts"
   },
   "devDependencies": {

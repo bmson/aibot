@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
-import { getApplication } from '@/lib/server';
+import { dismissOwnerAnomaly, suspendOwnerAnomalyPolicy } from '@/lib/workspace-reviews';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -15,7 +15,7 @@ function revalidateAnomalies(): void {
 export async function dismissAnomalyAction(anomalyId: string): Promise<void> {
   await requireOwner();
   if (!UUID_RE.test(anomalyId)) return;
-  await getApplication().dismissAnomaly(anomalyId);
+  await dismissOwnerAnomaly(anomalyId);
   revalidateAnomalies();
 }
 
@@ -23,6 +23,6 @@ export async function dismissAnomalyAction(anomalyId: string): Promise<void> {
 export async function suspendPolicyAction(anomalyId: string): Promise<void> {
   await requireOwner();
   if (!UUID_RE.test(anomalyId)) return;
-  await getApplication().suspendAnomaly(anomalyId);
+  await suspendOwnerAnomalyPolicy(anomalyId);
   revalidateAnomalies();
 }

@@ -57,6 +57,8 @@ import {
   registerPortableMemoryTools,
   registerPortableOwnerNotifyTool,
   registerPortableTaskTools,
+  registerSportsTools,
+  registerWeatherTool,
 } from '@assistant/tools/builtin';
 import { ToolDispatcher } from '@assistant/tools/dispatcher';
 import { registerMcpTools } from '@assistant/tools/mcp';
@@ -351,6 +353,16 @@ export function pinnedMemoryEmbed(
 function buildFirestoreDeps(config: Config): AgentDeps {
   const problems = validateAgentPersistenceConfig(config);
   if (problems.length) throw new Error(problems.join('; '));
+  return composeFirestoreAgent(config);
+}
+
+/**
+ * The Firestore composition itself, without the runtime policy that narrows
+ * which modules may be enabled. `buildDeps` always validates first. This is
+ * exported so a test can compose every production module and prove that
+ * construction opens no SQL client.
+ */
+export function composeFirestoreAgent(config: Config): AgentDeps {
   const store = createInstallationStore({
     projectId: config.GCP_PROJECT,
     installationId: config.ASSISTANT_WORKSPACE_ID,
@@ -379,29 +391,45 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     config.FILES_DRIVER === 'gcs'
       ? new GcsWorkspaceStore(config.WORKSPACE_BUCKET, workspacePrefix)
       : new LocalWorkspaceStore(workspaceRoot);
-  // Memory, scheduling, goal progress, and owner notices use portable repositories.
+  const ownerTimezone = async (agentId: string): Promise<string> => {
+    if (agentId !== config.FIRESTORE_AGENT_ID)
+      throw new Error('Owner is outside the configured Firestore agent');
+    const owner = await store.doc('agents', agentId).get();
+    const timezone = owner.exists ? owner.get('timezone') : null;
+    if (typeof timezone !== 'string' || !timezone)
+      throw new Error('Firestore owner timezone is unavailable');
+    return timezone;
+  };
+  // Memory, scheduling, goal progress, owner notices, and keyless lookups use
+  // portable repositories.
   // MCP tools can use their Firestore adapter, but remain explicitly opt-in here.
   const notices = new FirestoreOwnerNoticeRepository(store, config.FIRESTORE_AGENT_ID);
   const registry = registerFirestoreMcpTools(
     registerPortableOwnerNotifyTool(
       registerPortableGoalProgressTool(
         registerPortableTaskTools(
-          registerPortableMemoryTools(new ToolRegistry(), {
-            memory: persistence.memory,
-            embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
-              router.embed(texts),
+          registerPortableMemoryTools(
+            registerSportsTools(
+              registerWeatherTool(new ToolRegistry(), { ownerContext: persistence.ownerContext }),
+              { timezone: ownerTimezone },
             ),
-            supersede: (input) =>
-              supersedeContradictedFacts(
-                {
-                  memory: persistence.memorySupersede,
-                  router,
-                  onRetired: () =>
-                    compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
-                },
-                input,
+            {
+              memory: persistence.memory,
+              embed: pinnedMemoryEmbed(embeddingSpace, persistence.modelRouting, (texts) =>
+                router.embed(texts),
               ),
-          }),
+              supersede: (input) =>
+                supersedeContradictedFacts(
+                  {
+                    memory: persistence.memorySupersede,
+                    router,
+                    onRetired: () =>
+                      compileOwnerCard(persistence.ownerCardCompilation, input.agentId),
+                  },
+                  input,
+                ),
+            },
+          ),
           { tasks: persistence.tasks },
         ),
         new FirestoreGoalProgressRepository(store, config.FIRESTORE_AGENT_ID),
@@ -430,15 +458,7 @@ function buildFirestoreDeps(config: Config): AgentDeps {
     portableReminders: {
       schedules: new FirestoreScheduleRepository(store),
       reminders: new FirestoreReminderRepository(store),
-      getTimezone: async (agentId) => {
-        if (agentId !== config.FIRESTORE_AGENT_ID)
-          throw new Error('Reminder owner is outside the configured Firestore agent');
-        const owner = await store.doc('agents', agentId).get();
-        const timezone = owner.exists ? owner.get('timezone') : null;
-        if (typeof timezone !== 'string' || !timezone)
-          throw new Error('Firestore reminder owner timezone is unavailable');
-        return timezone;
-      },
+      getTimezone: ownerTimezone,
     },
   });
   return {

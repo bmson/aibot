@@ -1,4 +1,4 @@
-import type { ExecutorDeps } from '@assistant/core';
+import { type ExecutorDeps, firestoreCodeJobUnavailable } from '@assistant/core';
 import { googleModule } from '@assistant/modules';
 import { listEventsInWindow } from '@assistant/tools/modules/google';
 import { type AgentDeps, agentServices } from './deps.js';
@@ -68,7 +68,12 @@ export function executorDeps(deps: AgentDeps): ExecutorDeps {
         complete: res.complete,
       };
     },
-    jobUnavailable: (job) => deps.modules.jobUnavailable(job),
+    // Under Firestore, a job that still needs PostgreSQL completes benignly
+    // (a task imported or queued before its port landed) rather than failing
+    // into the SQL tripwire and dead-lettering.
+    jobUnavailable: (job) =>
+      deps.modules.jobUnavailable(job) ??
+      (deps.config.PERSISTENCE_DRIVER === 'firestore' ? firestoreCodeJobUnavailable(job) : null),
     deliverFinal: async (task, text) => {
       // An owner-facing task whose owning channel module is UNINSTALLED has no
       // channel to assert against, so it would otherwise complete with the

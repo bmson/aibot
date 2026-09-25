@@ -5,12 +5,13 @@ import {
   updatePersonIdentity,
   updatePersonRelationship,
 } from '@assistant/application/profile';
-import { loadConfig } from '@assistant/config';
+import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { FirestoreProfilePeopleReadRepository } from '@assistant/firestore';
 import {
   getFirestoreProfileCommands,
   recompileFirestoreProfileCard,
 } from '@/lib/firestore-profile-commands';
-import { getDb } from '@/lib/server';
+import { getDb, getFirestoreInstallationStore } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -24,7 +25,17 @@ export async function GET(
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const { id } = await params;
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid person id' }, { status: 400 });
-  const profile = await getPersonProfile(getDb(), id);
+  const config = loadConfig();
+  let reads: Parameters<typeof getPersonProfile>[0];
+  if (config.PERSISTENCE_DRIVER === 'firestore') {
+    const problems = validateAgentPersistenceConfig(config);
+    if (problems.length) throw new Error(problems.join('; '));
+    reads = new FirestoreProfilePeopleReadRepository(
+      getFirestoreInstallationStore(),
+      config.FIRESTORE_AGENT_ID,
+    );
+  } else reads = getDb();
+  const profile = await getPersonProfile(reads, id);
   return profile ? mobileJson(profile) : mobileJson({ error: 'person not found' }, { status: 404 });
 }
 

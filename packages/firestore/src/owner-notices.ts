@@ -131,6 +131,20 @@ export class FirestoreOwnerNoticeRepository {
     return { row, created: true };
   }
 
+  /** The owner's Notifications chat for background work without its own chat, created on first use. */
+  async notificationsConversationId(): Promise<string> {
+    return this.store.db.runTransaction(async (tx) => {
+      await this.owner(tx);
+      const destination = await this.notifications(tx);
+      const ref = this.store.doc('conversations', destination.row.id);
+      if (destination.created)
+        tx.create(ref, encodeRecord({ ...destination.row, archived: false }));
+      else if (destination.row.archivedAt)
+        tx.update(ref, { archivedAt: null, archived: false, updatedAt: this.store.now() });
+      return destination.row.id;
+    });
+  }
+
   async post(input: {
     text: string;
     taskId?: string;

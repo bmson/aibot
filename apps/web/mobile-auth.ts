@@ -15,8 +15,14 @@ function bearerToken(request: Request): string {
  * production bypass for the app.
  */
 export async function isMobileAuthed(request: Request): Promise<boolean> {
-  const configuredToken = loadConfig().MOBILE_API_TOKEN;
-  if (secureTokenMatches(configuredToken, bearerToken(request))) return true;
+  const config = loadConfig();
+  const token = bearerToken(request);
+  if (secureTokenMatches(config.MOBILE_API_TOKEN, token)) return true;
+  // Passkey installations issue revocable per-device credentials from /security.
+  if (config.OWNER_AUTH_MODE === 'passkey' && token.startsWith('asd1_')) {
+    const { verifyOwnerDeviceToken } = await import('./lib/owner-auth/runtime');
+    if (await verifyOwnerDeviceToken(token)) return true;
+  }
   return Boolean(await isAuthed());
 }
 

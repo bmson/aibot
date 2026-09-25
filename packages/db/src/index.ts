@@ -16,6 +16,7 @@ export {
 } from './graph-recall-repository.js';
 export { createPostgresHistoryRecallRepository } from './history-recall-repository.js';
 export { createPostgresKnowledgeGraphSyncRepository } from './knowledge-graph-sync-repository.js';
+export { createPostgresLocationPingRepository } from './location-ping-repository.js';
 export { createPostgresMemorySupersedeRepository } from './memory-supersede-repository.js';
 export { createPostgresMemoryToolRepository } from './memory-tool-repository.js';
 export { createPostgresMessageRepository } from './message-repository.js';
@@ -32,6 +33,7 @@ export { createPostgresProfileMemoryMaintenance } from './profile-memory-mainten
 export { createPostgresProfileMemoryManagementRepository } from './profile-memory-management-repository.js';
 export { createPostgresProfileVoiceOverviewRepository } from './profile-overview-repository.js';
 export { createPostgresProfilePeopleReadRepository } from './profile-people-read-repository.js';
+export { createPostgresRecallFeedbackRepository } from './recall-feedback-repository.js';
 export { createPostgresRecallMetricsRepository } from './recall-metrics-repository.js';
 export { createPostgresReminderRepository } from './reminder-repository.js';
 export { createPostgresScheduleRepository } from './schedule-repository.js';

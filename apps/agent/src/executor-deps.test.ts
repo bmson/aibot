@@ -214,3 +214,34 @@ describe('executorDeps channel composition', () => {
     expect(calls).toEqual([]); // no channels, nothing delivered, no throw
   });
 });
+
+describe('executorDeps code-job availability', () => {
+  const depsFor = (driver: 'postgres' | 'firestore', moduleOwned: string | null = null) =>
+    ({
+      config: { PERSISTENCE_DRIVER: driver, FIRESTORE_AGENT_ID: 'agent' },
+      db: {},
+      firestoreStore: {},
+      outOfBandNotifier: { notifyOwner: async () => {}, notifyApprovals: async () => {} },
+      modules: {
+        channels: [],
+        ownerNotifier: { notifyOwner: async () => {}, notifyApprovals: async () => {} },
+        emailObservers: [],
+        jobUnavailable: () => moduleOwned,
+      } as unknown as InstalledModuleSet,
+    }) as unknown as AgentDeps;
+
+  it('completes SQL-only jobs benignly under Firestore and keeps portable ones', () => {
+    const jobs = executorDeps(depsFor('firestore'));
+    expect(jobs.jobUnavailable?.('dream.run')).toBe(
+      'dream.run skipped because it is not yet available on Firestore persistence',
+    );
+    expect(jobs.jobUnavailable?.('memory.consolidate')).toBeNull();
+    expect(jobs.jobUnavailable?.('reminder.notify')).toBeNull();
+  });
+
+  it('leaves every job available on PostgreSQL and prefers the module owner message', () => {
+    expect(executorDeps(depsFor('postgres')).jobUnavailable?.('dream.run')).toBeNull();
+    const moduleOff = executorDeps(depsFor('firestore', 'documents.process: module off'));
+    expect(moduleOff.jobUnavailable?.('documents.process')).toBe('documents.process: module off');
+  });
+});

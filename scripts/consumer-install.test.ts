@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createInstallationStore } from '@assistant/firestore';
 import {
   advanceInstallationStage,
@@ -11,6 +13,8 @@ import {
 } from '@assistant/setup/installation';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  firestoreReadinessEvidence,
+  issueInstallerOwnerClaim,
   provisionConsumerInstallationWithPublishedImages,
   provisionConsumerInstallationWithSeed,
 } from './consumer-install.js';
@@ -452,12 +456,13 @@ describe('consumer install image publishing orchestration', () => {
       await writeFile(options.outputPath as string, JSON.stringify(imageManifest), { mode: 0o600 });
       return { schemaVersion: 1 };
     };
+    const stateDir = await mkdtemp(join(tmpdir(), 'assistant-build-images-'));
     const result = await provisionConsumerInstallationWithPublishedImages(
       dependenciesForCleanRelease(input),
       {
         manifest: input,
         archivePath: 'unused',
-        statePath: 'unused',
+        statePath: join(stateDir, 'state.json'),
         stateBucket: 'unused',
         terraformDir: 'unused',
         apply: true,
@@ -471,6 +476,87 @@ describe('consumer install image publishing orchestration', () => {
     expect(result.imagePublish).toMatchObject({
       published: true,
       sourceSha: input.identity.release.commitSha,
+      imageManifestPath: join(stateDir, `image-manifest-${input.identity.release.commitSha}.json`),
     });
+    expect(
+      JSON.parse(
+        await readFile(
+          join(stateDir, `image-manifest-${input.identity.release.commitSha}.json`),
+          'utf8',
+        ),
+      ),
+    ).toEqual(imageManifest);
+  });
+});
+
+describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('consumer install readiness evidence', () => {
+  it('reports seeded runtime data, a recorded model response, and issues one owner claim', async () => {
+    const installationId = `ready-${randomUUID().slice(0, 8)}`;
+    const createStore = () =>
+      createInstallationStore({ projectId: 'demo-assistant-test', installationId });
+    const inspect = createStore();
+    try {
+      const { applyConsumerRuntimeSeed, planConsumerRuntimeSeed } = await import(
+        './consumer-runtime-seed.js'
+      );
+      await applyConsumerRuntimeSeed(inspect, planConsumerRuntimeSeed(seedInput(installationId)));
+      const context = {
+        ownerAuth: 'passkey' as const,
+        webUrl: 'https://ready-web-1.us-central1.run.app',
+        authOrigin: 'https://ready-web-1.us-central1.run.app',
+        agentId,
+        embeddingSpace,
+      };
+      const evidence = firestoreReadinessEvidence(createStore);
+      expect(await evidence(context)).toEqual({
+        runtimeData: { ready: true, issues: [] },
+        modelResponseObserved: false,
+      });
+      await inspect.doc('modelCalls', 'call-1').set({
+        id: 'call-1',
+        createdAt: new Date(),
+        model: 'vertex/example-chat',
+        outputTokens: 12,
+      });
+      expect((await evidence(context)).modelResponseObserved).toBe(true);
+      expect(
+        (await evidence({ ...context, agentId: '00000000-0000-4000-8000-000000000000' }))
+          .runtimeData.ready,
+      ).toBe(false);
+
+      const result = {
+        manifest: advanced(manifest(installationId), 'initialized'),
+        applied: true,
+        runtimeReady: false,
+        completed: [],
+        pending: ['ready'],
+        note: 'fixture',
+        ownerAccess: {
+          webUrl: context.webUrl,
+          authOrigin: context.authOrigin,
+          ownerAuth: 'passkey' as const,
+          publicInvoker: true,
+        },
+      } satisfies ConsumerInstallResult;
+      const claim = await issueInstallerOwnerClaim(result, createStore);
+      expect(claim).toMatchObject({
+        setupUrl: expect.stringMatching(
+          /^https:\/\/ready-web-1\.us-central1\.run\.app\/setup#claim=[A-Za-z0-9_-]{43}$/,
+        ),
+      });
+      await inspect.doc('ownerAuth', 'state').set({ claimedAt: new Date(), sessionGeneration: 1 });
+      expect(await issueInstallerOwnerClaim(result, createStore)).toMatchObject({
+        skipped: expect.stringContaining('already has an owner'),
+      });
+      expect(
+        await issueInstallerOwnerClaim(
+          { ...result, ownerAccess: { ...result.ownerAccess, ownerAuth: 'google' } },
+          createStore,
+        ),
+      ).toMatchObject({ skipped: expect.stringContaining('passkey runtime') });
+    } finally {
+      await inspect.db.recursiveDelete(inspect.root);
+      await inspect.db.terminate();
+    }
   });
 });

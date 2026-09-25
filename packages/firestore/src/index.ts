@@ -27,6 +27,7 @@ export {
 } from './knowledge-graph-read.js';
 export { FirestoreKnowledgeGraphRelationMutationRepository } from './knowledge-graph-relation-mutations.js';
 export { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
+export { FirestoreLocationPingRepository } from './location-pings.js';
 export type { McpDiscoveryResult } from './mcp-connections.js';
 export {
   FirestoreMcpConnectionMutationRepository,
@@ -46,6 +47,26 @@ export {
   type WakeIntent,
   wakeIntentId,
 } from './outbox.js';
+export {
+  FirestoreOwnerAuthRepository,
+  generateOwnerSecret,
+  generateRecoveryCode,
+  MAX_OWNER_DEVICES,
+  MAX_OWNER_PASSKEYS,
+  type NewOwnerPasskey,
+  normalizeRecoveryCode,
+  OWNER_CLAIM_TTL_MS,
+  OwnerAuthRejectedError,
+  type OwnerAuthRejection,
+  type OwnerAuthState,
+  type OwnerChallengeUse,
+  type OwnerClaimGrant,
+  type OwnerDevice,
+  type OwnerPasskey,
+  type OwnerRegistrationAuthorization,
+  type OwnerSecretPurpose,
+  ownerSecretVerifier,
+} from './owner-auth.js';
 export { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 export { FirestoreOwnerContextRepository } from './owner-context.js';
 export { FirestoreOwnerKnowledgeGraphFactRepository } from './owner-knowledge-graph-fact.js';
@@ -73,8 +94,9 @@ export { FirestoreProfileOccasionCommandRepository } from './profile-occasion-co
 export { FirestoreProfileVoiceOverviewRepository } from './profile-overview.js';
 export { FirestoreProfilePeopleCommandRepository } from './profile-people-command.js';
 export { FirestoreProfilePeopleReadRepository } from './profile-people-read.js';
+export { FirestoreRecallFeedbackRepository } from './recall-feedback.js';
 export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
-export { FirestoreReminderRepository } from './reminders.js';
+export { FirestoreReminderDeliveryRepository, FirestoreReminderRepository } from './reminders.js';
 export {
   checkFirestoreRuntimeData,
   type RuntimeDataIssue,

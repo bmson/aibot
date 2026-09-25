@@ -1,19 +1,16 @@
 'use server';
 
-import {
-  cancelActivity,
-  raiseTaskBudget,
-  retryActivity,
-  revokeTaskAutonomy,
-} from '@assistant/application/tasks';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { requireOwner } from '@/auth';
-import { getDb } from '@/lib/server';
 import {
   archiveOldTaskActivity,
   archiveTaskActivity,
+  cancelTaskActivity,
+  raiseTaskActivityBudget,
   restoreTaskActivity,
+  retryTaskActivity,
+  revokeTaskActivityAutonomy,
 } from '@/lib/task-activity';
 
 function revalidateTaskViews(taskId: string): void {
@@ -26,7 +23,7 @@ function revalidateTaskViews(taskId: string): void {
 /** Re-queue a stuck task (needs_attention → pending). */
 export async function retryTask(taskId: string): Promise<void> {
   await requireOwner();
-  await retryActivity(getDb(), taskId);
+  await retryTaskActivity(taskId);
   revalidateTaskViews(taskId);
 }
 
@@ -37,7 +34,7 @@ export async function retryTask(taskId: string): Promise<void> {
  */
 export async function revokeAutonomyGrant(taskId: string): Promise<void> {
   await requireOwner();
-  await revokeTaskAutonomy(getDb(), taskId);
+  await revokeTaskActivityAutonomy(taskId);
   revalidateTaskViews(taskId);
 }
 
@@ -45,13 +42,13 @@ export async function revokeAutonomyGrant(taskId: string): Promise<void> {
 export async function raiseTaskBudgetAndRetry(taskId: string, formData: FormData): Promise<void> {
   await requireOwner();
   const requested = Number.parseFloat(String(formData.get('budgetUsdLimit') ?? '').trim());
-  await raiseTaskBudget(getDb(), taskId, requested);
+  await raiseTaskActivityBudget(taskId, requested);
   revalidateTaskViews(taskId);
 }
 
 export async function cancelTask(taskId: string): Promise<void> {
   await requireOwner();
-  await cancelActivity(getDb(), taskId);
+  await cancelTaskActivity(taskId);
   revalidateTaskViews(taskId);
 }
 

@@ -47,11 +47,10 @@ const messages = [
   },
 ] as unknown as UIMessage[];
 
-function render(legacyActionsAvailable: boolean, log = messages) {
+function render(log = messages) {
   return renderToStaticMarkup(
     <ChatLog
       log={log}
-      legacyActionsAvailable={legacyActionsAvailable}
       busy={false}
       streaming={false}
       notificationMode={false}
@@ -64,29 +63,21 @@ function render(legacyActionsAvailable: boolean, log = messages) {
   );
 }
 
-describe('chat transcript in Firestore mode', () => {
-  it('shows decision context without SQL-backed controls or recall feedback', () => {
-    const html = render(false);
-    expect(html).toContain('Decision controls are unavailable in this chat right now.');
+// Every inline control is backed by a Server Action with a PostgreSQL and a
+// Firestore path, so the transcript offers the same controls in both drivers.
+describe('chat transcript controls', () => {
+  it('offers decision controls and recall feedback', () => {
+    const html = render();
     expect(html).toContain('Send the invoice');
-    expect(html).toContain('Raise task budget to $5.00');
-    expect(html).toContain('Review the plan?');
     expect(html).toContain('Earlier discussion');
-    expect(html).not.toContain('Helpful');
-    expect(html).not.toContain('Stop task');
-    expect(html).not.toContain('Start task');
-    expect(html).not.toContain('Review all');
-  });
-
-  it('keeps the existing interactive controls in PostgreSQL mode', () => {
-    const html = render(true);
     expect(html).toContain('Helpful');
     expect(html).toContain('Stop task');
     expect(html).toContain('Start task');
     expect(html).toContain('Review all');
+    expect(html).not.toContain('Decision controls are unavailable');
   });
 
-  it('shows a saved card without offering its SQL-backed refresh action', () => {
+  it('offers refresh on a refreshable saved card', () => {
     const card = [
       {
         id: 'assistant-card',
@@ -111,9 +102,8 @@ describe('chat transcript in Firestore mode', () => {
         ],
       },
     ] as unknown as UIMessage[];
-    const portable = render(false, card);
-    expect(portable).toContain('Grand Hotel');
-    expect(portable).not.toContain('>Refresh</button>');
-    expect(render(true, card)).toContain('>Refresh</button>');
+    const html = render(card);
+    expect(html).toContain('Grand Hotel');
+    expect(html).toContain('>Refresh</button>');
   });
 });
