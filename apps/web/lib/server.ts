@@ -81,6 +81,8 @@ import {
 import type { GoalInput } from '@assistant/application/goals';
 import {
   createProfileMemoryCommands,
+  organizeMemoryNow,
+  organizeMemoryNowWithRepository,
   type ProfileMemoryCommandPersistence,
   profileMemoryCommands,
 } from '@assistant/application/profile';
@@ -109,6 +111,7 @@ import {
   createFirestoreProfileMemoryCommandPersistence,
   createFirestoreSettingsPersistence,
   createInstallationStore,
+  FirestoreActiveJobLookup,
   FirestoreApplicationChatPersistence,
   FirestoreCommitmentMutationRepository,
   FirestoreDeviceTokenRepository,
@@ -588,6 +591,12 @@ function createFirestoreChatApplication() {
         body,
       );
     },
+    organizeMemoryNow: () =>
+      organizeMemoryNowWithRepository(
+        new FirestoreActiveJobLookup(store),
+        persistence.tasks,
+        config.FIRESTORE_AGENT_ID,
+      ),
     registerDeviceToken: (body: unknown) =>
       registerDeviceTokenWithRepository(deviceTokens, config.FIRESTORE_AGENT_ID, body),
     checkReadiness: () =>
@@ -768,6 +777,13 @@ export function downloadOwnerArtifact(workspacePath: string) {
     config.FIRESTORE_AGENT_ID,
     workspacePath,
   );
+}
+
+/** Queue an owner-requested memory organization pass with the configured driver. */
+export function organizeOwnerMemoryNow() {
+  return loadConfig().PERSISTENCE_DRIVER === 'firestore'
+    ? getFirestoreChatApplication().organizeMemoryNow()
+    : organizeMemoryNow(getDb());
 }
 
 /** Register the owner's APNs token with the configured driver. */

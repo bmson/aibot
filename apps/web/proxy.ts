@@ -124,7 +124,7 @@ export function proxy(request: NextRequest) {
     (improvementIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/memory/profile' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/mobile/v1/memory/people' && request.method === 'POST') ||
-    (memoryPersonPath.test(path) && ['GET', 'PATCH'].includes(request.method)) ||
+    (memoryPersonPath.test(path) && ['GET', 'PATCH', 'POST', 'DELETE'].includes(request.method)) ||
     // Owner memory commands: create, correct, confirm, forget, and review.
     (path === '/api/mobile/v1/memory' && request.method === 'POST') ||
     (/^\/api\/mobile\/v1\/memory\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
