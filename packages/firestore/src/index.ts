@@ -128,4 +128,5 @@ export { FirestoreVoiceProfileRepository } from './voice-profile.js';
 export { FirestoreWatchRepository } from './watches.js';
 export { FirestoreWorkspaceAnomalyRepository } from './workspace-anomalies.js';
 export { FirestoreWorkspaceCapabilityRepository } from './workspace-capabilities.js';
+export { FirestoreWorkspaceFileLookup } from './workspace-files.js';
 export { FirestoreWorkspaceImprovementRepository } from './workspace-improvements.js';

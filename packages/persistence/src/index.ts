@@ -61,4 +61,5 @@ export * from './voice-profile.js';
 export * from './watches.js';
 export * from './workspace-anomalies.js';
 export * from './workspace-capabilities.js';
+export * from './workspace-files.js';
 export * from './workspace-improvements.js';
