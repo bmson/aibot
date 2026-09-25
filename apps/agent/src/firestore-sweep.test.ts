@@ -166,9 +166,10 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
 
   it('names every SQL-only code job and leaves portable ones runnable', () => {
     expect(firestoreCodeJobUnavailable('dream.run')).toMatch(/not yet available on Firestore/);
-    expect(firestoreCodeJobUnavailable('memory.extract')).not.toBeNull();
+    expect(firestoreCodeJobUnavailable('briefing.compose')).not.toBeNull();
     for (const job of [
       'reminder.notify',
+      'memory.extract',
       'memory.consolidate',
       'memory.graph_sync',
       'documents.extract',

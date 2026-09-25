@@ -10,7 +10,11 @@ import {
   type Records,
   validateEmbedding,
 } from '@assistant/persistence';
-import type { DocumentReference, QueryDocumentSnapshot, Transaction } from '@google-cloud/firestore';
+import type {
+  DocumentReference,
+  QueryDocumentSnapshot,
+  Transaction,
+} from '@google-cloud/firestore';
 import {
   assertCodeJobLeaseInTransaction,
   codeJobCheckpointKeys,
@@ -83,11 +87,7 @@ export class FirestoreMemoryExtractionRepository implements MemoryExtractionRepo
   }
 
   /** Read the checkpoint and fences, returning the committed keys. */
-  private async begin(
-    tx: Transaction,
-    agentId: string,
-    lease: CodeJobLease,
-  ): Promise<string[]> {
+  private async begin(tx: Transaction, agentId: string, lease: CodeJobLease): Promise<string[]> {
     await assertPrivacyErasureInactiveInTransaction(tx, this.store, agentId);
     await assertCodeJobLeaseInTransaction(tx, this.store, agentId, lease);
     return codeJobCheckpointKeys(
@@ -393,7 +393,11 @@ export class FirestoreMemoryExtractionRepository implements MemoryExtractionRepo
                 doc.get('day') === occasion.day,
             );
           if (existing) {
-            entry = { ref: existing.ref, row: decodeRecord<Occasion>(existing.data()), isNew: false };
+            entry = {
+              ref: existing.ref,
+              row: decodeRecord<Occasion>(existing.data()),
+              isNew: false,
+            };
           } else {
             const id = occasionDocumentId(input.agentId, contactId, occasion);
             entry = {

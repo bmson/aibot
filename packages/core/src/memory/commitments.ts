@@ -321,7 +321,8 @@ async function extractPortableCommitments(
       if (needle.length < 3) continue;
       const matches = activeRows.filter((row) => normalizedTitle(row.title) === needle);
       const [match] = matches;
-      if (matches.length === 1 && match && !resolveIds.includes(match.id)) resolveIds.push(match.id);
+      if (matches.length === 1 && match && !resolveIds.includes(match.id))
+        resolveIds.push(match.id);
     }
     const items = outcome.object.commitments
       .filter((item) => item.confidence >= MIN_CONFIDENCE)
