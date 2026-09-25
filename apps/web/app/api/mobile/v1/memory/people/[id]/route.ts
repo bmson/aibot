@@ -8,7 +8,9 @@ import {
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import { FirestoreProfilePeopleReadRepository } from '@assistant/firestore';
 import {
+  deleteFirestorePerson,
   getFirestoreProfileCommands,
+  mergeFirestorePeople,
   recompileFirestoreProfileCard,
 } from '@/lib/firestore-profile-commands';
 import { getDb, getFirestoreInstallationStore } from '@/lib/server';
@@ -86,12 +88,10 @@ export async function POST(
   ) {
     return mobileJson({ error: 'action must be merge with a valid targetId' }, { status: 400 });
   }
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-    return mobileJson(
-      { error: 'Merging people is unavailable with Firestore persistence.' },
-      { status: 409 },
-    );
-  const merged = await mergePeople(getDb(), id, body.targetId);
+  const merged =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? await mergeFirestorePeople(id, body.targetId)
+      : await mergePeople(getDb(), id, body.targetId);
   return merged.error
     ? mobileJson({ error: merged.error }, { status: 409 })
     : mobileJson({ ok: true });
@@ -104,12 +104,10 @@ export async function DELETE(
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const { id } = await params;
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid person id' }, { status: 400 });
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-    return mobileJson(
-      { error: 'Deleting people is unavailable with Firestore persistence.' },
-      { status: 409 },
-    );
-  const result = await deletePerson(getDb(), id);
+  const result =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? await deleteFirestorePerson(id)
+      : await deletePerson(getDb(), id);
   return result.error
     ? mobileJson({ error: result.error }, { status: 409 })
     : mobileJson({ ok: true });

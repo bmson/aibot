@@ -11,10 +11,13 @@ type ModelCall = Records['modelCalls'] & { agentId?: string };
 
 const PAGE_SIZE = 60;
 const RELATION_LIMIT = 80;
-const RELATIVE_DATE =
+export const RELATIVE_DATE =
   /\b(today|tomorrow|yesterday|(next|last|this)\s+(week|month|year)|(next|last|this|coming)\s+(mon|tues?|wed(nes)?|thur?s?|fri|satur|sun)day|(mon|tues?|wed(nes)?|thur?s?|fri|satur|sun)day)\b/i;
 
-async function assertConfiguredOwner(store: InstallationStore, agentId: string): Promise<void> {
+export async function assertConfiguredOwner(
+  store: InstallationStore,
+  agentId: string,
+): Promise<void> {
   const agents = await store.collection('agents').limit(2).get();
   const owner = agents.docs[0];
   if (

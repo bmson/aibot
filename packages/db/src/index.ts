@@ -1,3 +1,4 @@
+export { createPostgresActiveJobLookup } from './active-job-lookup.js';
 export { createPostgresApplicationChatPersistence } from './application-chat-repository.js';
 export { createPostgresApprovalPolicyRepository } from './approval-policy-repository.js';
 export { createPostgresApprovalRepository } from './approval-repository.js';
@@ -48,4 +49,5 @@ export { createPostgresTaskLeaseRepository } from './task-lease-repository.js';
 export { createPostgresTaskRepository } from './task-lifecycle-repository.js';
 export { createPostgresToolExecutionRepository } from './tool-execution-repository.js';
 export { createPostgresWatchRepository } from './watch-repository.js';
+export { createPostgresWorkspaceFileLookup } from './workspace-file-lookup.js';
 export * from './write-fence.js';
