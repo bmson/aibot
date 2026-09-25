@@ -1,4 +1,3 @@
-import { loadConfig } from '@assistant/config';
 import { notFound } from 'next/navigation';
 import { requireOwner } from '@/auth';
 import { chatNoticeMessage } from '@/lib/chat-notices';
@@ -26,7 +25,6 @@ export async function renderChatConversation(id: string, query: ChatPageQuery) {
 
   return (
     <ChatClient
-      firestorePreview={loadConfig().PERSISTENCE_DRIVER === 'firestore'}
       conversationId={conversation.id}
       title={conversation.title || 'Untitled'}
       agentName={view.agentName}
