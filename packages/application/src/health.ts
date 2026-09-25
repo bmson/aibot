@@ -6,6 +6,22 @@ export interface Readiness {
   database: 'ready' | 'unavailable';
 }
 
+/**
+ * Readiness through an injected probe, for compositions without SQL. The
+ * probe resolves true when the configured owner record is readable.
+ */
+export async function checkReadinessWithProbe(
+  probe: () => Promise<boolean>,
+): Promise<{ ready: boolean; database: 'firestore' | 'unavailable' }> {
+  try {
+    return (await probe())
+      ? { ready: true, database: 'firestore' }
+      : { ready: false, database: 'unavailable' };
+  } catch {
+    return { ready: false, database: 'unavailable' };
+  }
+}
+
 /** A deliberately small dependency check suitable for readiness probes. */
 export async function checkReadiness(db: Db): Promise<Readiness> {
   try {

@@ -57,6 +57,7 @@ import {
   registerPortableMemoryTools,
   registerPortableOwnerNotifyTool,
   registerPortableTaskTools,
+  registerPortableWebWorkspaceTools,
   registerSportsTools,
   registerWeatherTool,
 } from '@assistant/tools/builtin';
@@ -409,9 +410,12 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
       registerPortableGoalProgressTool(
         registerPortableTaskTools(
           registerPortableMemoryTools(
-            registerSportsTools(
-              registerWeatherTool(new ToolRegistry(), { ownerContext: persistence.ownerContext }),
-              { timezone: ownerTimezone },
+            registerPortableWebWorkspaceTools(
+              registerSportsTools(
+                registerWeatherTool(new ToolRegistry(), { ownerContext: persistence.ownerContext }),
+                { timezone: ownerTimezone },
+              ),
+              { workspace },
             ),
             {
               memory: persistence.memory,
