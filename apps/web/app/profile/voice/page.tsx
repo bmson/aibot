@@ -71,6 +71,7 @@ export default async function VoicePage() {
         profile={voiceProfile}
         readOnly={readOnly}
         profileEditable
+        uploadable
       />
     </PageShell>
   );

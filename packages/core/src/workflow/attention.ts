@@ -1,4 +1,5 @@
 import { type Db, type TaskRow, tasks } from '@assistant/db';
+import type { MaintenanceRepository, TaskRepository } from '@assistant/persistence';
 import { and, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { getOrCreateNotificationsConversation, persistMessage } from '../chat.js';
 import { markAttentionNotified } from './machine.js';
@@ -30,11 +31,13 @@ function attentionText(task: Pick<TaskRow, 'status' | 'title' | 'progress'>): st
  * it, and a per-task failure leaves the row unstamped for the next pass.
  */
 export async function renotifyStalledAttention(
-  db: Db,
+  store: Db | { maintenance: MaintenanceRepository; tasks: TaskRepository },
   notifyOwner?: OwnerPush,
   opts: { olderThanMinutes?: number; batch?: number } = {},
 ): Promise<number> {
   const olderThanMinutes = opts.olderThanMinutes ?? 5;
+  if ('maintenance' in store) return renotifyPortable(store, notifyOwner, olderThanMinutes, opts);
+  const db = store as Db;
   const rows = await db
     .select()
     .from(tasks)
@@ -94,6 +97,47 @@ export async function renotifyStalledAttention(
       if (notified && (await markAttentionNotified(db, task.id))) renotified += 1;
     } catch (err) {
       // Leave the row unstamped — the next sweep retries this task.
+      console.error('attention re-notification failed', { taskId: task.id }, err);
+    }
+  }
+  return renotified;
+}
+
+async function renotifyPortable(
+  store: { maintenance: MaintenanceRepository; tasks: TaskRepository },
+  notifyOwner: OwnerPush | undefined,
+  olderThanMinutes: number,
+  opts: { batch?: number },
+): Promise<number> {
+  const rows = await store.maintenance.listStalledAttention({
+    olderThanMinutes,
+    batch: opts.batch ?? 50,
+  });
+  let renotified = 0;
+  for (const task of rows) {
+    try {
+      const text = attentionText(task);
+      // The same destinations as the PostgreSQL pass: the task's own thread,
+      // or the Notifications sink for a conversation-less assistant task.
+      let notified = await store.maintenance.postAttentionNotice({
+        taskId: task.id,
+        text,
+        parts: [
+          { type: 'text', text },
+          { type: 'notice', notice: 'needs-attention' },
+        ],
+      });
+      if (notifyOwner) {
+        notified =
+          (await notifyOwner({ taskId: task.id, conversationId: task.conversationId, text })
+            .then(() => true)
+            .catch((err) => {
+              console.error('attention owner push failed', { taskId: task.id }, err);
+              return false;
+            })) || notified;
+      }
+      if (notified && (await markAttentionNotified(store.tasks, task.id))) renotified += 1;
+    } catch (err) {
       console.error('attention re-notification failed', { taskId: task.id }, err);
     }
   }
