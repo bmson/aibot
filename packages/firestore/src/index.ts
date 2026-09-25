@@ -1,3 +1,4 @@
+export { FirestoreActiveJobLookup } from './active-jobs.js';
 export { FirestoreApplicationChatPersistence } from './application-chat.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 export { FirestoreApprovalRepository } from './approvals.js';
@@ -17,7 +18,6 @@ export { FirestoreGeneratedCardRepository } from './generated-cards.js';
 export { FirestoreGoalMutationRepository } from './goal-mutations.js';
 export { FirestoreGoalProgressRepository } from './goal-progress.js';
 export { FirestoreGoalReadRepository } from './goals.js';
-export { FirestoreActiveJobLookup } from './active-jobs.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { FirestoreImportOverviewRepository } from './import-overview.js';
