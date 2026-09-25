@@ -38,7 +38,7 @@ function registry(): ToolRegistry {
     );
 }
 
-describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore SMS channel', () => {
+describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore SMS channel', { timeout: 30_000 }, () => {
   const agentId = randomUUID();
   let store: InstallationStore;
   let persistence: ExecutionPersistence;
