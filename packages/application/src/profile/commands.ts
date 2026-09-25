@@ -28,6 +28,7 @@ import {
   type ProfileOccasionCommandInput,
   type ProfileOccasionCommandRepository,
   type ProfilePeopleCommandRepository,
+  type ProfilePeopleRemovalRepository,
 } from '@assistant/persistence';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
@@ -194,6 +195,8 @@ const OWNER_FACING_DB_ERRORS: ReadonlySet<string> = new Set([
   'Person not found.',
   'The owner profile cannot be deleted.',
   'Person could not be deleted.',
+  'Person has too many occasions to update safely.',
+  'Person has too many knowledge links to update safely.',
 ]);
 
 export function ownerFacingError(error: unknown, fallback: string): string {
@@ -242,6 +245,72 @@ export async function deletePerson(db: Db, contactId: string): Promise<{ error?:
     return { error: ownerFacingError(error, 'Person could not be deleted. Please try again.') };
   }
   await compileOwnerCard(db);
+  return {};
+}
+
+/** Facts are removed in bounded passes; this many passes is far past any real person. */
+const PERSON_FACT_BATCH = 100;
+const PERSON_FACT_MAX_PASSES = 200;
+
+/**
+ * Delete a non-owner person through portable repositories: every fact about
+ * them is forgotten with a tombstone (so extraction cannot recreate it) and
+ * its graph projection removed, then their occasions, graph links, and the
+ * person go in one final transaction. Safe to retry after an interruption.
+ */
+export async function deletePersonWithRepository(
+  removal: ProfilePeopleRemovalRepository,
+  memory: ProfileMemoryCommandPersistence,
+  agentId: string,
+  contactId: string,
+): Promise<{ error?: string }> {
+  if (!UUID_RE.test(contactId)) return { error: 'Invalid person identifier.' };
+  try {
+    await removal.assertRemovable(contactId);
+    for (let pass = 0; ; pass += 1) {
+      if (pass >= PERSON_FACT_MAX_PASSES) throw new Error('Person facts did not drain');
+      const ids = await removal.subjectMemoryIds(contactId, PERSON_FACT_BATCH);
+      if (ids.length === 0) break;
+      for (const memoryId of ids) {
+        const result = await memory.memories.forget(memoryId, 'owner_delete_contact');
+        if (result.status === 'updated')
+          await memory.maintenance.removeOrphanedGraphEntities({ agentId, memoryId });
+      }
+    }
+    await removal.finishDelete(contactId);
+  } catch (error) {
+    return { error: ownerFacingError(error, 'Person could not be deleted. Please try again.') };
+  }
+  await compileOwnerCard(memory.ownerCards, agentId);
+  return {};
+}
+
+/**
+ * Merge one person into another through portable repositories: facts are
+ * re-attributed in bounded passes, then occasions, identity fields, and the
+ * source's removal commit together. Safe to retry after an interruption.
+ */
+export async function mergePeopleWithRepository(
+  removal: ProfilePeopleRemovalRepository,
+  ownerCards: OwnerCardCompilationRepository,
+  agentId: string,
+  sourceId: string,
+  targetId: string,
+): Promise<{ error?: string }> {
+  try {
+    if (sourceId === targetId) throw new Error('cannot merge a contact into itself');
+    for (let pass = 0; ; pass += 1) {
+      if (pass >= PERSON_FACT_MAX_PASSES) throw new Error('Person facts did not drain');
+      const moved = await removal.reassignSubjectMemories(sourceId, targetId, PERSON_FACT_BATCH);
+      if (moved === 0) break;
+    }
+    await removal.finishMerge(sourceId, targetId);
+  } catch (error) {
+    return {
+      error: ownerFacingError(error, 'These people could not be merged. Please try again.'),
+    };
+  }
+  await compileOwnerCard(ownerCards, agentId);
   return {};
 }
 

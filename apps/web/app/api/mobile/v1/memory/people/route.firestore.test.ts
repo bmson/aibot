@@ -77,14 +77,14 @@ describe.skipIf(!localEmulator)('Firestore mobile people mutations with PostgreS
     resetConfigForTest();
   });
 
-  it('allows only POST collection and PATCH item mutations through the proxy', async () => {
+  it('allows person create, edit, merge, and delete mutations through the proxy', async () => {
     const { proxy } = await import('../../../../../../proxy.js');
     const status = (path: string, method: string) =>
       proxy(new NextRequest(`http://localhost${path}`, { method })).status;
     expect(status('/api/mobile/v1/memory/people', 'POST')).toBe(200);
     expect(status(`/api/mobile/v1/memory/people/${contactId}`, 'PATCH')).toBe(200);
-    expect(status(`/api/mobile/v1/memory/people/${contactId}`, 'DELETE')).toBe(503);
-    expect(status(`/api/mobile/v1/memory/people/${contactId}`, 'POST')).toBe(503);
+    expect(status(`/api/mobile/v1/memory/people/${contactId}`, 'DELETE')).toBe(200);
+    expect(status(`/api/mobile/v1/memory/people/${contactId}`, 'POST')).toBe(200);
     expect(status('/api/mobile/v1/memory/people/not-a-uuid', 'PATCH')).toBe(503);
   });
 
@@ -138,7 +138,7 @@ describe.skipIf(!localEmulator)('Firestore mobile people mutations with PostgreS
     expect(() => getDb()).toThrow('PostgreSQL-backed web surface is unavailable');
   });
 
-  it('keeps whole-person merge and delete fail-closed', async () => {
+  it('refuses to merge into or delete another owner’s person', async () => {
     const { POST, DELETE } = await import('./[id]/route.js');
     const merge = await POST(
       new Request(`http://localhost/api/mobile/v1/memory/people/${contactId}`, {
@@ -150,18 +150,17 @@ describe.skipIf(!localEmulator)('Firestore mobile people mutations with PostgreS
     );
     expect(merge.status).toBe(409);
     expect(await merge.json()).toEqual({
-      error: 'Merging people is unavailable with Firestore persistence.',
+      error: 'These people could not be merged. Please try again.',
     });
     const deleted = await DELETE(
-      new Request(`http://localhost/api/mobile/v1/memory/people/${contactId}`, {
+      new Request(`http://localhost/api/mobile/v1/memory/people/${foreignContactId}`, {
         method: 'DELETE',
       }),
-      { params: Promise.resolve({ id: contactId }) },
+      { params: Promise.resolve({ id: foreignContactId }) },
     );
     expect(deleted.status).toBe(409);
-    expect(await deleted.json()).toEqual({
-      error: 'Deleting people is unavailable with Firestore persistence.',
-    });
+    expect(await deleted.json()).toEqual({ error: 'Person not found.' });
     expect((await store.doc('contacts', contactId).get()).exists).toBe(true);
+    expect((await store.doc('contacts', foreignContactId).get()).exists).toBe(true);
   });
 });

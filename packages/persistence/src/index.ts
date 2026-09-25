@@ -3,6 +3,7 @@ export * from './approval-policies.js';
 export * from './approvals.js';
 export * from './budget-caps.js';
 export * from './card-refresh.js';
+export * from './contact-names.js';
 export * from './contracts.js';
 export * from './cost-policy.js';
 export * from './dispatch.js';

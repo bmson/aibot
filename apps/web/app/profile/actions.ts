@@ -29,7 +29,9 @@ import {
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import {
+  deleteFirestorePerson,
   getFirestoreProfileCommands,
+  mergeFirestorePeople,
   recompileFirestoreProfileCard,
 } from '@/lib/firestore-profile-commands';
 import { getApplication, getDb, getFirestoreInstallationStore, getWorkspace } from '@/lib/server';
@@ -159,9 +161,10 @@ export async function updateContactIdentityAction(
 
 export async function deleteContactAction(contactId: string): Promise<{ error?: string }> {
   await requireOwner();
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-    return { error: 'Deleting people is unavailable with Firestore persistence.' };
-  const result = await deletePerson(getDb(), contactId);
+  const result =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? await deleteFirestorePerson(contactId)
+      : await deletePerson(getDb(), contactId);
   revalidateProfile();
   return result;
 }
@@ -208,9 +211,10 @@ export async function mergeContactAction(
   targetId: string,
 ): Promise<{ error?: string }> {
   await requireOwner();
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
-    return { error: 'Merging people is unavailable with Firestore persistence.' };
-  const result = await mergePeople(getDb(), sourceId, targetId);
+  const result =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? await mergeFirestorePeople(sourceId, targetId)
+      : await mergePeople(getDb(), sourceId, targetId);
   revalidateProfile();
   return result;
 }

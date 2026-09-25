@@ -108,7 +108,7 @@ export function proxy(request: NextRequest) {
     (improvementIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/memory/profile' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/mobile/v1/memory/people' && request.method === 'POST') ||
-    (memoryPersonPath.test(path) && request.method === 'PATCH') ||
+    (memoryPersonPath.test(path) && ['PATCH', 'POST', 'DELETE'].includes(request.method)) ||
     (memoryOccasionPath.test(path) && ['POST', 'PATCH', 'DELETE'].includes(request.method)) ||
     (personOccasionsPath.test(path) && request.method === 'POST') ||
     (path === '/api/card-image' && request.method === 'GET') ||
