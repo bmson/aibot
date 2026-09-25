@@ -10,7 +10,7 @@ Production composition: `assistant.config.ts` composes 11 modules, and `infra/gc
 - **Disabled**: `validateAgentPersistenceConfig` refuses the setting, or the Firestore composition deliberately does not register or run the path. It cannot reach SQL. It is also unavailable to the owner.
 - **SQL**: the code path still calls PostgreSQL. It would hit the `unavailableSqlDb()` tripwire if Firestore mode reached it.
 
-Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSISTANT_MODULES` ⊆ `{reminders, calendar}`, `QUEUE_DRIVER=local`, `CANARY_ENABLED=false`, and an empty `LOCATION_PING_SECRET`. Anything outside those limits is **Disabled** by configuration, even where parts of it are ported.
+Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSISTANT_MODULES` ⊆ `{reminders, calendar}`, `CANARY_ENABLED=false`, and an empty `LOCATION_PING_SECRET`. On `main` it also requires `QUEUE_DRIVER=local`. #383 replaces that with Cloud Tasks support that requires `INTERNAL_AUTH_MODE=oidc`. Anything outside those limits is **Disabled** by configuration, even where parts of it are ported.
 
 ## Process and dispatch
 
@@ -19,7 +19,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | Boot (`buildFirestoreDeps`), `/health`, `/ready` | Ready | `firestore-boot.test.ts` spawns the process with an unreachable `DATABASE_URL`. No SQL client is constructed. |
 | Local poller claim/drain (`QUEUE_DRIVER=local`) | Ready | Fenced by owner readiness. Claims only the configured agent. |
 | `/internal/tasks/execute` (Cloud Tasks delivery) | Ready (route) | Runs the same `executeAgentTask`. |
-| Durable outbox → Cloud Tasks dispatcher | SQL-free but **not wired** | `dispatchOutbox` + `FirestoreOutbox` exist and are emulator-tested (`firestore-dispatch.test.ts`), but no route or poller runs them. So Firestore mode requires `QUEUE_DRIVER=local`, and the local poller is the single dispatcher. A Cloud Tasks deployment needs one scheduled dispatcher route. |
+| Durable outbox → Cloud Tasks dispatcher | Ready in #383 | With `QUEUE_DRIVER=cloudtasks`, the scheduled `/internal/sweep` is the single dispatcher. It reclaims expired leases, then runs `dispatchOutbox`. No local poller starts. `/internal/tasks/execute` answers 503 until the installation is ready. Covered by `firestore-cloudtasks.test.ts` and `firestore-boot-cloudtasks.test.ts`. |
 | Canaries (`/internal/canaries/*`, browser canary webhook) | Disabled | Return 501 in Firestore mode. `canary_runs` is SQL. |
 | Location webhook (`/webhooks/location`) + arrival nudge | Disabled | `recordLocationPing` and `maybeEnqueueArrivalNudge` are SQL. Firestore requires an empty `LOCATION_PING_SECRET`. |
 | Vertex model probe | Ready | Firestore-only route. |
@@ -34,6 +34,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | Tool dispatch, approvals, policies, cost reservations, idempotency, cache | Ready | `dispatcher.firestore.test.ts`, `firestore-approval.test.ts`. |
 | Browser/code job staging and settle | Ready | `executionJobs`. |
 | Final delivery to the task's own chat, generated cards, response checks | Ready | |
+| Full composition with all 11 modules (construction + maintenance) | Ready in #387 | `firestore-full-composition.test.ts` checks that `createDb` is never called and every tool is classified. |
 | Final delivery for a conversation-less assistant task (e.g. seeded `tomorrow-check`) | SQL | `getOrCreateNotificationsConversation(db)` in `executor/finalize.ts`. |
 | Goal-blocked write (`recordGoalBlocked`) | SQL | `goals` update in `executor/notices.ts`. Reached by unattended goal sessions. |
 | Missions (`startMission`, `wakeMission`) | SQL | `missions` domain. |
@@ -43,7 +44,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 
 | Job | Seeded schedule | State |
 |---|---|---|
-| `reminder.notify` | per reminder | Ready (PR #368, `firestore-reminder-delivery.test.ts`) |
+| `reminder.notify` | per reminder | Ready (#368, `firestore-reminder-delivery.test.ts`) |
 | `memory.consolidate` | memory-consolidation | Ready (`firestore-memory-consolidation.test.ts`) |
 | `memory.graph_sync` | knowledge-graph-sync | Ready (`firestore-graph-sync.test.ts`) |
 | `documents.extract` | per upload | Ready (`firestore-document-extraction.test.ts`). The upload path is in PR #360. |
@@ -66,7 +67,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `documents.process` | document-processing (every 15 min) | SQL |
 | `import.run`, `voice.ingest` | on demand | SQL |
 
-Imported installations carry these schedules. In Firestore mode an SQL job's task fails on the tripwire, retries, and dead-letters with an owner notice. They must be either ported or explicitly skipped at the schedule runner.
+Imported installations carry these schedules. On `main`, an SQL job's task fails on the tripwire, retries, and dead-letters with an owner notice. A goal-linked schedule throws inside the portable runner, which starves every later schedule in the batch. #378 marks the SQL jobs **Disabled** instead (`firestoreCodeJobUnavailable`): the sweep advances their schedules without creating tasks, goal sessions are skipped, and an already-queued SQL job completes benignly.
 
 ## Maintenance sweep (`/internal/sweep` and local poller)
 
@@ -75,11 +76,11 @@ Imported installations carry these schedules. In Firestore mode an SQL job's tas
 | `expireStaleApprovals`, `resumeResolvedApprovalTasks`, `renotifyStalledApprovals` | Ready |
 | Watch expiry (`persistence.watches.expire`) | Ready |
 | `runDueSchedules` (portable runner) | Ready. Goal-linked schedules reject without a goal adapter. |
-| Stale cost-reservation release (`purgeExpired` → `releaseStaleReservations`) | SQL-only today. `FirestoreCostRepository.releaseStale` exists but is not run, so held reservations are never released in Firestore mode. |
+| Stale cost-reservation release | Ready in #374 (`firestore-sweep.test.ts`). On `main`, held reservations are never released in Firestore mode. |
 | `expireStaleSuggestions`, `renotifyStalledAttention`, `emitBudgetNotices`, `backfillMessageEmbeddings`, `purgeExpired` (rest), `purgeAgedHistory`, `findDueTasks` backstop | SQL. The local drain covers `findDueTasks`. |
-| Module sweep steps: watches `reapExpiredWatches`, `pollWebWatches` | Portable code, but **not run** in Firestore mode (the Firestore branch skips module sweep steps). |
+| Module sweep steps: watches `reapExpiredWatches`, `pollWebWatches` | Ready in #374. Steps marked `portable` run under Firestore. |
 | Module sweep step: google `reapExpiredApplicationWatches` | SQL |
-| Module poller ticks: google `email-sync` | SQL. It is not gated by persistence driver; the module is currently disabled by configuration. |
+| Module poller ticks: google `email-sync` | SQL. Skipped under Firestore by #374, which runs only ticks marked `portable`. |
 
 ## Modules
 
@@ -88,8 +89,8 @@ Imported installations carry these schedules. In Firestore mode an SQL job's tas
 | reminders | Ready | `reminder.create/list/cancel` Ready | Delivery Ready (#368) | **Ready** (allowed) |
 | calendar | Ready | `calendar.*` reads (HTTP only) Ready | none | **Ready** (allowed) |
 | watches | Ready | `watch.create/list/cancel/web` Ready | email observers need google; sweep steps portable but not run | Disabled (config) |
-| search | Ready | `web.search` SQL. It only records cost via `recordCostEvent(ctx.db)`. | none | Disabled (config) |
-| maps | Ready | `maps.directions` SQL, but only for current-location origin (`latestLocation(ctx.db)`) | none | Disabled (config) |
+| search | Ready | `web.search` Ready in #381 (`CostRepository.record`) | none | Disabled (config) |
+| maps | Ready | `maps.directions` Ready in #381 (`ownerContext.getLatestLocation`) | none | Disabled (config) |
 | browser | Ready | `browser.plan/execute` staging Ready | `/webhooks/browser/callback` → `recordBrowserJobResult(db)` SQL | Disabled (config) |
 | code | Ready | `code.execute` staging Ready | `/webhooks/code/callback` → `recordCodeJobResult(db)` SQL | Disabled (config) |
 | documents | Ready | `documents.search` SQL (pgvector chunks) | `/webhooks/document/callback`, `documents.process` SQL; `documents.extract` Ready | Disabled (config) |
@@ -105,8 +106,8 @@ The Firestore composition registers `memory.save`, `memory.recall`, `task.schedu
 
 | Tool | State |
 |---|---|
-| `weather.lookup` | SQL only for the current-location fallback (`latestLocation(db)`); the rest is HTTP |
-| `sports.scores` | SQL only for the owner timezone (`getAgent(db)`) |
+| `weather.lookup` | Ready and registered under Firestore in #381 |
+| `sports.scores` | Ready and registered under Firestore in #381 |
 | `memory.graph_snapshot` | SQL (pgvector join) |
 | `tools.read_result` | SQL (`tool_calls`) |
 | `occasions.save/list`, `contacts.lookup`, `conversations.search` | SQL |
@@ -115,12 +116,11 @@ The Firestore composition registers `memory.save`, `memory.recall`, `task.schedu
 
 ## Remaining work, in dependency order
 
-1. Run the portable maintenance paths the Firestore sweep skips: stale reservation release and the watches module steps. Gate SQL-only module ticks and sweep steps by driver.
-2. Refuse SQL-only code jobs explicitly in Firestore mode (schedule skip and benign completion) until each is ported, instead of tripwire dead letters.
-3. Port the thin SQL reads in otherwise portable tools: weather/maps current location (`ownerContext.getLatestLocation`), sports timezone, and `web.search` cost recording (`CostRepository.record`).
-4. Port the Notifications-conversation final delivery and the goal-blocked write in the executor.
-5. Port browser/code job callbacks (`recordBrowserJobResult`, `recordCodeJobResult`) to an execution-jobs callback command.
-6. Wire the Firestore outbox dispatcher for `QUEUE_DRIVER=cloudtasks`, with exactly one dispatcher active.
-7. Large domains, each needing its own repository family: Gmail sync/ingest/delivery (google), SMS channel and approval codes, push device tokens and nudge policy, documents search/processor, missions, goals list/create, occasions/contacts/conversation search, situations, the remaining proactive code jobs, location ingest, and canaries.
+Done in open PRs: portable sweep and reservation release (#374), explicit SQL-job skipping (#378), keyless lookup tools (#381), Cloud Tasks dispatch (#383), and the full-composition proof (#387).
+
+1. Port the Notifications-conversation final delivery and the goal-blocked write in the executor.
+2. Port the browser/code job callbacks (`recordBrowserJobResult`, `recordCodeJobResult`) to an execution-jobs callback command. Their launches already stage through execution persistence.
+3. Port the lightweight SQL code jobs next (`memory.sweep_loops`, `ambient.refresh`, `health.monitor`, `memory.graph_date_backfill`), then the model-backed proactive jobs.
+4. Large domains, each needing its own repository family: Gmail sync/ingest/delivery (google), SMS channel and approval codes, push device tokens and nudge policy, documents search/processor, missions, goals list/create, occasions/contacts/conversation search, situations, the remaining proactive code jobs, location ingest, and canaries.
 
 Relaxing `validateAgentPersistenceConfig` for a module is safe only once every row for that module above is Ready.
