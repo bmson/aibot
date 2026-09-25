@@ -1,6 +1,7 @@
 export * from './application-chat.js';
 export * from './approval-policies.js';
 export * from './approvals.js';
+export * from './assistant-health.js';
 export * from './budget-caps.js';
 export * from './card-refresh.js';
 export * from './commitment-maintenance.js';
