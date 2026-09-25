@@ -80,6 +80,23 @@ export class FirestoreProfileOccasionCommandRepository implements ProfileOccasio
   ) {}
 
   async create(input: Parameters<ProfileOccasionCommandRepository['create']>[0]): Promise<void> {
+    await this.record(input, {
+      originTrust: 'owner',
+      quarantined: false,
+      ownerConfirmed: true,
+      source: 'profile',
+    });
+  }
+
+  /**
+   * Create an occasion with the given provenance, or merge notes and a missing
+   * year into the existing one for the same person and date. Returns whether a
+   * new occasion was created. A merge never changes the existing provenance.
+   */
+  async record(
+    input: ProfileOccasionCommandInput,
+    provenance: Pick<Occasion, 'originTrust' | 'quarantined' | 'ownerConfirmed' | 'source'>,
+  ): Promise<{ created: boolean }> {
     const id = occasionId(this.configuredAgentId, input);
     const ownerQuery = this.store.collection('agents').limit(2);
     const contactRef = this.store.doc('contacts', input.contactId);
@@ -94,7 +111,7 @@ export class FirestoreProfileOccasionCommandRepository implements ProfileOccasio
     // Concurrent creates dedupe by owner/person/date, so a retry resolves to the winner.
     for (let attempt = 0; ; attempt += 1) {
       try {
-        await this.store.db.runTransaction(async (tx) => {
+        return await this.store.db.runTransaction(async (tx) => {
           const owners = await tx.get(ownerQuery);
           const owner = owners.docs[0];
           if (
@@ -161,7 +178,7 @@ export class FirestoreProfileOccasionCommandRepository implements ProfileOccasio
               notes,
               updatedAt: now,
             });
-            return;
+            return { created: false };
           }
 
           const row: Occasion = {
@@ -176,16 +193,13 @@ export class FirestoreProfileOccasionCommandRepository implements ProfileOccasio
             recurrence: 'annual',
             leadDays: input.leadDays,
             notes: input.notes,
-            originTrust: 'owner',
-            quarantined: false,
-            ownerConfirmed: true,
-            source: 'profile',
+            ...provenance,
             createdAt: now,
             updatedAt: now,
           };
           tx.create(occasionRef, encodeRecord(row));
+          return { created: true };
         });
-        break;
       } catch (error) {
         if (!isEmulatorClosedTransaction(error) || attempt >= 2) throw error;
         await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));

@@ -176,7 +176,15 @@ export async function upcomingOccasions(
     .from(occasions)
     .innerJoin(contacts, eq(contacts.id, occasions.contactId))
     .where(and(eq(occasions.agentId, agentId), eq(occasions.quarantined, false)));
+  return selectUpcomingOccasions(rows, { ...opts, now });
+}
 
+/** The storage-free half of `upcomingOccasions`, for rows any driver has already read. */
+export function selectUpcomingOccasions(
+  rows: Array<Omit<UpcomingOccasion, 'daysUntil' | 'nextDate'> & { recurrence: string }>,
+  opts: { withinDays?: number; now?: Date } = {},
+): UpcomingOccasion[] {
+  const now = opts.now ?? new Date();
   const upcoming: UpcomingOccasion[] = [];
   for (const row of rows) {
     const daysUntil = daysUntilOccurrence(row, now);
