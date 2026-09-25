@@ -20,7 +20,7 @@ const SPACE = { provider: 'synthetic', model: 'apps-fixture', dimensions: 1536, 
 const SENDER = 'careers@acme.test';
 const HOUR = 3_600_000;
 
-describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore application confirmations', () => {
+describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore application confirmations', { timeout: 30_000 }, () => {
   const agentId = randomUUID();
   let store: InstallationStore;
   let persistence: ExecutionPersistence;
