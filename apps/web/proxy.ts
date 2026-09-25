@@ -43,8 +43,22 @@ export function proxy(request: NextRequest) {
     (path === '/api/health' && request.method === 'GET') ||
     // Owner artifact download, gated on the owner's files record.
     (path === '/api/files' && request.method === 'GET') ||
+    (path === '/api/ready' && request.method === 'GET') ||
+    // Persistence-free owner reads: live scores (agent timezone only) and route maps.
+    ((path === '/api/live/scoreboard' ||
+      path === '/api/mobile/v1/live/scoreboard' ||
+      path === '/api/maps/snapshot') &&
+      request.method === 'GET') ||
+    (path === '/api/mobile/v1/devices' && request.method === 'POST') ||
+    // Legacy person links only redirect to /people/<id>.
+    (/^\/profile\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      request.method === 'GET') ||
     (path === '/' && request.method === 'GET') ||
     (path === '/profile/memories' && request.method === 'GET') ||
+    // The memory hub and its owner-authenticated Server Actions.
+    (path === '/profile' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/people' && request.method === 'GET') ||
     (/^\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path) &&
       request.method === 'GET') ||

@@ -110,7 +110,7 @@ describe.skipIf(!localEmulator)('Firestore owner Memory hub page with PostgreSQL
     expect(proxy(request('/profile/memories')).status).toBe(200);
     expect(proxy(request('/profile/memories', 'POST')).status).toBe(503);
     expect(proxy(request('/profile/knowledge')).status).toBe(503);
-    expect(proxy(request('/profile')).status).toBe(503);
+    expect(proxy(request('/profile')).status).toBe(200);
     expect(proxy(request('/profile/about')).status).toBe(200);
   });
 
@@ -157,7 +157,9 @@ describe.skipIf(!localEmulator)('Firestore owner Memory hub page with PostgreSQL
   it('fails closed if another agent appears in the installation', async () => {
     await store.doc('agents', foreignAgentId).set({ id: foreignAgentId, name: 'Other assistant' });
     try {
-      await expect(page.default(params)).rejects.toThrow('one matching configured owner');
+      await expect(page.default(params)).rejects.toThrow(
+        'Memory hub requires exactly one configured agent',
+      );
     } finally {
       await store.doc('agents', foreignAgentId).delete();
     }
