@@ -1,5 +1,5 @@
 import type { EmailSyncRepository } from '@assistant/persistence';
-import { and, eq, gte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import {
   agents,
@@ -17,9 +17,12 @@ export function createPostgresEmailSyncRepository(db: Db): EmailSyncRepository {
   return {
     kind: 'email-sync-repository',
     async mailbox() {
-      const [agent] = await db.select({ id: agents.id, email: agents.email }).from(agents).limit(1);
+      const [agent] = await db
+        .select({ id: agents.id, name: agents.name, email: agents.email })
+        .from(agents)
+        .limit(1);
       if (!agent) throw new Error('no agent row');
-      return { agentId: agent.id, email: agent.email };
+      return { agentId: agent.id, name: agent.name, email: agent.email };
     },
     async contactTrust() {
       const rows = await db
@@ -167,6 +170,40 @@ export function createPostgresEmailSyncRepository(db: Db): EmailSyncRepository {
         .update(emailIngest)
         .set({ triaged: true, updatedAt: now })
         .where(eq(emailIngest.id, ingestId));
+    },
+    async replyThread(conversationId) {
+      const [conversation] = await db
+        .select({ channel: conversations.channel })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId));
+      if (!conversation) return null;
+      const [binding] = await db
+        .select({ externalId: channelBindings.externalId })
+        .from(channelBindings)
+        .where(
+          and(
+            eq(channelBindings.conversationId, conversationId),
+            eq(channelBindings.channel, 'email'),
+          ),
+        )
+        .limit(1);
+      const [origin] = await db
+        .select({ trigger: tasks.trigger })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.conversationId, conversationId),
+            eq(tasks.type, 'email_triage'),
+            eq(tasks.trust, 'owner'),
+          ),
+        )
+        .orderBy(asc(tasks.createdAt))
+        .limit(1);
+      return {
+        channel: conversation.channel,
+        threadId: binding?.externalId ?? null,
+        ownerOriginTrigger: origin?.trigger ?? null,
+      };
     },
   };
 }

@@ -29,6 +29,14 @@ import {
 import { googleMeta } from './meta.js';
 import { gmailSyncEnabled } from './runtime.js';
 
+/** Mail state and the owner's voice, from the persistence bundle of either driver. */
+function emailPersistence(persistence: ExecutionPersistence) {
+  const { emailSync, voiceContext } = persistence;
+  if (!emailSync || !voiceContext)
+    throw new Error('google: persistence has no mail or voice repository');
+  return { emailSync, voiceContext };
+}
+
 /** The watch repository, resolved when a tool runs so a bundle without it still installs. */
 function lazyApplications(persistence: ExecutionPersistence): ApplicationConfirmationRepository {
   return new Proxy({} as ApplicationConfirmationRepository, {
@@ -179,10 +187,18 @@ export const googleModule = defineModule<GoogleClient>({
           }
         },
         deliverFinal: async (services, task, text) => {
-          await deliverEmailFinal({ db: services.db, googleClient: client }, task, text);
+          await deliverEmailFinal(
+            { persistence: emailPersistence(services.persistence), googleClient: client },
+            task,
+            text,
+          );
         },
         deliverApprovalNotice: async (services, task, text) => {
-          await deliverEmailFinal({ db: services.db, googleClient: client }, task, text);
+          await deliverEmailFinal(
+            { persistence: emailPersistence(services.persistence), googleClient: client },
+            task,
+            text,
+          );
         },
       },
     };
