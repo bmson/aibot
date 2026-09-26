@@ -3,6 +3,7 @@ import {
   channelBindings,
   conversations,
   createDb,
+  createPostgresExecutionPersistence,
   type Db,
   emailIngest,
   messages,
@@ -83,6 +84,7 @@ function harness(score: Record<string, unknown>) {
   });
   const deps = {
     db,
+    persistence: createPostgresExecutionPersistence(db),
     config: {
       ASSISTANT_MODULES: ['google'],
       EMAIL_INGEST_MODE: 'forwarded',
