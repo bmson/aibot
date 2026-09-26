@@ -7,6 +7,7 @@ import type { CommitmentMaintenanceRepository } from './commitment-maintenance.j
 import type { CostRepository, MessageRepository } from './contracts.js';
 import type { ConversationSegmentationRepository } from './conversation-segmentation.js';
 import type { ToolExecutionRepository } from './dispatch.js';
+import type { DreamRepository } from './dream.js';
 import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
 import type { ExecutionJobRepository } from './execution-jobs.js';
@@ -94,4 +95,6 @@ export interface ExecutionPersistence {
   readonly pulse?: PulseRepository;
   /** Present where the `chat.segment` job has a portable adapter. */
   readonly conversationSegmentation?: ConversationSegmentationRepository;
+  /** Present where the `dream.run` job has a portable adapter. */
+  readonly dream?: DreamRepository;
 }

@@ -61,7 +61,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `skill.reflect` | skill-reflection | SQL |
 | `self.improve` | self-improve | SQL |
 | `ambient.refresh` | ambient-refresh (every 30 min) | SQL |
-| `dream.run` | dream | SQL |
+| `dream.run` | dream | Ready (`firestore-dream.test.ts`). Reads the owner's failures and approval decisions through `persistence.dream`. Tool calls and approvals are kept only when their task is the owner's. Hypotheses are saved quarantined through `memoryExtraction.applyMemories` (lease-fenced, one checkpoint per task, tombstones honoured, `source: 'dream'`), and notes are keyed per task so a retried run converges. |
 | `self.maintain` | self-maintain | SQL |
 | `health.monitor` | assistant-health-monitor | SQL |
 | `documents.process` | document-processing (every 15 min) | SQL |

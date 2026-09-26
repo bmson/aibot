@@ -18,6 +18,7 @@ export { FirestoreDeviceTokenRepository } from './device-tokens.js';
 export { FirestoreDocumentCatalogRepository } from './document-catalog.js';
 export { FirestoreDocumentExtractionRepository } from './document-extraction.js';
 export { FirestoreDocumentReadRepository } from './documents.js';
+export { FirestoreDreamRepository } from './dream.js';
 export { createFirestoreExecutionPersistence } from './execution.js';
 export { FirestoreExecutionContextRepository } from './execution-context.js';
 export { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';

@@ -8,6 +8,7 @@ import { createFirestoreCardRefreshRepository } from './card-refresh.js';
 import { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import { FirestoreConversationSegmentationRepository } from './conversation-segmentation.js';
 import { FirestoreCostRepository } from './costs.js';
+import { FirestoreDreamRepository } from './dream.js';
 import { FirestoreExecutionContextRepository } from './execution-context.js';
 import { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 import { FirestoreExecutionJobRepository } from './execution-jobs.js';
@@ -89,5 +90,6 @@ export function createFirestoreExecutionPersistence(
       store,
       skillEmbeddingSpace,
     ),
+    dream: new FirestoreDreamRepository(store, agentId),
   };
 }
