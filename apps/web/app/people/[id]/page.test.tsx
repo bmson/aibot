@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { GRAPH_EXTRACTION_VERSION } from '@assistant/application/knowledge-graph';
 import { resetConfigForTest } from '@assistant/config';
 import { createInstallationStore } from '@assistant/firestore';
 import { NextRequest } from 'next/server';
@@ -7,7 +8,16 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ owner: vi.fn(), db: vi.fn() }));
 vi.mock('@/auth', () => ({ requireOwner: mocks.owner }));
-vi.mock('@/lib/server', () => ({ getDb: mocks.db }));
+vi.mock('@/lib/server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/server')>()),
+  getDb: mocks.db,
+}));
+vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), unstable_cache: (run: unknown) => run }));
+// The client controls call useRouter, which needs a mounted App Router.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
 const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
@@ -18,27 +28,79 @@ describe.skipIf(!localEmulator)('Firestore person detail with PostgreSQL offline
   const agentId = randomUUID();
   const otherAgentId = randomUUID();
   const contactId = randomUUID();
+  const friendId = randomUUID();
   const foreignContactId = randomUUID();
   const ownerContactId = randomUUID();
+  const factId = randomUUID();
+  const eventId = randomUUID();
   const store = createInstallationStore({ projectId: 'demo-assistant-test', installationId });
   const foreignStore = createInstallationStore({
     projectId: 'demo-assistant-test',
     installationId: foreignInstallationId,
   });
+  const now = new Date();
   let page: typeof import('./page.js');
   const params = (id: string) => ({ params: Promise.resolve({ id }) });
+
+  function person(id: string, name: string, patch: Record<string, unknown> = {}) {
+    return store.doc('contacts', id).set({
+      id,
+      agentId,
+      name,
+      relationship: '',
+      trust: 'known',
+      aliases: [],
+      emails: [],
+      phones: [],
+      notes: '',
+      createdAt: new Date('2026-09-01T00:00:00Z'),
+      updatedAt: new Date('2026-09-01T00:00:00Z'),
+      ...patch,
+    });
+  }
+
+  function memory(id: string, content: string, patch: Record<string, unknown>) {
+    return store.doc('memories', id).set({
+      id,
+      agentId,
+      subjectContactId: contactId,
+      content,
+      contentHash: `${id}-hash`,
+      kind: 'fact',
+      category: 'knowledge',
+      confidence: '0.70',
+      importance: 3,
+      quarantined: false,
+      ownerConfirmed: false,
+      pinned: false,
+      originTrust: 'owner',
+      domain: 'relationships',
+      sourceTaskId: null,
+      supersededById: null,
+      lastConsolidatedAt: null,
+      expiresAt: null,
+      validFrom: null,
+      validUntil: null,
+      embedding: [0.1],
+      createdAt: now,
+      ...patch,
+    });
+  }
 
   beforeAll(async () => {
     vi.stubEnv('PERSISTENCE_DRIVER', 'firestore');
     vi.stubEnv('DATABASE_URL', 'postgres://offline:offline@127.0.0.1:1/offline_test');
     vi.stubEnv('GCP_PROJECT', 'demo-assistant-test');
     vi.stubEnv('ASSISTANT_WORKSPACE_ID', installationId);
+    vi.stubEnv('FIRESTORE_DATABASE_ID', '(default)');
     vi.stubEnv('FIRESTORE_AGENT_ID', agentId);
     vi.stubEnv(
       'FIRESTORE_EMBEDDING_SPACE',
       '{"provider":"vertex","model":"example-embedding","dimensions":768,"revision":"fixture-v1"}',
     );
     vi.stubEnv('LLM_PROVIDER', 'vertex');
+    vi.stubEnv('VERTEX_PROJECT', 'demo-assistant-test');
+    vi.stubEnv('VERTEX_LOCATION', 'us-central1');
     vi.stubEnv('ASSISTANT_MODULES', 'minimal');
     vi.stubEnv('QUEUE_DRIVER', 'local');
     vi.stubEnv('CANARY_ENABLED', 'false');
@@ -50,22 +112,72 @@ describe.skipIf(!localEmulator)('Firestore person detail with PostgreSQL offline
     });
     page = await import('./page.js');
     await Promise.all([
-      store.doc('agents', agentId).set({ id: agentId, name: 'Assistant' }),
-      store.doc('contacts', contactId).set({
-        id: contactId,
-        name: 'Anna Example',
-        relationship: 'daughter',
-        trust: 'confirmed',
-        aliases: ['Annie'],
-        emails: ['anna@example.test'],
-        phones: ['555-0100'],
-        notes: 'Likes hiking',
+      store.doc('agents', agentId).set({ id: agentId, name: 'Assistant', timezone: 'UTC' }),
+      person(contactId, 'Anna Example', { relationship: 'daughter', trust: 'confirmed' }),
+      person(friendId, 'Bob Example', { relationship: 'friend' }),
+      person(ownerContactId, 'Owner private contact', { trust: 'owner' }),
+      memory(factId, 'Anna is close friends with Bob', {}),
+      memory(eventId, 'Went hiking with Anna', {
+        kind: 'event',
+        category: 'experience',
+        embedding: null,
+        validFrom: new Date('2026-09-10T00:00:00Z'),
       }),
-      store.doc('contacts', ownerContactId).set({
-        id: ownerContactId,
-        name: 'Owner private contact',
-        relationship: '',
-        trust: 'owner',
+      store.doc('occasions', 'anna-birthday').set({
+        id: 'anna-birthday',
+        agentId,
+        contactId,
+        kind: 'birthday',
+        label: '',
+        month: 3,
+        day: 14,
+        year: null,
+        recurrence: 'annual',
+        leadDays: 7,
+        notes: '',
+        originTrust: 'owner',
+        ownerConfirmed: true,
+        source: null,
+        quarantined: false,
+        createdAt: new Date('2026-09-01T00:00:00Z'),
+        updatedAt: new Date('2026-09-01T00:00:00Z'),
+      }),
+      store.doc('knowledgeGraphEntities', 'anna-entity').set({
+        id: 'anna-entity',
+        agentId,
+        contactId,
+        kind: 'person',
+        label: 'Anna',
+        canonicalKey: `contact:${contactId}`,
+        preferredLabel: null,
+      }),
+      store.doc('knowledgeGraphEntities', 'bob-entity').set({
+        id: 'bob-entity',
+        agentId,
+        contactId: friendId,
+        kind: 'person',
+        label: 'Bobby',
+        canonicalKey: `contact:${friendId}`,
+        preferredLabel: null,
+      }),
+      store.doc('knowledgeGraphSources', factId).set({
+        memoryId: factId,
+        status: 'ready',
+        contentHash: `${factId}-hash`,
+        extractionVersion: GRAPH_EXTRACTION_VERSION,
+      }),
+      store.doc('knowledgeGraphRelations', 'anna-friend-bob').set({
+        id: 'anna-friend-bob',
+        agentId,
+        subjectEntityId: 'anna-entity',
+        objectEntityId: 'bob-entity',
+        predicate: 'friend_of',
+        sourceMemoryId: factId,
+        reviewStatus: 'confirmed',
+        evidenceQuote: 'Anna is close friends with Bob',
+        validFrom: null,
+        validUntil: null,
+        createdAt: now,
       }),
       foreignStore.doc('agents', otherAgentId).set({ id: otherAgentId, name: 'Foreign' }),
       foreignStore.doc('contacts', foreignContactId).set({
@@ -87,37 +199,83 @@ describe.skipIf(!localEmulator)('Firestore person detail with PostgreSQL offline
     resetConfigForTest();
   });
 
-  it('allows only UUID detail GET through the Firestore proxy', async () => {
+  it('admits UUID detail GET and Server Action POST through the Firestore proxy', async () => {
     const { proxy } = await import('../../../proxy.js');
     const request = (path: string, method = 'GET') =>
       new NextRequest(`http://localhost${path}`, { method });
     expect(proxy(request(`/people/${contactId}`)).status).toBe(200);
-    expect(proxy(request(`/people/${contactId}`, 'POST')).status).toBe(503);
+    expect(proxy(request(`/people/${contactId}`, 'POST')).status).toBe(200);
+    expect(proxy(request(`/people/${contactId}`, 'DELETE')).status).toBe(503);
     expect(proxy(request('/people/not-a-uuid')).status).toBe(503);
+    expect(proxy(request('/people/not-a-uuid', 'POST')).status).toBe(503);
   });
 
-  it('shows owner-scoped saved details without SQL or mutation controls', async () => {
+  it('renders the full dossier and every editing control without PostgreSQL', async () => {
     const html = renderToStaticMarkup(await page.default(params(contactId)));
     expect(mocks.owner).toHaveBeenCalled();
     expect(mocks.db).not.toHaveBeenCalled();
     expect(html).toContain('Anna Example');
     expect(html).toContain('daughter');
-    expect(html).toContain('Annie');
-    expect(html).toContain('anna@example.test');
-    expect(html).toContain('Likes hiking');
-    expect(html).not.toContain('Add fact');
-    expect(html).not.toContain('Delete person');
-    expect(html).not.toContain('<form');
+    // Saved facts, the timeline, occasions, and graph relations.
+    expect(html).toContain('Anna is close friends with Bob');
+    expect(html).toContain('Went hiking with Anna');
+    expect(html).toContain('id="important-dates"');
+    expect(html).toContain('Explore connections');
+    expect(html).toContain('Bobby');
+    expect(html).toContain(`href="/people/${friendId}"`);
+    // Every control the PostgreSQL page offers.
+    expect(html).toContain('Add a fact about Anna Example');
+    expect(html).toContain('Add connection');
+    expect(html).toContain('Save changes');
+    expect(html).toContain('merge into…');
+    expect(html).toContain('Bob Example (friend)');
+    expect(html).toContain('Delete person');
   });
 
-  it('links UUID contacts from the read-only directory', async () => {
-    const directory = await import('../page.js');
-    const html = renderToStaticMarkup(
-      await directory.default({ searchParams: Promise.resolve({}) }),
+  it('edits the person and adds an occasion through the shared Server Actions', async () => {
+    const { addOccasionAction, updateContactIdentityAction } = await import(
+      '@/app/profile/actions'
     );
-    expect(html).toContain(`href="/people/${contactId}"`);
-    expect(html).not.toContain(`href="/people/${foreignContactId}"`);
-    expect(html).not.toContain(`href="/people/${ownerContactId}"`);
+    expect(await updateContactIdentityAction(contactId, 'Anna Renamed', 'Annie, Nan')).toEqual({});
+    expect(
+      await addOccasionAction(contactId, {
+        kind: 'anniversary',
+        label: '',
+        month: '6',
+        day: '12',
+        year: '2015',
+        leadDays: '7',
+        notes: 'Wedding day',
+      }),
+    ).toEqual({});
+
+    const saved = await store.doc('contacts', contactId).get();
+    expect(saved.get('name')).toBe('Anna Renamed');
+    // The previous name is kept as an alias, as in PostgreSQL.
+    expect(saved.get('aliases')).toEqual(['Annie', 'Nan', 'Anna Example']);
+    const occasions = await store
+      .collection('occasions')
+      .where('contactId', '==', contactId)
+      .where('kind', '==', 'anniversary')
+      .get();
+    expect(occasions.size).toBe(1);
+    expect(occasions.docs[0]?.get('notes')).toBe('Wedding day');
+
+    const html = renderToStaticMarkup(await page.default(params(contactId)));
+    expect(html).toContain('Anna Renamed');
+    expect(html).toContain('Wedding day');
+    expect(mocks.db).not.toHaveBeenCalled();
+  });
+
+  it('deletes a person through the shared Server Action', async () => {
+    const { deleteContactAction } = await import('@/app/profile/actions');
+    const doomedId = randomUUID();
+    await person(doomedId, 'Temporary Example');
+    expect(renderToStaticMarkup(await page.default(params(doomedId)))).toContain(
+      'Temporary Example',
+    );
+    expect(await deleteContactAction(doomedId)).toEqual({});
+    await expect(page.default(params(doomedId))).rejects.toThrow('NEXT_HTTP_ERROR_FALLBACK;404');
   });
 
   it('authenticates before reading and hides absent, foreign, and owner contacts', async () => {

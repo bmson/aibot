@@ -1,20 +1,19 @@
 import { listPeopleDirectory, type PersonSummary } from '@assistant/application/people';
 import {
   birthdayLabel,
-  derivePersonGroup,
   lastContactLabel,
   PERSON_GROUP_LABELS,
   PERSON_GROUPS,
   type PersonGroup,
 } from '@assistant/application/people-presentation';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import { createInstallationStore, getFirestorePeopleDirectory } from '@assistant/firestore';
-import type { ProfileContact } from '@assistant/persistence';
+import { createInstallationStore } from '@assistant/firestore';
 import { CalendarDays, MapPin, Search } from 'lucide-react';
 import Link from 'next/link';
 import { AddPerson } from '@/app/people/add-person';
 import { PersonAvatar } from '@/app/people/person-avatar';
 import { requireOwner } from '@/auth';
+import { listFirestorePeopleDirectory } from '@/lib/firestore-people';
 import { getDb } from '@/lib/server';
 import {
   Badge,
@@ -32,7 +31,6 @@ export const dynamic = 'force-dynamic';
 
 /** Soonest-first, so an upcoming birthday is visible without opening anyone. */
 const BIRTHDAY_HORIZON_DAYS = 30;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function matches(person: PersonSummary, query: string): boolean {
   if (!query) return true;
@@ -44,118 +42,21 @@ function matches(person: PersonSummary, query: string): boolean {
   );
 }
 
-function ReadOnlyPeopleDirectory({
-  contacts,
-  query,
-}: {
-  contacts: ProfileContact[];
-  query: string;
-}) {
-  const needle = query.toLocaleLowerCase();
-  const shown = contacts.filter(
-    (contact) =>
-      !needle ||
-      contact.name.toLocaleLowerCase().includes(needle) ||
-      contact.relationship.toLocaleLowerCase().includes(needle),
-  );
-  const groups = PERSON_GROUPS.map((group) => ({
-    group,
-    contacts: shown.filter((contact) => derivePersonGroup(contact) === group),
-  })).filter((section) => section.contacts.length > 0);
-
-  return (
-    <PageShell size="reading">
-      <PageHeader
-        back={{ href: '/chat', label: 'Chat' }}
-        title="People"
-        intro="Names and relationships saved in this assistant's contacts."
-      />
-      <section className="mt-8">
-        <SectionHeading
-          title={query ? `Matching “${query}”` : 'Everyone'}
-          count={contacts.length}
-          hint={query ? `${shown.length} shown` : undefined}
-        />
-        <form method="get" className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
-          <label htmlFor="people-search" className="sr-only">
-            Search people
-          </label>
-          <span className="relative min-w-0 flex-1">
-            <Search
-              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"
-              aria-hidden="true"
-            />
-            <input
-              id="people-search"
-              name="q"
-              defaultValue={query}
-              placeholder="Name or relationship"
-              className={`${inputClass} pl-9`}
-            />
-          </span>
-          <button type="submit" className={btn.outline}>
-            Search
-          </button>
-          {query ? (
-            <Link href="/people" className={btn.outline}>
-              Clear
-            </Link>
-          ) : null}
-        </form>
-        {contacts.length === 0 ? (
-          <EmptyState>No people are saved yet.</EmptyState>
-        ) : shown.length === 0 ? (
-          <EmptyState>Nobody matches “{query}”.</EmptyState>
-        ) : (
-          <div className="mt-6 flex flex-col gap-8">
-            {groups.map((section) => (
-              <div key={section.group}>
-                <SectionHeading
-                  title={PERSON_GROUP_LABELS[section.group]}
-                  count={section.contacts.length}
-                />
-                <ul className="mt-3 flex flex-col gap-2">
-                  {section.contacts.map((contact) => {
-                    const content = (
-                      <>
-                        <PersonAvatar name={contact.name} />
-                        <span className="min-w-0 flex-1">
-                          <span className="flex min-w-0 items-center gap-2">
-                            <span className="truncate text-sm font-medium text-strong">
-                              {contact.name}
-                            </span>
-                            {contact.trust === 'unknown' ? (
-                              <Badge tone="amber" size="xs">
-                                Unverified
-                              </Badge>
-                            ) : null}
-                          </span>
-                          <MetaLine segments={[contact.relationship || 'Relationship not set']} />
-                        </span>
-                      </>
-                    );
-                    const className =
-                      'flex min-w-0 items-center gap-3 rounded-xl bg-raised p-3.5 ring-1 ring-edge/60';
-                    return (
-                      <li key={contact.id}>
-                        {UUID_RE.test(contact.id) ? (
-                          <Link href={`/people/${contact.id}`} className={className}>
-                            {content}
-                          </Link>
-                        ) : (
-                          <div className={className}>{content}</div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-    </PageShell>
-  );
+async function loadPeopleDirectory(now: Date): Promise<PersonSummary[]> {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER !== 'firestore') return listPeopleDirectory(getDb(), { now });
+  const problems = validateAgentPersistenceConfig(config);
+  if (problems.length) throw new Error(problems.join('; '));
+  const store = createInstallationStore({
+    projectId: config.GCP_PROJECT,
+    installationId: config.ASSISTANT_WORKSPACE_ID,
+    databaseId: config.FIRESTORE_DATABASE_ID,
+  });
+  try {
+    return await listFirestorePeopleDirectory(store, config.FIRESTORE_AGENT_ID, now);
+  } finally {
+    await store.db.terminate();
+  }
 }
 
 export default async function PeoplePage({
@@ -167,26 +68,8 @@ export default async function PeoplePage({
   const { q } = await searchParams;
   const query = (q ?? '').trim();
 
-  const config = loadConfig();
-  if (config.PERSISTENCE_DRIVER === 'firestore') {
-    const problems = validateAgentPersistenceConfig(config);
-    if (problems.length) throw new Error(problems.join('; '));
-    const store = createInstallationStore({
-      projectId: config.GCP_PROJECT,
-      installationId: config.ASSISTANT_WORKSPACE_ID,
-      databaseId: config.FIRESTORE_DATABASE_ID,
-    });
-    try {
-      const contacts = await getFirestorePeopleDirectory(store, config.FIRESTORE_AGENT_ID);
-      return <ReadOnlyPeopleDirectory contacts={contacts} query={query} />;
-    } finally {
-      await store.db.terminate();
-    }
-  }
-
-  const db = getDb();
   const now = new Date();
-  const everyone = await listPeopleDirectory(db, { now });
+  const everyone = await loadPeopleDirectory(now);
   const people = everyone.filter((person) => matches(person, query));
 
   const byGroup = PERSON_GROUPS.map((group) => ({
