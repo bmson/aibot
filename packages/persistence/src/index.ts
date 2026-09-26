@@ -29,6 +29,8 @@ export * from './execution-evidence.js';
 export * from './execution-jobs.js';
 export * from './generated-cards.js';
 export * from './goals.js';
+export * from './graph-curiosity.js';
+export * from './graph-date-backfill.js';
 export * from './graph-recall.js';
 export * from './history-recall.js';
 export * from './import-jobs.js';

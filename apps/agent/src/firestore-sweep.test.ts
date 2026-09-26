@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { loadConfig, resetConfigForTest } from '@assistant/config';
-import { firestoreCodeJobUnavailable } from '@assistant/core';
+import { firestoreCodeJobUnavailable, sqlOnlyCodeJobs } from '@assistant/core';
 import type { Db } from '@assistant/db';
 import {
   createFirestoreExecutionPersistence,
@@ -323,15 +323,17 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
   });
 
   it('names every SQL-only code job and leaves portable ones runnable', () => {
-    expect(firestoreCodeJobUnavailable('memory.graph_date_backfill')).toMatch(
-      /not yet available on Firestore/,
-    );
+    // Shrinks to nothing as the last jobs are ported; each one left is named.
+    for (const job of sqlOnlyCodeJobs())
+      expect(firestoreCodeJobUnavailable(job)).toMatch(/not yet available on Firestore/);
     for (const job of [
       'reminder.notify',
       'pulse.check',
       'memory.extract',
       'memory.consolidate',
       'memory.graph_sync',
+      'memory.graph_date_backfill',
+      'graph.curiosity',
       'briefing.compose',
       'chat.segment',
       'documents.extract',

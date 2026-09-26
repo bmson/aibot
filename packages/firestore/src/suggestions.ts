@@ -65,7 +65,7 @@ export class FirestoreSuggestionRepository implements SuggestionRepository {
           createdAt: now,
           updatedAt: now,
           agentId: input.agentId,
-          status: 'pending',
+          status: input.status ?? 'pending',
           expiresAt: input.expiresAt,
           conversationId: input.conversationId ?? null,
           origin: input.origin,

@@ -14,7 +14,7 @@ import {
 } from '@google-cloud/firestore';
 import { assertConfiguredOwner, RELATIVE_DATE } from './knowledge-graph-read.js';
 import { assertPrivacyErasureInactiveInTransaction } from './privacy-erasure.js';
-import { decodeRecord, documentKey, type InstallationStore } from './store.js';
+import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 type Entity = Records['knowledgeGraphEntities'];
 type Relation = Records['knowledgeGraphRelations'];
@@ -458,7 +458,11 @@ export class FirestoreKnowledgeGraphCurationRepository implements KnowledgeGraph
     return retried.filter(Boolean).length;
   }
 
-  async requeueRelativeDateSources(agentId: string): Promise<number> {
+  /**
+   * Ready, unquarantined knowledge sources whose text has relative date wording
+   * but from which no canonical date entity was extracted.
+   */
+  private async relativeDateCandidates(agentId: string): Promise<string[]> {
     await assertConfiguredOwner(this.store, agentId);
     const worded: string[] = [];
     await scan(
@@ -526,33 +530,209 @@ export class FirestoreKnowledgeGraphCurationRepository implements KnowledgeGraph
         )
         .map((doc) => String(doc.get('sourceMemoryId'))),
     );
-    const requeued = await eachLimited(
-      ready.filter((id) => !dated.has(id)),
-      (memoryId) =>
-        this.store.db.runTransaction(async (tx) => {
-          await this.begin(tx, agentId);
-          const sourceRef = this.store.doc('knowledgeGraphSources', memoryId);
-          const [memory, source] = await tx.getAll(this.store.doc('memories', memoryId), sourceRef);
-          if (
-            memory?.get('agentId') !== agentId ||
-            memory.get('category') !== 'knowledge' ||
-            memory.get('quarantined') !== false ||
-            source?.get('memoryId') !== memoryId ||
-            source.get('status') !== 'ready'
-          )
-            return false;
-          const now = this.store.now();
-          tx.update(sourceRef, {
-            status: 'failed',
-            attempts: 0,
-            lastError: null,
-            nextRetryAt: now,
-            updatedAt: now,
-          });
-          return true;
-        }),
+    return ready.filter((id) => !dated.has(id));
+  }
+
+  /** How many sources only a paid, anchored re-extraction could date. */
+  async countRelativeDateSources(agentId: string): Promise<number> {
+    return (await this.relativeDateCandidates(agentId)).length;
+  }
+
+  async requeueRelativeDateSources(agentId: string): Promise<number> {
+    const requeued = await eachLimited(await this.relativeDateCandidates(agentId), (memoryId) =>
+      this.store.db.runTransaction(async (tx) => {
+        await this.begin(tx, agentId);
+        const sourceRef = this.store.doc('knowledgeGraphSources', memoryId);
+        const [memory, source] = await tx.getAll(this.store.doc('memories', memoryId), sourceRef);
+        if (
+          memory?.get('agentId') !== agentId ||
+          memory.get('category') !== 'knowledge' ||
+          memory.get('quarantined') !== false ||
+          source?.get('memoryId') !== memoryId ||
+          source.get('status') !== 'ready'
+        )
+          return false;
+        const now = this.store.now();
+        tx.update(sourceRef, {
+          status: 'failed',
+          attempts: 0,
+          lastError: null,
+          nextRetryAt: now,
+          updatedAt: now,
+        });
+        return true;
+      }),
     );
     return requeued.filter(Boolean).length;
+  }
+
+  /**
+   * The owner's date entities that a relation still cites, each with the
+   * earliest and latest creation time of the memories citing it.
+   */
+  async citedDateEntities(
+    agentId: string,
+  ): Promise<
+    Array<{ id: string; label: string; canonicalKey: string; anchor: Date; lastAnchor: Date }>
+  > {
+    await assertConfiguredOwner(this.store, agentId);
+    const dates = new Map<string, { label: string; canonicalKey: string }>();
+    await scan(
+      this.store
+        .collection('knowledgeGraphEntities')
+        .where('agentId', '==', agentId)
+        .where('kind', '==', 'date')
+        .select('id', 'label', 'canonicalKey') as Query,
+      ENTITY_LIMIT,
+      'entity',
+      (doc) => {
+        const id = doc.get('id');
+        const label = doc.get('label');
+        const canonicalKey = doc.get('canonicalKey');
+        if (
+          typeof id === 'string' &&
+          documentKey(id) === doc.id &&
+          typeof label === 'string' &&
+          typeof canonicalKey === 'string'
+        )
+          dates.set(id, { label, canonicalKey });
+      },
+    );
+    if (dates.size === 0) return [];
+    const citing = new Map<string, Set<string>>();
+    await scan(
+      this.store
+        .collection('knowledgeGraphRelations')
+        .where('agentId', '==', agentId)
+        .select('subjectEntityId', 'objectEntityId', 'sourceMemoryId') as Query,
+      RELATION_LIMIT,
+      'relation',
+      (doc) => {
+        const memoryId = doc.get('sourceMemoryId');
+        if (typeof memoryId !== 'string') return;
+        for (const entityId of [doc.get('subjectEntityId'), doc.get('objectEntityId')]) {
+          if (typeof entityId !== 'string' || !dates.has(entityId)) continue;
+          const set = citing.get(entityId) ?? new Set<string>();
+          set.add(memoryId);
+          citing.set(entityId, set);
+        }
+      },
+    );
+    const memories = await readMany(
+      this.store,
+      'memories',
+      [...citing.values()].flatMap((set) => [...set]),
+      ['agentId', 'createdAt'],
+    );
+    return [...citing.entries()].flatMap(([id, memoryIds]) => {
+      const times = [...memoryIds].flatMap((memoryId) => {
+        const memory = memories.get(memoryId);
+        if (memory?.get('agentId') !== agentId) return [];
+        const createdAt = decodeRecord<{ createdAt?: unknown }>(memory.data()).createdAt;
+        return createdAt instanceof Date ? [createdAt.getTime()] : [];
+      });
+      const entity = dates.get(id);
+      if (!entity || times.length === 0) return [];
+      return [
+        {
+          id,
+          ...entity,
+          anchor: new Date(Math.min(...times)),
+          lastAnchor: new Date(Math.max(...times)),
+        },
+      ];
+    });
+  }
+
+  /**
+   * Give a date entity its canonical key and label. The entity moves to the
+   * document its new key derives, with its relations and aliases, so a later
+   * extraction of the old relative wording creates a fresh node instead of
+   * colliding with this one. Unlike a merge, the old wording is not aliased:
+   * "Friday" means a different day to every memory that says it.
+   */
+  async recanonicalizeDate(
+    agentId: string,
+    input: { entityId: string; fromKey: string; canonicalKey: string; label: string },
+  ): Promise<'updated' | 'missing' | 'changed' | 'conflict'> {
+    const relations = this.store.collection('knowledgeGraphRelations');
+    const sourceRef = this.store.doc('knowledgeGraphEntities', input.entityId);
+    const targetId = deterministicId('entity', agentId, input.canonicalKey);
+    return this.store.db.runTransaction(async (tx) => {
+      await this.begin(tx, agentId);
+      const entity = ownedEntity(await tx.get(sourceRef), agentId);
+      if (!entity || entity.kind !== 'date') return 'missing';
+      if (entity.canonicalKey !== input.fromKey) return 'changed';
+      const holders = await tx.get(
+        this.store
+          .collection('knowledgeGraphEntities')
+          .where('agentId', '==', agentId)
+          .where('canonicalKey', '==', input.canonicalKey)
+          .limit(2),
+      );
+      if (holders.docs.some((doc) => doc.id !== sourceRef.id)) return 'conflict';
+      const now = this.store.now();
+      if (targetId === entity.id) {
+        tx.update(sourceRef, {
+          canonicalKey: input.canonicalKey,
+          label: input.label,
+          updatedAt: now,
+        });
+        return 'updated';
+      }
+      const targetRef = this.store.doc('knowledgeGraphEntities', targetId);
+      const [target, subjects, objects, aliases] = await Promise.all([
+        tx.get(targetRef),
+        bounded(
+          tx,
+          relations.where('agentId', '==', agentId).where('subjectEntityId', '==', entity.id),
+          MERGE_WRITE_LIMIT,
+          'Knowledge date re-key relation bound reached',
+        ),
+        bounded(
+          tx,
+          relations.where('agentId', '==', agentId).where('objectEntityId', '==', entity.id),
+          MERGE_WRITE_LIMIT,
+          'Knowledge date re-key relation bound reached',
+        ),
+        bounded(
+          tx,
+          this.store.collection('knowledgeGraphEntityAliases').where('entityId', '==', entity.id),
+          ALIAS_LIMIT,
+          'Graph entity alias re-key bound reached',
+        ),
+      ]);
+      // A document at the new key's id that does not hold the key belongs to
+      // something else; leave the entity for the owner rather than guess.
+      if (target.exists) return 'conflict';
+      if (aliases.some((doc) => doc.get('agentId') !== agentId))
+        throw new Error('Graph alias ownership mismatch');
+      const incident = new Map([...subjects, ...objects].map((doc) => [doc.ref.path, doc]));
+      if (incident.size + aliases.length + 2 > MERGE_WRITE_LIMIT)
+        throw new Error('Knowledge date re-key write bound reached');
+      for (const doc of incident.values()) {
+        const row = decodeRecord<Relation>(doc.data());
+        if (row.agentId !== agentId) throw new Error('Graph relation ownership mismatch');
+        tx.update(doc.ref, {
+          subjectEntityId: row.subjectEntityId === entity.id ? targetId : row.subjectEntityId,
+          objectEntityId: row.objectEntityId === entity.id ? targetId : row.objectEntityId,
+        });
+      }
+      for (const alias of aliases) tx.update(alias.ref, { entityId: targetId });
+      const { id: _previous, ...rest } = entity;
+      tx.create(
+        targetRef,
+        encodeRecord({
+          ...rest,
+          id: targetId,
+          canonicalKey: input.canonicalKey,
+          label: input.label,
+          updatedAt: now,
+        }),
+      );
+      tx.delete(sourceRef);
+      return 'updated';
+    });
   }
 
   async searchEntities(

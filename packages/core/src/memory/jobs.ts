@@ -26,6 +26,7 @@ import { type DocumentProcessorConfig, runDocumentProcessing } from './document-
 import { runDocumentExtraction } from './documents.js';
 import { pendingEmailExtractionCount, runEmailIngestExtraction } from './email-extraction.js';
 import { runMemoryExtraction } from './extraction.js';
+import { backfillGraphDates } from './graph-date-backfill.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
 import {
   backfillKnowledgeGraphDates,
@@ -140,7 +141,14 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'skill.reflect',
   'self.maintain',
   'self.improve',
+  'memory.graph_date_backfill',
+  'graph.curiosity',
 ]);
+
+/** Registered code jobs that still need PostgreSQL, so a Firestore agent skips them. */
+export function sqlOnlyCodeJobs(): string[] {
+  return [...CODE_JOBS].filter((job) => !FIRESTORE_PORTABLE_CODE_JOBS.has(job)).sort();
+}
 
 /** A completion summary when `job` cannot run on Firestore persistence yet, otherwise null. */
 export function firestoreCodeJobUnavailable(job: string): string | null {
@@ -412,7 +420,9 @@ export async function runCodeJob(
       await deps.heartbeat?.();
       return {
         done: true,
-        summary: curiositySummary(await runCuriosity(deps, { taskId: task.id })),
+        summary: curiositySummary(
+          await runCuriosity(deps, { agentId: task.agentId, taskId: task.id }),
+        ),
       };
     }
     case 'pulse.check': {
@@ -476,8 +486,13 @@ export async function runCodeJob(
         return { done: true, summary: 'knowledge graph dates: disabled' };
       }
       await deps.heartbeat?.();
-      const r = await backfillKnowledgeGraphDates(deps.db, { agentId: task.agentId });
-      const remaining = await countRelativeDateSources(deps.db, task.agentId);
+      const portable = deps.persistence?.graphDateBackfill;
+      const r = portable
+        ? await backfillGraphDates(portable, task.agentId)
+        : await backfillKnowledgeGraphDates(deps.db, { agentId: task.agentId });
+      const remaining = portable
+        ? await portable.countRelativeDateSources(task.agentId)
+        : await countRelativeDateSources(deps.db, task.agentId);
       return {
         done: true,
         summary:

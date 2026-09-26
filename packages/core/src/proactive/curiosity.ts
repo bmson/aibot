@@ -1,4 +1,5 @@
 import type { Db } from '@assistant/db';
+import type { ExecutionPersistence } from '@assistant/persistence';
 import { getAgent, postOwnerNotice } from '../chat.js';
 import { findGraphGaps, markGapAsked, nextUnaskedGap } from '../memory/graph-gaps.js';
 import { withSpan } from '../otel.js';
@@ -30,30 +31,42 @@ export interface CuriosityResult {
 }
 
 export async function runCuriosity(
-  deps: { db: Db; notifyOwner?: ProactiveNotifier; heartbeat?: () => Promise<void> },
-  opts: { taskId?: string; now?: Date } = {},
+  deps: {
+    db: Db;
+    notifyOwner?: ProactiveNotifier;
+    heartbeat?: () => Promise<void>;
+    /** The portable graph reads, asked-gap ledger and notice writer; PostgreSQL without them. */
+    persistence?: Pick<ExecutionPersistence, 'graphCuriosity' | 'suggestions' | 'ownerNotices'>;
+  },
+  opts: { agentId?: string; taskId?: string; now?: Date } = {},
 ): Promise<CuriosityResult> {
   const { db } = deps;
   const now = opts.now ?? new Date();
+  const graph = deps.persistence?.graphCuriosity;
+  const ledger = deps.persistence?.suggestions;
+  const notices = deps.persistence?.ownerNotices;
+  const portable = graph && ledger && notices ? { graph, ledger, notices } : null;
+  if (graph && !portable)
+    throw new Error('Portable curiosity needs the suggestion ledger and owner notices');
 
   return withSpan('proactive.curiosity', {}, async () => {
-    const agent = await getAgent(db);
+    const agentId = portable && opts.agentId ? opts.agentId : (await getAgent(db)).id;
     const result: CuriosityResult = { gapsFound: 0, asked: null, pinged: false };
 
-    const gaps = await findGraphGaps(db, agent.id, now);
+    const gaps = await findGraphGaps(portable?.graph ?? db, agentId, now);
     result.gapsFound = gaps.length;
     await deps.heartbeat?.();
 
-    const gap = await nextUnaskedGap(db, agent.id, gaps);
+    const gap = await nextUnaskedGap(portable?.graph ?? db, agentId, gaps);
     // Nothing worth asking is the normal case, and it produces silence — the
     // same self-silence rule the briefing and the pulse follow.
     if (!gap) return result;
 
     // Claim before asking: two instances must not both put the same question.
-    if (!(await markGapAsked(db, agent.id, gap, now))) return result;
+    if (!(await markGapAsked(portable?.ledger ?? db, agentId, gap, now))) return result;
 
-    const { conversationId } = await postOwnerNotice(db, {
-      agentId: agent.id,
+    const { conversationId } = await postOwnerNotice(portable?.notices ?? db, {
+      agentId,
       text: gap.question,
       ...(opts.taskId ? { taskId: opts.taskId } : {}),
     });
