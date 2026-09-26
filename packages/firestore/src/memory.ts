@@ -10,6 +10,25 @@ export function embeddingSpaceKey(space: EmbeddingSpace): string {
     .digest('hex');
 }
 
+/**
+ * The stored form of a new memory: its vector plus the embedding-space key
+ * and retrieval revision that recall and graph sync fence on.
+ */
+export function memoryDocument(
+  space: EmbeddingSpace,
+  memory: Records['memories'],
+): FirebaseFirestore.DocumentData {
+  if (!memory.embedding) throw new Error('Memory requires an embedding');
+  validateEmbedding(space, memory.embedding);
+  if (!memory.contentHash) throw new Error('Memory requires a content hash');
+  return encodeRecord({
+    ...memory,
+    embedding: FieldValue.vector(memory.embedding),
+    embeddingSpace: embeddingSpaceKey(space),
+    retrievalRevision: randomUUID(),
+  });
+}
+
 /** Initial vector feasibility adapter; graph/lexical ranking is still owned by the SQL runtime. */
 export class FirestoreMemoryRepository {
   constructor(
@@ -18,9 +37,7 @@ export class FirestoreMemoryRepository {
   ) {}
 
   async save(memory: Records['memories']): Promise<boolean> {
-    if (!memory.embedding) throw new Error('Memory requires an embedding');
-    validateEmbedding(this.space, memory.embedding);
-    if (!memory.contentHash) throw new Error('Memory requires a content hash');
+    const document = memoryDocument(this.space, memory);
     const ref = this.store.doc('memories', memory.id);
     const hashRef = this.store.doc('memoryContentHashes', memory.contentHash);
     const tombstoneRef = this.store.doc('memoryTombstones', memory.contentHash);
@@ -35,15 +52,7 @@ export class FirestoreMemoryRepository {
         throw new Error('Privacy erasure is in progress');
       if (tombstone?.exists) return false;
       if (existing?.exists || hash?.exists) return false;
-      tx.create(
-        ref,
-        encodeRecord({
-          ...memory,
-          embedding: FieldValue.vector(memory.embedding as number[]),
-          embeddingSpace: embeddingSpaceKey(this.space),
-          retrievalRevision: randomUUID(),
-        }),
-      );
+      tx.create(ref, document);
       tx.create(hashRef, { memoryId: memory.id });
       return true;
     });

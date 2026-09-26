@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { NotificationsConversationRepository, Records } from '@assistant/persistence';
-import type { DocumentSnapshot, Transaction } from '@google-cloud/firestore';
+import type {
+  NotificationsConversationRepository,
+  OwnerNoticeRepository,
+  Records,
+} from '@assistant/persistence';
+import type { DocumentSnapshot, Timestamp, Transaction } from '@google-cloud/firestore';
 import { messageRecord } from './messages.js';
 import { privacyErasureIsActive, readPrivacyErasureFence } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
@@ -217,6 +221,120 @@ export class FirestoreOwnerNoticeRepository implements NotificationsConversation
     });
   }
 
+  private async assertErasureUnchanged(tx: Transaction, fence: Timestamp | null): Promise<void> {
+    const erasure = await tx.get(this.store.doc('privacyErasureJobs', this.agentId));
+    if (erasure.exists) {
+      if (
+        erasure.get('agentId') !== this.agentId ||
+        privacyErasureIsActive(erasure.get('status')) ||
+        !erasure.updateTime ||
+        !fence?.isEqual(erasure.updateTime)
+      )
+        throw new Error('Privacy erasure changed during owner notice');
+    } else if (fence) {
+      throw new Error('Privacy erasure changed during owner notice');
+    }
+  }
+
+  private appendIn(
+    tx: Transaction,
+    destination: { row: Conversation; created: boolean },
+    input: { text: string; taskId?: string; parts: readonly unknown[] },
+  ): void {
+    const now = this.store.now();
+    const message = messageRecord(
+      {
+        conversationId: destination.row.id,
+        ...(input.taskId ? { taskId: input.taskId } : {}),
+        role: 'assistant',
+        origin: 'assistant',
+        parts: [...input.parts],
+        text: input.text,
+      },
+      randomUUID(),
+      now,
+    );
+    const conversationRef = this.store.doc('conversations', destination.row.id);
+    if (destination.created)
+      tx.create(
+        conversationRef,
+        encodeRecord({ ...destination.row, updatedAt: now, archived: false }),
+      );
+    else tx.update(conversationRef, { updatedAt: now });
+    tx.create(this.store.doc('messages', message.id), encodeRecord(message));
+  }
+
+  /**
+   * A waiting-on-owner task notice: into the task's own conversation (any
+   * channel), or into Notifications for conversation-less assistant work.
+   * Null when the task has neither, matching the PostgreSQL sweep.
+   */
+  async postTaskNotice(input: {
+    taskId: string;
+    text: string;
+    parts: readonly unknown[];
+  }): Promise<{ conversationId: string } | null> {
+    if (!input.text || !input.taskId) throw new Error('Task notice requires text and task');
+    const fence = await readPrivacyErasureFence(this.store, this.agentId);
+    return this.store.db.runTransaction(async (tx) => {
+      await this.owner(tx);
+      await this.assertErasureUnchanged(tx, fence);
+      const task = await tx.get(this.store.doc('tasks', input.taskId));
+      if (!task.exists || task.get('id') !== input.taskId || task.get('agentId') !== this.agentId)
+        throw new Error('Task notice task is outside the configured installation');
+      const conversationId = task.get('conversationId');
+      let destination: { row: Conversation; created: boolean } | null = null;
+      if (typeof conversationId === 'string' && conversationId) {
+        const snapshot = await tx.get(this.store.doc('conversations', conversationId));
+        const row = snapshot.exists ? decodeRecord<Conversation>(snapshot.data()) : null;
+        if (!row || row.agentId !== this.agentId || documentKey(row.id) !== snapshot.id)
+          throw new Error('Task notice conversation identity mismatch');
+        destination = { row, created: false };
+      } else if (task.get('trust') === 'assistant') {
+        destination = await this.notifications(tx);
+      }
+      if (!destination) return null;
+      this.appendIn(tx, destination, { ...input });
+      return { conversationId: destination.row.id };
+    });
+  }
+
+  /**
+   * Post to Notifications at most once per dedupe key. The key is a tool-cache
+   * entry that expires with its period, committed with the message.
+   */
+  async postNotificationOnce(input: {
+    text: string;
+    cacheKey: string;
+    toolName: string;
+    result: unknown;
+    expiresAt: Date;
+  }): Promise<boolean> {
+    if (!input.text || !input.cacheKey) throw new Error('Notification requires text and key');
+    const fence = await readPrivacyErasureFence(this.store, this.agentId);
+    return this.store.db.runTransaction(async (tx) => {
+      await this.owner(tx);
+      await this.assertErasureUnchanged(tx, fence);
+      const keyRef = this.store.doc('toolCache', input.cacheKey);
+      if ((await tx.get(keyRef)).exists) return false;
+      const destination = await this.notifications(tx);
+      this.appendIn(tx, destination, {
+        text: input.text,
+        parts: [{ type: 'text', text: input.text }],
+      });
+      tx.create(
+        keyRef,
+        encodeRecord({
+          cacheKey: input.cacheKey,
+          toolName: input.toolName,
+          result: input.result,
+          expiresAt: input.expiresAt,
+        }),
+      );
+      return true;
+    });
+  }
+
   /** The owner.notify tool writes to its task chat, or to Notifications without one. */
   async postToolNotice(input: {
     text: string;
@@ -288,4 +406,26 @@ export class FirestoreOwnerNoticeRepository implements NotificationsConversation
       return { conversationId: destination.row.id };
     });
   }
+}
+
+/** Background producers' notices through the owner-notice sink: primary chat, else Notifications. */
+export function firestoreOwnerNotices(
+  notices: FirestoreOwnerNoticeRepository,
+): OwnerNoticeRepository {
+  return {
+    kind: 'owner-notice-repository',
+    async post(input) {
+      if (input.agentId !== notices.agentId)
+        throw new Error('Owner notice is outside the configured owner');
+      const posted = await notices.post({
+        text: input.text,
+        ...(input.taskId ? { taskId: input.taskId } : {}),
+        ...(input.extraParts ? { extraParts: input.extraParts } : {}),
+      });
+      // Only a notice mirrored from its own conversation is skipped, and a
+      // producer's notice has no source conversation.
+      if (!posted) throw new Error('Owner notice was not posted');
+      return posted;
+    },
+  };
 }

@@ -33,6 +33,8 @@ const PORTABLE_TOOLS = [
   'applications.watch_confirmation',
   // Job launches stage through execution persistence; their result callbacks
   // (webhooks, not tools) are still SQL — see the inventory.
+  // Job launches stage through execution persistence, and their result
+  // callbacks (webhooks, not tools) record through it too.
   'browser.execute',
   'browser.plan',
   'calendar.availability',

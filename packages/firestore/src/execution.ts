@@ -4,8 +4,10 @@ import { FirestoreApplicationConfirmationRepository } from './application-confir
 import { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 import { FirestoreApprovalRepository } from './approvals.js';
 import { FirestoreAssistantHealthRepository } from './assistant-health.js';
+import { FirestoreBriefingRepository } from './briefing.js';
 import { createFirestoreCardRefreshRepository } from './card-refresh.js';
 import { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
+import { FirestoreConversationSegmentationRepository } from './conversation-segmentation.js';
 import { FirestoreCostRepository } from './costs.js';
 import { FirestoreDeviceTokenRepository } from './device-tokens.js';
 import { FirestoreDocumentCatalogRepository } from './document-catalog.js';
@@ -19,7 +21,9 @@ import { FirestoreGoalRuntimeRepository } from './goal-runtime.js';
 import { FirestoreGraphRecallRepository } from './graph-recall.js';
 import { FirestoreHistoryRecallRepository } from './history-recall.js';
 import { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
+import { FirestoreMaintenanceRepository } from './maintenance.js';
 import { FirestoreMemoryConsolidationRepository } from './memory-consolidation.js';
+import { FirestoreMemoryExtractionRepository } from './memory-extraction.js';
 import { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 import { FirestoreMemoryToolRepository } from './memory-tools.js';
 import { FirestoreMessageRepository } from './messages.js';
@@ -28,12 +32,14 @@ import { FirestoreModelRoutingRepository } from './model-routing.js';
 import { FirestoreNudgePolicyRepository } from './nudge-policy.js';
 import { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 import { FirestoreOwnerContextRepository } from './owner-context.js';
-import { FirestoreOwnerNoticeRepository } from './owner-notices.js';
+import { FirestoreOwnerNoticeRepository, firestoreOwnerNotices } from './owner-notices.js';
+import { FirestorePulseRepository } from './pulse.js';
 import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 import { FirestoreReminderDeliveryRepository } from './reminders.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
 import { FirestoreSmsChannelRepository } from './sms-channel.js';
 import type { InstallationStore } from './store.js';
+import { FirestoreSuggestionRepository } from './suggestions.js';
 import { FirestoreTaskRepository } from './task-lifecycle.js';
 import { FirestoreToolExecutionRepository } from './tool-execution.js';
 import { FirestoreVoiceContextRepository } from './voice-context.js';
@@ -44,7 +50,11 @@ export function createFirestoreExecutionPersistence(
   store: InstallationStore,
   agentId: string,
   skillEmbeddingSpace: EmbeddingSpace,
-): ExecutionPersistence & { tasks: FirestoreTaskRepository } {
+): ExecutionPersistence & {
+  tasks: FirestoreTaskRepository;
+  maintenance: FirestoreMaintenanceRepository;
+} {
+  const notifications = new FirestoreOwnerNoticeRepository(store, agentId);
   return {
     driver: 'firestore',
     tasks: new FirestoreTaskRepository(store),
@@ -53,6 +63,7 @@ export function createFirestoreExecutionPersistence(
     memory: new FirestoreMemoryToolRepository(store, skillEmbeddingSpace),
     memorySupersede: new FirestoreMemorySupersedeRepository(store, skillEmbeddingSpace),
     memoryConsolidation: new FirestoreMemoryConsolidationRepository(store, skillEmbeddingSpace),
+    memoryExtraction: new FirestoreMemoryExtractionRepository(store, skillEmbeddingSpace),
     approvals: new FirestoreApprovalRepository(store),
     approvalPolicies: new FirestoreApprovalPolicyRepository(store),
     modelRouting: new FirestoreModelRoutingRepository(store, agentId),
@@ -72,7 +83,8 @@ export function createFirestoreExecutionPersistence(
     watches: new FirestoreWatchRepository(store),
     assistantHealth: new FirestoreAssistantHealthRepository(store, agentId),
     reminderDelivery: new FirestoreReminderDeliveryRepository(store, agentId),
-    notifications: new FirestoreOwnerNoticeRepository(store, agentId),
+    maintenance: new FirestoreMaintenanceRepository(store, agentId, skillEmbeddingSpace),
+    notifications,
     goals: new FirestoreGoalRuntimeRepository(store, agentId),
     missions: new FirestoreMissionRepository(store, agentId),
     ambientSnapshots: new FirestoreAmbientSnapshotRepository(store),
@@ -85,5 +97,13 @@ export function createFirestoreExecutionPersistence(
     emailSync: new FirestoreEmailSyncRepository(store, agentId),
     documentCatalog: new FirestoreDocumentCatalogRepository(store, agentId),
     documentSearch: new FirestoreDocumentSearchRepository(store, agentId, skillEmbeddingSpace),
+    ownerNotices: firestoreOwnerNotices(notifications),
+    suggestions: new FirestoreSuggestionRepository(store),
+    briefing: new FirestoreBriefingRepository(store),
+    pulse: new FirestorePulseRepository(store),
+    conversationSegmentation: new FirestoreConversationSegmentationRepository(
+      store,
+      skillEmbeddingSpace,
+    ),
   };
 }
