@@ -125,9 +125,6 @@ Handlers that were SQL, Gated, or Degraded in the 2026-09-23 snapshot, and what 
 
 ## Remaining
 
-No route reaches SQL in Firestore mode. What is left on the web side:
-
-1. Heavy-format uploads through `documents` POST and `documents/upload` queue `documents.process`, which the agent still skips until it is added to `FIRESTORE_PORTABLE_CODE_JOBS` (see `docs/firestore-agent-runtime-inventory.md`).
-2. The structural gap above.
+No route reaches SQL in Firestore mode. What is left on the web side is the structural gap above.
 
 The production cutover is an owner action, run from `docs/firestore-cutover-checklist.md`.
