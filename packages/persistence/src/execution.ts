@@ -44,6 +44,7 @@ import type { PulseRepository } from './pulse.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
 import type { SelfMaintenanceRepository } from './self-maintenance.js';
+import type { SelfImprovementRepository } from './self-improvement.js';
 import type { SkillContextRepository } from './skill-context.js';
 import type { SmsChannelRepository } from './sms-channel.js';
 import type { SkillReflectionRepository } from './skill-reflection.js';
@@ -138,4 +139,6 @@ export interface ExecutionPersistence {
   readonly selfMaintenance?: SelfMaintenanceRepository;
   /** Present where the `dream.run` job has a portable adapter. */
   readonly dream?: DreamRepository;
+  /** Present where the `self.improve` job has a portable adapter. */
+  readonly selfImprovement?: SelfImprovementRepository;
 }

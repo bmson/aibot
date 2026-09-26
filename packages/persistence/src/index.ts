@@ -67,6 +67,7 @@ export * from './records.js';
 export * from './reminders.js';
 export * from './schedules.js';
 export * from './self-maintenance.js';
+export * from './self-improvement.js';
 export * from './settings.js';
 export * from './shell-presence.js';
 export * from './shell-status.js';

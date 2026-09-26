@@ -139,6 +139,7 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'anomaly.scan',
   'skill.reflect',
   'self.maintain',
+  'self.improve',
 ]);
 
 /** A completion summary when `job` cannot run on Firestore persistence yet, otherwise null. */
@@ -529,7 +530,12 @@ export async function runCodeJob(
     }
     case 'self.improve': {
       await deps.heartbeat?.();
-      const r = await runSelfImprove(deps, { agentId: task.agentId, taskId: task.id });
+      const r = await runSelfImprove(deps, {
+        agentId: task.agentId,
+        taskId: task.id,
+        // Read at commit: every heartbeat renewal rotates the lease token.
+        lease: () => ({ taskId: task.id, leaseToken: task.leaseToken ?? '' }),
+      });
       return {
         done: true,
         summary: `self-improve: ${r.proposalsDrafted} proposal(s) from ${r.patterns} failure pattern(s)${r.experienceSaved ? ', experience saved' : ''}`,

@@ -62,6 +62,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `anomaly.scan` | anomaly-scan | SQL |
 | `skill.reflect` | skill-reflection | Ready (`firestore-skill-reflection.test.ts`). Reads the owner's finished tasks and their tool calls through `persistence.skillReflection`, and writes skills under the same owner and privacy-erasure fence as owner edits. An owner-authored skill is never overwritten, and a full 500-skill library is left as it is. |
 | `self.improve` | self-improve | SQL |
+| `self.improve` | self-improve | Ready (`firestore-self-improvement.test.ts`). Reads the week's signals through `persistence.selfImprovement`. Tool calls, model calls, response checks and graph sources count only when their task or memory is the owner's. The experience memory is saved through the lease-fenced `memoryExtraction.applyMemories` (`source: 'self-improve'`), and proposals are unique per (kind, title), including imported ones. Approving a proposal is still a PostgreSQL web action. |
 | `ambient.refresh` | ambient-refresh (every 30 min) | SQL |
 | `dream.run` | dream | SQL |
 | `self.maintain` | self-maintain | Ready (`firestore-self-maintenance.test.ts`). Reads the owner's open proposals and records fenced backlog items through `persistence.selfMaintenance`. Items are unique per title, including imported ones. The PR primitive is unchanged and stays inert without a GitHub token. |
