@@ -67,6 +67,10 @@ const PORTABLE_TOOLS = [
   'goals.list',
   'goals.update_progress',
   'maps.directions',
+  // Owner MCP servers, read from Firestore connection snapshots.
+  'mcp.call',
+  'mcp.list_connections',
+  'mcp.list_tools',
   'memory.graph_snapshot',
   'memory.recall',
   'memory.save',

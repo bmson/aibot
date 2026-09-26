@@ -21,6 +21,8 @@ const child = spawn(
     'packages/persistence',
     'apps/agent/src/firestore-dispatch.test.ts',
     'apps/agent/src/firestore-mcp.test.ts',
+    'apps/agent/src/firestore-owner-notices.test.ts',
+    'apps/agent/src/firestore-boot.test.ts',
     'apps/agent/src/firestore-portable-web-workspace.test.ts',
     'apps/agent/src/firestore-google-calendar.test.ts',
     'apps/agent/src/firestore-schedule.test.ts',
