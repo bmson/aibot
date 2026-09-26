@@ -42,6 +42,7 @@ import type { AmbientSnapshotRepository, OwnerContextRepository } from './owner-
 import type { PulseRepository } from './pulse.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
+import type { SelfMaintenanceRepository } from './self-maintenance.js';
 import type { SkillContextRepository } from './skill-context.js';
 import type { SmsChannelRepository } from './sms-channel.js';
 import type { SkillReflectionRepository } from './skill-reflection.js';
@@ -132,4 +133,6 @@ export interface ExecutionPersistence {
   readonly conversationSegmentation?: ConversationSegmentationRepository;
   /** Present where the `skill.reflect` job has a portable adapter. */
   readonly skillReflection?: SkillReflectionRepository;
+  /** Present where the `self.maintain` job has a portable adapter. */
+  readonly selfMaintenance?: SelfMaintenanceRepository;
 }

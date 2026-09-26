@@ -39,6 +39,7 @@ import { FirestoreOwnerNoticeRepository, firestoreOwnerNotices } from './owner-n
 import { FirestorePulseRepository } from './pulse.js';
 import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 import { FirestoreReminderDeliveryRepository } from './reminders.js';
+import { FirestoreSelfMaintenanceRepository } from './self-maintenance.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
 import { FirestoreSmsChannelRepository } from './sms-channel.js';
 import { FirestoreSkillReflectionRepository } from './skill-reflection.js';
@@ -113,5 +114,6 @@ export function createFirestoreExecutionPersistence(
       skillEmbeddingSpace,
     ),
     skillReflection: new FirestoreSkillReflectionRepository(store, agentId, skillEmbeddingSpace),
+    selfMaintenance: new FirestoreSelfMaintenanceRepository(store, agentId),
   };
 }

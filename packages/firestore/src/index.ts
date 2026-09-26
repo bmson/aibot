@@ -129,6 +129,7 @@ export {
   type RuntimeDataPreflight,
 } from './runtime-data-preflight.js';
 export { FirestoreScheduleRepository } from './schedules.js';
+export { FirestoreSelfMaintenanceRepository } from './self-maintenance.js';
 export { FirestoreSettingsRepository } from './settings.js';
 export { createFirestoreSettingsPersistence } from './settings-persistence.js';
 export { FirestoreShellPresenceRepository } from './shell-presence.js';
