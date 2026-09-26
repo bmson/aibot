@@ -101,7 +101,11 @@ describe('consumer Firestore index readiness', () => {
     expect(commands.every((args) => args.includes('--async'))).toBe(true);
     expect(commands.some((args) => args.includes('--disable-indexes'))).toBe(true);
     expect(
-      commands.some((args) => args.some((arg) => arg.includes('vector-config={dimension='))),
+      commands.some((args) =>
+        args.includes(
+          '--field-config=field-path=embedding,vector-config={"dimension":"1536","flat":"{}"}',
+        ),
+      ),
     ).toBe(true);
   });
 
