@@ -1,5 +1,6 @@
 import type { EmbeddingSpace, ExecutionPersistence } from '@assistant/persistence';
 import { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
+import { FirestoreAnomalyScanRepository } from './anomaly-scan.js';
 import { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 import { FirestoreApprovalRepository } from './approvals.js';
 import { FirestoreAssistantHealthRepository } from './assistant-health.js';
@@ -80,6 +81,7 @@ export function createFirestoreExecutionPersistence(
     missions: new FirestoreMissionRepository(store, agentId),
     ambientSnapshots: new FirestoreAmbientSnapshotRepository(store),
     commitmentMaintenance: new FirestoreCommitmentMaintenanceRepository(store),
+    anomalyScan: new FirestoreAnomalyScanRepository(store, agentId),
     ownerNotices: firestoreOwnerNotices(notifications),
     suggestions: new FirestoreSuggestionRepository(store),
     briefing: new FirestoreBriefingRepository(store),

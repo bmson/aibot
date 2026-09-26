@@ -1,3 +1,4 @@
+import type { AnomalyScanRepository } from './anomaly-scan.js';
 import type { ApprovalPolicyRepository } from './approval-policies.js';
 import type { ApprovalRepository } from './approvals.js';
 import type { AssistantHealthRepository } from './assistant-health.js';
@@ -83,6 +84,8 @@ export interface ExecutionPersistence {
   readonly ambientSnapshots?: AmbientSnapshotRepository;
   /** Present where the open-loop sweep has a portable adapter. */
   readonly commitmentMaintenance?: CommitmentMaintenanceRepository;
+  /** Present where the `anomaly.scan` job has a portable adapter. */
+  readonly anomalyScan?: AnomalyScanRepository;
   /** Present where background producers post their dashboard copy portably. */
   readonly ownerNotices?: OwnerNoticeRepository;
   /** Present where producers record one-tap suggestions portably. */

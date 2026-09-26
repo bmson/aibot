@@ -131,6 +131,7 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'watch.suggest',
   'import.run',
   'voice.ingest',
+  'anomaly.scan',
 ]);
 
 /** A completion summary when `job` cannot run on Firestore persistence yet, otherwise null. */

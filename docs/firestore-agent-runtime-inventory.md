@@ -57,7 +57,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `graph.curiosity` | knowledge-graph-curiosity | SQL |
 | `memory.graph_date_backfill` | knowledge-graph-date-backfill | SQL |
 | `chat.segment` | chat-segmentation | Ready (`firestore-chat-segmentation.test.ts`). Groups only vectors in `FIRESTORE_EMBEDDING_SPACE` and stamps new segments with it; one segment per start message. |
-| `anomaly.scan` | anomaly-scan | SQL |
+| `anomaly.scan` | anomaly-scan | Ready (`firestore-anomaly-scan.test.ts`). Reads auto-executed tool calls through `persistence.anomalyScan`, scoped by the owner's approval policies; anomaly ids are keyed by (kind, subject, window), so a re-scan or an imported row never double-reports. Alerts post to the Notifications conversation. |
 | `skill.reflect` | skill-reflection | SQL |
 | `self.improve` | self-improve | SQL |
 | `ambient.refresh` | ambient-refresh (every 30 min) | SQL |
