@@ -318,10 +318,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
   });
 
   it('names every SQL-only code job and leaves portable ones runnable', () => {
-    expect(firestoreCodeJobUnavailable('dream.run')).toMatch(/not yet available on Firestore/);
-    expect(firestoreCodeJobUnavailable('pulse.check')).not.toBeNull();
+    expect(firestoreCodeJobUnavailable('memory.graph_date_backfill')).toMatch(
+      /not yet available on Firestore/,
+    );
     for (const job of [
       'reminder.notify',
+      'pulse.check',
       'memory.extract',
       'memory.consolidate',
       'memory.graph_sync',
