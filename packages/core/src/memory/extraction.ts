@@ -8,6 +8,12 @@ import {
   messages,
   resolveSubjectContact,
 } from '@assistant/db';
+import type {
+  CodeJobLease,
+  ExecutionPersistence,
+  ExtractedMemoryFact,
+  MemoryExtractionRepository,
+} from '@assistant/persistence';
 import { and, eq, gte, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getAgent } from '../chat.js';
@@ -77,6 +83,7 @@ export interface ExtractionDeps {
   db: Db;
   router: ModelRouter;
   heartbeat?: () => Promise<void>;
+  persistence?: ExecutionPersistence;
 }
 
 export interface ExtractionResult {
@@ -94,6 +101,8 @@ const WINDOW_HOURS = 26; // nightly run with an hour of overlap slack
 const MAX_CONVERSATIONS = 12;
 const MAX_CHARS_PER_CONVERSATION = 8000;
 const MAX_MESSAGES_PER_CONVERSATION = 100;
+const MIN_MESSAGE_CHARS = 6;
+const EXPERIENCE_TTL_MS = 90 * 24 * 3600 * 1000;
 
 function extractionSystem(knownNames: string[]): string {
   return [
@@ -116,6 +125,55 @@ function extractionSystem(knownNames: string[]): string {
     .join('\n');
 }
 
+function extractionTranscript(rows: Array<{ role: string; text: string }>): string {
+  return rows
+    .map((m) => `${m.role === 'user' ? 'them' : 'assistant'}: ${m.text}`)
+    .join('\n')
+    .slice(-MAX_CHARS_PER_CONVERSATION);
+}
+
+/**
+ * One conversation's structured extraction. A conversation the model can't
+ * structure (even on the fallback) returns null so it cannot fail the whole
+ * nightly run into a dead-letter; budget stops still park, and other errors
+ * still surface.
+ */
+async function extractConversation(
+  deps: { router: ModelRouter; heartbeat?: () => Promise<void> },
+  input: {
+    taskId?: string;
+    conversationId: string;
+    knownNames: string[];
+    trust: string;
+    transcript: string;
+  },
+): Promise<z.infer<typeof ExtractionOutputSchema> | null> {
+  const outcome = await deps.router
+    .object<z.infer<typeof ExtractionOutputSchema>>('extract', {
+      taskId: input.taskId,
+      schema: ExtractionOutputSchema,
+      system: extractionSystem(input.knownNames),
+      prompt: `Conversation (source trust: ${input.trust}):\n${input.transcript}`,
+    })
+    .catch((err) => {
+      if (!isUnparseableObjectError(err)) throw err;
+      console.error(
+        `memory extraction: skipping unstructurable conversation ${input.conversationId}`,
+        err,
+      );
+      return null;
+    });
+  if (outcome === null) return null;
+  await deps.heartbeat?.();
+  if (!outcome.ok) {
+    throw new BudgetReservationError(
+      outcome.decision.reason,
+      outcome.decision.reason.includes('monthly') ? nextMonthlyReset() : nextDailyReset(),
+    );
+  }
+  return outcome.object;
+}
+
 export function parseValidFrom(value: string): Date | null {
   if (!value) return null;
   const d = new Date(value.length === 4 ? `${value}-01-01` : value);
@@ -130,10 +188,29 @@ export function parseValidFrom(value: string): Date | null {
  */
 export async function runMemoryExtraction(
   deps: ExtractionDeps,
-  opts: { taskId?: string; since?: Date } = {},
+  opts: {
+    taskId?: string;
+    since?: Date;
+    agentId?: string;
+    /** The running task's current lease; portable stores commit only under it. */
+    lease?: () => CodeJobLease;
+  } = {},
 ): Promise<ExtractionResult> {
   const { db, router } = deps;
   const since = opts.since ?? new Date(Date.now() - WINDOW_HOURS * 3600 * 1000);
+  if (deps.persistence?.driver === 'firestore') {
+    const repository = deps.persistence.memoryExtraction;
+    if (!repository)
+      throw new Error('Memory extraction repository is missing from Firestore persistence');
+    if (!opts.agentId || !opts.lease)
+      throw new Error('Firestore memory extraction requires an agent and a task lease');
+    return runPortableMemoryExtraction(repository, deps, {
+      agentId: opts.agentId,
+      taskId: opts.taskId,
+      since,
+      lease: opts.lease,
+    });
+  }
 
   return withSpan('memory.extract', { since: since.toISOString() }, async () => {
     const result: ExtractionResult = {
@@ -208,41 +285,20 @@ export async function runMemoryExtraction(
       await deps.heartbeat?.();
       const rows = byConversation.get(conversationId) ?? [];
       const trust = trustById.get(conversationId) ?? 'unknown';
-      const transcript = rows
-        .map((m) => `${m.role === 'user' ? 'them' : 'assistant'}: ${m.text}`)
-        .join('\n')
-        .slice(-MAX_CHARS_PER_CONVERSATION);
+      const transcript = extractionTranscript(rows);
       if (transcript.length < 40) continue;
       result.conversationsScanned += 1;
 
-      // A single conversation the model can't structure (even on the fallback)
-      // must not fail the whole nightly extraction into a dead-letter — skip it
-      // and carry on. Budget stops still park; other errors still surface.
-      const outcome = await router
-        .object<z.infer<typeof ExtractionOutputSchema>>('extract', {
-          taskId: opts.taskId,
-          schema: ExtractionOutputSchema,
-          system: extractionSystem(knownNames),
-          prompt: `Conversation (source trust: ${trust}):\n${transcript}`,
-        })
-        .catch((err) => {
-          if (!isUnparseableObjectError(err)) throw err;
-          console.error(
-            `memory extraction: skipping unstructurable conversation ${conversationId}`,
-            err,
-          );
-          return null;
-        });
-      if (outcome === null) continue;
-      await deps.heartbeat?.();
-      if (!outcome.ok) {
-        throw new BudgetReservationError(
-          outcome.decision.reason,
-          outcome.decision.reason.includes('monthly') ? nextMonthlyReset() : nextDailyReset(),
-        );
-      }
+      const output = await extractConversation(deps, {
+        taskId: opts.taskId,
+        conversationId,
+        knownNames,
+        trust,
+        transcript,
+      });
+      if (output === null) continue;
 
-      const facts = outcome.object.facts;
+      const facts = output.facts;
       result.extracted += facts.length;
       if (facts.length === 0) continue;
 
@@ -305,7 +361,7 @@ export async function runMemoryExtraction(
 
       // Occasions (Phase 17): recurring dates for named people. Same
       // attribution + quarantine rules as facts; a bad date never fails the run.
-      for (const occ of outcome.object.occasions ?? []) {
+      for (const occ of output.occasions ?? []) {
         const resolvedContact = await resolveSubjectContact(db, { subject: occ.subject });
         if (!resolvedContact) continue;
         if (resolvedContact.created) result.contactsCreated += 1;
@@ -330,6 +386,108 @@ export async function runMemoryExtraction(
       }
     }
 
+    return result;
+  });
+}
+
+/**
+ * The same extraction over a portable store. Each conversation's facts and
+ * occasions commit in one transaction with a per-task checkpoint, so a task
+ * reclaimed mid-run neither re-pays the model for a finished conversation nor
+ * saves a differently worded copy of what it already saved.
+ */
+async function runPortableMemoryExtraction(
+  repository: MemoryExtractionRepository,
+  deps: ExtractionDeps,
+  opts: { agentId: string; taskId?: string; since: Date; lease: () => CodeJobLease },
+): Promise<ExtractionResult> {
+  return withSpan('memory.extract', { since: opts.since.toISOString() }, async () => {
+    const result: ExtractionResult = {
+      conversationsScanned: 0,
+      extracted: 0,
+      saved: 0,
+      duplicates: 0,
+      tombstoned: 0,
+      quarantined: 0,
+      contactsCreated: 0,
+      occasionsSaved: 0,
+    };
+    const conversations = await repository.recentConversations({
+      agentId: opts.agentId,
+      since: opts.since,
+      maxConversations: MAX_CONVERSATIONS,
+      maxMessages: MAX_MESSAGES_PER_CONVERSATION,
+      minTextLength: MIN_MESSAGE_CHARS,
+    });
+    if (conversations.length === 0) return result;
+    const done = new Set(await repository.completedSteps(opts.agentId, opts.lease()));
+    const knownNames = await repository.knownContactNames(opts.agentId);
+
+    for (const conversation of conversations) {
+      await deps.heartbeat?.();
+      const checkpointKey = `memory:${conversation.conversationId}`;
+      if (done.has(checkpointKey)) continue;
+      const trust = conversation.trust;
+      const transcript = extractionTranscript(conversation.messages);
+      if (transcript.length < 40) continue;
+      result.conversationsScanned += 1;
+
+      const output = await extractConversation(deps, {
+        taskId: opts.taskId,
+        conversationId: conversation.conversationId,
+        knownNames,
+        trust,
+        transcript,
+      });
+      if (output === null) continue;
+      result.extracted += output.facts.length;
+
+      const facts: ExtractedMemoryFact[] = [];
+      if (output.facts.length > 0) {
+        const embeddings = await deps.router.embed(
+          output.facts.map((f) => f.content),
+          { taskId: opts.taskId },
+        );
+        await deps.heartbeat?.();
+        const now = Date.now();
+        output.facts.forEach((fact, index) => {
+          const embedding = embeddings[index];
+          if (!embedding) return;
+          facts.push({
+            content: fact.content,
+            contentHash: createHash('sha256').update(fact.content).digest('hex'),
+            embedding,
+            category: fact.category,
+            kind: fact.kind,
+            importance: fact.importance,
+            confidence: Math.min(fact.confidence, 0.95).toFixed(2),
+            domain: fact.domain,
+            validFrom: parseValidFrom(fact.validFrom),
+            expiresAt: fact.category === 'experience' ? new Date(now + EXPERIENCE_TTL_MS) : null,
+            subject: fact.subject,
+            relationship: fact.relationship,
+          });
+        });
+      }
+      // As in PostgreSQL, occasions are only kept from a conversation that also
+      // yielded facts. An empty outcome still commits its checkpoint.
+      const applied = await repository.applyMemories({
+        agentId: opts.agentId,
+        lease: opts.lease(),
+        checkpointKey,
+        originTrust: trust,
+        quarantined: trust !== 'owner' && trust !== 'assistant',
+        facts,
+        occasions: output.facts.length > 0 ? (output.occasions ?? []) : [],
+      });
+      if (!applied) continue;
+      result.saved += applied.saved;
+      result.quarantined += applied.quarantined;
+      result.duplicates += applied.duplicates;
+      result.tombstoned += applied.tombstoned;
+      result.contactsCreated += applied.contactsCreated;
+      result.occasionsSaved += applied.occasionsSaved;
+    }
     return result;
   });
 }
