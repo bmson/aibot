@@ -106,7 +106,7 @@ export interface MemoryExtractionRepository {
     facts: ExtractedMemoryFact[];
     occasions: ExtractedOccasion[];
     /** The memories' `source`; nightly extraction when omitted. */
-    source?: 'extraction' | 'dream';
+    source?: 'extraction' | 'dream' | 'self-improve';
   }): Promise<MemoryExtractionApplied | null>;
   /** The owner's open and snoozed loops, most recently touched first. */
   activeCommitments(agentId: string, limit: number): Promise<Array<{ id: string; title: string }>>;
