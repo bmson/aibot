@@ -31,6 +31,7 @@ import {
   type ProfilePeopleCommandRepository,
   type ProfilePeopleRemovalRepository,
   type TaskRepository,
+  type VoiceSamplePurgeRepository,
 } from '@assistant/persistence';
 import { and, eq, sql } from 'drizzle-orm';
 import {
@@ -399,10 +400,10 @@ export async function mergePeople(
 }
 
 export function purgeProfileVoiceSamples(
-  db: Db,
+  storage: Db | VoiceSamplePurgeRepository,
   workspace: WorkspaceDeletePort,
 ): Promise<{ deleted: number }> {
-  return purgeVoiceSamples(db, workspace);
+  return purgeVoiceSamples(storage, workspace);
 }
 
 /**

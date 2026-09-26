@@ -142,6 +142,7 @@ export { FirestoreTaskLeaseRepository } from './tasks.js';
 export { FirestoreToolExecutionRepository } from './tool-execution.js';
 export { FirestoreVoiceContextRepository } from './voice-context.js';
 export { FirestoreVoiceProfileRepository } from './voice-profile.js';
+export { FirestoreVoiceSamplePurgeRepository } from './voice-purge.js';
 export { FirestoreWatchRepository } from './watches.js';
 export { FirestoreWorkspaceAnomalyRepository } from './workspace-anomalies.js';
 export { FirestoreWorkspaceCapabilityRepository } from './workspace-capabilities.js';
