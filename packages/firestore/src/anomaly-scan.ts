@@ -6,6 +6,7 @@ import type {
   Records,
 } from '@assistant/persistence';
 import type { QueryDocumentSnapshot } from '@google-cloud/firestore';
+import { assertPrivacyErasureInactiveInTransaction } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 const PAGE = 500;
@@ -24,7 +25,8 @@ function anomalyIdFor(agentId: string, anomaly: NewAnomaly): string {
 /**
  * The approval-anomaly scan on Firestore. Tool calls are scoped by the
  * policy that allowed them, which belongs to one owner; anomalies are keyed by
- * their identity, and imported ones are found by query before any insert.
+ * their identity, imported ones are found by query before any insert, and no
+ * anomaly is written while a privacy erasure is active.
  */
 export class FirestoreAnomalyScanRepository implements AnomalyScanRepository {
   readonly kind = 'anomaly-scan-repository' as const;
@@ -124,6 +126,7 @@ export class FirestoreAnomalyScanRepository implements AnomalyScanRepository {
         .where('windowLabel', '==', anomaly.windowLabel)
         .limit(1);
       const created = await this.store.db.runTransaction(async (tx) => {
+        await assertPrivacyErasureInactiveInTransaction(tx, this.store, agentId);
         const [byId, byIdentity] = await Promise.all([tx.get(ref), tx.get(imported)]);
         if (byId.exists || !byIdentity.empty) return null;
         const now = this.store.now();
