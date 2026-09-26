@@ -35,10 +35,12 @@ import { FirestorePulseRepository } from './pulse.js';
 import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 import { FirestoreReminderDeliveryRepository } from './reminders.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
+import { FirestoreSmsChannelRepository } from './sms-channel.js';
 import type { InstallationStore } from './store.js';
 import { FirestoreSuggestionRepository } from './suggestions.js';
 import { FirestoreTaskRepository } from './task-lifecycle.js';
 import { FirestoreToolExecutionRepository } from './tool-execution.js';
+import { FirestoreVoiceContextRepository } from './voice-context.js';
 import { FirestoreWatchRepository } from './watches.js';
 
 /** Composes migrated operations only; this is not a complete application driver switch. */
@@ -87,6 +89,8 @@ export function createFirestoreExecutionPersistence(
     commitmentMaintenance: new FirestoreCommitmentMaintenanceRepository(store),
     deviceTokens: new FirestoreDeviceTokenRepository(store),
     nudgePolicy: new FirestoreNudgePolicyRepository(store, agentId),
+    voiceContext: new FirestoreVoiceContextRepository(store, agentId, skillEmbeddingSpace),
+    smsChannel: new FirestoreSmsChannelRepository(store, agentId),
     ownerNotices: firestoreOwnerNotices(notifications),
     suggestions: new FirestoreSuggestionRepository(store),
     briefing: new FirestoreBriefingRepository(store),

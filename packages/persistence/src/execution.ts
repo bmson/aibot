@@ -36,8 +36,10 @@ import type { PulseRepository } from './pulse.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
 import type { SkillContextRepository } from './skill-context.js';
+import type { SmsChannelRepository } from './sms-channel.js';
 import type { SuggestionRepository } from './suggestions.js';
 import type { TaskRepository } from './task-lifecycle.js';
+import type { VoiceContextRepository } from './voice-context.js';
 import type { WatchRepository } from './watches.js';
 
 /** One store supplies every migrated executor operation. Remaining domain ports are separate. */
@@ -92,6 +94,10 @@ export interface ExecutionPersistence {
   readonly deviceTokens?: DeviceTokenRepository;
   /** Present where out-of-band pings consult quiet hours and the daily cap portably. */
   readonly nudgePolicy?: NudgePolicyRepository;
+  /** Present where outbound rewrites read the owner's voice portably. */
+  readonly voiceContext?: VoiceContextRepository;
+  /** Present where the SMS channel keeps its state portably. */
+  readonly smsChannel?: SmsChannelRepository;
   /** Present where background producers post their dashboard copy portably. */
   readonly ownerNotices?: OwnerNoticeRepository;
   /** Present where producers record one-tap suggestions portably. */

@@ -24,8 +24,10 @@ import { createPostgresOwnerCardCompilationRepository } from './owner-card-compi
 import { createPostgresOwnerContextRepository } from './owner-context-repository.js';
 import { createPostgresRecallMetricsRepository } from './recall-metrics-repository.js';
 import { createPostgresSkillContextRepository } from './skill-context-repository.js';
+import { createPostgresSmsChannelRepository } from './sms-channel-repository.js';
 import { createPostgresTaskRepository } from './task-lifecycle-repository.js';
 import { createPostgresToolExecutionRepository } from './tool-execution-repository.js';
+import { createPostgresVoiceContextRepository } from './voice-context-repository.js';
 import { createPostgresWatchRepository } from './watch-repository.js';
 
 export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence {
@@ -58,5 +60,7 @@ export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence
     missions: createPostgresMissionRepository(db),
     deviceTokens: createPostgresDeviceTokenRepository(db),
     nudgePolicy: createPostgresNudgePolicyRepository(db),
+    voiceContext: createPostgresVoiceContextRepository(db),
+    smsChannel: createPostgresSmsChannelRepository(db),
   };
 }

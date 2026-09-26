@@ -133,9 +133,15 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'watch.suggest',
   'import.run',
   'voice.ingest',
+  'pulse.check',
   'memory.graph_date_backfill',
   'graph.curiosity',
 ]);
+
+/** Registered code jobs that still need PostgreSQL, so a Firestore agent skips them. */
+export function sqlOnlyCodeJobs(): string[] {
+  return [...CODE_JOBS].filter((job) => !FIRESTORE_PORTABLE_CODE_JOBS.has(job)).sort();
+}
 
 /** A completion summary when `job` cannot run on Firestore persistence yet, otherwise null. */
 export function firestoreCodeJobUnavailable(job: string): string | null {

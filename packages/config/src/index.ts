@@ -388,6 +388,7 @@ export const FIRESTORE_PORTABLE_MODULES: readonly AssistantModule[] = [
   'maps',
   'watches',
   'push',
+  'sms',
 ];
 
 /** Firestore agent mode stays narrow until the remaining runtime ports migrate. */
