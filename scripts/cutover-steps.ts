@@ -464,7 +464,7 @@ async function jobSummary<T extends Record<string, unknown>>(
   if (!name || (execution.status?.succeededCount ?? 0) < 1)
     throw new Error(`No successful ${job} execution started after ${notBefore}`);
   if (!/^[a-z0-9-]+$/.test(name)) throw new Error('Unexpected Cloud Run execution name');
-  const entries = await gcloud.json<Array<{ textPayload?: string }>>([
+  const entries = await gcloud.json<Array<{ textPayload?: string; jsonPayload?: unknown }>>([
     'logging',
     'read',
     `resource.type="cloud_run_job" AND resource.labels.job_name="${job}" AND labels."run.googleapis.com/execution_name"="${name}"`,
@@ -474,15 +474,20 @@ async function jobSummary<T extends Record<string, unknown>>(
     '2d',
   ]);
   for (const entry of entries) {
-    const text = entry.textPayload?.trim();
-    if (!text?.startsWith('{')) continue;
-    try {
-      const parsed = JSON.parse(text) as T;
-      if (parsed && typeof parsed === 'object' && requiredKey in parsed)
-        return { execution: name, summary: parsed };
-    } catch {
-      // Not the summary line.
+    // Cloud Logging stores a single-line JSON stdout write as jsonPayload and
+    // anything else (including pretty-printed JSON) as textPayload.
+    let parsed: unknown = entry.jsonPayload;
+    if (!parsed) {
+      const text = entry.textPayload?.trim();
+      if (!text?.startsWith('{')) continue;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        continue; // Not the summary line.
+      }
     }
+    if (parsed && typeof parsed === 'object' && requiredKey in parsed)
+      return { execution: name, summary: parsed as T };
   }
   throw new Error(`Execution ${name} did not log a ${job} summary`);
 }

@@ -356,9 +356,17 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
               status: { succeededCount: 1 },
             }));
         if (key.startsWith('logging read'))
-          return executions
-            .filter((item) => (args[2] as string).includes(`"${item.name}"`))
-            .map((item) => ({ textPayload: JSON.stringify(item.summary) }));
+          return (
+            executions
+              .filter((item) => (args[2] as string).includes(`"${item.name}"`))
+              // Like Cloud Logging: a single-line JSON write lands in jsonPayload,
+              // anything else (here, pretty-printed JSON) in textPayload.
+              .map((item) =>
+                item.job === 'assistant-workspace-export'
+                  ? { jsonPayload: item.summary }
+                  : { textPayload: JSON.stringify(item.summary, null, 2) },
+              )
+          );
         if (key === 'storage objects describe')
           return { generation: '99', size: String(bundleBytes.length) };
         throw new Error(`unexpected gcloud json ${args.join(' ')}`);
