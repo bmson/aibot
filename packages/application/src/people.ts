@@ -33,6 +33,7 @@ import {
   type KnowledgeGraphEntityView,
   type KnowledgeGraphNeighborEdge,
 } from './knowledge-graph.js';
+import { type PersonGraphEdgeInput, projectPersonGraph } from './people-graph-projection.js';
 import {
   type BirthdayView,
   derivePersonGroup,
@@ -209,7 +210,10 @@ function experienceMemory() {
 /** `coalesce(valid_from, created_at)` — when the thing happened. */
 const occurredAt = sql<Date>`coalesce(${memories.validFrom}, ${memories.createdAt})`;
 
-function toBirthday(rows: OccasionRow[], now: Date): BirthdayView | null {
+function toBirthday(
+  rows: Array<Pick<OccasionRow, 'kind' | 'quarantined' | 'month' | 'day' | 'year' | 'recurrence'>>,
+  now: Date,
+): BirthdayView | null {
   const birthday = rows.find((row) => row.kind === 'birthday' && !row.quarantined);
   if (!birthday) return null;
   const daysUntil = daysUntilOccurrence(birthday, now);
@@ -385,6 +389,45 @@ export async function getPersonDossier(
     lastContactAt: events[0]?.occurredAt ?? null,
     birthday,
     upcomingOccasion,
+  };
+}
+
+/**
+ * Apply the SQL dossier's derivations to adapter-backed parts: the same graph
+ * buckets, header location, birthday, and reminder window, so a Firestore
+ * person page renders exactly what the PostgreSQL one does.
+ */
+export function personDossierFromStoredParts(
+  parts: {
+    profile: PersonProfile;
+    entity: KnowledgeGraphEntityView | null;
+    edges: PersonGraphEdgeInput[];
+    /** Newest first, already bounded to the timeline window. */
+    events: PersonEvent[];
+    /** Non-quarantined occasions for this contact. */
+    occasions: Array<
+      Pick<
+        OccasionRow,
+        'quarantined' | 'kind' | 'label' | 'month' | 'day' | 'year' | 'recurrence' | 'leadDays'
+      >
+    >;
+  },
+  now: Date,
+): PersonDossier {
+  const graph = projectPersonGraph(parts.profile.contact.name, parts.edges);
+  return {
+    profile: parts.profile,
+    group: derivePersonGroup({ relationship: parts.profile.contact.relationship }),
+    entityId: parts.entity?.id ?? null,
+    entity: parts.entity,
+    location: graph.location,
+    origins: graph.origins,
+    relations: graph.relations,
+    connections: graph.connections,
+    events: parts.events,
+    lastContactAt: parts.events[0]?.occurredAt ?? null,
+    birthday: toBirthday(parts.occasions, now),
+    upcomingOccasion: nextOccasionWithinLead(parts.occasions, now),
   };
 }
 

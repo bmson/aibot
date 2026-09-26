@@ -59,9 +59,11 @@ export function proxy(request: NextRequest) {
     (path === '/profile/memories' && request.method === 'GET') ||
     // The memory hub and its owner-authenticated Server Actions.
     (path === '/profile' && ['GET', 'POST'].includes(request.method)) ||
-    (path === '/people' && request.method === 'GET') ||
+    // The People directory, one person's page, and their owner-authenticated
+    // Server Actions (add, edit, occasions, facts, relations, merge, delete).
+    (path === '/people' && ['GET', 'POST'].includes(request.method)) ||
     (/^\/people\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path) &&
-      request.method === 'GET') ||
+      ['GET', 'POST'].includes(request.method)) ||
     (path === '/profile/data' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/profile-export' && request.method === 'GET') ||
     (path === '/api/mobile/v1/memory/export' && request.method === 'GET') ||
