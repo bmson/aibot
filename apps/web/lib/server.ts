@@ -42,6 +42,7 @@ import {
   getShellStatus,
   handleChatTurn,
   hideChatMessage,
+  type ImportCommandPersistence,
   isValidChatCursor,
   listActivity,
   listAnomalies,
@@ -116,6 +117,7 @@ import {
   FirestoreCommitmentMutationRepository,
   FirestoreDeviceTokenRepository,
   FirestoreGoalMutationRepository,
+  FirestoreImportCommandRepository,
   FirestoreLocationPingRepository,
   FirestoreMcpConnectionMutationRepository,
   FirestoreOwnerKnowledgeGraphFactRepository,
@@ -533,6 +535,11 @@ function createFirestoreChatApplication() {
       router.embed(texts, { expectedModelId: embeddingModelId(embeddingSpace) }),
   };
   const locationPings = new FirestoreLocationPingRepository(store);
+  const imports: ImportCommandPersistence = {
+    kind: 'import-command-persistence',
+    imports: new FirestoreImportCommandRepository(store, config.FIRESTORE_AGENT_ID),
+    ownerCards: persistence.ownerCardCompilation,
+  };
   const deviceTokens = new FirestoreDeviceTokenRepository(store);
   const memoryCommands = createProfileMemoryCommands(
     createFirestoreProfileMemoryCommandPersistence(store, embeddingSpace),
@@ -629,6 +636,14 @@ function createFirestoreChatApplication() {
       note: string;
     }) => addOwnerKnowledgeGraphFactFromRepository(ownerGraphFacts, ownerGraphEmbedding, input),
     embedSkillText,
+    startImport: (path: string, source: string) =>
+      startWorkspaceImport(imports, getWorkspace(), path, source),
+    purgeImport: (source: string) => purgeImportedSource(imports, source),
+    deleteImport: (source: string) => deleteImportedSource(imports, getWorkspace(), source),
+    reviewImport: (source: string, verdict: 'approve' | 'reject') =>
+      reviewImportedSource(imports, source, verdict),
+    uploadImport: (input: Parameters<typeof uploadImport>[2]) =>
+      uploadImport(imports, getWorkspace(), input),
     getWorkspaceSettings: () => getSettingsOverview(settings),
     addSkill: async (input: {
       name: string;
@@ -818,5 +833,23 @@ export function getOwnerMemoryCommands() {
     snoozeCommitment: application.snoozeCommitment,
     dismissCommitment: application.dismissCommitment,
     correctCommitment: application.correctCommitment,
+  };
+}
+
+/**
+ * Owner import commands for the configured driver. Uploaded bytes go to the
+ * installation's workspace store either way; only the records differ.
+ */
+export function getImportCommands() {
+  const application =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? getFirestoreChatApplication()
+      : getApplication();
+  return {
+    startImport: application.startImport,
+    purgeImport: application.purgeImport,
+    deleteImport: application.deleteImport,
+    reviewImport: application.reviewImport,
+    uploadImport: application.uploadImport,
   };
 }

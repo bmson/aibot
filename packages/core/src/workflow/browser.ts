@@ -1,21 +1,8 @@
-import { timingSafeEqual } from 'node:crypto';
-import { type Db, files, tasks, toolCalls } from '@assistant/db';
-import { and, eq, inArray, sql } from 'drizzle-orm';
-import { hashCallbackToken } from '../browse.js';
-import { TaskStateSchema } from '../events.js';
-import { getQueueNotifier } from '../queue.js';
+import { createPostgresExecutionJobRepository, type Db } from '@assistant/db';
+import type { ExecutionJobRepository } from '@assistant/persistence';
+import { type JobCallbackOutcome, recordJobCallback } from './job-callback.js';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function tokensMatch(expected: string, given: string): boolean {
-  const a = Buffer.from(expected);
-  const b = Buffer.from(given);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-export type BrowserCallbackOutcome =
-  | { ok: true; taskId: string; queueGeneration: number }
-  | { ok: false; status: 400 | 403 | 404 | 409; error: string };
+export type BrowserCallbackOutcome = JobCallbackOutcome;
 
 /**
  * The browser job's one-shot callback: verify the launch token against the
@@ -24,84 +11,22 @@ export type BrowserCallbackOutcome =
  * executor settles the job, pendingJob is cleared and later callbacks get 409.
  */
 export async function recordBrowserJobResult(
-  db: Db,
+  store: Db | ExecutionJobRepository,
   input: { taskId: string; token: string; result: Record<string, unknown> },
 ): Promise<BrowserCallbackOutcome> {
-  if (!input.taskId || !input.token) return { ok: false, status: 400, error: 'bad request' };
-  // The tasks primary key is a uuid column. A malformed, unauthenticated
-  // taskId would otherwise raise a Postgres 22P02 cast error inside the
-  // transaction (before the token check), surfacing as an uncaught 500 and a
-  // free DB/log amplification vector. Reject it structurally first.
-  if (!UUID_RE.test(input.taskId)) return { ok: false, status: 400, error: 'bad request' };
-
-  const outcome = await db.transaction(async (tx): Promise<BrowserCallbackOutcome> => {
-    // Serialize callback vs. administrative cancellation and executor claim.
-    const [task] = await tx.select().from(tasks).where(eq(tasks.id, input.taskId)).for('update');
-    if (!task) return { ok: false, status: 404, error: 'task not found' };
-
-    const state = TaskStateSchema.parse(task.state ?? {});
-    const pending = state.pendingJob;
-    if (!pending) return { ok: false, status: 409, error: 'no pending browser job' };
-    // Compare hashes: only the hash is stored, and the incoming raw token is
-    // hashed here. timingSafeEqual over equal-length hex strings.
-    if (!tokensMatch(pending.callbackTokenHash, hashCallbackToken(input.token))) {
-      return { ok: false, status: 403, error: 'invalid token' };
-    }
-    // The token is durably checkpointed BEFORE launch, so a fast callback may
-    // legitimately arrive while the launching executor still owns the task.
-    // Moving running → pending invalidates that lease; its later CAS writes are
-    // fenced out and the callback result becomes authoritative.
-    const callbackStates = ['running', 'sleeping', 'waiting_approval'];
-    if (!callbackStates.includes(task.status)) {
-      return {
-        ok: false,
-        status: 409,
-        error: `task is ${task.status}; callback is no longer accepted`,
-      };
-    }
-
-    await tx
-      .update(toolCalls)
-      .set({ status: 'succeeded', result: input.result, finishedAt: sql`now()` })
-      .where(eq(toolCalls.id, pending.dbToolCallId));
-
-    // Inventory the job's Workspace artifacts (screenshots + trace) in `files`.
-    const screenshots = Array.isArray(input.result.screenshots)
-      ? (input.result.screenshots as unknown[]).filter((s): s is string => typeof s === 'string')
-      : [];
-    const artifacts = [
-      ...screenshots.map((p) => ({ path: p, mime: 'image/png' })),
-      ...(typeof input.result.tracePath === 'string'
-        ? [{ path: input.result.tracePath, mime: 'application/zip' }]
-        : []),
-    ];
-    if (artifacts.length > 0) {
-      await tx.insert(files).values(
-        artifacts.map((a) => ({
-          agentId: task.agentId,
-          taskId: task.id,
-          workspacePath: a.path,
-          mime: a.mime,
-        })),
-      );
-    }
-
-    const [woken] = await tx
-      .update(tasks)
-      .set({
-        status: 'pending',
-        runAfter: null,
-        lockedUntil: null,
-        queueGeneration: sql`${tasks.queueGeneration} + 1`,
-        updatedAt: sql`now()`,
-      })
-      .where(and(eq(tasks.id, task.id), inArray(tasks.status, callbackStates)))
-      .returning({ id: tasks.id, queueGeneration: tasks.queueGeneration });
-    return woken
-      ? { ok: true, taskId: task.id, queueGeneration: woken.queueGeneration }
-      : { ok: false, status: 409, error: 'task is no longer waiting for this callback' };
-  });
-
-  if (outcome.ok) getQueueNotifier().notify(outcome.taskId, outcome.queueGeneration);
-  return outcome;
+  // Inventory the job's Workspace artifacts (screenshots + trace) in `files`.
+  const screenshots = Array.isArray(input.result.screenshots)
+    ? (input.result.screenshots as unknown[]).filter((s): s is string => typeof s === 'string')
+    : [];
+  const files = [
+    ...screenshots.map((path) => ({ workspacePath: path, mime: 'image/png' })),
+    ...(typeof input.result.tracePath === 'string'
+      ? [{ workspacePath: input.result.tracePath, mime: 'application/zip' }]
+      : []),
+  ];
+  const jobs =
+    'kind' in store && store.kind === 'execution-job-repository'
+      ? (store as ExecutionJobRepository)
+      : createPostgresExecutionJobRepository(store as Db);
+  return recordJobCallback(jobs, 'browser', { ...input, files });
 }

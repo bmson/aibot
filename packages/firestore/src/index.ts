@@ -5,6 +5,7 @@ export { FirestoreApplicationConfirmationRepository } from './application-confir
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 export { FirestoreApprovalRepository } from './approvals.js';
 export { FirestoreAssistantHealthRepository } from './assistant-health.js';
+export { FirestoreBriefingRepository } from './briefing.js';
 export { FirestoreBudgetCapsRepository } from './budget-caps.js';
 export { createFirestoreCardRefreshRepository } from './card-refresh.js';
 export { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
@@ -12,6 +13,7 @@ export { FirestoreCommitmentMutationRepository } from './commitment-mutations.js
 export { getFirestoreCommitmentOverview } from './commitment-overview.js';
 export { FirestoreContactLookupRepository } from './contact-lookup.js';
 export { FirestoreConversationSearchRepository } from './conversation-search.js';
+export { FirestoreConversationSegmentationRepository } from './conversation-segmentation.js';
 export { FirestoreCostRepository } from './costs.js';
 export { FirestoreDeviceTokenRepository } from './device-tokens.js';
 export { FirestoreDocumentCatalogRepository } from './document-catalog.js';
@@ -29,6 +31,7 @@ export { FirestoreGoalReadRepository } from './goals.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { FirestoreImportOverviewRepository } from './import-overview.js';
+export { FirestoreImportCommandRepository, FirestoreImportJobRepository } from './imports.js';
 export { FirestoreKnowledgeGraphCurationRepository } from './knowledge-graph-curation.js';
 export {
   getFirestoreKnowledgeGraphOverview,
@@ -39,6 +42,7 @@ export { FirestoreKnowledgeGraphRelationMutationRepository } from './knowledge-g
 export { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
 export { FirestoreKnowledgeWorkspaceReadRepository } from './knowledge-workspace-read.js';
 export { FirestoreLocationPingRepository } from './location-pings.js';
+export { FirestoreMaintenanceRepository } from './maintenance.js';
 export type { McpDiscoveryResult } from './mcp-connections.js';
 export {
   FirestoreMcpConnectionMutationRepository,
@@ -46,6 +50,7 @@ export {
 } from './mcp-connections.js';
 export { embeddingSpaceKey, FirestoreMemoryRepository } from './memory.js';
 export { FirestoreMemoryConsolidationRepository } from './memory-consolidation.js';
+export { FirestoreMemoryExtractionRepository } from './memory-extraction.js';
 export { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 export { FirestoreMemoryToolRepository } from './memory-tools.js';
 export { FirestoreMessageRepository } from './messages.js';
@@ -83,7 +88,7 @@ export {
 export { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
 export { FirestoreOwnerContextRepository } from './owner-context.js';
 export { FirestoreOwnerKnowledgeGraphFactRepository } from './owner-knowledge-graph-fact.js';
-export { FirestoreOwnerNoticeRepository } from './owner-notices.js';
+export { FirestoreOwnerNoticeRepository, firestoreOwnerNotices } from './owner-notices.js';
 export {
   getFirestoreMobilePeopleDirectory,
   getFirestorePeopleDirectory,
@@ -108,6 +113,7 @@ export { FirestoreProfileVoiceOverviewRepository } from './profile-overview.js';
 export { FirestoreProfilePeopleCommandRepository } from './profile-people-command.js';
 export { FirestoreProfilePeopleReadRepository } from './profile-people-read.js';
 export { FirestoreProfilePeopleRemovalRepository } from './profile-people-removal.js';
+export { FirestorePulseRepository } from './pulse.js';
 export { FirestoreRecallFeedbackRepository } from './recall-feedback.js';
 export { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 export { FirestoreReminderDeliveryRepository, FirestoreReminderRepository } from './reminders.js';
@@ -129,6 +135,7 @@ export { FirestoreSkillMutationRepository } from './skill-mutations.js';
 export { FirestoreSmsChannelRepository } from './sms-channel.js';
 export { createInstallationStore, InstallationStore } from './store.js';
 export { FirestoreSuggestionDecisionRepository } from './suggestion-decisions.js';
+export { FirestoreSuggestionRepository, suggestionIdFor } from './suggestions.js';
 export { FirestoreTaskActivityRepository } from './task-activity.js';
 export { FirestoreTaskActivityCommandRepository } from './task-activity-commands.js';
 export { FirestoreTaskRepository } from './task-lifecycle.js';

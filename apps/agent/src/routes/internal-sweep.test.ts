@@ -7,35 +7,44 @@ const mocks = vi.hoisted(() => ({
   resumeResolvedApprovalTasks: vi.fn(),
   renotifyStalledApprovals: vi.fn(),
   runDueSchedules: vi.fn(),
+  expireStaleSuggestions: vi.fn(),
+  renotifyStalledAttention: vi.fn(),
+  emitBudgetNotices: vi.fn(),
+  backfillMessageEmbeddings: vi.fn(),
+  purgeExpired: vi.fn(),
+  purgeAgedHistory: vi.fn(),
+  pinnedMemoryEmbed: vi.fn(),
   prepareGoalSession: vi.fn(),
   releaseStaleReservations: vi.fn(),
   executeSqlOnlySweep: vi.fn(),
   notifyApproval: vi.fn(),
+  notifyOwner: vi.fn(),
 }));
 
 vi.mock('@assistant/config', () => ({
   isModuleEnabled: () => true,
   loadConfig: () => ({ INTERNAL_AUTH_MODE: 'shared-secret' }),
+  parseFirestoreEmbeddingSpace: (value: string) => JSON.parse(value),
 }));
 vi.mock('@assistant/core', () => ({
   evaluateCanaryHealth: vi.fn(),
   expireStaleApprovals: mocks.expireStaleApprovals,
-  expireStaleSuggestions: mocks.executeSqlOnlySweep,
+  expireStaleSuggestions: mocks.expireStaleSuggestions,
   findDueTasks: mocks.executeSqlOnlySweep,
   resumeResolvedApprovalTasks: mocks.resumeResolvedApprovalTasks,
   renotifyStalledApprovals: mocks.renotifyStalledApprovals,
-  renotifyStalledAttention: mocks.executeSqlOnlySweep,
+  renotifyStalledAttention: mocks.renotifyStalledAttention,
   runDueSchedules: mocks.runDueSchedules,
   prepareGoalSession: mocks.prepareGoalSession,
   releaseStaleReservations: mocks.releaseStaleReservations,
   isCodeJobEnabled: () => true,
   firestoreCodeJobUnavailable: (job: string) => (job === 'dream.run' ? 'unavailable' : null),
-  backfillMessageEmbeddings: mocks.executeSqlOnlySweep,
-  emitBudgetNotices: mocks.executeSqlOnlySweep,
+  backfillMessageEmbeddings: mocks.backfillMessageEmbeddings,
+  emitBudgetNotices: mocks.emitBudgetNotices,
   getAgent: mocks.executeSqlOnlySweep,
   getQueueNotifier: mocks.executeSqlOnlySweep,
-  purgeAgedHistory: mocks.executeSqlOnlySweep,
-  purgeExpired: mocks.executeSqlOnlySweep,
+  purgeAgedHistory: mocks.purgeAgedHistory,
+  purgeExpired: mocks.purgeExpired,
 }));
 vi.mock('@assistant/firestore', () => ({
   FirestoreScheduleRepository: class {
@@ -48,6 +57,7 @@ vi.mock('../deps.js', () => ({
   buildDeps: mocks.buildDeps,
   composedModuleMetas: [],
   firestoreMaintenanceReady: mocks.firestoreMaintenanceReady,
+  pinnedMemoryEmbed: mocks.pinnedMemoryEmbed,
 }));
 vi.mock('../google-oidc.js', () => ({
   oidcAudienceForPath: (_audience: string, path: string) => path,
@@ -55,7 +65,7 @@ vi.mock('../google-oidc.js', () => ({
 }));
 vi.mock('../canaries.js', () => ({ latestCanaryRun: vi.fn(), runCanaries: vi.fn() }));
 vi.mock('../executor-deps.js', () => ({
-  executorDeps: () => ({ notifyApproval: mocks.notifyApproval }),
+  executorDeps: () => ({ notifyApproval: mocks.notifyApproval, notifyOwner: mocks.notifyOwner }),
 }));
 
 const { internal } = await import('./internal.js');
@@ -87,11 +97,29 @@ function fixture() {
     }),
   };
   const costs = { kind: 'cost-repository' };
+  const maintenance = { kind: 'maintenance-repository' };
   const goals = { kind: 'goal-runtime-repository' };
   const tasks = { kind: 'task-lease-repository' };
-  const persistence = { driver: 'firestore', approvals, messages, watches, costs, goals, tasks };
+  const recallMetrics = { kind: 'recall-metrics-repository' };
+  const modelRouting = { kind: 'model-routing-repository' };
+  const persistence = {
+    driver: 'firestore',
+    approvals,
+    messages,
+    watches,
+    costs,
+    maintenance,
+    goals,
+    tasks,
+    recallMetrics,
+    modelRouting,
+  };
   const deps = {
-    config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: 'agent-1' },
+    config: {
+      PERSISTENCE_DRIVER: 'firestore',
+      FIRESTORE_AGENT_ID: 'agent-1',
+      FIRESTORE_EMBEDDING_SPACE: '{"provider":"synthetic"}',
+    },
     db,
     persistence,
     firestoreStore: store,
@@ -112,11 +140,31 @@ beforeEach(() => {
   mocks.renotifyStalledApprovals.mockResolvedValue(2);
   mocks.runDueSchedules.mockResolvedValue([{ schedule: 'morning', taskId: 'task-fired' }]);
   mocks.firestoreMaintenanceReady.mockResolvedValue(true);
-  mocks.releaseStaleReservations.mockResolvedValue(4);
+  mocks.expireStaleSuggestions.mockResolvedValue(5);
+  mocks.renotifyStalledAttention.mockResolvedValue(6);
+  mocks.emitBudgetNotices.mockResolvedValue(['budget-notice:daily:80:2026-09-24']);
+  mocks.backfillMessageEmbeddings.mockResolvedValue(7);
+  mocks.purgeExpired.mockResolvedValue({
+    cache: 1,
+    memories: 1,
+    reservations: 4,
+    locations: 1,
+    dreamNotes: 0,
+    recallMetrics: 0,
+    proactivePings: 0,
+    modelCallAudit: 0,
+  });
+  mocks.purgeAgedHistory.mockResolvedValue({
+    messages: 2,
+    toolCalls: 1,
+    modelCalls: 0,
+    costEvents: 0,
+  });
+  mocks.pinnedMemoryEmbed.mockReturnValue(mocks.executeSqlOnlySweep);
 });
 
 describe('POST /internal/sweep in Firestore mode', () => {
-  it('runs only portable approval, watch, and schedule maintenance', async () => {
+  it('runs every maintenance step through portable repositories', async () => {
     const f = fixture();
     mocks.buildDeps.mockReturnValue(f.deps);
     f.watches.expire.mockResolvedValue(3);
@@ -126,13 +174,35 @@ describe('POST /internal/sweep in Firestore mode', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       expiredApprovalsWoke: 1,
+      expiredSuggestions: 5,
       resumedApprovalTasks: 1,
       renotifiedApprovals: 2,
+      renotifiedAttention: 6,
       expiredWatches: 3,
       schedulesFired: 1,
+      budgetNotices: 1,
+      messagesEmbedded: 7,
+      purgedExpired: 3,
+      agedHistory: 3,
       releasedReservations: 4,
     });
-    expect(mocks.releaseStaleReservations).toHaveBeenCalledWith(f.persistence.costs, 120, 500);
+    const { maintenance, costs, tasks, recallMetrics, modelRouting } = f.persistence;
+    expect(mocks.expireStaleSuggestions).toHaveBeenCalledWith(maintenance);
+    expect(mocks.renotifyStalledAttention).toHaveBeenCalledWith(
+      { maintenance, tasks },
+      mocks.notifyOwner,
+    );
+    expect(mocks.emitBudgetNotices).toHaveBeenCalledWith({ costs, maintenance }, 'agent-1');
+    expect(mocks.pinnedMemoryEmbed).toHaveBeenCalledWith(
+      { provider: 'synthetic' },
+      modelRouting,
+      expect.any(Function),
+    );
+    expect(mocks.backfillMessageEmbeddings).toHaveBeenCalledWith(maintenance, {
+      embed: mocks.executeSqlOnlySweep,
+    });
+    expect(mocks.purgeExpired).toHaveBeenCalledWith({ maintenance, costs, recallMetrics });
+    expect(mocks.purgeAgedHistory).toHaveBeenCalledWith(maintenance);
     expect(mocks.expireStaleApprovals).toHaveBeenCalledWith(f.persistence.approvals);
     expect(mocks.resumeResolvedApprovalTasks).toHaveBeenCalledWith(f.persistence.approvals);
     expect(mocks.renotifyStalledApprovals).toHaveBeenCalledWith(

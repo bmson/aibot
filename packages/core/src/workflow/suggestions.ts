@@ -6,6 +6,11 @@ import {
   suggestions,
   type TaskRow,
 } from '@assistant/db';
+import type {
+  MaintenanceRepository,
+  SuggestionRecord,
+  SuggestionRepository,
+} from '@assistant/persistence';
 import { and, asc, desc, eq, gt, isNull, lte, or, sql } from 'drizzle-orm';
 import { getOrCreatePrimaryConversation } from '../chat.js';
 import { getQueueNotifier } from '../queue.js';
@@ -83,24 +88,33 @@ export interface CreateSuggestionInput {
  * Returns the row when it was newly created, and null when it already existed.
  */
 export async function createSuggestion(
-  db: Db,
+  store: Db | SuggestionRepository,
   input: CreateSuggestionInput,
-): Promise<SuggestionRow | null> {
+): Promise<SuggestionRow | SuggestionRecord | null> {
   const now = input.now ?? new Date();
-  const [row] = await db
+  const values = {
+    agentId: input.agentId,
+    summary: input.summary.slice(0, 500),
+    proposedAction: input.proposedAction.slice(0, 2000),
+    origin: input.origin ?? 'briefing',
+    sourceRef: input.sourceRef,
+    expiresAt: new Date(now.getTime() + (input.ttlDays ?? DEFAULT_TTL_DAYS) * 24 * 3600 * 1000),
+  };
+  if (isSuggestionRepository(store))
+    return store.create({
+      ...values,
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+    });
+  const [row] = await store
     .insert(suggestions)
-    .values({
-      agentId: input.agentId,
-      conversationId: input.conversationId,
-      summary: input.summary.slice(0, 500),
-      proposedAction: input.proposedAction.slice(0, 2000),
-      origin: input.origin ?? 'briefing',
-      sourceRef: input.sourceRef,
-      expiresAt: new Date(now.getTime() + (input.ttlDays ?? DEFAULT_TTL_DAYS) * 24 * 3600 * 1000),
-    })
+    .values({ ...values, conversationId: input.conversationId })
     .onConflictDoNothing({ target: [suggestions.agentId, suggestions.sourceRef] })
     .returning();
   return row ?? null;
+}
+
+function isSuggestionRepository(store: Db | SuggestionRepository): store is SuggestionRepository {
+  return 'kind' in store && store.kind === 'suggestion-repository';
 }
 
 export type AcceptOutcome = { ok: true; taskId: string } | { ok: false; reason: string };
@@ -265,23 +279,25 @@ export async function snoozeSuggestion(
 
 /** Suggestions the owner should see now: pending, unexpired, done snoozing. */
 export async function listOpenSuggestions(
-  db: Db,
+  store: Db | SuggestionRepository,
   agentId: string,
   opts: { now?: Date; limit?: number } = {},
-): Promise<SuggestionRow[]> {
+): Promise<Array<SuggestionRow | SuggestionRecord>> {
   const now = opts.now ?? new Date();
-  const rows = await db
-    .select()
-    .from(suggestions)
-    .where(
-      and(
-        eq(suggestions.agentId, agentId),
-        or(eq(suggestions.status, 'pending'), eq(suggestions.status, 'snoozed')),
-        gt(suggestions.expiresAt, now),
-        or(isNull(suggestions.snoozedUntil), lte(suggestions.snoozedUntil, now)),
-      ),
-    )
-    .orderBy(asc(suggestions.createdAt));
+  const rows = isSuggestionRepository(store)
+    ? await store.listOpen(agentId, now)
+    : await store
+        .select()
+        .from(suggestions)
+        .where(
+          and(
+            eq(suggestions.agentId, agentId),
+            or(eq(suggestions.status, 'pending'), eq(suggestions.status, 'snoozed')),
+            gt(suggestions.expiresAt, now),
+            or(isNull(suggestions.snoozedUntil), lte(suggestions.snoozedUntil, now)),
+          ),
+        )
+        .orderBy(asc(suggestions.createdAt));
   // Filter legacy dated proposals before the display cap so stale cards cannot
   // crowd out current work. The query already excludes records beyond their TTL.
   return rows.filter((row) => suggestionExpiresAt(row) > now).slice(0, opts.limit ?? MAX_PENDING);
@@ -292,7 +308,14 @@ export async function listOpenSuggestions(
  * owner owes anyone — it goes quiet on its own rather than accumulating into a
  * backlog that has to be cleared.
  */
-export async function expireStaleSuggestions(db: Db, now: Date = new Date()): Promise<number> {
+export async function expireStaleSuggestions(
+  store: Db | MaintenanceRepository,
+  now?: Date,
+): Promise<number> {
+  if ('kind' in store && store.kind === 'maintenance-repository')
+    return (store as MaintenanceRepository).expireSuggestions(now);
+  const db = store as Db;
+  now ??= new Date();
   const rows = await db
     .update(suggestions)
     .set({ status: 'expired', updatedAt: now })

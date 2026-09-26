@@ -8,6 +8,11 @@ import {
   proactiveMoments,
   tasks as taskTable,
 } from '@assistant/db';
+import type {
+  ExecutionPersistence,
+  PulseCalendarSnapshot,
+  PulseRepository,
+} from '@assistant/persistence';
 import { and, count, desc, eq, gte, isNotNull, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import { getAgent, postOwnerNotice } from '../chat.js';
 import { loadConfig } from '../config.js';
@@ -188,13 +193,8 @@ export function selectPulseMoment(candidates: readonly PulseMoment[]): PulseMome
  * The owner's ceiling, or ours — whichever is stricter. An absent prefs row is
  * the shipped default (no cap of their own), which leaves the pulse's own.
  */
-async function dailyCapFor(db: Db, agentId: string): Promise<number> {
-  const [prefs] = await db
-    .select({ cap: notificationPrefs.ambientDailyCap })
-    .from(notificationPrefs)
-    .where(eq(notificationPrefs.agentId, agentId))
-    .limit(1);
-  const owner = prefs?.cap ?? null;
+async function dailyCapFor(store: PulseRepository, agentId: string): Promise<number> {
+  const owner = await store.ambientDailyCap(agentId);
   return owner == null ? DEFAULT_DAILY_CAP : Math.min(owner, DEFAULT_DAILY_CAP);
 }
 
@@ -436,24 +436,12 @@ function commitmentMoment(
  * mistaking "the read failed" for "the calendar emptied out overnight."
  */
 async function syncCalendarSnapshot(
-  db: Db,
+  store: PulseRepository,
   agentId: string,
   calendar: { events: readonly BriefingCalendarEvent[]; complete: boolean },
   now: Date,
 ): Promise<CalendarChange[]> {
-  const previousRows = await db
-    .select({
-      calendarId: calendarEventSnapshots.calendarId,
-      eventId: calendarEventSnapshots.eventId,
-      iCalUID: calendarEventSnapshots.iCalUID,
-      summary: calendarEventSnapshots.summary,
-      start: calendarEventSnapshots.start,
-      end: calendarEventSnapshots.end,
-      status: calendarEventSnapshots.status,
-      attendeeResponseHash: calendarEventSnapshots.attendeeResponseHash,
-    })
-    .from(calendarEventSnapshots)
-    .where(eq(calendarEventSnapshots.agentId, agentId));
+  const previousRows = await store.calendarSnapshot(agentId);
 
   const changes = diffCalendarEvents(
     calendar.events,
@@ -465,54 +453,170 @@ async function syncCalendarSnapshot(
     calendar.complete,
   );
 
-  // A cancelled event is deleted rather than upserted below (it is, by
-  // construction, absent from `calendar.events`) — delete its row outright so
-  // a stale snapshot entry never re-reports the same cancellation next time.
-  for (const change of changes) {
-    if (change.kind !== 'cancelled') continue;
-    await db
-      .delete(calendarEventSnapshots)
-      .where(
-        and(
-          eq(calendarEventSnapshots.agentId, agentId),
-          eq(calendarEventSnapshots.calendarId, change.calendarId),
-          eq(calendarEventSnapshots.eventId, change.eventId),
-        ),
-      );
-  }
-
-  for (const event of calendar.events) {
-    const row = toSnapshotRow(event);
-    if (!row) continue; // no stable identity to compare against next time
-    await db
-      .insert(calendarEventSnapshots)
-      .values({ agentId, updatedAt: now, ...row })
-      .onConflictDoUpdate({
-        target: [
-          calendarEventSnapshots.agentId,
-          calendarEventSnapshots.calendarId,
-          calendarEventSnapshots.eventId,
-        ],
-        set: { ...row, updatedAt: now },
-      });
-  }
-
-  // Bounded growth: once a row has gone a day without appearing in a read, it
-  // is either long past or already handled above — either way there is
-  // nothing left to compare it against.
-  await db
-    .delete(calendarEventSnapshots)
-    .where(
-      and(
-        eq(calendarEventSnapshots.agentId, agentId),
-        lt(
-          calendarEventSnapshots.updatedAt,
-          new Date(now.getTime() - SNAPSHOT_STALE_HOURS * 3600_000),
-        ),
-      ),
-    );
+  // A cancelled event is deleted rather than upserted (it is, by construction,
+  // absent from `calendar.events`) so a stale snapshot entry never re-reports
+  // the same cancellation next time. Rows that go a day without appearing in a
+  // read are long past or already handled, so they are forgotten.
+  await store.syncCalendarSnapshot(agentId, {
+    cancelled: changes
+      .filter((change) => change.kind === 'cancelled')
+      .map(({ calendarId, eventId }) => ({ calendarId, eventId })),
+    seen: calendar.events.flatMap((event) => {
+      const row = toSnapshotRow(event);
+      return row ? [row] : []; // no stable identity to compare against next time
+    }),
+    staleBefore: new Date(now.getTime() - SNAPSHOT_STALE_HOURS * 3600_000),
+    now,
+  });
 
   return changes;
+}
+
+/** The pulse's reads and ledger on PostgreSQL: the same queries as before the port. */
+function postgresPulseRepository(db: Db): PulseRepository {
+  return {
+    kind: 'pulse-repository',
+    async deliveredSince(agentId, since) {
+      const [row] = await db
+        .select({ value: count() })
+        .from(proactiveMoments)
+        .where(
+          and(eq(proactiveMoments.agentId, agentId), gte(proactiveMoments.deliveredAt, since)),
+        );
+      return Number(row?.value ?? 0);
+    },
+    async ambientDailyCap(agentId) {
+      const [prefs] = await db
+        .select({ cap: notificationPrefs.ambientDailyCap })
+        .from(notificationPrefs)
+        .where(eq(notificationPrefs.agentId, agentId))
+        .limit(1);
+      return prefs?.cap ?? null;
+    },
+    async momentKeys(agentId, kind) {
+      const rows = await db
+        .select({ key: proactiveMoments.momentKey })
+        .from(proactiveMoments)
+        .where(and(eq(proactiveMoments.agentId, agentId), eq(proactiveMoments.kind, kind)));
+      return rows.map((row) => row.key);
+    },
+    calendarSnapshot: (agentId): Promise<PulseCalendarSnapshot[]> =>
+      db
+        .select({
+          calendarId: calendarEventSnapshots.calendarId,
+          eventId: calendarEventSnapshots.eventId,
+          iCalUID: calendarEventSnapshots.iCalUID,
+          summary: calendarEventSnapshots.summary,
+          start: calendarEventSnapshots.start,
+          end: calendarEventSnapshots.end,
+          status: calendarEventSnapshots.status,
+          attendeeResponseHash: calendarEventSnapshots.attendeeResponseHash,
+        })
+        .from(calendarEventSnapshots)
+        .where(eq(calendarEventSnapshots.agentId, agentId)),
+    async syncCalendarSnapshot(agentId, input) {
+      for (const change of input.cancelled) {
+        await db
+          .delete(calendarEventSnapshots)
+          .where(
+            and(
+              eq(calendarEventSnapshots.agentId, agentId),
+              eq(calendarEventSnapshots.calendarId, change.calendarId),
+              eq(calendarEventSnapshots.eventId, change.eventId),
+            ),
+          );
+      }
+      for (const row of input.seen) {
+        await db
+          .insert(calendarEventSnapshots)
+          .values({ agentId, updatedAt: input.now, ...row })
+          .onConflictDoUpdate({
+            target: [
+              calendarEventSnapshots.agentId,
+              calendarEventSnapshots.calendarId,
+              calendarEventSnapshots.eventId,
+            ],
+            set: { ...row, updatedAt: input.now },
+          });
+      }
+      await db
+        .delete(calendarEventSnapshots)
+        .where(
+          and(
+            eq(calendarEventSnapshots.agentId, agentId),
+            lt(calendarEventSnapshots.updatedAt, input.staleBefore),
+          ),
+        );
+    },
+    actionableMail: (agentId, input) =>
+      db
+        .select({
+          channelMessageId: emailIngest.channelMessageId,
+          fromEmail: emailIngest.fromEmail,
+          fromName: emailIngest.fromName,
+          subject: emailIngest.subject,
+          importance: emailIngest.importance,
+        })
+        .from(emailIngest)
+        .where(
+          and(
+            eq(emailIngest.agentId, agentId),
+            eq(emailIngest.actionable, true),
+            gte(emailIngest.importance, input.minImportance),
+            gte(emailIngest.createdAt, input.since),
+            // Nothing has picked it up: no triage task ran to completion on it.
+            sql`NOT EXISTS (
+              SELECT 1 FROM ${taskTable}
+              WHERE ${taskTable.externalEventId} = ${emailIngest.channelMessageId}
+                AND ${taskTable.status} = 'done'
+            )`,
+          ),
+        )
+        .orderBy(desc(emailIngest.importance))
+        .limit(input.limit),
+    async dueCommitments(agentId, input) {
+      const rows = await db
+        .select({
+          id: commitments.id,
+          title: commitments.title,
+          nextAction: commitments.nextAction,
+          dueAt: commitments.dueAt,
+        })
+        .from(commitments)
+        .where(
+          and(
+            eq(commitments.agentId, agentId),
+            eq(commitments.status, 'open'),
+            isNotNull(commitments.dueAt),
+            gte(commitments.dueAt, input.now),
+            lte(commitments.dueAt, input.until),
+            or(isNull(commitments.snoozedUntil), lte(commitments.snoozedUntil, input.now)),
+          ),
+        )
+        .limit(input.limit);
+      return rows.filter((row): row is typeof row & { dueAt: Date } => row.dueAt !== null);
+    },
+    async claimMoment(input) {
+      const [claimed] = await db
+        .insert(proactiveMoments)
+        .values({
+          agentId: input.agentId,
+          kind: input.kind,
+          momentKey: input.momentKey,
+          summary: input.summary,
+          deliveredAt: input.deliveredAt,
+        })
+        .onConflictDoNothing({
+          target: [proactiveMoments.agentId, proactiveMoments.momentKey],
+        })
+        .returning({ id: proactiveMoments.id });
+      return claimed?.id ?? null;
+    },
+    async markPinged(_agentId, momentId, pinged) {
+      await db.update(proactiveMoments).set({ pinged }).where(eq(proactiveMoments.id, momentId));
+    },
+    situationPacks: (agentId) => listSituationPacks(db, agentId),
+  };
 }
 
 export interface PulseDeps {
@@ -520,17 +624,37 @@ export interface PulseDeps {
   calendarReader?: BriefingCalendarReader;
   notifyOwner?: ProactiveNotifier;
   heartbeat?: () => Promise<void>;
+  /** The pulse's portable stores; without them it reads and writes PostgreSQL. */
+  persistence?: Pick<
+    ExecutionPersistence,
+    'executionContext' | 'pulse' | 'suggestions' | 'ownerNotices'
+  >;
 }
 
 export async function runPulse(
   deps: PulseDeps,
-  opts: { taskId?: string; now?: Date; dailyCap?: number } = {},
+  opts: { taskId?: string; now?: Date; dailyCap?: number; agentId?: string } = {},
 ): Promise<PulseResult> {
   const { db } = deps;
   const now = opts.now ?? new Date();
+  const portable =
+    deps.persistence?.pulse && deps.persistence.suggestions && deps.persistence.ownerNotices
+      ? {
+          context: deps.persistence.executionContext,
+          suggestions: deps.persistence.suggestions,
+          notices: deps.persistence.ownerNotices,
+        }
+      : undefined;
+  const store = deps.persistence?.pulse ?? postgresPulseRepository(db);
 
   return withSpan('proactive.pulse', {}, async () => {
-    const agent = await getAgent(db);
+    let agent: Pick<Awaited<ReturnType<typeof getAgent>>, 'id' | 'name' | 'email' | 'timezone'>;
+    if (portable) {
+      if (!opts.agentId) throw new Error('pulse: portable runs need the task owner');
+      const owner = await portable.context.getAgent(opts.agentId);
+      if (!owner) throw new Error('pulse: owner row gone');
+      agent = owner;
+    } else agent = await getAgent(db);
     const result: PulseResult = {
       candidates: 0,
       delivered: null,
@@ -542,24 +666,15 @@ export async function runPulse(
     // Pacing first: when the pulse may not speak, there is no reason to spend a
     // calendar read finding out what it would have said.
     const gapStart = new Date(now.getTime() - MIN_GAP_MINUTES * 60_000);
-    const [recent] = await db
-      .select({ value: count() })
-      .from(proactiveMoments)
-      .where(
-        and(eq(proactiveMoments.agentId, agent.id), gte(proactiveMoments.deliveredAt, gapStart)),
-      );
-    if (Number(recent?.value ?? 0) > 0) {
+    if ((await store.deliveredSince(agent.id, gapStart)) > 0) {
       result.heldBy = 'min-gap';
       return result;
     }
     const dayStart = new Date(now.getTime() - 24 * 3600_000);
-    const [today] = await db
-      .select({ value: count() })
-      .from(proactiveMoments)
-      .where(
-        and(eq(proactiveMoments.agentId, agent.id), gte(proactiveMoments.deliveredAt, dayStart)),
-      );
-    if (Number(today?.value ?? 0) >= (opts.dailyCap ?? (await dailyCapFor(db, agent.id)))) {
+    if (
+      (await store.deliveredSince(agent.id, dayStart)) >=
+      (opts.dailyCap ?? (await dailyCapFor(store, agent.id)))
+    ) {
       result.heldBy = 'daily-cap';
       return result;
     }
@@ -593,65 +708,28 @@ export async function runPulse(
     // calendar just got cancelled" — see the safety contract on
     // `diffCalendarEvents` — so a failed read must skip this entirely rather
     // than degrade to an empty list the way `salient` does above.
-    const calendarChanges = calendar ? await syncCalendarSnapshot(db, agent.id, calendar, now) : [];
+    const calendarChanges = calendar
+      ? await syncCalendarSnapshot(store, agent.id, calendar, now)
+      : [];
 
     const mailSince = new Date(now.getTime() - MAIL_WINDOW_HOURS * 3600_000);
-    const mail = await db
-      .select({
-        channelMessageId: emailIngest.channelMessageId,
-        fromEmail: emailIngest.fromEmail,
-        fromName: emailIngest.fromName,
-        subject: emailIngest.subject,
-        importance: emailIngest.importance,
-      })
-      .from(emailIngest)
-      .where(
-        and(
-          eq(emailIngest.agentId, agent.id),
-          eq(emailIngest.actionable, true),
-          gte(emailIngest.importance, MAIL_MIN_IMPORTANCE),
-          gte(emailIngest.createdAt, mailSince),
-          // Nothing has picked it up: no triage task ran to completion on it.
-          sql`NOT EXISTS (
-            SELECT 1 FROM ${taskTable}
-            WHERE ${taskTable.externalEventId} = ${emailIngest.channelMessageId}
-              AND ${taskTable.status} = 'done'
-          )`,
-        ),
-      )
-      .orderBy(desc(emailIngest.importance))
-      .limit(5);
+    const mail = await store.actionableMail(agent.id, {
+      since: mailSince,
+      minImportance: MAIL_MIN_IMPORTANCE,
+      limit: 5,
+    });
 
-    const dueCommitments = await db
-      .select({
-        id: commitments.id,
-        title: commitments.title,
-        nextAction: commitments.nextAction,
-        dueAt: commitments.dueAt,
-      })
-      .from(commitments)
-      .where(
-        and(
-          eq(commitments.agentId, agent.id),
-          eq(commitments.status, 'open'),
-          isNotNull(commitments.dueAt),
-          gte(commitments.dueAt, now),
-          lte(commitments.dueAt, new Date(now.getTime() + COMMITMENT_HORIZON_HOURS * 3600_000)),
-          or(isNull(commitments.snoozedUntil), lte(commitments.snoozedUntil, now)),
-        ),
-      )
-      .limit(5);
+    const dueCommitments = await store.dueCommitments(agent.id, {
+      now,
+      until: new Date(now.getTime() + COMMITMENT_HORIZON_HOURS * 3600_000),
+      limit: 5,
+    });
 
     // Reuse the existing pacing/claim/suggestion machinery. A source change
     // can ask for review, never silently execute the dependent plan.
-    const packs = await listSituationPacks(db, agent.id);
-    const deliveredPackMoments = await db
-      .select({ key: proactiveMoments.momentKey })
-      .from(proactiveMoments)
-      .where(
-        and(eq(proactiveMoments.agentId, agent.id), eq(proactiveMoments.kind, 'situation-change')),
-      );
-    const seenPackChanges = new Set(deliveredPackMoments.map((row) => row.key));
+    const packs = await store.situationPacks(agent.id);
+    const deliveredPackMoments = await store.momentKeys(agent.id, 'situation-change');
+    const seenPackChanges = new Set(deliveredPackMoments);
     const packMoments = packs
       .map(situationChangeMoment)
       .filter(
@@ -662,9 +740,7 @@ export async function runPulse(
       ...eventLeadMoments(salient, now),
       ...calendarChangeMoments(calendarChanges, agent.timezone),
       ...mail.map(mailMoment),
-      ...dueCommitments
-        .filter((row): row is typeof row & { dueAt: Date } => row.dueAt !== null)
-        .map((row) => commitmentMoment(row, agent.timezone)),
+      ...dueCommitments.map((row) => commitmentMoment(row, agent.timezone)),
     ];
     result.candidates = candidates.length;
 
@@ -677,23 +753,17 @@ export async function runPulse(
     // Claim the moment BEFORE saying anything. Two instances sweeping at once
     // both find the same candidate; exactly one wins the unique index, and the
     // loser stands down rather than posting a duplicate.
-    const [claimed] = await db
-      .insert(proactiveMoments)
-      .values({
-        agentId: agent.id,
-        kind: moment.kind,
-        momentKey: moment.key,
-        summary: moment.text.slice(0, MAX_SUMMARY_CHARS),
-        // The evaluation's own clock, not insert time — the same rule the ping
-        // ledger follows (`nudge-policy.ts`). A caller pinning `now` (a test, a
-        // replayed sweep) must land its row inside the window it judged, or the
-        // pacing check reads it back as "just now" and holds forever.
-        deliveredAt: now,
-      })
-      .onConflictDoNothing({
-        target: [proactiveMoments.agentId, proactiveMoments.momentKey],
-      })
-      .returning({ id: proactiveMoments.id });
+    const claimed = await store.claimMoment({
+      agentId: agent.id,
+      kind: moment.kind,
+      momentKey: moment.key,
+      summary: moment.text.slice(0, MAX_SUMMARY_CHARS),
+      // The evaluation's own clock, not insert time — the same rule the ping
+      // ledger follows (`nudge-policy.ts`). A caller pinning `now` (a test, a
+      // replayed sweep) must land its row inside the window it judged, or the
+      // pacing check reads it back as "just now" and holds forever.
+      deliveredAt: now,
+    });
     if (!claimed) {
       result.heldBy = 'already-said';
       return result;
@@ -704,7 +774,7 @@ export async function runPulse(
     // discipline the briefing follows.
     const parts: unknown[] = [{ type: 'data-card', data: moment.card }];
     if (moment.suggestion) {
-      const created = await createSuggestion(db, {
+      const created = await createSuggestion(portable?.suggestions ?? db, {
         agentId: agent.id,
         summary: moment.suggestion.summary,
         proposedAction: moment.suggestion.proposedAction,
@@ -723,7 +793,7 @@ export async function runPulse(
       }
     }
 
-    const { conversationId } = await postOwnerNotice(db, {
+    const { conversationId } = await postOwnerNotice(portable?.notices ?? db, {
       agentId: agent.id,
       text: moment.text,
       ...(opts.taskId ? { taskId: opts.taskId } : {}),
@@ -735,10 +805,7 @@ export async function runPulse(
       text: truncateAtBoundary(moment.text, 200),
       ...(opts.taskId ? { taskId: opts.taskId } : {}),
     });
-    await db
-      .update(proactiveMoments)
-      .set({ pinged: result.pinged })
-      .where(eq(proactiveMoments.id, claimed.id));
+    await store.markPinged(agent.id, claimed, result.pinged);
     return result;
   });
 }

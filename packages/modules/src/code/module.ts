@@ -49,7 +49,7 @@ export const codeModule = defineModule<CodeJobLauncher>({
               }>();
               if (!body?.taskId || !body?.token)
                 return { status: 400, json: { error: 'bad request' } };
-              const outcome = await recordCodeJobResult(services.db, {
+              const outcome = await recordCodeJobResult(services.persistence.executionJobs, {
                 taskId: body.taskId,
                 token: body.token,
                 result: body.result ?? { ok: false, error: 'job reported no result' },
