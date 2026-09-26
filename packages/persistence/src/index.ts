@@ -47,6 +47,7 @@ export * from './owner-context.js';
 export * from './owner-knowledge-graph-fact.js';
 export * from './privacy-erasure.js';
 export * from './privacy-export.js';
+export * from './proactive-health.js';
 export * from './profile-library.js';
 export * from './profile-memory-maintenance.js';
 export * from './profile-memory-management.js';
