@@ -32,7 +32,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | Seed/context window, owner replies while parked | Ready | `executionContext`. |
 | Planner, owner card, ambient, commitments, skills, history/graph recall, recall metrics | Ready | `firestore-executor.test.ts`, `firestore-chat.test.ts`. |
 | Tool dispatch, approvals, policies, cost reservations, idempotency, cache | Ready | `dispatcher.firestore.test.ts`, `firestore-approval.test.ts`. |
-| Browser/code job staging and settle | Ready | `executionJobs`. |
+| Browser/code job staging, callback, and settle | Ready | `executionJobs`. The `/webhooks/{browser,code}/callback` command keeps the hashed sentinel check, callback-versus-timeout ordering, lease fencing, and pending reservation settlement (`firestore-job-callbacks.test.ts`). |
 | Final delivery to the task's own chat, generated cards, response checks | Ready | |
 | Full composition with all 11 modules (construction + maintenance) | Ready in #387 | `firestore-full-composition.test.ts` checks that `createDb` is never called and every tool is classified. |
 | Final delivery for a conversation-less assistant task (e.g. seeded `tomorrow-check`) | Ready | `persistence.notifications`. The `notificationConversations` marker makes concurrent first uses converge on one conversation. `firestore-goals-missions.test.ts` races two finals and four direct calls. |
@@ -49,14 +49,14 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `memory.graph_sync` | knowledge-graph-sync | Ready (`firestore-graph-sync.test.ts`) |
 | `documents.extract` | per upload | Ready (`firestore-document-extraction.test.ts`). The upload path is in PR #360. |
 | `watch.suggest` | per watch fire | Ready. It uses only `persistence.watches/messages/executionContext`. |
-| `memory.extract` (+ commitments) | memory-extraction | SQL |
+| `memory.extract` (+ commitments) | memory-extraction | Ready (`firestore-memory-extraction.test.ts`). Each conversation's facts, occasions, and open loops commit with a per-task checkpoint under the task lease, so a reclaimed run resumes after the last committed conversation. |
 | `memory.sweep_loops` | open-loop-sweep | SQL |
 | `email.extract` | email-extraction | SQL |
-| `briefing.compose` | daily-briefing | SQL |
-| `pulse.check` | pulse (every 20 min) | SQL |
+| `briefing.compose` | daily-briefing | Ready (`firestore-briefing.test.ts`). Reads the same inputs through `persistence.briefing`, proposes dates through `persistence.suggestions` (one per source, UUID-shaped ids), and posts through `persistence.ownerNotices`. |
+| `pulse.check` | pulse (every 20 min) | Ready (`firestore-pulse.test.ts`). The moment ledger, calendar snapshot, actionable mail, due loops and situation packs go through `persistence.pulse`; suggestions and notices share the briefing seams. |
 | `graph.curiosity` | knowledge-graph-curiosity | SQL |
 | `memory.graph_date_backfill` | knowledge-graph-date-backfill | SQL |
-| `chat.segment` | chat-segmentation | SQL |
+| `chat.segment` | chat-segmentation | Ready (`firestore-chat-segmentation.test.ts`). Groups only vectors in `FIRESTORE_EMBEDDING_SPACE` and stamps new segments with it; one segment per start message. |
 | `anomaly.scan` | anomaly-scan | SQL |
 | `skill.reflect` | skill-reflection | SQL |
 | `self.improve` | self-improve | SQL |
@@ -66,6 +66,8 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `health.monitor` | assistant-health-monitor | SQL |
 | `documents.process` | document-processing (every 15 min) | Ready (`firestore-document-processing.test.ts`). |
 | `import.run`, `voice.ingest` | on demand | SQL |
+| `documents.process` | document-processing (every 15 min) | SQL |
+| `import.run`, `voice.ingest` | on demand | Ready (`firestore-imports.test.ts`). Window commits and the voice checkpoint are lease-fenced. |
 
 Imported installations carry these schedules. The SQL jobs are **Disabled** (`firestoreCodeJobUnavailable`): the sweep advances their schedules without creating tasks, and an already-queued SQL job completes benignly. Goal sessions run through the portable goal gate. Unlike PostgreSQL, the Firestore sweep does not re-sync goal cadences each tick; the firing's instruction is rebuilt from the goal's current progress, and the cadence is the one the goal's last mobile or tool mutation wrote.
 
@@ -76,8 +78,11 @@ Imported installations carry these schedules. The SQL jobs are **Disabled** (`fi
 | `expireStaleApprovals`, `resumeResolvedApprovalTasks`, `renotifyStalledApprovals` | Ready |
 | Watch expiry (`persistence.watches.expire`) | Ready |
 | `runDueSchedules` (portable runner) | Ready. Goal sessions pass `prepareGoalSession` on `persistence.goals`, the same gate PostgreSQL uses (`firestore-goals-missions.test.ts`). |
-| Stale cost-reservation release | Ready in #374 (`firestore-sweep.test.ts`). On `main`, held reservations are never released in Firestore mode. |
-| `expireStaleSuggestions`, `renotifyStalledAttention`, `emitBudgetNotices`, `backfillMessageEmbeddings`, `purgeExpired` (rest), `purgeAgedHistory`, `findDueTasks` backstop | SQL. The local drain covers `findDueTasks`. |
+| Stale cost-reservation release | Ready (`firestore-sweep.test.ts`). Runs inside `purgeExpired`, as in PostgreSQL. |
+| `expireStaleSuggestions`, `renotifyStalledAttention`, `emitBudgetNotices` | Ready (`MaintenanceRepository`, `firestore-sweep.test.ts`, `maintenance.test.ts`). Stalled-attention scans walk a durable cursor, so tasks whose notice fails cannot starve later ones. A budget notice and its dedupe key commit together. |
+| `backfillMessageEmbeddings` | Ready. Vectors are written only in `FIRESTORE_EMBEDDING_SPACE`, with matching space metadata, and only while the embed role produces that space. Messages are read in creation order behind a durable cursor that advances after the vectors are stored. A vector from another space is re-embedded. |
+| `purgeExpired`, `purgeAgedHistory` | Ready. They delete the same data classes as PostgreSQL, including its foreign-key effects: graph provenance for expired memories, recall feedback and card or commitment provenance for messages, captured prompts for model calls, and freed idempotency keys. They keep the same rows: segment anchors, and tool calls referenced by an approval or a retained cost event. Kept rows stay behind a durable cursor that rescans at most daily. `firestore-maintenance-parity.test.ts` runs both drivers on the same rows. |
+| `findDueTasks` backstop | Not needed. Every Firestore transition that makes a task runnable commits a durable wake intent. The local drain claims due tasks, and in Cloud Tasks mode the sweep reclaims expired leases and dispatches the outbox. |
 | Module sweep steps: watches `reapExpiredWatches`, `pollWebWatches` | Ready in #374. Steps marked `portable` run under Firestore. |
 | Module sweep step: google `reapExpiredApplicationWatches` | Ready (portable, `persistence.applications.expireDue`). |
 | Module poller ticks: google `email-sync` | Ready (portable). |
@@ -94,6 +99,13 @@ Imported installations carry these schedules. The SQL jobs are **Disabled** (`fi
 | browser | Ready | `browser.plan/execute` staging Ready | `/webhooks/browser/callback` through the execution-jobs callback command (#400) | **Ready** (allowed) |
 | code | Ready | `code.execute` staging Ready | `/webhooks/code/callback` through the execution-jobs callback command (#400) | **Ready** (allowed) |
 | documents | Ready | `documents.search` through `persistence.documentSearch` (native vector search in `FIRESTORE_EMBEDDING_SPACE`, `firestore-document-search.test.ts`) | `documents.extract` Ready; `documents.process` and `/webhooks/document/callback` through `persistence.documentProcessor` (`firestore-document-processing.test.ts`) | **Ready** (allowed) |
+| documents | Ready | `documents.search` through `persistence.documentSearch` (native vector search in `FIRESTORE_EMBEDDING_SPACE`, `firestore-document-search.test.ts`) | `/webhooks/document/callback`, `documents.process` SQL; `documents.extract` Ready | Disabled (config) |
+| watches | Ready | `watch.create/list/cancel/web` Ready | email observers need google; sweep steps portable but not run | Disabled (config) |
+| search | Ready | `web.search` Ready in #381 (`CostRepository.record`) | none | Disabled (config); every row Ready |
+| maps | Ready | `maps.directions` Ready in #381 (`ownerContext.getLatestLocation`) | none | Disabled (config); every row Ready |
+| browser | Ready | `browser.plan/execute` staging Ready | `/webhooks/browser/callback` Ready (`executionJobs.recordCallback`) | Disabled (config); every row Ready |
+| code | Ready | `code.execute` staging Ready | `/webhooks/code/callback` Ready (`executionJobs.recordCallback`) | Disabled (config); every row Ready |
+| documents | Ready | `documents.search` SQL (pgvector chunks) | `/webhooks/document/callback`, `documents.process` SQL; `documents.extract` Ready | Disabled (config) |
 | push | Ready | none | Owner notifier through `persistence.deviceTokens` (list, invalidate on APNs 410), behind the Firestore nudge policy (`firestore-push-notifier.test.ts`) | **Ready** (allowed) |
 | sms | Ready | `sms.send` voice rewrite through `persistence.voiceContext` | Inbound `/webhooks/twilio/sms`, approval codes, final delivery, metering and the `channel:sms` limit, and the notifier leg through `persistence.smsChannel` and the shared cost, approval, message and task repositories (`firestore-sms-channel.test.ts`) | **Ready** (allowed) |
 | google | Ready | Gmail/Docs/Sheets/Slides/Calendar HTTP tools; `gmail.send`/`gmail.create_draft` voice rewrite through `persistence.voiceContext`; `drive.ingest` through `persistence.documentCatalog`; `applications.*` through `persistence.applications` (`firestore-application-confirmations.test.ts`) | Gmail Pub/Sub + sync + watch renewal through `persistence.emailSync` (leased mailbox lock, `firestore-email-sync.test.ts`), attachments through `persistence.documentCatalog`, application confirmations Ready; email thread replies through `persistence.emailSync.replyThread` (`firestore-email-channel.test.ts`) | Disabled (config) |
@@ -120,10 +132,8 @@ The Firestore composition registers `memory.save`, `memory.recall`, `task.schedu
 
 ## Remaining work, in dependency order
 
-Done in open PRs: portable sweep and reservation release (#374), explicit SQL-job skipping (#378), keyless lookup tools (#381), Cloud Tasks dispatch (#383), and the full-composition proof (#387).
-
-1. Port the browser/code job callbacks (`recordBrowserJobResult`, `recordCodeJobResult`) to an execution-jobs callback command. Their launches already stage through execution persistence.
-2. Port the lightweight SQL code jobs next (`memory.sweep_loops`, `ambient.refresh`, `health.monitor`, `memory.graph_date_backfill`), then the model-backed proactive jobs.
-3. Large domains, each needing its own repository family: Gmail sync/ingest/delivery (google), SMS channel and approval codes, documents search/processor, the remaining proactive code jobs, location ingest, and canaries.
+1. The remaining SQL-only code jobs: `memory.graph_date_backfill`, `graph.curiosity`, `anomaly.scan`, `skill.reflect`, `self.improve`, `dream.run`, `self.maintain`.
+2. The google module's Gmail sync, email delivery, application confirmations, `drive.ingest` and `email.extract` (open PRs), then `google` in `FIRESTORE_PORTABLE_MODULES`.
+3. Canaries (`CANARY_ENABLED` must stay false) and agent-side location pings (`LOCATION_PING_SECRET` must stay empty).
 
 `validateAgentPersistenceConfig` admits the modules in `FIRESTORE_PORTABLE_MODULES` (reminders, calendar, browser, code, search, maps, watches, push, sms, documents). Add a module there only once every row for it above is Ready.
