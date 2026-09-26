@@ -1,7 +1,9 @@
+import { uploadDocument } from '@assistant/application/documents';
 import { isModuleEnabled, loadConfig } from '@assistant/config';
 import { redirect } from 'next/navigation';
 import { isAuthed } from '@/auth';
-import { getApplication } from '@/lib/server';
+import { getFirestoreDocumentStores } from '@/lib/firestore-documents';
+import { getApplication, getWorkspace } from '@/lib/server';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // Cloud Run request cap is 32MB — stay under it
 const MAX_MULTIPART_BYTES = MAX_UPLOAD_BYTES + 1024 * 1024;
@@ -34,12 +36,10 @@ export async function POST(req: Request) {
   }
 
   const bytes = Buffer.from(await file.arrayBuffer());
-  await getApplication().uploadDocument({
-    name: file.name,
-    title: String(form.get('title') ?? ''),
-    mime: file.type,
-    bytes,
-  });
+  const input = { name: file.name, title: String(form.get('title') ?? ''), mime: file.type, bytes };
+  if (loadConfig().PERSISTENCE_DRIVER === 'firestore')
+    await uploadDocument(getFirestoreDocumentStores(), getWorkspace(), input);
+  else await getApplication().uploadDocument(input);
 
   redirect('/documents');
 }

@@ -208,19 +208,33 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
     expect(foreignResponse.status).toBe(404);
   });
 
-  it('authenticates first and fails closed for Firestore document writes', async () => {
+  it('authenticates first and validates Firestore document writes', async () => {
     const { GET, POST } = await import('./route.js');
     const { DELETE } = await import('./[id]/route.js');
+    const { proxy } = await import('../../../../../proxy.js');
+    const { NextRequest } = await import('next/server');
+    for (const [path, method] of [
+      ['/documents', 'GET'],
+      ['/documents', 'POST'],
+      ['/api/documents/upload', 'POST'],
+      [`/api/mobile/v1/documents/${documentId}`, 'DELETE'],
+    ])
+      expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(200);
     auth.mobile.mockResolvedValueOnce(false);
     expect((await GET(new Request(url))).status).toBe(401);
     expect((await POST(new Request(url, { method: 'POST' }))).status).toBe(400);
+    auth.mobile.mockResolvedValueOnce(false);
+    const params = { params: Promise.resolve({ id: documentId }) };
+    expect(
+      (await DELETE(new Request(`${url}/${documentId}`, { method: 'DELETE' }), params)).status,
+    ).toBe(401);
     expect(
       (
-        await DELETE(new Request(`${url}/${documentId}`, { method: 'DELETE' }), {
-          params: Promise.resolve({ id: documentId }),
+        await DELETE(new Request(`${url}/not-a-uuid`, { method: 'DELETE' }), {
+          params: Promise.resolve({ id: 'not-a-uuid' }),
         })
       ).status,
-    ).toBe(501);
+    ).toBe(400);
   });
 
   it('stages and catalogs owner text atomically with its extraction wake while PostgreSQL is offline', async () => {
@@ -291,16 +305,8 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
     ).toBe(1);
   });
 
-  it('rejects non-text Firestore files before staging, and cleans staged text bytes when the erasure fence rejects commit', async () => {
+  it('cleans staged bytes when the erasure fence rejects commit', async () => {
     const { POST } = await import('./route.js');
-    const pdf = new FormData();
-    pdf.set('file', new File(['%PDF'], 'scan.pdf', { type: 'application/pdf' }));
-    expect((await POST(new Request(url, { method: 'POST', body: pdf }))).status).toBe(415);
-    const mislabeledImage = new FormData();
-    mislabeledImage.set('file', new File(['image bytes'], 'notes.txt', { type: 'image/png' }));
-    expect((await POST(new Request(url, { method: 'POST', body: mislabeledImage }))).status).toBe(
-      415,
-    );
     const stagedBaseline = staged.size;
     const documentsBaseline = (await store.collection('documents').get()).size;
     const filesBaseline = (await store.collection('files').get()).size;
@@ -337,6 +343,75 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
     });
     expect(overview.goals).toEqual({ items: [], archivedCount: 0 });
     expect(overview.approvals).toEqual({ pending: [], resolved: [] });
+  });
+
+  it('files PDFs and processor documents with the job each one needs', async () => {
+    const { POST } = await import('./route.js');
+    const jobFor = async (name: string, type: string, body: string) => {
+      const form = new FormData();
+      form.set('file', new File([body], name, { type }));
+      const response = await POST(new Request(url, { method: 'POST', body: form }));
+      expect(response.status).toBe(201);
+      const docs = await store.collection('documents').where('title', '==', name).get();
+      const record = docs.docs[0];
+      const tasks = await store
+        .collection('tasks')
+        .where('trigger.payload.documentId', '==', String(record?.get('id')))
+        .get();
+      return [record?.get('extractor'), tasks.docs[0]?.get('trigger.payload.job')];
+    };
+    expect(await jobFor('statement.pdf', 'application/pdf', '%PDF-1.4 statement')).toEqual([
+      'pdf',
+      'documents.extract',
+    ]);
+    expect(await jobFor('receipt.png', 'image/png', 'png bytes')).toEqual([
+      'pending_processor',
+      'documents.process',
+    ]);
+  });
+
+  it('deletes a document with its chunks, file, claim, queued job and bytes', async () => {
+    const { POST } = await import('./route.js');
+    const { DELETE } = await import('./[id]/route.js');
+    const bytes = Buffer.from('A document the owner no longer wants.');
+    const upload = async () => {
+      const form = new FormData();
+      form.set('file', new File([bytes], 'unwanted.txt', { type: 'text/plain' }));
+      const response = await POST(new Request(url, { method: 'POST', body: form }));
+      expect(response.status).toBe(201);
+      return (await response.json()) as { duplicate: boolean };
+    };
+    await upload();
+    const [record] = (
+      await store.collection('documents').where('title', '==', 'unwanted.txt').get()
+    ).docs;
+    const id = String(record?.get('id'));
+    const fileRef = store.doc('files', String(record?.get('fileId')));
+    const workspacePath = String((await fileRef.get()).get('workspacePath'));
+    await store.doc('documentChunks', randomUUID()).set({
+      agentId,
+      documentId: id,
+      chunkIndex: 0,
+      text: 'A document the owner no longer wants.',
+    });
+    const [task] = (
+      await store.collection('tasks').where('trigger.payload.documentId', '==', id).get()
+    ).docs;
+    expect(staged.has(workspacePath)).toBe(true);
+
+    const response = await DELETE(new Request(`${url}/${id}`, { method: 'DELETE' }), {
+      params: Promise.resolve({ id }),
+    });
+    expect(response.status).toBe(200);
+    expect((await store.doc('documents', id).get()).exists).toBe(false);
+    expect((await fileRef.get()).exists).toBe(false);
+    expect(
+      (await store.collection('documentChunks').where('documentId', '==', id).get()).empty,
+    ).toBe(true);
+    expect((await task?.ref.get())?.get('status')).toBe('cancelled');
+    expect(staged.has(workspacePath)).toBe(false);
+    // The deduplication claim went with it, so the same bytes file afresh.
+    expect(await upload()).toEqual({ ok: true, duplicate: false });
   });
 
   it('keeps the Documents module gate when Firestore is selected', async () => {

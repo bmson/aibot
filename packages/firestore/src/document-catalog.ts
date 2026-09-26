@@ -18,7 +18,7 @@ type DedupClaim = {
   documentId: string;
 };
 
-function dedupClaimId(agentId: string, sha256: string): string {
+export function dedupClaimId(agentId: string, sha256: string): string {
   return createHash('sha256').update(`${agentId}\0${sha256}`).digest('hex');
 }
 

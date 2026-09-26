@@ -1,6 +1,8 @@
+import { deleteDocument } from '@assistant/application/documents';
 import { isModuleEnabled, loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import { FirestoreDocumentReadRepository } from '@assistant/firestore';
-import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
+import { getFirestoreDocumentStores } from '@/lib/firestore-documents';
+import { getApplication, getFirestoreInstallationStore, getWorkspace } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -46,16 +48,12 @@ export async function DELETE(
   if (!isModuleEnabled(config, 'documents')) {
     return mobileJson({ error: 'documents module disabled' }, { status: 404 });
   }
-  if (config.PERSISTENCE_DRIVER === 'firestore') {
-    return mobileJson(
-      { error: 'document deletion is not supported by Firestore persistence' },
-      { status: 501 },
-    );
-  }
   const { id } = await params;
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid document id' }, { status: 400 });
   try {
-    await getApplication().deleteDocument(id);
+    if (config.PERSISTENCE_DRIVER === 'firestore')
+      await deleteDocument(getFirestoreDocumentStores(), getWorkspace(), id);
+    else await getApplication().deleteDocument(id);
     return mobileJson({ ok: true });
   } catch (error) {
     return mobileJson(

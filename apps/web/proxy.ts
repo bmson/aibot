@@ -72,6 +72,9 @@ export function proxy(request: NextRequest) {
     // The POST is the costs page's Server Action; it performs its own owner
     // authentication and Firestore persistence checks before changing caps.
     (path === '/costs' && ['GET', 'POST'].includes(request.method)) ||
+    // Owner document catalog: page, delete action, and the upload form.
+    (path === '/documents' && ['GET', 'POST'].includes(request.method)) ||
+    (path === '/api/documents/upload' && request.method === 'POST') ||
     (path === '/profile/voice' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/profile/about' && ['GET', 'POST'].includes(request.method)) ||
     // Knowledge workspace: bounded Firestore reads and owner graph curation actions.
