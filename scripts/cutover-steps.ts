@@ -204,7 +204,8 @@ export type CutoverDeps = {
 export type SecretRef = { env: string; secret: string; version: string };
 export type ServiceInventory = {
   name: string;
-  serviceAccount: string | null;
+  /** Absent in evidence recorded before runtime identities were captured. */
+  serviceAccount?: string | null;
   url: string | null;
   latestReadyRevision: string | null;
   traffic: Array<{ revision: string | null; percent: number; latest: boolean }>;
