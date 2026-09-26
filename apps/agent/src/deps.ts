@@ -447,6 +447,7 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
   const documentExtractionRepository = new FirestoreDocumentExtractionRepository(
     store,
     config.FIRESTORE_AGENT_ID,
+    embeddingSpace,
   );
   const importJobRepository = new FirestoreImportJobRepository(
     store,

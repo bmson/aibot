@@ -234,7 +234,11 @@ export const googleModule = defineModule<GoogleClient>({
       botEmail: config.ASSISTANT_EMAIL,
       ownerEmail: config.OWNER_EMAIL,
     });
-    registerDriveTools(registry, { client, workspace, db });
+    registerDriveTools(registry, {
+      client,
+      workspace,
+      catalog: persistence.documentCatalog ?? db,
+    });
     registerSheetsTools(registry, { client, ownerEmail: config.OWNER_EMAIL });
     registerSlidesTools(registry, { client, ownerEmail: config.OWNER_EMAIL });
     registerApplicationTools(registry, {

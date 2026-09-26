@@ -151,7 +151,7 @@ describe('Drive read + ingest (Phase 24)', () => {
     const withDb = registerDriveTools(new ToolRegistry(), {
       client: { api: vi.fn(), apiBytes: vi.fn() } as never,
       workspace: { writeBytes: vi.fn() } as never,
-      db: {} as never,
+      catalog: {} as never,
     });
     expect(withDb.get('drive.ingest')).toBeDefined();
   });
@@ -217,7 +217,7 @@ describe('drive.ingest → document library (integration)', () => {
           store.delete(p);
         },
       } as never,
-      db,
+      catalog: db,
     });
     const out = (await tool(registry, 'drive.ingest').execute(
       { fileId: 'xtestdrive0000', title: 'XTESTDRIVE notes' },

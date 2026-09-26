@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto';
-import type {
-  DocumentExtractionCursor,
-  DocumentExtractionFence,
-  DocumentExtractionRepository,
-  Records,
+import {
+  type DocumentExtractionCursor,
+  type DocumentExtractionFence,
+  type DocumentExtractionRepository,
+  type EmbeddingSpace,
+  type Records,
+  validateEmbedding,
 } from '@assistant/persistence';
 import { FieldValue } from '@google-cloud/firestore';
+import { embeddingSpaceKey } from './memory.js';
 import { privacyErasureIsActive } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
@@ -70,6 +73,8 @@ export class FirestoreDocumentExtractionRepository implements DocumentExtraction
   constructor(
     readonly store: InstallationStore,
     readonly configuredAgentId: string,
+    /** Stamped on new chunk vectors so `documents.search` matches only this space. */
+    readonly space?: EmbeddingSpace,
   ) {}
 
   async load(fence: DocumentExtractionFence): Promise<{
@@ -295,12 +300,16 @@ export class FirestoreDocumentExtractionRepository implements DocumentExtraction
         const chunk = input.chunks[i];
         const target = refs[i];
         if (!chunk || !target) continue;
+        if (chunk.embedding && this.space) validateEmbedding(this.space, chunk.embedding);
         tx.create(
           target,
           encodeRecord({
             ...chunk,
             id: chunkKey(chunk.documentId, chunk.chunkIndex),
             embedding: chunk.embedding ? FieldValue.vector(chunk.embedding) : null,
+            ...(chunk.embedding && this.space
+              ? { embeddingSpace: embeddingSpaceKey(this.space) }
+              : {}),
           }),
         );
       }

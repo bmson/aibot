@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  createPostgresDocumentSearchRepository,
   type Db,
   type DocumentRow,
   documentChunks,
@@ -9,7 +10,12 @@ import {
   type TaskRow,
   tasks,
 } from '@assistant/db';
-import type { DocumentExtractionFence, DocumentExtractionRepository } from '@assistant/persistence';
+import type {
+  DocumentExtractionFence,
+  DocumentExtractionRepository,
+  DocumentSearchHit,
+  DocumentSearchRepository,
+} from '@assistant/persistence';
 import { and, eq, sql } from 'drizzle-orm';
 import { BudgetReservationError } from '../cost.js';
 import type { ModelRouter } from '../model-router/router.js';
@@ -529,15 +535,7 @@ async function failDocument(
 
 // ── Search (used by the documents.search tool + dashboard) ───────────────────
 
-export interface DocumentSearchHit {
-  documentId: string;
-  title: string;
-  source: string;
-  trust: string;
-  chunkIndex: number;
-  text: string;
-  similarity: number;
-}
+export type { DocumentSearchHit } from '@assistant/persistence';
 
 /**
  * Cosine-nearest document chunks across the agent's ready documents.
@@ -549,7 +547,7 @@ export interface DocumentSearchHit {
  * single `documentId` (the model already knows which document) can lower it.
  */
 export async function searchDocumentChunks(
-  db: Db,
+  store: Db | DocumentSearchRepository,
   input: {
     agentId: string;
     embedding: number[];
@@ -558,27 +556,9 @@ export async function searchDocumentChunks(
     minSimilarity?: number;
   },
 ): Promise<DocumentSearchHit[]> {
-  const vec = JSON.stringify(input.embedding);
-  const minSimilarity = input.minSimilarity ?? 0.7;
-  const filters = [
-    eq(documentChunks.agentId, input.agentId),
-    eq(documents.status, 'ready'),
-    sql`1 - (${documentChunks.embedding} <=> ${vec}::vector) >= ${minSimilarity}`,
-  ];
-  if (input.documentId) filters.push(eq(documentChunks.documentId, input.documentId));
-  return db
-    .select({
-      documentId: documentChunks.documentId,
-      title: documents.title,
-      source: documents.source,
-      trust: documents.trust,
-      chunkIndex: documentChunks.chunkIndex,
-      text: documentChunks.text,
-      similarity: sql<number>`1 - (${documentChunks.embedding} <=> ${vec}::vector)`,
-    })
-    .from(documentChunks)
-    .innerJoin(documents, eq(documents.id, documentChunks.documentId))
-    .where(and(...filters))
-    .orderBy(sql`${documentChunks.embedding} <=> ${vec}::vector`)
-    .limit(input.limit);
+  const repository =
+    'kind' in store && store.kind === 'document-search-repository'
+      ? store
+      : createPostgresDocumentSearchRepository(store as Db);
+  return repository.search({ ...input, minSimilarity: input.minSimilarity ?? 0.7 });
 }

@@ -104,3 +104,25 @@ export interface DocumentExtractionRepository {
     keepStatus?: boolean;
   }): Promise<boolean>;
 }
+
+export interface DocumentSearchHit {
+  documentId: string;
+  title: string;
+  source: string;
+  trust: string;
+  chunkIndex: number;
+  text: string;
+  similarity: number;
+}
+
+/** Nearest passages across the owner's ready documents (the `documents.search` tool). */
+export interface DocumentSearchRepository {
+  readonly kind: 'document-search-repository';
+  search(input: {
+    agentId: string;
+    embedding: number[];
+    limit: number;
+    documentId?: string;
+    minSimilarity: number;
+  }): Promise<DocumentSearchHit[]>;
+}

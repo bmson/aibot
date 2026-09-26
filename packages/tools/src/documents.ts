@@ -1,4 +1,5 @@
 import { searchDocumentChunks } from '@assistant/core';
+import type { DocumentSearchRepository } from '@assistant/persistence';
 import { z } from 'zod';
 import { register } from './register.js';
 import type { ToolRegistry } from './registry.js';
@@ -6,6 +7,8 @@ import type { ToolRegistry } from './registry.js';
 export interface DocumentToolDeps {
   /** Embedding closure (injected by the app — avoids a core↔tools cycle). */
   embed: (texts: string[]) => Promise<number[][]>;
+  /** Passage search; without it the tool searches through the task's SQL client. */
+  search?: DocumentSearchRepository;
 }
 
 /** Search over documents the owner filed. Installed by the documents module. */
@@ -28,7 +31,7 @@ export function registerDocumentTools(
       execute: async (args, ctx) => {
         const [embedding] = await deps.embed([args.query]);
         if (!embedding) return { passages: [] };
-        const hits = await searchDocumentChunks(ctx.db, {
+        const hits = await searchDocumentChunks(deps.search ?? ctx.db, {
           agentId: ctx.agentId,
           embedding,
           limit: args.limit,
