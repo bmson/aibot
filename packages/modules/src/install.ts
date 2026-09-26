@@ -206,15 +206,23 @@ export function installModules(
     ticks,
     taskHandlerFor: (kind) => taskHandlers.get(kind),
     channels,
+    // Each channel is a separate leg: one that fails (an SMS outage, an APNs
+    // rejection) is logged and never keeps the next channel from delivering.
     ownerNotifier:
       notifiers.length === 0
         ? noopOwnerNotifier
         : {
             notifyOwner: async (input) => {
-              for (const notifier of notifiers) await notifier.notifyOwner(input);
+              for (const notifier of notifiers)
+                await notifier
+                  .notifyOwner(input)
+                  .catch((err) => console.error('owner notification leg failed', err));
             },
             notifyApprovals: async (approvals) => {
-              for (const notifier of notifiers) await notifier.notifyApprovals(approvals);
+              for (const notifier of notifiers)
+                await notifier
+                  .notifyApprovals(approvals)
+                  .catch((err) => console.error('approval notification leg failed', err));
             },
           },
     emailObservers,

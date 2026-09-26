@@ -203,7 +203,9 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
         validateAgentPersistenceConfig(config, {
           ASSISTANT_WORKSPACE_ID: installationId,
         }),
-      ).toContain('only ASSISTANT_MODULES=reminders,calendar is supported in Firestore agent mode');
+      ).toContain(
+        'ASSISTANT_MODULES=documents,google,sms still needs PostgreSQL; Firestore agent mode supports reminders,calendar,browser,code,search,maps,watches,push',
+      );
     });
   },
 );

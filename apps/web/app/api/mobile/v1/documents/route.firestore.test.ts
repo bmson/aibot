@@ -366,7 +366,9 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
       const { GET } = await import('./route.js');
       const response = await GET(new Request(url));
       expect(response.status).toBe(503);
-      expect((await response.json()).error).toContain('only ASSISTANT_MODULES=reminders,calendar');
+      expect((await response.json()).error).toContain(
+        'ASSISTANT_MODULES=google still needs PostgreSQL',
+      );
     } finally {
       vi.stubEnv('ASSISTANT_MODULES', 'documents');
       resetConfigForTest();

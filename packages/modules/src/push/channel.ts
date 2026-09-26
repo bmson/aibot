@@ -1,12 +1,12 @@
-import { getAgent } from '@assistant/core/chat';
 import { truncateAtBoundary } from '@assistant/core/owner-text';
-import { invalidateDeviceToken, listActiveDeviceTokens } from '@assistant/core/push/devices';
-import type { Db } from '@assistant/db';
+import type { DeviceTokenRepository } from '@assistant/persistence';
 import type { ApnsClient } from '@assistant/tools/modules/push';
 
 export interface PushChannelDeps {
-  db: Db;
   apns: ApnsClient;
+  devices: Pick<DeviceTokenRepository, 'listActive' | 'invalidate'>;
+  /** The owner the notices belong to: their id selects devices, their name titles the alert. */
+  owner: () => Promise<{ id: string; name: string }>;
 }
 
 /**
@@ -30,8 +30,8 @@ async function deliver(
   alert: { title: string; body: string; category: string; data?: Record<string, string> },
 ): Promise<void> {
   if (!deps.apns?.configured()) return;
-  const agent = await getAgent(deps.db);
-  const devices = await listActiveDeviceTokens(deps.db, agent.id);
+  const agent = await deps.owner();
+  const devices = await deps.devices.listActive(agent.id);
   for (const device of devices) {
     const result = await deps.apns
       .send({
@@ -44,7 +44,7 @@ async function deliver(
         return undefined;
       });
     if (result && !result.ok) {
-      if (result.unregistered) await invalidateDeviceToken(deps.db, device.token);
+      if (result.unregistered) await deps.devices.invalidate(device.token);
       else console.error('push: APNs rejected a send', result.status, result.reason);
     }
   }
@@ -62,7 +62,7 @@ export async function notifyOwnerByPush(
   input: { taskId?: string; text: string },
 ): Promise<void> {
   if (!deps.apns?.configured()) return;
-  const agent = await getAgent(deps.db);
+  const agent = await deps.owner();
   await deliver(deps, {
     title: agent.name,
     body: plain(input.text),
@@ -77,7 +77,7 @@ export async function notifyApprovalsByPush(
   approvals: ReadonlyArray<{ taskId: string; shortCode: string; summary: string }>,
 ): Promise<void> {
   if (!deps.apns?.configured() || approvals.length === 0) return;
-  const agent = await getAgent(deps.db);
+  const agent = await deps.owner();
   const single = approvals.length === 1 ? approvals[0] : undefined;
   // No approvalId in the payload: the notifier port only carries the short
   // code, and a wrong id would mis-resolve the notification's Approve/Deny

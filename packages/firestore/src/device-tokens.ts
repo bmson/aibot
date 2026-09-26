@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
-import type { DeviceTokenRegistrationInput, DeviceTokenRepository } from '@assistant/persistence';
+import type {
+  ActiveDeviceToken,
+  DeviceTokenRegistrationInput,
+  DeviceTokenRepository,
+} from '@assistant/persistence';
 import { privacyErasureIsActive } from './privacy-erasure.js';
-import { documentKey, encodeRecord, type InstallationStore } from './store.js';
+import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
+
+/** One owner's phones and tablets; far above any real device count. */
+const ACTIVE_LIMIT = 100;
 
 /**
  * New registrations use a token-derived ID so two concurrent first
@@ -79,5 +86,61 @@ export class FirestoreDeviceTokenRepository implements DeviceTokenRepository {
         }),
       );
     });
+  }
+
+  async listActive(agentId: string): Promise<ActiveDeviceToken[]> {
+    const snapshot = await this.store
+      .collection('deviceTokens')
+      .where('agentId', '==', agentId)
+      .where('invalidatedAt', '==', null)
+      .limit(ACTIVE_LIMIT + 1)
+      .get();
+    if (snapshot.size > ACTIVE_LIMIT) throw new Error('Device token scan exceeded bound');
+    return snapshot.docs
+      .flatMap((doc) => {
+        const row = decodeRecord<{
+          id?: unknown;
+          agentId?: unknown;
+          token?: unknown;
+          environment?: unknown;
+          lastSeenAt?: unknown;
+        }>(doc.data());
+        if (
+          typeof row.id !== 'string' ||
+          documentKey(row.id) !== doc.id ||
+          row.agentId !== agentId ||
+          typeof row.token !== 'string'
+        )
+          return [];
+        return [
+          {
+            token: row.token,
+            environment: (row.environment === 'sandbox' ? 'sandbox' : 'production') as
+              | 'sandbox'
+              | 'production',
+            lastSeenAt: row.lastSeenAt instanceof Date ? row.lastSeenAt.getTime() : 0,
+          },
+        ];
+      })
+      .sort((a, b) => a.lastSeenAt - b.lastSeenAt)
+      .map(({ token, environment }) => ({ token, environment }));
+  }
+
+  async invalidate(token: string): Promise<void> {
+    const existing = await this.store
+      .collection('deviceTokens')
+      .where('token', '==', token)
+      .limit(2)
+      .get();
+    const now = this.store.now();
+    await Promise.all(
+      existing.docs.map((doc) =>
+        this.store.db.runTransaction(async (tx) => {
+          const current = await tx.get(doc.ref);
+          if (current.exists && current.get('token') === token)
+            tx.update(doc.ref, { invalidatedAt: now });
+        }),
+      ),
+    );
   }
 }

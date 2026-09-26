@@ -1,3 +1,4 @@
+import { getAgent } from '@assistant/core/chat';
 import { ApnsClient } from '@assistant/tools/modules/push';
 import { defineModule, type ModuleHooks } from '../platform.js';
 import { notifyApprovalsByPush, notifyOwnerByPush, type PushChannelDeps } from './channel.js';
@@ -19,14 +20,29 @@ const unconfiguredApnsClient = () => new ApnsClient('', '', '', '');
 export const pushModule = defineModule<ApnsClient>({
   meta: pushMeta,
   absent: unconfiguredApnsClient,
-  create: ({ config, db }) => {
+  create: ({ config, db, persistence }) => {
     const client = new ApnsClient(
       config.APNS_KEY_ID,
       config.APNS_TEAM_ID,
       config.APNS_PRIVATE_KEY,
       config.APNS_BUNDLE_ID,
     );
-    const channelDeps: PushChannelDeps = { db, apns: client };
+    // Devices come from the persistence bundle on either driver. The owner is
+    // the configured Firestore agent, or PostgreSQL's single agent row.
+    const devices = persistence.deviceTokens;
+    if (!devices) throw new Error('push: persistence has no device-token repository');
+    const firestore = config.PERSISTENCE_DRIVER === 'firestore';
+    const channelDeps: PushChannelDeps = {
+      apns: client,
+      devices,
+      owner: firestore
+        ? async () => {
+            const owner = await persistence.executionContext.getAgent(config.FIRESTORE_AGENT_ID);
+            if (!owner) throw new Error('push: the configured owner is missing');
+            return owner;
+          }
+        : () => getAgent(db),
+    };
 
     const hooks: ModuleHooks = {
       ownerNotifier: {
