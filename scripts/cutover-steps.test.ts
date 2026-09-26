@@ -161,7 +161,13 @@ function bundleFixture() {
         sha256: null,
         taskId: null,
       }),
-      record('import_sources', 'recovered-1', { workspacePath: 'imports/b.zip', status: 'done' }),
+      // Written while the bytes were missing, so its recorded size is stale.
+      record('files', 'recovered-1', {
+        workspacePath: 'imports/b.zip',
+        bytes: 0,
+        sha256: null,
+        taskId: null,
+      }),
       record('files', 'missing-1', {
         workspacePath: 'traces/c.zip',
         bytes: 0,
@@ -514,10 +520,17 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
       });
       return { code: 0, stdout: 'Running\n' };
     }
+    // Like the real audit: exit 2 for the manifest's missing object and the
+    // recovered object's stale size.
     if (args[0] === 'workspace:assets-audit')
       return {
-        code: 0,
-        stdout: JSON.stringify({ references: 3, digestMismatches: 0, sizeMismatches: 0 }),
+        code: 2,
+        stdout: JSON.stringify({
+          references: 3,
+          missingObjects: 1,
+          digestMismatches: 0,
+          sizeMismatches: 1,
+        }),
       };
     if (args[0] === 'workspace:assets-recover')
       return {
@@ -828,6 +841,16 @@ describe('cutover orchestration', () => {
       'push subscription gmail-events-push keeps its live OIDC identity',
     );
     expect(JSON.stringify(preflight)).not.toContain('assistant-gmail-push@');
+  });
+
+  it('fails assets on a size mismatch that no recovery hash explains', async () => {
+    const { config, store, world } = setup();
+    await runAll(config, world.deps, store, 'verify-import');
+    const live = world.objects.get(`${BUCKET}/workspace/assistant/files/a.pdf`);
+    if (live) live.size = 8;
+    const assets = await runCutoverStep('assets', config, world.deps, store, { confirm: 'assets' });
+    expect(assets.status).toBe('failed');
+    expect(JSON.stringify(assets.result)).toContain('"sizeMismatches":["present-1"]');
   });
 
   it('requires a per-step confirmation before any production change', async () => {

@@ -522,9 +522,16 @@ export function lastJsonObject(stdout: string): Record<string, unknown> {
   throw new Error('Command did not print a JSON result');
 }
 
-async function runCli(context: StepContext, command: string, args: string[], env = {}) {
+async function runCli(
+  context: StepContext,
+  command: string,
+  args: string[],
+  env = {},
+  acceptedCodes: number[] = [0],
+) {
   const { code, stdout } = await context.deps.commands(command, args, env);
-  if (code !== 0) throw new Error(`${command} ${args[0] ?? ''} exited with status ${code}`);
+  if (!acceptedCodes.includes(code))
+    throw new Error(`${command} ${args[0] ?? ''} exited with status ${code}`);
   return lastJsonObject(stdout);
 }
 
@@ -1535,13 +1542,16 @@ async function assetsStep(context: StepContext): Promise<StepResult> {
   const { config, deps, store } = context;
   const bundlePath = store.privatePath('final-snapshot.json');
   const common = ['--bucket', config.workspaceBucket, '--gcloud-auth'];
-  const audit = await runCli(context, 'pnpm', [
-    'workspace:assets-audit',
-    '--bundle',
-    bundlePath,
-    '--verify-digests',
-    ...common,
-  ]);
+  // The audit exits 2 when it finds missing or mismatched objects. Missing
+  // objects are expected here (the recovery manifest accounts for them), so keep
+  // its report and let the checks below decide.
+  const audit = await runCli(
+    context,
+    'pnpm',
+    ['workspace:assets-audit', '--bundle', bundlePath, '--verify-digests', ...common],
+    {},
+    [0, 2],
+  );
   const recovery = await runCli(context, 'pnpm', [
     'workspace:assets-recover',
     '--bundle',
@@ -1586,6 +1596,7 @@ async function assetsStep(context: StepContext): Promise<StepResult> {
   let restored = 0;
   const unaccountedMissing: string[] = [];
   const recoveredVerified: string[] = [];
+  const sizeMismatches: string[] = [];
   for (const reference of references) {
     const live = {
       bucket: config.workspaceBucket,
@@ -1607,6 +1618,14 @@ async function assetsStep(context: StepContext): Promise<StepResult> {
       recovered.destination.bytes === stat.size
     )
       recoveredVerified.push(reference.id);
+    // A recovered object's row was written while its bytes were missing, so its
+    // recorded size can be stale; the recovery hash above verifies those bytes.
+    if (
+      reference.expectedBytes !== undefined &&
+      stat.size !== reference.expectedBytes &&
+      !recoveredVerified.includes(reference.id)
+    )
+      sizeMismatches.push(reference.id);
     const backup = { bucket: backupRoot.bucket, name: `${backupRoot.name}${reference.path}` };
     if (!(await copyVerified(source, backup, digest))) continue;
     backedUp++;
@@ -1644,10 +1663,11 @@ async function assetsStep(context: StepContext): Promise<StepResult> {
     backedUp === present,
   );
   check(checks, 'every backup restores with identical SHA-256', restored === present);
+  check(checks, 'audit found no digest mismatch', audit.digestMismatches === 0);
   check(
     checks,
-    'audit found no digest or size mismatch',
-    audit.digestMismatches === 0 && audit.sizeMismatches === 0,
+    'no size mismatch outside hash-verified recovered objects',
+    sizeMismatches.length === 0,
   );
   return {
     passed: checks.every((item) => item.ok),
@@ -1663,6 +1683,7 @@ async function assetsStep(context: StepContext): Promise<StepResult> {
       backupPrefix: config.assets.backupPrefix,
       restorePrefix: config.assets.restorePrefix,
       recoveredVerified,
+      sizeMismatches,
       unaccountedMissing,
       unresolved,
     },
