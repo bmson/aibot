@@ -31,6 +31,7 @@ import type { AmbientSnapshotRepository, OwnerContextRepository } from './owner-
 import type { PulseRepository } from './pulse.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
+import type { SelfImprovementRepository } from './self-improvement.js';
 import type { SkillContextRepository } from './skill-context.js';
 import type { SuggestionRepository } from './suggestions.js';
 import type { TaskRepository } from './task-lifecycle.js';
@@ -94,4 +95,6 @@ export interface ExecutionPersistence {
   readonly pulse?: PulseRepository;
   /** Present where the `chat.segment` job has a portable adapter. */
   readonly conversationSegmentation?: ConversationSegmentationRepository;
+  /** Present where the `self.improve` job has a portable adapter. */
+  readonly selfImprovement?: SelfImprovementRepository;
 }

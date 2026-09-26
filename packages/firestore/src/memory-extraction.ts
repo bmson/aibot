@@ -353,7 +353,7 @@ export class FirestoreMemoryExtractionRepository implements MemoryExtractionRepo
           supersededById: null,
           ownerConfirmed: false,
           pinned: false,
-          source: 'extraction',
+          source: input.source ?? 'extraction',
           lastAccessedAt: null,
           lastConsolidatedAt: null,
         };

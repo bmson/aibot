@@ -30,6 +30,7 @@ import { FirestoreOwnerNoticeRepository, firestoreOwnerNotices } from './owner-n
 import { FirestorePulseRepository } from './pulse.js';
 import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 import { FirestoreReminderDeliveryRepository } from './reminders.js';
+import { FirestoreSelfImprovementRepository } from './self-improvement.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
 import type { InstallationStore } from './store.js';
 import { FirestoreSuggestionRepository } from './suggestions.js';
@@ -89,5 +90,6 @@ export function createFirestoreExecutionPersistence(
       store,
       skillEmbeddingSpace,
     ),
+    selfImprovement: new FirestoreSelfImprovementRepository(store, agentId),
   };
 }

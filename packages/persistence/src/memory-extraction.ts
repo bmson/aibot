@@ -24,7 +24,7 @@ export interface ExtractedMemoryFact {
   importance: number;
   /** Two-decimal string, as stored. */
   confidence: string;
-  domain: string;
+  domain: string | null;
   validFrom: Date | null;
   expiresAt: Date | null;
   /** Who the fact is about: "owner", a person's name, or an assistant alias. */
@@ -105,6 +105,8 @@ export interface MemoryExtractionRepository {
     quarantined: boolean;
     facts: ExtractedMemoryFact[];
     occasions: ExtractedOccasion[];
+    /** The memories' `source`; nightly extraction when omitted. */
+    source?: 'extraction' | 'self-improve';
   }): Promise<MemoryExtractionApplied | null>;
   /** The owner's open and snoozed loops, most recently touched first. */
   activeCommitments(agentId: string, limit: number): Promise<Array<{ id: string; title: string }>>;

@@ -14,6 +14,11 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
+import type {
+  CodeJobLease,
+  ExecutionPersistence,
+  SelfImprovementRepository,
+} from '@assistant/persistence';
 import { and, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
@@ -81,35 +86,147 @@ export interface SelfImproveResult {
   experienceSaved: boolean;
 }
 
+/** The review's PostgreSQL reads and proposal ledger, with the queries it has always run. */
+function postgresSelfImprovement(db: Db): SelfImprovementRepository {
+  return {
+    kind: 'self-improvement-repository',
+    async signals({ agentId, since, staleBefore, costOutlierUsd, outlierLimit }) {
+      const failedCalls = await db
+        .select({ toolName: toolCalls.toolName, error: toolCalls.error })
+        .from(toolCalls)
+        .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
+        .where(
+          and(
+            eq(tasks.agentId, agentId),
+            eq(toolCalls.status, 'failed'),
+            gte(toolCalls.createdAt, since),
+          ),
+        );
+      const [stuck] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.agentId, agentId),
+            inArray(tasks.status, ['needs_attention', 'failed']),
+            gte(tasks.updatedAt, since),
+            gte(tasks.attempt, 2),
+          ),
+        );
+      const outliers = await db
+        .select({ role: modelCalls.role, costUsd: modelCalls.costUsd })
+        .from(modelCalls)
+        .innerJoin(tasks, eq(tasks.id, modelCalls.taskId))
+        .where(
+          and(
+            eq(tasks.agentId, agentId),
+            gte(modelCalls.createdAt, since),
+            gte(modelCalls.costUsd, String(costOutlierUsd)),
+          ),
+        )
+        .orderBy(desc(modelCalls.costUsd))
+        .limit(outlierLimit);
+      // The finalization funnel already persists these counters, but a stored
+      // metric is only useful if the improvement loop sees it.
+      const [quality] = await db
+        .select({
+          contractBlocks: sql<number>`count(*) FILTER (WHERE ${responseChecks.blocked})`,
+          unsupportedClaims: sql<number>`COALESCE(sum(${responseChecks.unsupportedCount}), 0)`,
+          mustActRetries: sql<number>`COALESCE(sum(${responseChecks.mustActRetries}), 0)`,
+          degradedSteps: sql<number>`COALESCE(sum(${responseChecks.degradedSteps}), 0)`,
+          verificationUnavailable: sql<number>`count(*) FILTER (WHERE ${responseChecks.outputVerificationUnavailable})`,
+        })
+        .from(responseChecks)
+        .innerJoin(tasks, eq(tasks.id, responseChecks.taskId))
+        .where(and(eq(tasks.agentId, agentId), gte(responseChecks.createdAt, since)));
+      const graphStatusRows = await db
+        .select({ status: knowledgeGraphSources.status, count: sql<number>`count(*)` })
+        .from(knowledgeGraphSources)
+        .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
+        .where(eq(memories.agentId, agentId))
+        .groupBy(knowledgeGraphSources.status);
+      const graphCounts = new Map(graphStatusRows.map((row) => [row.status, Number(row.count)]));
+      const [staleGraph] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(knowledgeGraphSources)
+        .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
+        .where(
+          and(
+            eq(memories.agentId, agentId),
+            eq(knowledgeGraphSources.status, 'pending'),
+            lt(knowledgeGraphSources.updatedAt, staleBefore),
+          ),
+        );
+      return {
+        failedCalls,
+        stuckCount: Number(stuck?.n ?? 0),
+        costOutliers: outliers,
+        contractBlocks: Number(quality?.contractBlocks ?? 0),
+        unsupportedClaims: Number(quality?.unsupportedClaims ?? 0),
+        mustActRetries: Number(quality?.mustActRetries ?? 0),
+        degradedSteps: Number(quality?.degradedSteps ?? 0),
+        verificationUnavailable: Number(quality?.verificationUnavailable ?? 0),
+        graphFailedSources: graphCounts.get('failed') ?? 0,
+        graphStalePending: Number(staleGraph?.count ?? 0),
+      };
+    },
+    async insertProposal(agentId, proposal) {
+      const [inserted] = await db
+        .insert(improvementProposals)
+        .values({ agentId, ...proposal })
+        .onConflictDoNothing({
+          target: [
+            improvementProposals.agentId,
+            improvementProposals.kind,
+            improvementProposals.title,
+          ],
+        })
+        .returning({ id: improvementProposals.id });
+      return Boolean(inserted);
+    },
+  };
+}
+
 /** Nightly self-improvement scan for one selected agent. */
 export async function runSelfImprove(
-  deps: { db: Db; router: ModelRouter; heartbeat?: () => Promise<void> },
-  opts: { agentId?: string; taskId?: string; now?: Date } = {},
+  deps: {
+    db: Db;
+    router: ModelRouter;
+    heartbeat?: () => Promise<void>;
+    /**
+     * The portable signals, proposal ledger and experience writer; without them
+     * the review uses PostgreSQL. The experience memory needs the task lease.
+     */
+    persistence?: Pick<
+      ExecutionPersistence,
+      'selfImprovement' | 'memoryExtraction' | 'notifications' | 'messages'
+    >;
+  },
+  opts: { agentId?: string; taskId?: string; now?: Date; lease?: () => CodeJobLease } = {},
 ): Promise<SelfImproveResult> {
   const { db, router } = deps;
+  const portable = deps.persistence?.selfImprovement ? deps.persistence : null;
+  const store = portable?.selfImprovement ?? postgresSelfImprovement(db);
   const now = opts.now ?? new Date();
   const since = new Date(now.getTime() - WINDOW_DAYS * 24 * 3600 * 1000);
 
   return withSpan('self.improve', {}, async () => {
     await deps.heartbeat?.();
-    const [fallbackAgent] = opts.agentId
-      ? []
-      : await db.select({ id: agents.id }).from(agents).limit(1);
+    const [fallbackAgent] =
+      opts.agentId || portable ? [] : await db.select({ id: agents.id }).from(agents).limit(1);
     const agentId = opts.agentId ?? fallbackAgent?.id;
     if (!agentId) return { patterns: 0, proposalsDrafted: 0, experienceSaved: false };
 
+    const signals = await store.signals({
+      agentId,
+      since,
+      staleBefore: new Date(now.getTime() - GRAPH_STALE_PENDING_MS),
+      costOutlierUsd: COST_OUTLIER_USD,
+      outlierLimit: 5,
+    });
+
     // 1. Failure patterns by tool + error signature.
-    const failedCalls = await db
-      .select({ toolName: toolCalls.toolName, error: toolCalls.error })
-      .from(toolCalls)
-      .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
-      .where(
-        and(
-          eq(tasks.agentId, agentId),
-          eq(toolCalls.status, 'failed'),
-          gte(toolCalls.createdAt, since),
-        ),
-      );
+    const failedCalls = signals.failedCalls;
     const failureCounts = new Map<string, { toolName: string; sig: string; count: number }>();
     for (const c of failedCalls) {
       const sig = errorSignature(c.error);
@@ -124,54 +241,22 @@ export async function runSelfImprove(
       .slice(0, 8);
 
     // 2. Dead-lettered / needs-attention tasks.
-    const [stuck] = await db
-      .select({ n: sql<number>`count(*)` })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agentId),
-          inArray(tasks.status, ['needs_attention', 'failed']),
-          gte(tasks.updatedAt, since),
-          gte(tasks.attempt, 2),
-        ),
-      );
-    const stuckCount = Number(stuck?.n ?? 0);
+    const stuckCount = signals.stuckCount;
 
     // 3. Cost outliers.
-    const outliers = await db
-      .select({ taskId: modelCalls.taskId, role: modelCalls.role, cost: modelCalls.costUsd })
-      .from(modelCalls)
-      .innerJoin(tasks, eq(tasks.id, modelCalls.taskId))
-      .where(
-        and(
-          eq(tasks.agentId, agentId),
-          gte(modelCalls.createdAt, since),
-          gte(modelCalls.costUsd, String(COST_OUTLIER_USD)),
-        ),
-      )
-      .orderBy(desc(modelCalls.costUsd))
-      .limit(5);
+    const outliers = signals.costOutliers;
 
     // 4. Response quality. The finalization funnel already persists these
     // counters, but a stored metric is only useful if the improvement loop
     // sees it. Aggregate recurring symptoms rather than reacting to one
     // conservative contract correction.
-    const [quality] = await db
-      .select({
-        contractBlocks: sql<number>`count(*) FILTER (WHERE ${responseChecks.blocked})`,
-        unsupportedClaims: sql<number>`COALESCE(sum(${responseChecks.unsupportedCount}), 0)`,
-        mustActRetries: sql<number>`COALESCE(sum(${responseChecks.mustActRetries}), 0)`,
-        degradedSteps: sql<number>`COALESCE(sum(${responseChecks.degradedSteps}), 0)`,
-        verificationUnavailable: sql<number>`count(*) FILTER (WHERE ${responseChecks.outputVerificationUnavailable})`,
-      })
-      .from(responseChecks)
-      .innerJoin(tasks, eq(tasks.id, responseChecks.taskId))
-      .where(and(eq(tasks.agentId, agentId), gte(responseChecks.createdAt, since)));
-    const contractBlocks = Number(quality?.contractBlocks ?? 0);
-    const unsupportedClaims = Number(quality?.unsupportedClaims ?? 0);
-    const mustActRetries = Number(quality?.mustActRetries ?? 0);
-    const degradedSteps = Number(quality?.degradedSteps ?? 0);
-    const verificationUnavailable = Number(quality?.verificationUnavailable ?? 0);
+    const {
+      contractBlocks,
+      unsupportedClaims,
+      mustActRetries,
+      degradedSteps,
+      verificationUnavailable,
+    } = signals;
     const responseSignals = [
       contractBlocks >= MIN_FAILURES
         ? `- response contract corrected ${contractBlocks} response(s) with ${unsupportedClaims} unsupported claim(s)`
@@ -188,26 +273,8 @@ export async function runSelfImprove(
     // 5. GraphRAG is offline by design. That makes a failed extraction or a
     // lease that outlives its normal run easy to miss unless it joins the same
     // owner-visible health review as response regressions.
-    const graphStatusRows = await db
-      .select({ status: knowledgeGraphSources.status, count: sql<number>`count(*)` })
-      .from(knowledgeGraphSources)
-      .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
-      .where(eq(memories.agentId, agentId))
-      .groupBy(knowledgeGraphSources.status);
-    const graphCounts = new Map(graphStatusRows.map((row) => [row.status, Number(row.count)]));
-    const failedGraphSources = graphCounts.get('failed') ?? 0;
-    const [staleGraph] = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(knowledgeGraphSources)
-      .innerJoin(memories, eq(memories.id, knowledgeGraphSources.memoryId))
-      .where(
-        and(
-          eq(memories.agentId, agentId),
-          eq(knowledgeGraphSources.status, 'pending'),
-          lt(knowledgeGraphSources.updatedAt, new Date(now.getTime() - GRAPH_STALE_PENDING_MS)),
-        ),
-      );
-    const staleGraphPending = Number(staleGraph?.count ?? 0);
+    const failedGraphSources = signals.graphFailedSources;
+    const staleGraphPending = signals.graphStalePending;
     const graphSignals = [
       failedGraphSources >= MIN_FAILURES
         ? `- GraphRAG has ${failedGraphSources} failed source extraction(s)`
@@ -231,7 +298,7 @@ export async function runSelfImprove(
       'Recent reliability review (last 7 days):',
       ...topFailures.map((f) => `- ${f.toolName} failed ${f.count}× — "${f.sig}"`),
       stuckCount > 0 ? `- ${stuckCount} task(s) needed attention after retries` : '',
-      ...outliers.map((o) => `- expensive ${o.role} call: $${Number(o.cost).toFixed(3)}`),
+      ...outliers.map((o) => `- expensive ${o.role} call: $${Number(o.costUsd).toFixed(3)}`),
       ...responseSignals,
       ...graphSignals,
     ]
@@ -242,7 +309,43 @@ export async function runSelfImprove(
     let experienceSaved = false;
     const content = `Self-improvement review: ${summary.slice(0, 500)}`.slice(0, 600);
     const contentHash = createHash('sha256').update(content).digest('hex');
-    if (!(await isTombstoned(db, contentHash))) {
+    const experienceExpiry = new Date(now.getTime() + 90 * 24 * 3600 * 1000);
+    if (portable) {
+      const extraction = portable.memoryExtraction;
+      if (!extraction || !opts.lease)
+        throw new Error('Portable self-improvement needs memory extraction and the task lease');
+      const [embedding] = await router.embed([content], { taskId: opts.taskId });
+      await deps.heartbeat?.();
+      if (embedding) {
+        // One checkpoint per review task: a reclaimed run never re-saves it.
+        const applied = await extraction.applyMemories({
+          agentId,
+          lease: opts.lease(),
+          checkpointKey: 'self-improve.experience',
+          originTrust: 'assistant',
+          quarantined: false,
+          facts: [
+            {
+              content,
+              contentHash,
+              embedding,
+              category: 'experience',
+              kind: 'episode',
+              importance: 2,
+              confidence: '0.80',
+              domain: null,
+              validFrom: null,
+              expiresAt: experienceExpiry,
+              subject: '',
+              relationship: '',
+            },
+          ],
+          occasions: [],
+          source: 'self-improve',
+        });
+        experienceSaved = (applied?.saved ?? 0) > 0;
+      }
+    } else if (!(await isTombstoned(db, contentHash))) {
       const [embedding] = await router.embed([content], { taskId: opts.taskId });
       await deps.heartbeat?.();
       const [saved] = await db
@@ -259,7 +362,7 @@ export async function runSelfImprove(
           originTrust: 'assistant',
           source: 'self-improve',
           sourceTaskId: opts.taskId,
-          expiresAt: new Date(now.getTime() + 90 * 24 * 3600 * 1000),
+          expiresAt: experienceExpiry,
         })
         .onConflictDoNothing({ target: memories.contentHash })
         .returning({ id: memories.id });
@@ -307,34 +410,32 @@ export async function runSelfImprove(
           : draft.kind === 'policy'
             ? { toolName: draft.toolName, suggestion: draft.suggestion }
             : { suggestion: draft.suggestion };
-      const [inserted] = await db
-        .insert(improvementProposals)
-        .values({
-          agentId,
-          kind: draft.kind,
-          title: draft.title.trim().slice(0, 200),
-          rationale: draft.rationale,
-          change,
-          evidenceIds,
-        })
-        .onConflictDoNothing({
-          target: [
-            improvementProposals.agentId,
-            improvementProposals.kind,
-            improvementProposals.title,
-          ],
-        })
-        .returning({ id: improvementProposals.id });
+      const inserted = await store.insertProposal(agentId, {
+        kind: draft.kind,
+        title: draft.title.trim().slice(0, 200),
+        rationale: draft.rationale,
+        change,
+        evidenceIds,
+      });
       if (inserted) proposalsDrafted += 1;
     }
 
     if (proposalsDrafted > 0) {
-      await notifyOwnerInNotifications(
-        db,
-        agentId,
-        `🔧 I drafted ${proposalsDrafted} improvement proposal${proposalsDrafted === 1 ? '' : 's'} from this week's reliability review. Review them on the [Improvements page](/improvements) — nothing changes until you approve.`,
-        opts.taskId,
-      ).catch((err) => console.error('self-improve: owner notify failed', err));
+      const text = `🔧 I drafted ${proposalsDrafted} improvement proposal${proposalsDrafted === 1 ? '' : 's'} from this week's reliability review. Review them on the [Improvements page](/improvements) — nothing changes until you approve.`;
+      const notify = portable
+        ? async () => {
+            const conversationId = await portable.notifications.getOrCreate(agentId);
+            await portable.messages.append({
+              conversationId,
+              ...(opts.taskId ? { taskId: opts.taskId } : {}),
+              role: 'assistant',
+              origin: 'assistant',
+              parts: [{ type: 'text', text }],
+              text,
+            });
+          }
+        : () => notifyOwnerInNotifications(db, agentId, text, opts.taskId);
+      await notify().catch((err) => console.error('self-improve: owner notify failed', err));
     }
 
     return {
