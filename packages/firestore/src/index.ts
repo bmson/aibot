@@ -111,6 +111,7 @@ export {
   readPrivacyErasureFence,
 } from './privacy-erasure.js';
 export { FirestorePrivacyExportRepository } from './privacy-export.js';
+export { FirestoreProactiveHealthRepository } from './proactive-health.js';
 export { FirestoreProfileOverviewRepository } from './profile-full-overview.js';
 export { FirestoreProfileLibraryRepository } from './profile-library.js';
 export { createFirestoreProfileMemoryCommandPersistence } from './profile-memory-commands.js';

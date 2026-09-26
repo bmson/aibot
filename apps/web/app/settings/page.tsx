@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { proactiveHealthView } from '@assistant/application/proactive-health';
 import { getSettingsOverview } from '@assistant/application/settings';
 import { envFile, loadConfig } from '@assistant/config';
 import {
@@ -6,6 +7,7 @@ import {
   createFirestoreSettingsPersistence,
   createInstallationStore,
   FirestoreMcpConnectionReadRepository,
+  FirestoreProactiveHealthRepository,
   readPrivacyErasureFence,
 } from '@assistant/firestore';
 import { ArrowRight } from 'lucide-react';
@@ -102,7 +104,7 @@ function SettingRow({
 export default async function SettingsPage() {
   await requireOwner();
   const config = loadConfig();
-  const readOnly = config.PERSISTENCE_DRIVER === 'firestore';
+  const firestore = config.PERSISTENCE_DRIVER === 'firestore';
   const now = new Date();
   const [
     {
@@ -114,14 +116,17 @@ export default async function SettingsPage() {
     },
     mcpConnections,
     proactiveHealth,
-  ] = readOnly
+  ] = firestore
     ? [
         await getFirestorePageSettings(),
         await new FirestoreMcpConnectionReadRepository(
           getFirestoreInstallationStore(),
           config.FIRESTORE_AGENT_ID,
         ).list(config.FIRESTORE_AGENT_ID),
-        null,
+        await proactiveHealthView(
+          new FirestoreProactiveHealthRepository(getFirestoreInstallationStore()),
+          config.FIRESTORE_AGENT_ID,
+        ),
       ]
     : await Promise.all([
         getApplication().getSettings(),
@@ -137,7 +142,7 @@ export default async function SettingsPage() {
   // RSC payload would be one cached-response or shoulder-surf away from a
   // bearer credential that bypasses web sign-in entirely. The full value is
   // revealed once, at rotation time, by the action that generates it.
-  const requestHeaders = readOnly ? null : await headers();
+  const requestHeaders = await headers();
   const host = requestHeaders?.get('x-forwarded-host') ?? requestHeaders?.get('host') ?? '';
   const proto = requestHeaders?.get('x-forwarded-proto') ?? 'http';
   const serverUrl = host ? `${proto}://${host}` : config.AUTH_URL;
@@ -177,23 +182,17 @@ export default async function SettingsPage() {
       </section>
 
       {/* Mobile app pairing */}
-      {!readOnly && (
-        <section>
-          <SectionHeading title="Mobile app" hint="pair the iPhone app with this server" />
-          <Card className="mt-3">
-            <MobileTokenPanel
-              maskedToken={maskedToken}
-              serverUrl={serverUrl}
-              canRotate={canRotate}
-            />
-          </Card>
-        </section>
-      )}
+      <section>
+        <SectionHeading title="Mobile app" hint="pair the iPhone app with this server" />
+        <Card className="mt-3">
+          <MobileTokenPanel maskedToken={maskedToken} serverUrl={serverUrl} canRotate={canRotate} />
+        </Card>
+      </section>
 
       {/* Is the proactive machinery actually receiving anything?
           Every producer is self-silencing, so a broken mail pipeline and a
           quiet week look identical. This is the surface that tells them apart. */}
-      {!readOnly && proactiveHealth && (
+      {proactiveHealth && (
         <section>
           <SectionHeading
             title="Noticing"
@@ -282,7 +281,7 @@ export default async function SettingsPage() {
           <McpConnectionsPanel
             connections={mcpConnections}
             discoveryAvailable
-            executionAvailable={!readOnly}
+            executionAvailable={!firestore}
           />
         </Card>
       </section>
@@ -351,26 +350,24 @@ export default async function SettingsPage() {
       </section>
 
       {/* Costs — one destination, so the whole row is the link. */}
-      {!readOnly && (
-        <section>
-          <SectionHeading title="Spending" />
-          <Link
-            href="/costs"
-            className={`${cardShellClass} ${cardInteractiveClass} ${focusRing} mt-3 flex min-w-0 items-center justify-between gap-4 px-4 py-4 sm:px-5`}
-          >
-            <span className="min-w-0">
-              <span className={`block ${cardTitleClass}`}>Usage and limits</span>
-              <span className="mt-1 block text-sm leading-5 text-muted">
-                Today’s spend, the monthly total, and the caps that pause work.
-              </span>
+      <section>
+        <SectionHeading title="Spending" />
+        <Link
+          href="/costs"
+          className={`${cardShellClass} ${cardInteractiveClass} ${focusRing} mt-3 flex min-w-0 items-center justify-between gap-4 px-4 py-4 sm:px-5`}
+        >
+          <span className="min-w-0">
+            <span className={`block ${cardTitleClass}`}>Usage and limits</span>
+            <span className="mt-1 block text-sm leading-5 text-muted">
+              Today’s spend, the monthly total, and the caps that pause work.
             </span>
-            <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-accent">
-              Open costs
-              <ArrowRight className="size-3.5" aria-hidden="true" />
-            </span>
-          </Link>
-        </section>
-      )}
+          </span>
+          <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-accent">
+            Open costs
+            <ArrowRight className="size-3.5" aria-hidden="true" />
+          </span>
+        </Link>
+      </section>
 
       {/* Approval rules */}
       <section>

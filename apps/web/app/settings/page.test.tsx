@@ -9,6 +9,9 @@ const auth = vi.hoisted(() => ({ owner: vi.fn() }));
 const mcpDiscovery = vi.hoisted(() => ({ inspect: vi.fn() }));
 vi.mock('@/auth', () => ({ requireOwner: auth.owner }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
+vi.mock('next/headers', () => ({
+  headers: async () => new Headers({ host: 'assistant.test', 'x-forwarded-proto': 'https' }),
+}));
 vi.mock('@assistant/tools/mcp', () => ({
   inspectMcpConnection: mcpDiscovery.inspect,
 }));
@@ -159,7 +162,12 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     expect(html).toContain('Resume');
     expect(html).toContain('Use');
     expect(html).toContain('Delete');
-    expect(html).not.toContain('/costs');
+    // Pairing, spending and the proactive-health panel need no SQL.
+    expect(html).toContain('pair the iPhone app with this server');
+    expect(html).toContain('https://assistant.test');
+    expect(html).toContain('/costs');
+    expect(html).toContain('Noticing');
+    expect(html).toContain('No push device is registered');
     expect(html).toContain('MCP connections');
     expect(html).toContain('MCP tool execution is not yet available with Firestore persistence.');
     expect(html).toContain('Add');

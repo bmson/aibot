@@ -5,6 +5,7 @@ import {
   type ProactiveHealth,
 } from '@assistant/core/proactive/pipeline-health';
 import type { Db } from '@assistant/db';
+import type { ProactiveHealthRepository } from '@assistant/persistence';
 
 /**
  * "Is the assistant actually able to notice anything?" as a view model.
@@ -22,9 +23,16 @@ export interface ProactiveHealthView extends Omit<ProactiveHealth, 'lastMailAt'>
 }
 
 export async function getProactiveHealth(db: Db): Promise<ProactiveHealthView> {
+  return proactiveHealthView(db, (await getAgent(db)).id);
+}
+
+/** The same view over a portable counts repository, for the configured owner. */
+export async function proactiveHealthView(
+  storage: Db | ProactiveHealthRepository,
+  agentId: string,
+): Promise<ProactiveHealthView> {
   const config = loadConfig();
-  const agent = await getAgent(db);
-  const health = await assessProactiveHealth(db, agent.id, {
+  const health = await assessProactiveHealth(storage, agentId, {
     ingestMode: config.EMAIL_INGEST_MODE,
     googleEnabled: isModuleEnabled(config, 'google'),
   });
