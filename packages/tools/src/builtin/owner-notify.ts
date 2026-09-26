@@ -12,6 +12,11 @@ export function registerPortableOwnerNotifyTool(
       conversationId?: string | null;
       text: string;
     }) => Promise<{ conversationId: string }>;
+    /**
+     * The out-of-band leg (SMS/push) behind the owner's nudge policy. Without
+     * it a requested ping is reported as not sent.
+     */
+    notifyOwner?: (input: { text: string; taskId: string; urgency: 'ambient' }) => Promise<void>;
   },
 ): ToolRegistry {
   register(
@@ -19,7 +24,7 @@ export function registerPortableOwnerNotifyTool(
     {
       name: 'owner.notify',
       description:
-        'Leave a message for the owner in the current conversation, or in Notifications when there is no conversation. A phone ping may be requested, but is reported as unavailable until a phone channel is configured.',
+        "Leave a message for the owner in the current conversation, or in Notifications when there is no conversation. Set ping=true to also buzz their phone (SMS/push) — reserved for proactive, time-sensitive notes; the owner's quiet hours and daily ping limit still govern it, and it is reported as not sent when no phone channel is configured.",
       inputSchema: z.object({
         message: z.string().min(1).max(4000),
         ping: z.boolean().optional(),
@@ -33,7 +38,20 @@ export function registerPortableOwnerNotifyTool(
           conversationId: ctx.conversationId,
           text: args.message,
         });
-        return { notified: true, conversationId: result.conversationId, pinged: false };
+        // Ambient by construction, as in the PostgreSQL tool: the policy gate
+        // downstream decides whether the phone buzzes, and the chat message
+        // above is the record, so a failed radio never fails the tool.
+        let pinged = false;
+        if (args.ping && deps.notifyOwner) {
+          pinged = await deps
+            .notifyOwner({ text: args.message, taskId: ctx.taskId, urgency: 'ambient' })
+            .then(() => true)
+            .catch((err) => {
+              console.error('owner.notify ping failed', err);
+              return false;
+            });
+        }
+        return { notified: true, conversationId: result.conversationId, pinged };
       },
     },
     { ownerVisibleOnly: true },

@@ -373,6 +373,24 @@ export function modelProviderConfigProblems(config: Config): string[] {
   return problems;
 }
 
+/**
+ * Modules whose every runtime path — tools, jobs, callbacks, sweep steps,
+ * ticks, and owner-notifier legs — runs on Firestore persistence. A module
+ * joins only once each of its rows in docs/firestore-agent-runtime-inventory.md
+ * is Ready.
+ */
+export const FIRESTORE_PORTABLE_MODULES: readonly AssistantModule[] = [
+  'reminders',
+  'calendar',
+  'browser',
+  'code',
+  'search',
+  'maps',
+  'watches',
+  'push',
+  'sms',
+];
+
 /** Firestore agent mode stays narrow until the remaining runtime ports migrate. */
 export function validateAgentPersistenceConfig(
   config: Config,
@@ -398,8 +416,13 @@ export function validateAgentPersistenceConfig(
       problems.push('FIRESTORE_EMBEDDING_SPACE must be JSON {provider,model,dimensions,revision}');
     }
   }
-  if (config.ASSISTANT_MODULES.some((module) => module !== 'reminders' && module !== 'calendar'))
-    problems.push('only ASSISTANT_MODULES=reminders,calendar is supported in Firestore agent mode');
+  const unported = config.ASSISTANT_MODULES.filter(
+    (module) => !FIRESTORE_PORTABLE_MODULES.includes(module),
+  );
+  if (unported.length)
+    problems.push(
+      `ASSISTANT_MODULES=${unported.join(',')} still needs PostgreSQL; Firestore agent mode supports ${FIRESTORE_PORTABLE_MODULES.join(',')}`,
+    );
   // Cloud Tasks is supported: the scheduled /internal/sweep dispatches the
   // durable Firestore outbox. The shared-secret internal auth refuses
   // cloudtasks deployments on its own, so OIDC is required in practice.

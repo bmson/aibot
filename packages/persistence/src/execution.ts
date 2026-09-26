@@ -6,6 +6,7 @@ import type { CardRefreshRepository } from './card-refresh.js';
 import type { CommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import type { CostRepository, MessageRepository } from './contracts.js';
 import type { ConversationSegmentationRepository } from './conversation-segmentation.js';
+import type { DeviceTokenRepository } from './device-tokens.js';
 import type { ToolExecutionRepository } from './dispatch.js';
 import type { DreamRepository } from './dream.js';
 import type { ExecutionContextRepository } from './execution-context.js';
@@ -27,14 +28,17 @@ import type {
   NotificationsConversationRepository,
   OwnerNoticeRepository,
 } from './notifications.js';
+import type { NudgePolicyRepository } from './nudge-policy.js';
 import type { OwnerCardCompilationRepository } from './owner-card-compilation.js';
 import type { AmbientSnapshotRepository, OwnerContextRepository } from './owner-context.js';
 import type { PulseRepository } from './pulse.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
 import type { SkillContextRepository } from './skill-context.js';
+import type { SmsChannelRepository } from './sms-channel.js';
 import type { SuggestionRepository } from './suggestions.js';
 import type { TaskRepository } from './task-lifecycle.js';
+import type { VoiceContextRepository } from './voice-context.js';
 import type { WatchRepository } from './watches.js';
 
 /** One store supplies every migrated executor operation. Remaining domain ports are separate. */
@@ -85,6 +89,14 @@ export interface ExecutionPersistence {
   readonly ambientSnapshots?: AmbientSnapshotRepository;
   /** Present where the open-loop sweep has a portable adapter. */
   readonly commitmentMaintenance?: CommitmentMaintenanceRepository;
+  /** Present where the push channel reads and invalidates device tokens portably. */
+  readonly deviceTokens?: DeviceTokenRepository;
+  /** Present where out-of-band pings consult quiet hours and the daily cap portably. */
+  readonly nudgePolicy?: NudgePolicyRepository;
+  /** Present where outbound rewrites read the owner's voice portably. */
+  readonly voiceContext?: VoiceContextRepository;
+  /** Present where the SMS channel keeps its state portably. */
+  readonly smsChannel?: SmsChannelRepository;
   /** Present where background producers post their dashboard copy portably. */
   readonly ownerNotices?: OwnerNoticeRepository;
   /** Present where producers record one-tap suggestions portably. */

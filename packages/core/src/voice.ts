@@ -1,4 +1,5 @@
-import { type Db, voiceProfile, writingSamples } from '@assistant/db';
+import { createPostgresVoiceContextRepository, type Db, writingSamples } from '@assistant/db';
+import type { VoiceContextRepository } from '@assistant/persistence';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ModelRouter } from './model-router/router.js';
@@ -71,38 +72,32 @@ const FactCheckSchema = z.object({
 
 /** Load the voice profile + the nearest same-register samples to the draft. */
 export async function loadVoiceContext(
-  db: Db,
+  store: Db | VoiceContextRepository,
   router: ModelRouter,
   register: VoiceRegister,
   draft: string,
 ): Promise<VoiceContext> {
-  const [profile] = await db.select().from(voiceProfile).where(eq(voiceProfile.id, 1));
+  const voice =
+    'kind' in store && store.kind === 'voice-context-repository'
+      ? store
+      : createPostgresVoiceContextRepository(store as Db);
+  const profile = await voice.profile();
   let samples: string[] = [];
-  const [count] = await db
-    .select({ n: sql<number>`count(*)` })
-    .from(writingSamples)
-    .where(eq(writingSamples.register, register));
-  if (Number(count?.n ?? 0) > 0) {
+  if (await voice.hasSamples(register)) {
     // Best-effort: sample retrieval must never fail the outbound message. A
     // budget-blocked or erroring embed (router.embed throws) simply means no
     // nearest-sample context — the profile text alone still guides the rewrite.
     try {
       const [embedding] = await router.embed([draft.slice(0, 2000)]);
-      const rows = await db
-        .select({ text: writingSamples.text })
-        .from(writingSamples)
-        .where(eq(writingSamples.register, register))
-        .orderBy(sql`${writingSamples.embedding} <=> ${JSON.stringify(embedding)}::vector`)
-        .limit(5);
-      samples = rows.map((r) => r.text);
+      if (embedding) samples = await voice.nearestSamples(register, embedding, 5);
     } catch (err) {
       console.error('voice sample retrieval failed — continuing without samples', err);
     }
   }
   return {
     description: profile?.description ?? '',
-    dos: (profile?.dos ?? []) as string[],
-    donts: (profile?.donts ?? []) as string[],
+    dos: profile?.dos ?? [],
+    donts: profile?.donts ?? [],
     signature: profile?.signature ?? '',
     samples,
   };

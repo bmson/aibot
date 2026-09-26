@@ -4,6 +4,7 @@ import { createPostgresApprovalRepository } from './approval-repository.js';
 import { createPostgresCardRefreshRepository } from './card-refresh-repository.js';
 import type { Db } from './client.js';
 import { createPostgresCostRepository } from './cost-repository.js';
+import { createPostgresDeviceTokenRepository } from './device-token-repository.js';
 import { createPostgresExecutionContextRepository } from './execution-context-repository.js';
 import { createPostgresExecutionEvidenceRepository } from './execution-evidence-repository.js';
 import { createPostgresExecutionJobRepository } from './execution-jobs-repository.js';
@@ -18,12 +19,15 @@ import { createPostgresMessageRepository } from './message-repository.js';
 import { createPostgresMissionRepository } from './mission-repository.js';
 import { createPostgresModelRoutingRepository } from './model-routing-repository.js';
 import { createPostgresNotificationsConversationRepository } from './notifications-conversation-repository.js';
+import { createPostgresNudgePolicyRepository } from './nudge-policy-repository.js';
 import { createPostgresOwnerCardCompilationRepository } from './owner-card-compilation-repository.js';
 import { createPostgresOwnerContextRepository } from './owner-context-repository.js';
 import { createPostgresRecallMetricsRepository } from './recall-metrics-repository.js';
 import { createPostgresSkillContextRepository } from './skill-context-repository.js';
+import { createPostgresSmsChannelRepository } from './sms-channel-repository.js';
 import { createPostgresTaskRepository } from './task-lifecycle-repository.js';
 import { createPostgresToolExecutionRepository } from './tool-execution-repository.js';
+import { createPostgresVoiceContextRepository } from './voice-context-repository.js';
 import { createPostgresWatchRepository } from './watch-repository.js';
 
 export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence {
@@ -54,5 +58,9 @@ export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence
     notifications: createPostgresNotificationsConversationRepository(db),
     goals: createPostgresGoalRuntimeRepository(db),
     missions: createPostgresMissionRepository(db),
+    deviceTokens: createPostgresDeviceTokenRepository(db),
+    nudgePolicy: createPostgresNudgePolicyRepository(db),
+    voiceContext: createPostgresVoiceContextRepository(db),
+    smsChannel: createPostgresSmsChannelRepository(db),
   };
 }

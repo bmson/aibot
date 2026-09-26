@@ -12,4 +12,13 @@ export interface DeviceTokenRepository {
    * token to this agent, and revives a token APNs previously invalidated.
    */
   register(agentId: string, registration: DeviceTokenRegistrationInput): Promise<void>;
+  /** Deliverable tokens for one agent, oldest first so a replaced token loses ties. */
+  listActive(agentId: string): Promise<ActiveDeviceToken[]>;
+  /** APNs said Unregistered (410): stop sending to the token, but keep the row. */
+  invalidate(token: string): Promise<void>;
+}
+
+export interface ActiveDeviceToken {
+  token: string;
+  environment: 'sandbox' | 'production';
 }
