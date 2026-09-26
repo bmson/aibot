@@ -13,6 +13,7 @@ import {
   usdToMicros,
 } from '@assistant/persistence';
 import type { DocumentSnapshot, Transaction } from '@google-cloud/firestore';
+import { withEmulatorTransactionRetry } from './emulator-transaction.js';
 import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
 
 interface Policy {
@@ -285,13 +286,16 @@ export class FirestoreCostRepository implements CostRepository {
   async reconcile(reservationId: string, actual: ReservationActual): Promise<void> {
     usdToMicros(actual.usd);
     const id = randomUUID();
-    await this.store.db.runTransaction((tx) =>
-      this.settle(tx, reservationId, actual, undefined, id),
+    // Guarded by the reservation's held status, so a retry after a commit is a no-op.
+    await withEmulatorTransactionRetry(() =>
+      this.store.db.runTransaction((tx) => this.settle(tx, reservationId, actual, undefined, id)),
     );
   }
 
   async release(reservationId: string): Promise<void> {
-    await this.store.db.runTransaction((tx) => this.settle(tx, reservationId, null));
+    await withEmulatorTransactionRetry(() =>
+      this.store.db.runTransaction((tx) => this.settle(tx, reservationId, null)),
+    );
   }
 
   async releaseStale(olderThanMinutes = 120, batch = 500): Promise<number> {
@@ -315,8 +319,10 @@ export class FirestoreCostRepository implements CostRepository {
     let released = 0;
     for (const doc of stale.docs) {
       if (
-        await this.store.db.runTransaction((tx) =>
-          this.settle(tx, doc.get('id'), null, undefined, undefined, cutoff),
+        await withEmulatorTransactionRetry(() =>
+          this.store.db.runTransaction((tx) =>
+            this.settle(tx, doc.get('id'), null, undefined, undefined, cutoff),
+          ),
         )
       )
         released++;

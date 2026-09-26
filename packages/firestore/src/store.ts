@@ -9,6 +9,7 @@ import {
   VectorValue,
 } from '@google-cloud/firestore';
 import type { AuthClient } from 'google-auth-library';
+import { retryEmulatorTransactions } from './emulator-transaction.js';
 
 const CODEC_TAG = 'assistantFirestoreCodecV1';
 const CODEC_MARKER = Buffer.from('assistant-firestore-codec-v1', 'utf8');
@@ -133,6 +134,7 @@ export class InstallationStore {
     readonly databaseId = '(default)',
   ) {
     this.root = db.collection('installations').doc(documentKey(installationId));
+    retryEmulatorTransactions(db);
   }
 
   collection(name: string): CollectionReference {
