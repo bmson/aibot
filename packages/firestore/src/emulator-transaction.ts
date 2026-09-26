@@ -15,3 +15,19 @@ export function isEmulatorClosedTransaction(error: unknown): boolean {
     error.details === 'Transaction is invalid or closed.'
   );
 }
+
+/**
+ * Run an idempotent transaction, retrying the emulator-only closed-transaction
+ * response twice after the competing commit settles. Production errors and any
+ * other code pass straight through.
+ */
+export async function withEmulatorTransactionRetry<T>(run: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await run();
+    } catch (error) {
+      if (!isEmulatorClosedTransaction(error) || attempt >= 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+    }
+  }
+}
