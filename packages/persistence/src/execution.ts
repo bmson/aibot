@@ -13,6 +13,8 @@ import type { ExecutionEvidenceRepository } from './execution-evidence.js';
 import type { ExecutionJobRepository } from './execution-jobs.js';
 import type { GeneratedCardRepository } from './generated-cards.js';
 import type { GoalRuntimeRepository } from './goals.js';
+import type { GraphCuriosityRepository } from './graph-curiosity.js';
+import type { GraphDateBackfillRepository } from './graph-date-backfill.js';
 import type { GraphRecallRepository } from './graph-recall.js';
 import type { HistoryRecallRepository } from './history-recall.js';
 import type { KnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
@@ -100,4 +102,8 @@ export interface ExecutionPersistence {
   readonly pulse?: PulseRepository;
   /** Present where the `chat.segment` job has a portable adapter. */
   readonly conversationSegmentation?: ConversationSegmentationRepository;
+  /** Present where the `memory.graph_date_backfill` job has a portable adapter. */
+  readonly graphDateBackfill?: GraphDateBackfillRepository;
+  /** Present where the `graph.curiosity` job has a portable adapter. */
+  readonly graphCuriosity?: GraphCuriosityRepository;
 }

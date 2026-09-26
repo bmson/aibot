@@ -14,6 +14,8 @@ import { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 import { FirestoreExecutionJobRepository } from './execution-jobs.js';
 import { FirestoreGeneratedCardRepository } from './generated-cards.js';
 import { FirestoreGoalRuntimeRepository } from './goal-runtime.js';
+import { FirestoreGraphCuriosityRepository } from './graph-curiosity.js';
+import { FirestoreGraphDateBackfillRepository } from './graph-date-backfill.js';
 import { FirestoreGraphRecallRepository } from './graph-recall.js';
 import { FirestoreHistoryRecallRepository } from './history-recall.js';
 import { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
@@ -93,5 +95,7 @@ export function createFirestoreExecutionPersistence(
       store,
       skillEmbeddingSpace,
     ),
+    graphDateBackfill: new FirestoreGraphDateBackfillRepository(store, agentId),
+    graphCuriosity: new FirestoreGraphCuriosityRepository(store, agentId),
   };
 }
