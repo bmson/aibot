@@ -6,9 +6,16 @@ import {
   memories,
   suggestions,
 } from '@assistant/db';
+import type {
+  GraphCuriosityRepository,
+  GraphGapEntity,
+  GraphGapRelation,
+  SuggestionRepository,
+} from '@assistant/persistence';
 import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { activeGraphWhere } from './graph-recall.js';
+import { GRAPH_EXTRACTION_VERSION } from './knowledge-graph.js';
 import { predicateAliases } from './predicate-vocabulary.js';
 import { isCurrentAt } from './validity.js';
 
@@ -137,10 +144,27 @@ const SATISFIED_BY_ALIASES: Record<string, readonly string[]> = Object.fromEntri
  * a question is not worth an N+1.
  */
 export async function findGraphGaps(
-  db: Db,
+  storage: Db | GraphCuriosityRepository,
   agentId: string,
   now: Date = new Date(),
 ): Promise<GraphGap[]> {
+  const { connected, held } =
+    'kind' in storage && storage.kind === 'graph-curiosity-repository'
+      ? await (storage as GraphCuriosityRepository).gapInputs(agentId, {
+          now,
+          minRelations: MIN_RELATIONS_TO_CARE,
+          maxCandidates: MAX_CANDIDATES,
+          extractionVersion: GRAPH_EXTRACTION_VERSION,
+        })
+      : await sqlGapInputs(storage as Db, agentId);
+  if (connected.length === 0) return [];
+  return gapsFrom(connected, held, now);
+}
+
+async function sqlGapInputs(
+  db: Db,
+  agentId: string,
+): Promise<{ connected: GraphGapEntity[]; held: GraphGapRelation[] }> {
   // Entities the graph actually leans on, by how connected they are. An entity
   // mentioned once is not something the owner wants to be quizzed about.
   const connected = await db
@@ -170,7 +194,7 @@ export async function findGraphGaps(
     .orderBy(asc(knowledgeGraphEntities.label))
     .limit(MAX_CANDIDATES);
 
-  if (connected.length === 0) return [];
+  if (connected.length === 0) return { connected: [], held: [] };
 
   const ids = connected.map((row) => row.id);
   const held = await db
@@ -194,7 +218,17 @@ export async function findGraphGaps(
         activeGraphWhere(agentId),
       ),
     );
+  return {
+    connected: connected.map((row) => ({ ...row, degree: Number(row.degree) })),
+    held: held.map((row) => ({ ...row, confidence: String(row.confidence) })),
+  };
+}
 
+function gapsFrom(
+  connected: readonly GraphGapEntity[],
+  held: readonly GraphGapRelation[],
+  now: Date,
+): GraphGap[] {
   // Only relations that still speak for the present can answer a present-tense
   // expectation. A `works_at` edge the owner dated to a period that has ended
   // is the same "I already know that" mistake as a past-tense predicate, just
@@ -264,48 +298,49 @@ export async function findGraphGaps(
  * out as a notice, because a question's answer is data, not work.
  */
 export async function nextUnaskedGap(
-  db: Db,
+  storage: Db | GraphCuriosityRepository,
   agentId: string,
   gaps: readonly GraphGap[],
 ): Promise<GraphGap | null> {
   if (gaps.length === 0) return null;
-  const asked = await db
-    .select({ sourceRef: suggestions.sourceRef })
-    .from(suggestions)
-    .where(
-      and(
-        eq(suggestions.agentId, agentId),
-        inArray(
-          suggestions.sourceRef,
-          gaps.map((gap) => gap.key),
-        ),
-      ),
-    );
-  const seen = new Set(asked.map((row) => row.sourceRef));
+  const keys = gaps.map((gap) => gap.key);
+  const asked =
+    'kind' in storage && storage.kind === 'graph-curiosity-repository'
+      ? await (storage as GraphCuriosityRepository).askedKeys(agentId, keys)
+      : (
+          await (storage as Db)
+            .select({ sourceRef: suggestions.sourceRef })
+            .from(suggestions)
+            .where(and(eq(suggestions.agentId, agentId), inArray(suggestions.sourceRef, keys)))
+        ).map((row) => row.sourceRef);
+  const seen = new Set(asked);
   return gaps.find((gap) => !seen.has(gap.key)) ?? null;
 }
 
 /** Mark a gap asked. Returns false when another instance got there first. */
 export async function markGapAsked(
-  db: Db,
+  storage: Db | SuggestionRepository,
   agentId: string,
   gap: GraphGap,
   now = new Date(),
 ): Promise<boolean> {
-  const [row] = await db
+  const values = {
+    agentId,
+    summary: gap.question.slice(0, 500),
+    // Never promoted: this row exists to remember that the question was put,
+    // not to offer work. Dismissed on creation so it can never surface as an
+    // open card the owner is expected to accept.
+    proposedAction: 'Answered in conversation; nothing to run.',
+    origin: 'curiosity',
+    sourceRef: gap.key,
+    status: 'dismissed' as const,
+    expiresAt: new Date(now.getTime() + ASKED_TTL_DAYS * 24 * 3600 * 1000),
+  };
+  if ('kind' in storage && storage.kind === 'suggestion-repository')
+    return (await (storage as SuggestionRepository).create(values)) !== null;
+  const [row] = await (storage as Db)
     .insert(suggestions)
-    .values({
-      agentId,
-      summary: gap.question.slice(0, 500),
-      // Never promoted: this row exists to remember that the question was put,
-      // not to offer work. Dismissed on creation so it can never surface as an
-      // open card the owner is expected to accept.
-      proposedAction: 'Answered in conversation; nothing to run.',
-      origin: 'curiosity',
-      sourceRef: gap.key,
-      status: 'dismissed',
-      expiresAt: new Date(now.getTime() + ASKED_TTL_DAYS * 24 * 3600 * 1000),
-    })
+    .values(values)
     .onConflictDoNothing({ target: [suggestions.agentId, suggestions.sourceRef] })
     .returning({ id: suggestions.id });
   return Boolean(row);

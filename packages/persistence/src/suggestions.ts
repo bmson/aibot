@@ -11,6 +11,11 @@ export interface CreateSuggestionRecord {
   sourceRef: string;
   origin: string;
   expiresAt: Date;
+  /**
+   * `dismissed` records a ledger-only row that never surfaces as a card, for a
+   * producer that only needs the `(agentId, sourceRef)` fence. Pending otherwise.
+   */
+  status?: 'pending' | 'dismissed';
 }
 
 /** Proposals a producer offers the owner as one-tap suggestions. */

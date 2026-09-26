@@ -18,11 +18,7 @@ export async function GET(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const config = loadConfig();
   if (config.PERSISTENCE_DRIVER === 'firestore') {
-    const validationConfig = {
-      ...config,
-      ASSISTANT_MODULES: config.ASSISTANT_MODULES.filter((module) => module !== 'documents'),
-    };
-    const problems = validateAgentPersistenceConfig(validationConfig);
+    const problems = validateAgentPersistenceConfig(config);
     if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
     const store = getFirestoreInstallationStore();
     try {

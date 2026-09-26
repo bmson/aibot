@@ -1,3 +1,4 @@
+import type { AnomalyScanRepository } from './anomaly-scan.js';
 import type { ApplicationConfirmationRepository } from './application-confirmations.js';
 import type { ApprovalPolicyRepository } from './approval-policies.js';
 import type { ApprovalRepository } from './approvals.js';
@@ -9,13 +10,21 @@ import type { CostRepository, MessageRepository } from './contracts.js';
 import type { ConversationSegmentationRepository } from './conversation-segmentation.js';
 import type { DeviceTokenRepository } from './device-tokens.js';
 import type { ToolExecutionRepository } from './dispatch.js';
-import type { DocumentCatalogRepository, DocumentSearchRepository } from './document-catalog.js';
+import type {
+  DocumentCatalogRepository,
+  DocumentProcessorRepository,
+  DocumentSearchRepository,
+} from './document-catalog.js';
+import type { DreamRepository } from './dream.js';
+import type { EmailExtractionRepository } from './email-extraction.js';
 import type { EmailSyncRepository } from './email-sync.js';
 import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
 import type { ExecutionJobRepository } from './execution-jobs.js';
 import type { GeneratedCardRepository } from './generated-cards.js';
 import type { GoalRuntimeRepository } from './goals.js';
+import type { GraphCuriosityRepository } from './graph-curiosity.js';
+import type { GraphDateBackfillRepository } from './graph-date-backfill.js';
 import type { GraphRecallRepository } from './graph-recall.js';
 import type { HistoryRecallRepository } from './history-recall.js';
 import type { KnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
@@ -36,7 +45,10 @@ import type { AmbientSnapshotRepository, OwnerContextRepository } from './owner-
 import type { PulseRepository } from './pulse.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
+import type { SelfImprovementRepository } from './self-improvement.js';
+import type { SelfMaintenanceRepository } from './self-maintenance.js';
 import type { SkillContextRepository } from './skill-context.js';
+import type { SkillReflectionRepository } from './skill-reflection.js';
 import type { SmsChannelRepository } from './sms-channel.js';
 import type { SuggestionRepository } from './suggestions.js';
 import type { TaskRepository } from './task-lifecycle.js';
@@ -107,6 +119,12 @@ export interface ExecutionPersistence {
   readonly documentCatalog?: DocumentCatalogRepository;
   /** Present where document passages are searched portably. */
   readonly documentSearch?: DocumentSearchRepository;
+  /** Present where the document processor lifecycle is kept portably. */
+  readonly documentProcessor?: DocumentProcessorRepository;
+  /** Present where the `email.extract` job has a portable adapter. */
+  readonly emailExtraction?: EmailExtractionRepository;
+  /** Present where the `anomaly.scan` job has a portable adapter. */
+  readonly anomalyScan?: AnomalyScanRepository;
   /** Present where background producers post their dashboard copy portably. */
   readonly ownerNotices?: OwnerNoticeRepository;
   /** Present where producers record one-tap suggestions portably. */
@@ -117,4 +135,16 @@ export interface ExecutionPersistence {
   readonly pulse?: PulseRepository;
   /** Present where the `chat.segment` job has a portable adapter. */
   readonly conversationSegmentation?: ConversationSegmentationRepository;
+  /** Present where the `skill.reflect` job has a portable adapter. */
+  readonly skillReflection?: SkillReflectionRepository;
+  /** Present where the `self.maintain` job has a portable adapter. */
+  readonly selfMaintenance?: SelfMaintenanceRepository;
+  /** Present where the `dream.run` job has a portable adapter. */
+  readonly dream?: DreamRepository;
+  /** Present where the `self.improve` job has a portable adapter. */
+  readonly selfImprovement?: SelfImprovementRepository;
+  /** Present where the `memory.graph_date_backfill` job has a portable adapter. */
+  readonly graphDateBackfill?: GraphDateBackfillRepository;
+  /** Present where the `graph.curiosity` job has a portable adapter. */
+  readonly graphCuriosity?: GraphCuriosityRepository;
 }

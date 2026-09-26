@@ -1,5 +1,6 @@
 import type { EmbeddingSpace, ExecutionPersistence } from '@assistant/persistence';
 import { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
+import { FirestoreAnomalyScanRepository } from './anomaly-scan.js';
 import { FirestoreApplicationConfirmationRepository } from './application-confirmations.js';
 import { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 import { FirestoreApprovalRepository } from './approvals.js';
@@ -11,13 +12,18 @@ import { FirestoreConversationSegmentationRepository } from './conversation-segm
 import { FirestoreCostRepository } from './costs.js';
 import { FirestoreDeviceTokenRepository } from './device-tokens.js';
 import { FirestoreDocumentCatalogRepository } from './document-catalog.js';
+import { FirestoreDocumentProcessorRepository } from './document-processor.js';
 import { FirestoreDocumentSearchRepository } from './document-search.js';
+import { FirestoreDreamRepository } from './dream.js';
+import { FirestoreEmailExtractionRepository } from './email-extraction.js';
 import { FirestoreEmailSyncRepository } from './email-sync.js';
 import { FirestoreExecutionContextRepository } from './execution-context.js';
 import { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 import { FirestoreExecutionJobRepository } from './execution-jobs.js';
 import { FirestoreGeneratedCardRepository } from './generated-cards.js';
 import { FirestoreGoalRuntimeRepository } from './goal-runtime.js';
+import { FirestoreGraphCuriosityRepository } from './graph-curiosity.js';
+import { FirestoreGraphDateBackfillRepository } from './graph-date-backfill.js';
 import { FirestoreGraphRecallRepository } from './graph-recall.js';
 import { FirestoreHistoryRecallRepository } from './history-recall.js';
 import { FirestoreKnowledgeGraphSyncRepository } from './knowledge-graph-sync.js';
@@ -36,7 +42,10 @@ import { FirestoreOwnerNoticeRepository, firestoreOwnerNotices } from './owner-n
 import { FirestorePulseRepository } from './pulse.js';
 import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 import { FirestoreReminderDeliveryRepository } from './reminders.js';
+import { FirestoreSelfImprovementRepository } from './self-improvement.js';
+import { FirestoreSelfMaintenanceRepository } from './self-maintenance.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
+import { FirestoreSkillReflectionRepository } from './skill-reflection.js';
 import { FirestoreSmsChannelRepository } from './sms-channel.js';
 import type { InstallationStore } from './store.js';
 import { FirestoreSuggestionRepository } from './suggestions.js';
@@ -97,6 +106,9 @@ export function createFirestoreExecutionPersistence(
     emailSync: new FirestoreEmailSyncRepository(store, agentId),
     documentCatalog: new FirestoreDocumentCatalogRepository(store, agentId),
     documentSearch: new FirestoreDocumentSearchRepository(store, agentId, skillEmbeddingSpace),
+    documentProcessor: new FirestoreDocumentProcessorRepository(store, agentId),
+    emailExtraction: new FirestoreEmailExtractionRepository(store, agentId, skillEmbeddingSpace),
+    anomalyScan: new FirestoreAnomalyScanRepository(store, agentId),
     ownerNotices: firestoreOwnerNotices(notifications),
     suggestions: new FirestoreSuggestionRepository(store),
     briefing: new FirestoreBriefingRepository(store),
@@ -105,5 +117,11 @@ export function createFirestoreExecutionPersistence(
       store,
       skillEmbeddingSpace,
     ),
+    skillReflection: new FirestoreSkillReflectionRepository(store, agentId, skillEmbeddingSpace),
+    selfMaintenance: new FirestoreSelfMaintenanceRepository(store, agentId),
+    dream: new FirestoreDreamRepository(store, agentId),
+    selfImprovement: new FirestoreSelfImprovementRepository(store, agentId),
+    graphDateBackfill: new FirestoreGraphDateBackfillRepository(store, agentId),
+    graphCuriosity: new FirestoreGraphCuriosityRepository(store, agentId),
   };
 }

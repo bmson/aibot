@@ -24,6 +24,7 @@
     "./people-graph-projection": "./src/people-graph-projection.ts",
     "./people-presentation": "./src/people-presentation.ts",
     "./people-view": "./src/people-view.ts",
+    "./proactive-health": "./src/proactive-health.ts",
     "./profile": "./src/profile.ts",
     "./relationship-presentation": "./src/relationship-presentation.ts",
     "./settings": "./src/settings.ts",

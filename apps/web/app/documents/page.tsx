@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { UploadPanel } from '@/app/upload-panel';
 import { requireOwner } from '@/auth';
+import { getFirestoreDocumentsOverview } from '@/lib/firestore-documents';
 import { relativeTime } from '@/lib/format';
 import { getApplication } from '@/lib/server';
 import { btn, cardGridClass, EmptyState, PageHeader, PageShell, SectionHeading } from '@/lib/ui';
@@ -20,9 +21,17 @@ function formatBytes(n: number): string {
 
 export default async function DocumentsPage() {
   await requireOwner();
-  if (!isModuleEnabled(loadConfig(), 'documents')) notFound();
+  const config = loadConfig();
+  if (!isModuleEnabled(config, 'documents')) notFound();
   const now = new Date();
-  const { documents: docs, stats, primaryConversationId } = await getApplication().getDocuments();
+  const {
+    documents: docs,
+    stats,
+    primaryConversationId,
+  } = config.PERSISTENCE_DRIVER === 'firestore'
+    ? await getFirestoreDocumentsOverview()
+    : await getApplication().getDocuments();
+  const chatHref = primaryConversationId ? `/chat/${primaryConversationId}` : '/chat';
 
   const views: DocumentCardView[] = docs.map((d) => ({
     id: d.id,
@@ -36,7 +45,7 @@ export default async function DocumentsPage() {
     bytesLabel: formatBytes(d.bytes),
     error: d.error,
     createdLabel: relativeTime(d.createdAt, now),
-    askHref: `/chat/${primaryConversationId}?ask=${encodeURIComponent(
+    askHref: `${chatHref}?ask=${encodeURIComponent(
       `From my documents, tell me about "${d.title}".`,
     )}`,
   }));

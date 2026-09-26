@@ -67,6 +67,10 @@ const PORTABLE_TOOLS = [
   'goals.list',
   'goals.update_progress',
   'maps.directions',
+  // Owner MCP servers, read from Firestore connection snapshots.
+  'mcp.call',
+  'mcp.list_connections',
+  'mcp.list_tools',
   'memory.graph_snapshot',
   'memory.recall',
   'memory.save',
@@ -194,16 +198,13 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect(createDb).not.toHaveBeenCalled();
     });
 
-    it('still refuses to boot the modules that reach SQL at runtime', async () => {
+    it('validates the full production module set with no module left on SQL', async () => {
       const { validateAgentPersistenceConfig } = await import('@assistant/config');
-      const config = productionConfig();
       expect(
-        validateAgentPersistenceConfig(config, {
+        validateAgentPersistenceConfig(productionConfig(), {
           ASSISTANT_WORKSPACE_ID: installationId,
-        }),
-      ).toContain(
-        'ASSISTANT_MODULES=documents,google still needs PostgreSQL; Firestore agent mode supports reminders,calendar,browser,code,search,maps,watches,push,sms',
-      );
+        }).filter((problem) => problem.includes('ASSISTANT_MODULES')),
+      ).toEqual([]);
     });
   },
 );

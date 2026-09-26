@@ -21,6 +21,7 @@ import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import {
   FirestoreOwnerCardCompilationRepository,
   FirestoreVoiceProfileRepository,
+  FirestoreVoiceSamplePurgeRepository,
   readPrivacyErasureFence,
 } from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
@@ -225,7 +226,16 @@ export async function mergeContactAction(
 
 export async function purgeVoiceSamplesAction(): Promise<void> {
   await requireOwner();
-  await purgeProfileVoiceSamples(getDb(), getWorkspace());
+  const config = loadConfig();
+  await purgeProfileVoiceSamples(
+    config.PERSISTENCE_DRIVER === 'firestore'
+      ? new FirestoreVoiceSamplePurgeRepository(
+          getFirestoreInstallationStore(),
+          config.FIRESTORE_AGENT_ID,
+        )
+      : getDb(),
+    getWorkspace(),
+  );
   revalidateProfile();
 }
 

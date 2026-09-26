@@ -213,8 +213,10 @@ export class FirestoreMemoryExtractionRepository implements MemoryExtractionRepo
   ): Promise<MemoryExtractionApplied | null> {
     if (!input.checkpointKey || input.facts.length > 25 || input.occasions.length > 10)
       throw new Error('Invalid memory extraction batch');
+    // Dream hypotheses hash under their own prefix, so they never collide with facts.
+    const hashPrefix = input.source === 'dream' ? 'dream:' : '';
     for (const fact of input.facts) {
-      if (!fact.content || fact.contentHash !== sha256(fact.content))
+      if (!fact.content || fact.contentHash !== sha256(`${hashPrefix}${fact.content}`))
         throw new Error('Invalid extracted memory content hash');
       validateEmbedding(this.space, fact.embedding);
     }
@@ -353,7 +355,7 @@ export class FirestoreMemoryExtractionRepository implements MemoryExtractionRepo
           supersededById: null,
           ownerConfirmed: false,
           pinned: false,
-          source: 'extraction',
+          source: input.source ?? 'extraction',
           lastAccessedAt: null,
           lastConsolidatedAt: null,
         };

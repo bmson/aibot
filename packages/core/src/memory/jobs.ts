@@ -26,6 +26,7 @@ import { type DocumentProcessorConfig, runDocumentProcessing } from './document-
 import { runDocumentExtraction } from './documents.js';
 import { pendingEmailExtractionCount, runEmailIngestExtraction } from './email-extraction.js';
 import { runMemoryExtraction } from './extraction.js';
+import { backfillGraphDates } from './graph-date-backfill.js';
 import { runImportJob, type WorkspaceReader } from './import.js';
 import {
   backfillKnowledgeGraphDates,
@@ -75,7 +76,6 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'email.extract',
   'reminder.notify',
   'briefing.compose',
-  'pulse.check',
   'memory.consolidate',
   'memory.sweep_loops',
   'memory.graph_sync',
@@ -132,8 +132,22 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'watch.suggest',
   'import.run',
   'voice.ingest',
+  'dream.run',
   'pulse.check',
+  'anomaly.scan',
+  'skill.reflect',
+  'self.maintain',
+  'self.improve',
+  'memory.graph_date_backfill',
+  'graph.curiosity',
+  'documents.process',
+  'email.extract',
 ]);
+
+/** Registered code jobs that still need PostgreSQL, so a Firestore agent skips them. */
+export function sqlOnlyCodeJobs(): string[] {
+  return [...CODE_JOBS].filter((job) => !FIRESTORE_PORTABLE_CODE_JOBS.has(job)).sort();
+}
 
 /** A completion summary when `job` cannot run on Firestore persistence yet, otherwise null. */
 export function firestoreCodeJobUnavailable(job: string): string | null {
@@ -382,8 +396,12 @@ export async function runCodeJob(
     }
     case 'email.extract': {
       await deps.heartbeat?.();
-      const r = await runEmailIngestExtraction(deps, { taskId: task.id });
-      const pending = await pendingEmailExtractionCount(deps.db);
+      const extraction = deps.persistence?.emailExtraction;
+      const r = await runEmailIngestExtraction(
+        { ...deps, ...(extraction ? { store: extraction } : {}) },
+        { taskId: task.id },
+      );
+      const pending = await pendingEmailExtractionCount(extraction ?? deps.db);
       return {
         // A backlog drains across runs rather than in one long job: report it
         // so a mailbox that is falling behind is visible in the task summary.
@@ -401,7 +419,9 @@ export async function runCodeJob(
       await deps.heartbeat?.();
       return {
         done: true,
-        summary: curiositySummary(await runCuriosity(deps, { taskId: task.id })),
+        summary: curiositySummary(
+          await runCuriosity(deps, { agentId: task.agentId, taskId: task.id }),
+        ),
       };
     }
     case 'pulse.check': {
@@ -465,8 +485,13 @@ export async function runCodeJob(
         return { done: true, summary: 'knowledge graph dates: disabled' };
       }
       await deps.heartbeat?.();
-      const r = await backfillKnowledgeGraphDates(deps.db, { agentId: task.agentId });
-      const remaining = await countRelativeDateSources(deps.db, task.agentId);
+      const portable = deps.persistence?.graphDateBackfill;
+      const r = portable
+        ? await backfillGraphDates(portable, task.agentId)
+        : await backfillKnowledgeGraphDates(deps.db, { agentId: task.agentId });
+      const remaining = portable
+        ? await portable.countRelativeDateSources(task.agentId)
+        : await countRelativeDateSources(deps.db, task.agentId);
       return {
         done: true,
         summary:
@@ -519,7 +544,12 @@ export async function runCodeJob(
     }
     case 'self.improve': {
       await deps.heartbeat?.();
-      const r = await runSelfImprove(deps, { agentId: task.agentId, taskId: task.id });
+      const r = await runSelfImprove(deps, {
+        agentId: task.agentId,
+        taskId: task.id,
+        // Read at commit: every heartbeat renewal rotates the lease token.
+        lease: () => ({ taskId: task.id, leaseToken: task.leaseToken ?? '' }),
+      });
       return {
         done: true,
         summary: `self-improve: ${r.proposalsDrafted} proposal(s) from ${r.patterns} failure pattern(s)${r.experienceSaved ? ', experience saved' : ''}`,
@@ -562,6 +592,9 @@ export async function runCodeJob(
       return runDocumentProcessing(
         {
           db: deps.db,
+          ...(deps.persistence?.documentProcessor
+            ? { processorStore: deps.persistence.documentProcessor }
+            : {}),
           documentProcessor: deps.documentProcessor,
           heartbeat: deps.heartbeat,
         },
@@ -589,7 +622,12 @@ export async function runCodeJob(
     }
     case 'dream.run': {
       await deps.heartbeat?.();
-      const r = await runDream(deps, { agentId: task.agentId, taskId: task.id });
+      const r = await runDream(deps, {
+        agentId: task.agentId,
+        taskId: task.id,
+        // Read at commit: every heartbeat renewal rotates the lease token.
+        lease: () => ({ taskId: task.id, leaseToken: task.leaseToken ?? '' }),
+      });
       return {
         done: true,
         summary: `dream: ${r.footnotes} footnote(s), ${r.hypotheses} hypothesis(es), ${r.anticipations} anticipation(s)`,

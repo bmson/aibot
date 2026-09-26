@@ -11,10 +11,16 @@ import {
   FirestoreOwnerCardCompilationRepository,
   FirestoreProfileVoiceOverviewRepository,
   FirestoreVoiceProfileRepository,
+  FirestoreVoiceSamplePurgeRepository,
   readPrivacyErasureFence,
 } from '@assistant/firestore';
 import { forgetOwnerLongTermMemory } from '@/lib/memory-erasure';
-import { getDb, getWorkspace, organizeOwnerMemoryNow } from '@/lib/server';
+import {
+  getDb,
+  getFirestoreInstallationStore,
+  getWorkspace,
+  organizeOwnerMemoryNow,
+} from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -79,12 +85,6 @@ export async function POST(request: Request): Promise<Response> {
     Array.isArray(value) ? value.map(text).join('\n') : text(value);
   const config = loadConfig();
   const firestore = config.PERSISTENCE_DRIVER === 'firestore';
-  if (firestore && body?.action === 'purge-voice')
-    return mobileJson(
-      { error: 'This memory profile action is unavailable in Firestore mode.' },
-      { status: 503 },
-    );
-
   try {
     switch (body?.action) {
       case 'organize':
@@ -124,7 +124,15 @@ export async function POST(request: Request): Promise<Response> {
       case 'purge-voice':
         return mobileJson({
           ok: true,
-          ...(await purgeProfileVoiceSamples(getDb(), getWorkspace())),
+          ...(await purgeProfileVoiceSamples(
+            firestore
+              ? new FirestoreVoiceSamplePurgeRepository(
+                  getFirestoreInstallationStore(),
+                  config.FIRESTORE_AGENT_ID,
+                )
+              : getDb(),
+            getWorkspace(),
+          )),
         });
       case 'voice-profile': {
         const input = {

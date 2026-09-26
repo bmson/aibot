@@ -5,6 +5,7 @@ import {
   proactiveMoments,
   proactivePings,
 } from '@assistant/db';
+import type { ProactiveHealthCounts, ProactiveHealthRepository } from '@assistant/persistence';
 import { and, count, desc, eq, gte, isNull } from 'drizzle-orm';
 
 /**
@@ -51,14 +52,29 @@ export interface ProactiveHealth {
 }
 
 export async function assessProactiveHealth(
-  db: Db,
+  storage: Db | ProactiveHealthRepository,
   agentId: string,
   input: { ingestMode: string; googleEnabled: boolean; now?: Date },
 ): Promise<ProactiveHealth> {
   const now = input.now ?? new Date();
-  const since24h = new Date(now.getTime() - RECENT_HOURS * 3600_000);
-  const since7d = new Date(now.getTime() - WEEK_HOURS * 3600_000);
+  const window = {
+    since24h: new Date(now.getTime() - RECENT_HOURS * 3600_000),
+    since7d: new Date(now.getTime() - WEEK_HOURS * 3600_000),
+  };
+  const counts =
+    'kind' in storage && storage.kind === 'proactive-health-repository'
+      ? await (storage as ProactiveHealthRepository).counts(agentId, window)
+      : await sqlProactiveCounts(storage as Db, agentId, window);
+  const health: ProactiveHealth = { ingestMode: input.ingestMode, ...counts, warnings: [] };
+  health.warnings = proactiveWarnings(health, input.googleEnabled);
+  return health;
+}
 
+async function sqlProactiveCounts(
+  db: Db,
+  agentId: string,
+  { since24h, since7d }: { since24h: Date; since7d: Date },
+): Promise<ProactiveHealthCounts> {
   const [scored24h, scored7d, latest, moments, pings, devices] = await Promise.all([
     db
       .select({ value: count() })
@@ -89,9 +105,7 @@ export async function assessProactiveHealth(
       .from(deviceTokens)
       .where(and(eq(deviceTokens.agentId, agentId), isNull(deviceTokens.invalidatedAt))),
   ]);
-
-  const health: ProactiveHealth = {
-    ingestMode: input.ingestMode,
+  return {
     mailScored24h: Number(scored24h[0]?.value ?? 0),
     mailScored7d: Number(scored7d[0]?.value ?? 0),
     lastMailAt: latest[0]?.createdAt ?? null,
@@ -99,11 +113,7 @@ export async function assessProactiveHealth(
     pingsDelivered24h: pings.filter((row) => row.delivered).length,
     pingsHeld24h: pings.filter((row) => !row.delivered).length,
     pushDevices: Number(devices[0]?.value ?? 0),
-    warnings: [],
   };
-
-  health.warnings = proactiveWarnings(health, input.googleEnabled);
-  return health;
 }
 
 /**

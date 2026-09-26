@@ -270,9 +270,6 @@ async function publishToSecretManager(project: string, token: string): Promise<s
  */
 export async function rotateMobileToken(): Promise<{ token?: string; error?: string }> {
   await requireOwner();
-  if (loadConfig().PERSISTENCE_DRIVER === 'firestore') {
-    return { error: 'Mobile app pairing is unavailable in Firestore mode.' };
-  }
   const token = randomBytes(32).toString('hex');
 
   if (existsSync(envFile)) {

@@ -6,6 +6,7 @@ import { createPostgresCardRefreshRepository } from './card-refresh-repository.j
 import type { Db } from './client.js';
 import { createPostgresCostRepository } from './cost-repository.js';
 import { createPostgresDeviceTokenRepository } from './device-token-repository.js';
+import { createPostgresDocumentProcessorRepository } from './document-processor-repository.js';
 import { createPostgresDocumentSearchRepository } from './document-search-repository.js';
 import { createPostgresEmailSyncRepository } from './email-sync-repository.js';
 import { createPostgresExecutionContextRepository } from './execution-context-repository.js';
@@ -68,5 +69,6 @@ export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence
     applications: createPostgresApplicationConfirmationRepository(db),
     emailSync: createPostgresEmailSyncRepository(db),
     documentSearch: createPostgresDocumentSearchRepository(db),
+    documentProcessor: createPostgresDocumentProcessorRepository(db),
   };
 }

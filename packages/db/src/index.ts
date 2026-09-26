@@ -7,6 +7,7 @@ export { createPostgresCardRefreshRepository } from './card-refresh-repository.j
 export * from './client.js';
 export { createPostgresCostRepository } from './cost-repository.js';
 export { createPostgresDeviceTokenRepository } from './device-token-repository.js';
+export { createPostgresDocumentProcessorRepository } from './document-processor-repository.js';
 export { createPostgresDocumentSearchRepository } from './document-search-repository.js';
 export { createPostgresEmailSyncRepository } from './email-sync-repository.js';
 export * from './entities.js';

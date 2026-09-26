@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { loadConfig, resetConfigForTest } from '@assistant/config';
-import { firestoreCodeJobUnavailable } from '@assistant/core';
+import { firestoreCodeJobUnavailable, sqlOnlyCodeJobs } from '@assistant/core';
 import type { Db } from '@assistant/db';
 import {
   createFirestoreExecutionPersistence,
@@ -152,12 +152,17 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
     expect(sqlAccesses).toEqual([]);
   });
 
-  it('fires portable schedules past SQL-only jobs and a goal session whose goal is gone', async () => {
+  it('fires portable schedules past disabled jobs and a goal session whose goal is gone', async () => {
     const schedules = new FirestoreScheduleRepository(store);
     const due = new Date(Date.now() - 60_000);
     const ensure = (name: string, taskTemplate: Record<string, unknown>) =>
       schedules.ensure({ agentId, name, cron: '0 9 * * *', taskTemplate, nextRunAt: due });
-    const dream = await ensure('dream', { type: 'scheduled', job: 'dream.run' });
+    // GraphRAG is off here, so the curiosity schedule advances without a task,
+    // exactly as a job that cannot run on this persistence would.
+    const curiosity = await ensure('knowledge-graph-curiosity', {
+      type: 'scheduled',
+      job: 'graph.curiosity',
+    });
     const goal = await ensure('goal-session', { type: 'scheduled', goalId: randomUUID() });
     const consolidation = await ensure('memory-consolidation', {
       type: 'scheduled',
@@ -168,7 +173,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
     expect(result).toMatchObject({ ready: true, report: { schedulesFired: 1 } });
     const tasks = await store.collection('tasks').get();
     expect(tasks.docs.map((doc) => doc.get('trigger.payload.job'))).toEqual(['memory.consolidate']);
-    for (const skipped of [dream, consolidation]) {
+    for (const skipped of [curiosity, consolidation]) {
       const row = (await store.doc('schedules', skipped.id).get()).data();
       expect(row?.nextRunAt.toDate().getTime()).toBeGreaterThan(Date.now());
     }
@@ -317,16 +322,24 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
     expect(sqlAccesses).toEqual([]);
   });
 
+  it('runs every registered code job on Firestore', () => {
+    // A job registered in CODE_JOBS but not admitted as portable is silently
+    // skipped under Firestore even when its port and emulator test exist.
+    expect(sqlOnlyCodeJobs()).toEqual([]);
+  });
+
   it('names every SQL-only code job and leaves portable ones runnable', () => {
-    expect(firestoreCodeJobUnavailable('memory.graph_date_backfill')).toMatch(
-      /not yet available on Firestore/,
-    );
+    // Shrinks to nothing as the last jobs are ported; each one left is named.
+    for (const job of sqlOnlyCodeJobs())
+      expect(firestoreCodeJobUnavailable(job)).toMatch(/not yet available on Firestore/);
     for (const job of [
       'reminder.notify',
       'pulse.check',
       'memory.extract',
       'memory.consolidate',
       'memory.graph_sync',
+      'memory.graph_date_backfill',
+      'graph.curiosity',
       'briefing.compose',
       'chat.segment',
       'documents.extract',

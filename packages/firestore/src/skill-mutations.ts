@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   type EmbeddingSpace,
   type OwnerSkillInput,
+  type ReflectedSkill,
   type SkillMutationRepository,
   validateEmbedding,
   validateSkillEmbedding,
@@ -112,6 +113,83 @@ export class FirestoreSkillMutationRepository implements SkillMutationRepository
           }),
         );
       }
+    });
+  }
+
+  /** Whether the owner wrote the same-named skill, which reflection never overwrites. */
+  async ownerAuthoredNamed(agentId: string, name: string): Promise<boolean> {
+    const skills = await this.store
+      .collection('skills')
+      .where('agentId', '==', agentId)
+      .where('name', '==', name)
+      .limit(2)
+      .get();
+    return skills.docs.some((doc) => doc.get('ownerAuthored') === true);
+  }
+
+  /**
+   * Insert or revise a reflected skill under the same fence as owner writes.
+   * An owner-authored skill wins, and a full library is left as it is.
+   */
+  async saveReflected(
+    agentId: string,
+    input: ReflectedSkill,
+    embedding: number[],
+  ): Promise<boolean> {
+    const space = this.validateWrite(embedding);
+    if (!agentId || !input.name || !input.steps) return false;
+    return this.store.db.runTransaction(async (tx) => {
+      await this.ownerFence(tx, agentId);
+      const skills = await tx.get(
+        this.store.collection('skills').where('agentId', '==', agentId).limit(501),
+      );
+      const matches = skills.docs.filter((doc) => doc.get('name') === input.name);
+      if (matches.length > 1) throw new Error('Duplicate learned-skill name');
+      const existing = matches[0];
+      const now = this.store.now();
+      if (existing) {
+        this.validExisting(existing.data(), existing.id, agentId);
+        if (existing.get('ownerAuthored') === true) return false;
+        tx.update(existing.ref, {
+          preconditions: input.preconditions,
+          steps: input.steps,
+          gotchas: input.gotchas,
+          embedding: FieldValue.vector(embedding),
+          embeddingSpace: embeddingSpaceKey(space),
+          retrievalRevision: randomUUID(),
+          deprecated: false,
+          lastVerifiedAt: now,
+          updatedAt: now,
+        });
+        return false;
+      }
+      if (skills.size >= 500) return false;
+      const id = randomUUID();
+      tx.create(
+        this.store.doc('skills', id),
+        encodeRecord({
+          id,
+          agentId,
+          name: input.name,
+          preconditions: input.preconditions,
+          steps: input.steps,
+          gotchas: input.gotchas,
+          embedding: FieldValue.vector(embedding),
+          embeddingSpace: embeddingSpaceKey(space),
+          retrievalRevision: randomUUID(),
+          sourceTaskId: input.sourceTaskId,
+          originTrust: input.originTrust,
+          ownerAuthored: false,
+          useCount: 0,
+          successCount: 0,
+          failureCount: 0,
+          lastVerifiedAt: now,
+          deprecated: false,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      );
+      return true;
     });
   }
 

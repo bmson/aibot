@@ -36,7 +36,7 @@ describe.skipIf(!localEmulator)(
         }),
         store.doc('tasks', taskId).set({ id: taskId, agentId }),
       ]);
-      const phone = vi.fn();
+      const phone = vi.fn(async () => {});
       const deps = {
         config: { PERSISTENCE_DRIVER: 'firestore', FIRESTORE_AGENT_ID: agentId },
         firestoreStore: store,
@@ -78,7 +78,8 @@ describe.skipIf(!localEmulator)(
       expect(messages.docs.map((doc) => doc.get('text'))).toEqual(
         expect.arrayContaining(['Task finished', expect.stringContaining('1 action is waiting')]),
       );
-      expect(phone).not.toHaveBeenCalled();
+      // The dashboard write comes first; the policy-gated phone legs follow (#409).
+      expect(phone).toHaveBeenCalledTimes(2);
     });
   },
 );

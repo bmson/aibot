@@ -1,5 +1,6 @@
 export { FirestoreActiveJobLookup } from './active-jobs.js';
 export { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
+export { FirestoreAnomalyScanRepository } from './anomaly-scan.js';
 export { FirestoreApplicationChatPersistence } from './application-chat.js';
 export { FirestoreApplicationConfirmationRepository } from './application-confirmations.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
@@ -17,9 +18,13 @@ export { FirestoreConversationSegmentationRepository } from './conversation-segm
 export { FirestoreCostRepository } from './costs.js';
 export { FirestoreDeviceTokenRepository } from './device-tokens.js';
 export { FirestoreDocumentCatalogRepository } from './document-catalog.js';
+export { FirestoreDocumentDeletionRepository } from './document-deletion.js';
 export { FirestoreDocumentExtractionRepository } from './document-extraction.js';
+export { FirestoreDocumentProcessorRepository } from './document-processor.js';
 export { FirestoreDocumentSearchRepository } from './document-search.js';
 export { FirestoreDocumentReadRepository } from './documents.js';
+export { FirestoreDreamRepository } from './dream.js';
+export { FirestoreEmailExtractionRepository } from './email-extraction.js';
 export { FirestoreEmailSyncRepository } from './email-sync.js';
 export { createFirestoreExecutionPersistence } from './execution.js';
 export { FirestoreExecutionContextRepository } from './execution-context.js';
@@ -30,6 +35,8 @@ export { FirestoreGoalMutationRepository } from './goal-mutations.js';
 export { FirestoreGoalProgressRepository } from './goal-progress.js';
 export { FirestoreGoalRuntimeRepository } from './goal-runtime.js';
 export { FirestoreGoalReadRepository } from './goals.js';
+export { FirestoreGraphCuriosityRepository } from './graph-curiosity.js';
+export { FirestoreGraphDateBackfillRepository } from './graph-date-backfill.js';
 export { FirestoreGraphRecallRepository } from './graph-recall.js';
 export { FirestoreHistoryRecallRepository } from './history-recall.js';
 export { FirestoreImportOverviewRepository } from './import-overview.js';
@@ -104,6 +111,7 @@ export {
   readPrivacyErasureFence,
 } from './privacy-erasure.js';
 export { FirestorePrivacyExportRepository } from './privacy-export.js';
+export { FirestoreProactiveHealthRepository } from './proactive-health.js';
 export { FirestoreProfileOverviewRepository } from './profile-full-overview.js';
 export { FirestoreProfileLibraryRepository } from './profile-library.js';
 export { createFirestoreProfileMemoryCommandPersistence } from './profile-memory-commands.js';
@@ -125,6 +133,8 @@ export {
   type RuntimeDataPreflight,
 } from './runtime-data-preflight.js';
 export { FirestoreScheduleRepository } from './schedules.js';
+export { FirestoreSelfImprovementRepository } from './self-improvement.js';
+export { FirestoreSelfMaintenanceRepository } from './self-maintenance.js';
 export { FirestoreSettingsRepository } from './settings.js';
 export { createFirestoreSettingsPersistence } from './settings-persistence.js';
 export { FirestoreShellPresenceRepository } from './shell-presence.js';
@@ -134,6 +144,7 @@ export { FirestoreSituationPackReadRepository } from './situation-packs.js';
 export { FirestoreSituationToolRepository } from './situation-tools.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { FirestoreSkillMutationRepository } from './skill-mutations.js';
+export { FirestoreSkillReflectionRepository } from './skill-reflection.js';
 export { FirestoreSmsChannelRepository } from './sms-channel.js';
 export { createInstallationStore, InstallationStore } from './store.js';
 export { FirestoreSuggestionDecisionRepository } from './suggestion-decisions.js';
@@ -145,6 +156,7 @@ export { FirestoreTaskLeaseRepository } from './tasks.js';
 export { FirestoreToolExecutionRepository } from './tool-execution.js';
 export { FirestoreVoiceContextRepository } from './voice-context.js';
 export { FirestoreVoiceProfileRepository } from './voice-profile.js';
+export { FirestoreVoiceSamplePurgeRepository } from './voice-purge.js';
 export { FirestoreWatchRepository } from './watches.js';
 export { FirestoreWorkspaceAnomalyRepository } from './workspace-anomalies.js';
 export { FirestoreWorkspaceCapabilityRepository } from './workspace-capabilities.js';

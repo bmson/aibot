@@ -133,15 +133,16 @@ export async function firestoreMaintenanceReady(deps: AgentDeps): Promise<boolea
   return checkFirestoreMaintenanceReady(deps.firestoreStore, deps.config.FIRESTORE_AGENT_ID);
 }
 
-/** Firestore MCP tools are opt-in outside production until runtime validation matures. */
+/**
+ * The owner's MCP tools over Firestore connection snapshots. Registered in
+ * every environment, as the PostgreSQL composition does; each call still
+ * passes the approval, audit and taint spine.
+ */
 export function registerFirestoreMcpTools(
   registry: ToolRegistry,
   store: InstallationStore,
   agentId: string,
-  environment: NodeJS.ProcessEnv = process.env,
 ): ToolRegistry {
-  if (environment.NODE_ENV === 'production' || environment.FIRESTORE_MCP_TOOLS_ENABLED !== 'true')
-    return registry;
   const connections = new FirestoreMcpConnectionReadRepository(store, agentId);
   return registerMcpTools(registry, {
     list: (ownerId) => connections.list(ownerId),
@@ -326,7 +327,10 @@ function policyGatedOutOfBand(
 function composeOwnerNotifiers(notifiers: readonly OwnerNotifier[]): OwnerNotifier {
   const each = async (run: (notifier: OwnerNotifier) => Promise<void>) => {
     for (const notifier of notifiers) {
-      await run(notifier).catch((err) => console.error('owner notification failed', err));
+      // A leg that throws synchronously is isolated the same as one that rejects.
+      await Promise.resolve()
+        .then(() => run(notifier))
+        .catch((err) => console.error('owner notification failed', err));
     }
   };
   return {
@@ -478,7 +482,6 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
   };
   // Memory, scheduling, goals, missions, owner notices, and keyless lookups use
   // portable repositories.
-  // MCP tools can use their Firestore adapter, but remain explicitly opt-in here.
   const notices = new FirestoreOwnerNoticeRepository(store, config.FIRESTORE_AGENT_ID);
   // Late-bound like the PostgreSQL composition: owner.notify registers before
   // the modules that supply the phone legs are installed.

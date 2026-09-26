@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { type Db, documents, files, type TaskRow } from '@assistant/db';
-import { and, eq, gte, isNull, lt, or, sql } from 'drizzle-orm';
+import { createPostgresDocumentProcessorRepository, type Db, type TaskRow } from '@assistant/db';
+import type { DocumentProcessorRepository, TaskRepository } from '@assistant/persistence';
 import { hashCallbackToken } from '../browse.js';
 import { withSpan } from '../otel.js';
 import { getQueueNotifier } from '../queue.js';
@@ -190,6 +190,8 @@ export interface DocumentProcessorConfig {
 
 export interface DocumentProcessDeps {
   db: Db;
+  /** The portable processor lifecycle; without it the job reads and writes PostgreSQL. */
+  processorStore?: DocumentProcessorRepository;
   documentProcessor?: DocumentProcessorConfig;
   now?: () => Date;
   heartbeat?: () => Promise<void>;
@@ -218,54 +220,22 @@ export async function runDocumentProcessing(
     };
   }
   const now = deps.now?.() ?? new Date();
-  const db = deps.db;
+  const store = deps.processorStore ?? createPostgresDocumentProcessorRepository(deps.db);
   const payload = (task.trigger as { payload?: { documentId?: unknown } } | null)?.payload;
   const documentId = typeof payload?.documentId === 'string' ? payload.documentId : null;
 
   return withSpan('documents.process', { documentId: documentId ?? 'sweep' }, async () => {
     await deps.heartbeat?.();
-    const staleCutoff = new Date(now.getTime() - STALE_MS);
-    const claimable = or(
-      isNull(documents.processorStartedAt),
-      lt(documents.processorStartedAt, staleCutoff),
-    );
+    const staleBefore = new Date(now.getTime() - STALE_MS);
 
     // Retire documents that have burned through their launch budget before
     // selecting fresh work, so an exhausted row can never be claimed again.
-    await db
-      .update(documents)
-      .set({
-        status: 'failed',
-        processorTokenHash: null,
-        error: `processor did not report back after ${PROCESSOR_MAX_ATTEMPTS} launches`,
-        updatedAt: sql`now()`,
-      })
-      .where(
-        and(
-          eq(documents.extractor, 'pending_processor'),
-          eq(documents.status, 'pending'),
-          gte(documents.processorAttempts, PROCESSOR_MAX_ATTEMPTS),
-        ),
-      );
-    const rows = await db
-      .select({
-        id: documents.id,
-        title: documents.title,
-        mime: documents.mime,
-        extractor: documents.extractor,
-        workspacePath: files.workspacePath,
-      })
-      .from(documents)
-      .innerJoin(files, eq(files.id, documents.fileId))
-      .where(
-        and(
-          eq(documents.extractor, 'pending_processor'),
-          eq(documents.status, 'pending'),
-          claimable,
-          ...(documentId ? [eq(documents.id, documentId)] : []),
-        ),
-      )
-      .limit(documentId ? 1 : PROCESS_BATCH);
+    await store.retireExhausted(PROCESSOR_MAX_ATTEMPTS, now);
+    const rows = await store.claimable({
+      ...(documentId ? { documentId } : {}),
+      staleBefore,
+      limit: documentId ? 1 : PROCESS_BATCH,
+    });
 
     let launched = 0;
     let skipped = 0;
@@ -273,24 +243,13 @@ export async function runDocumentProcessing(
       await deps.heartbeat?.();
       const callbackToken = randomBytes(24).toString('hex');
       // Atomic claim: only take the row if it is still unclaimed/stale.
-      const [claimed] = await db
-        .update(documents)
-        .set({
-          processorTokenHash: hashCallbackToken(callbackToken),
-          processorStartedAt: now,
-          processorAttempts: sql`${documents.processorAttempts} + 1`,
-          updatedAt: sql`now()`,
-        })
-        .where(
-          and(
-            eq(documents.id, row.id),
-            eq(documents.extractor, 'pending_processor'),
-            eq(documents.status, 'pending'),
-            claimable,
-          ),
-        )
-        .returning({ id: documents.id });
-      if (!claimed) {
+      if (
+        !(await store.claim(row.id, {
+          tokenHash: hashCallbackToken(callbackToken),
+          now,
+          staleBefore,
+        }))
+      ) {
         skipped++;
         continue;
       }
@@ -318,10 +277,7 @@ export async function runDocumentProcessing(
           continue;
         }
         // A definite launch failure: release the claim so the next sweep retries.
-        await db
-          .update(documents)
-          .set({ processorTokenHash: null, processorStartedAt: null, updatedAt: sql`now()` })
-          .where(eq(documents.id, row.id));
+        await store.release(row.id, now);
         console.error(`document processor launch failed for ${row.id}`, error);
       }
     }
@@ -363,73 +319,42 @@ export type DocumentProcessorCallbackOutcome =
  * recordCodeJobResult, but keyed on the document rather than a task pendingJob.
  */
 export async function recordDocumentProcessorResult(
-  db: Db,
+  store: Db | { processor: DocumentProcessorRepository; tasks: TaskRepository },
   input: { documentId: string; token: string; result: DocumentProcessorResult },
 ): Promise<DocumentProcessorCallbackOutcome> {
   if (!input.documentId || !input.token) return { ok: false, status: 400, error: 'bad request' };
   if (!UUID_RE.test(input.documentId)) return { ok: false, status: 400, error: 'bad request' };
+  const portable = 'processor' in store ? store : null;
+  const processor = portable?.processor ?? createPostgresDocumentProcessorRepository(store as Db);
 
-  const outcome = await db.transaction(async (tx): Promise<DocumentProcessorCallbackOutcome> => {
-    const [doc] = await tx
-      .select()
-      .from(documents)
-      .where(eq(documents.id, input.documentId))
-      .for('update');
-    if (!doc) return { ok: false, status: 404, error: 'document not found' };
-    if (!doc.processorTokenHash) {
-      return { ok: false, status: 409, error: 'no pending processor run' };
-    }
-    if (!tokensMatch(doc.processorTokenHash, hashCallbackToken(input.token))) {
-      return { ok: false, status: 403, error: 'invalid token' };
-    }
-
-    if (input.result.ok) {
-      // Success: point the extract pipeline at the worker's text blob and wake
-      // it. The path is derived here — a worker-reported path is never trusted.
-      await tx
-        .update(documents)
-        .set({
-          processedTextPath: extractedTextPath(doc.id),
-          processorTokenHash: null,
-          error: null,
-          updatedAt: sql`now()`,
-        })
-        .where(eq(documents.id, doc.id));
-      return { ok: true, documentId: doc.id, enqueued: true };
-    }
-
-    const unsupported = input.result.kind === 'unsupported';
-    await tx
-      .update(documents)
-      .set({
-        status: unsupported ? 'unsupported' : 'failed',
-        processorTokenHash: null,
-        error: (
-          input.result.error ?? (unsupported ? 'format not supported' : 'processing failed')
-        ).slice(0, 2000),
-        updatedAt: sql`now()`,
-      })
-      .where(eq(documents.id, doc.id));
-    return { ok: true, documentId: doc.id, enqueued: false };
+  const given = hashCallbackToken(input.token);
+  const unsupported = input.result.kind === 'unsupported';
+  const recorded = await processor.recordResult({
+    documentId: input.documentId,
+    tokenMatches: (stored) => tokensMatch(stored, given),
+    ok: input.result.ok,
+    unsupported,
+    error: input.result.error ?? (unsupported ? 'format not supported' : 'processing failed'),
+    // The path is derived here — a worker-reported path is never trusted.
+    processedTextPath: extractedTextPath(input.documentId),
+    now: new Date(),
   });
+  if (!recorded.ok) return recorded;
 
   // Re-enter the existing resumable chunk+embed pipeline outside the txn.
-  if (outcome.ok && outcome.enqueued) {
-    const [doc] = await db.select().from(documents).where(eq(documents.id, outcome.documentId));
-    if (doc) {
-      const { task } = await enqueueTask(db, {
-        event: {
-          source: 'internal',
-          agentId: doc.agentId,
-          trust: 'assistant',
-          payload: { job: 'documents.extract', documentId: doc.id },
-        },
-        type: 'adhoc',
-        budgetUsdLimit: '0.50',
-        deferNotification: true,
-      });
-      getQueueNotifier().notify(task.id, task.queueGeneration);
-    }
+  if (recorded.extract) {
+    const { task } = await enqueueTask(portable?.tasks ?? (store as Db), {
+      event: {
+        source: 'internal',
+        agentId: recorded.agentId,
+        trust: 'assistant',
+        payload: { job: 'documents.extract', documentId: recorded.documentId },
+      },
+      type: 'adhoc',
+      budgetUsdLimit: '0.50',
+      deferNotification: true,
+    });
+    getQueueNotifier().notify(task.id, task.queueGeneration);
   }
-  return outcome;
+  return { ok: true, documentId: recorded.documentId, enqueued: recorded.extract };
 }
