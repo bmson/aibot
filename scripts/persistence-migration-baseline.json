@@ -96,7 +96,6 @@
   "packages/core/src/workflow/suggestions.ts",
   "packages/core/src/workflow/watch-suggest.ts",
   "packages/modules/src/google/application-confirmations.ts",
-  "packages/modules/src/google/email-channel.ts",
   "packages/modules/src/google/email-sync.ts",
   "packages/modules/src/platform.ts",
   "packages/modules/src/watches/email-watches.ts",

@@ -42,11 +42,12 @@ export class FirestoreEmailSyncRepository implements EmailSyncRepository {
     readonly agentId: string,
   ) {}
 
-  async mailbox(): Promise<{ agentId: string; email: string }> {
+  async mailbox(): Promise<{ agentId: string; name: string; email: string }> {
     const agent = await this.store.doc('agents', this.agentId).get();
     const email = agent.exists ? agent.get('email') : null;
+    const name = agent.exists ? agent.get('name') : null;
     if (typeof email !== 'string' || !email) throw new Error('Gmail sync owner has no email');
-    return { agentId: this.agentId, email };
+    return { agentId: this.agentId, name: typeof name === 'string' ? name : '', email };
   }
 
   async contactTrust(): Promise<Array<{ email: string; trust: 'owner' | 'known' }>> {
@@ -297,5 +298,36 @@ export class FirestoreEmailSyncRepository implements EmailSyncRepository {
     await this.store
       .doc('emailIngest', ingestId)
       .update(encodeRecord({ triaged: true, updatedAt: now }));
+  }
+
+  async replyThread(conversationId: string) {
+    const conversation = await this.store.doc('conversations', conversationId).get();
+    if (!conversation.exists || conversation.get('agentId') !== this.agentId) return null;
+    const [bindings, origins] = await Promise.all([
+      this.store
+        .collection('channelBindings')
+        .where('conversationId', '==', conversationId)
+        .where('channel', '==', 'email')
+        .limit(1)
+        .get(),
+      this.store
+        .collection('tasks')
+        .where('agentId', '==', this.agentId)
+        .where('conversationId', '==', conversationId)
+        .where('type', '==', 'email_triage')
+        .where('trust', '==', 'owner')
+        .orderBy('createdAt', 'asc')
+        .limit(1)
+        .get(),
+    ]);
+    const threadId = bindings.docs[0]?.get('externalId');
+    const origin = origins.docs[0];
+    return {
+      channel: String(conversation.get('channel')),
+      threadId: typeof threadId === 'string' ? threadId : null,
+      ownerOriginTrigger: origin
+        ? (decodeRecord<{ trigger?: unknown }>(origin.data()).trigger ?? null)
+        : null,
+    };
   }
 }

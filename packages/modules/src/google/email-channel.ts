@@ -1,7 +1,6 @@
 import { outboundEmailAllowed } from '@assistant/config';
-import { appendSignature, getAgent, isForwardedIngest } from '@assistant/core';
-import type { Db, TaskRow } from '@assistant/db';
-import { channelBindings, contacts, conversations, tasks, voiceProfile } from '@assistant/db';
+import { appendSignature, isForwardedIngest } from '@assistant/core';
+import type { EmailSyncRepository, Records, VoiceContextRepository } from '@assistant/persistence';
 import {
   buildRawEmail,
   type GmailPayload,
@@ -11,11 +10,12 @@ import {
   markdownToPlainText,
 } from '@assistant/tools';
 import type { GoogleClient } from '@assistant/tools/modules/google';
-import { and, asc, eq } from 'drizzle-orm';
 
-/** What email delivery consumes: the database and the module's own client. */
+type TaskRow = Records['tasks'];
+
+/** What email delivery consumes: the mail state, the owner's voice, and the module's client. */
 export interface EmailChannelDeps {
-  db: Db;
+  persistence: { emailSync: EmailSyncRepository; voiceContext: VoiceContextRepository };
   googleClient: GoogleClient;
 }
 
@@ -58,17 +58,8 @@ async function resolveEmailThreadTarget(
     };
   }
   if (!task.conversationId) return null;
-  const [binding] = await deps.db
-    .select({ externalId: channelBindings.externalId })
-    .from(channelBindings)
-    .where(
-      and(
-        eq(channelBindings.conversationId, task.conversationId),
-        eq(channelBindings.channel, 'email'),
-      ),
-    )
-    .limit(1);
-  if (!binding?.externalId) return null;
+  const thread = await deps.persistence.emailSync.replyThread(task.conversationId);
+  if (!thread?.threadId) return null;
   // Resolve the recipient from the earliest OWNER-TRUST email_triage task only.
   // A conversation is bound to a Gmail threadId regardless of trust
   // (conversationForThread), so an authenticated stranger can seed the first
@@ -77,18 +68,7 @@ async function resolveEmailThreadTarget(
   // email its final answer — and its parked-approval notices, with short codes
   // — to that stranger. No owner-trust origin means no auto-reply target: the
   // answer still lands on the dashboard via postConversationNotice.
-  const [origin] = await deps.db
-    .select({ trigger: tasks.trigger })
-    .from(tasks)
-    .where(
-      and(
-        eq(tasks.conversationId, task.conversationId),
-        eq(tasks.type, 'email_triage'),
-        eq(tasks.trust, 'owner'),
-      ),
-    )
-    .orderBy(asc(tasks.createdAt))
-    .limit(1);
+  const origin = thread.ownerOriginTrigger ? { trigger: thread.ownerOriginTrigger } : undefined;
   // An ingest task is owner-trust with a third-party `from`, so it must never
   // become the reply target for a later follow-up on the same thread either.
   if (isForwardedIngest(origin)) return null;
@@ -97,7 +77,7 @@ async function resolveEmailThreadTarget(
   const to = asStr(originPayload.from);
   if (!to) return null;
   return {
-    threadId: binding.externalId,
+    threadId: thread.threadId,
     to,
     subject: asStr(originPayload.subject),
     rfcMessageId: asStr(originPayload.rfcMessageId),
@@ -113,14 +93,11 @@ async function resolveEmailThreadTarget(
  * and `deleteContact` both refuse to touch owner rows — so this cannot be
  * widened by anything the model does.
  */
-async function isOwnerAddress(db: Db, address: string): Promise<boolean> {
+async function isOwnerAddress(deps: EmailChannelDeps, address: string): Promise<boolean> {
   const normalized = address.trim().toLowerCase();
   if (!normalized) return false;
-  const rows = await db
-    .select({ emails: contacts.emails })
-    .from(contacts)
-    .where(eq(contacts.trust, 'owner'));
-  return rows.some((row) => row.emails.some((email) => email.trim().toLowerCase() === normalized));
+  const contacts = await deps.persistence.emailSync.contactTrust();
+  return contacts.some((row) => row.trust === 'owner' && row.email.trim() === normalized);
 }
 
 /**
@@ -141,10 +118,7 @@ export async function deliverEmailFinal(
   if (task.trust !== 'owner') return false;
   if (!task.conversationId || !deps.googleClient.configured()) return false;
 
-  const [conversation] = await deps.db
-    .select()
-    .from(conversations)
-    .where(eq(conversations.id, task.conversationId));
+  const conversation = await deps.persistence.emailSync.replyThread(task.conversationId);
   if (conversation?.channel !== 'email') return false;
 
   const target = await resolveEmailThreadTarget(deps, task);
@@ -158,7 +132,7 @@ export async function deliverEmailFinal(
   // invariant is now checked directly instead of inferred. Auto-sending is the
   // one path here with no approval card in front of it, so it fails closed: an
   // address that is not a known owner address is never written to.
-  if (!(await isOwnerAddress(deps.db, target.to))) {
+  if (!(await isOwnerAddress(deps, target.to))) {
     console.warn(
       `email-channel: refusing to auto-reply to ${target.to} — not an owner address (task ${task.id})`,
     );
@@ -185,11 +159,10 @@ export async function deliverEmailFinal(
     inReplyTo = original ? gmailHeader(original.payload, 'Message-ID') : '';
   }
 
-  const agent = await getAgent(deps.db);
-  const [profile] = await deps.db
-    .select({ signature: voiceProfile.signature })
-    .from(voiceProfile)
-    .where(eq(voiceProfile.id, 1));
+  const [agent, profile] = await Promise.all([
+    deps.persistence.emailSync.mailbox(),
+    deps.persistence.voiceContext.profile(),
+  ]);
   // The final answer is the model's Markdown — render it to HTML (with a
   // plain-text fallback) and sign it, so an emailed reply reads as rich text
   // rather than raw asterisks.

@@ -4,6 +4,8 @@ import {
   contacts,
   conversations,
   createDb,
+  createPostgresEmailSyncRepository,
+  createPostgresVoiceContextRepository,
   type Db,
   type TaskRow,
   tasks,
@@ -39,7 +41,10 @@ const OWNER_ADDRESS = 'bmson@bmson.com';
 function makeDeps(): { deps: EmailChannelDeps; sent: Array<{ url: string; body: string }> } {
   const sent: Array<{ url: string; body: string }> = [];
   const deps = {
-    db,
+    persistence: {
+      emailSync: createPostgresEmailSyncRepository(db),
+      voiceContext: createPostgresVoiceContextRepository(db),
+    },
     googleClient: {
       configured: () => true,
       api: async (url: string, init?: { body?: string }) => {

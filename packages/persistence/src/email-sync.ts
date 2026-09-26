@@ -35,8 +35,8 @@ export type NewEmailIngest = Pick<
  */
 export interface EmailSyncRepository {
   readonly kind: 'email-sync-repository';
-  /** The owner agent and the mailbox it syncs. */
-  mailbox(): Promise<{ agentId: string; email: string }>;
+  /** The owner agent, its name for the From header, and the mailbox it syncs. */
+  mailbox(): Promise<{ agentId: string; name: string; email: string }>;
   /** Addresses of owner and known contacts, lowercased. */
   contactTrust(): Promise<Array<{ email: string; trust: 'owner' | 'known' }>>;
   syncState(mailbox: string): Promise<EmailSyncState | null>;
@@ -70,4 +70,13 @@ export interface EmailSyncRepository {
   /** Ingest rows marked triaged since `since`, for the daily triage ceiling. */
   triagedSince(since: Date): Promise<number>;
   markTriaged(ingestId: string, now: Date): Promise<void>;
+  /**
+   * Where an email conversation replies: its channel, the Gmail thread it is
+   * bound to, and the trigger of its earliest owner-trust email_triage task.
+   */
+  replyThread(conversationId: string): Promise<{
+    channel: string;
+    threadId: string | null;
+    ownerOriginTrigger: unknown;
+  } | null>;
 }
