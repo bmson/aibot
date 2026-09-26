@@ -23,7 +23,7 @@ Classification:
 |---|---:|---:|---:|---:|---:|
 | Mobile API handlers (`/api/mobile/v1`, per method) | 82 | 82 | 0 | 0 | 0 |
 | Web API handlers (`/api`, per method) | 26 | 26 | 0 | 0 | 0 |
-| Pages (30 `page.tsx`) | 30 | 27 | 3 | 0 | 0 |
+| Pages (30 `page.tsx`) | 30 | 28 | 2 | 0 | 0 |
 | Server Action modules (17) | 17 | 17 | 0 | 0 | 0 |
 
 "Degraded" pages count as working for reads; each lists what is still missing below. No web route reaches SQL in Firestore mode.
@@ -93,7 +93,7 @@ Handlers that were SQL, Gated, or Degraded in the 2026-09-23 snapshot, and what 
 | `/profile/data` | Ready | Firestore privacy export and erasure. |
 | `/profile/knowledge` | Ready | One bounded Firestore snapshot serves the header, library, map, entity focus, and cleanup views. |
 | `/profile/people/[id]` | Ready | Pure redirect to `/people/[id]`; now admitted by the proxy. |
-| `/profile/voice` | Degraded | Profile edit and sample upload work. `readOnly` hides the purge control in Firestore mode even though `purgeVoiceSamplesAction` and mobile `purge-voice` are portable. The back link goes to `/profile/memories`. |
+| `/profile/voice` | Ready | Profile edit, sample upload and the sample purge (`FirestoreVoiceSamplePurgeRepository`). |
 | `/people` | Degraded | `ReadOnlyPeopleDirectory`: no add-person control. The proxy admits only GET. |
 | `/people/[id]` | Degraded | `ReadOnlyPersonDetail`: no edit, occasions, relation, fact, merge or delete controls. The proxy admits only GET. The same commands are portable on mobile and in `profile/actions.ts`. |
 
@@ -127,7 +127,7 @@ Handlers that were SQL, Gated, or Degraded in the 2026-09-23 snapshot, and what 
 
 No route reaches SQL in Firestore mode. What is left on the web side:
 
-1. UI parity on `/people`, `/people/[id]` and `/profile/voice`. The commands exist; the pages render read-only variants in Firestore mode, and the proxy admits only GET on the two people pages.
+1. UI parity on `/people` and `/people/[id]`. The commands exist (mobile and `profile/actions.ts`); the pages render read-only variants in Firestore mode, and the proxy admits only GET on them.
 2. Heavy-format uploads through `documents` POST and `documents/upload` queue `documents.process`, which the agent still skips until it is added to `FIRESTORE_PORTABLE_CODE_JOBS` (see `docs/firestore-agent-runtime-inventory.md`).
 3. The structural gap above.
 
