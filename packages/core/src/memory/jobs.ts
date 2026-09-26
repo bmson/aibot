@@ -76,7 +76,6 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'email.extract',
   'reminder.notify',
   'briefing.compose',
-  'pulse.check',
   'memory.consolidate',
   'memory.sweep_loops',
   'memory.graph_sync',
@@ -94,8 +93,6 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'self.maintain',
   'health.monitor',
   'watch.suggest',
-  'documents.process',
-  'email.extract',
   'pulse.check',
   'graph.curiosity',
 ]);
@@ -143,6 +140,8 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'self.improve',
   'memory.graph_date_backfill',
   'graph.curiosity',
+  'documents.process',
+  'email.extract',
 ]);
 
 /** Registered code jobs that still need PostgreSQL, so a Firestore agent skips them. */

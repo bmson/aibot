@@ -79,7 +79,7 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
     resetConfigForTest();
   });
 
-  it('admits owner edits and sample uploads, and keeps the purge control hidden', async () => {
+  it('admits owner edits, sample uploads, and the sample purge', async () => {
     const { proxy } = await import('../../../proxy.js');
     expect(proxy(new NextRequest('http://localhost/profile/voice')).status).toBe(200);
     expect(
@@ -94,11 +94,11 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
     expect(html).toContain('formal greeting');
     expect(html).toContain('2 samples');
     expect(html).toContain('1 learned from your sent mail');
-    expect(html).toContain('/profile/memories');
+    expect(html).toContain('href="/profile"');
     expect(html).toContain('Save voice');
     expect(html).toContain('action="/api/import/upload"');
-    expect(html).not.toContain('Clear 2 samples');
-    expect(html).not.toContain('/profile"');
+    // The purge runs through FirestoreVoiceSamplePurgeRepository.
+    expect(html).toContain('Clear learned &amp; uploaded samples');
   });
 
   it('saves the voice profile through the owner-authenticated web action', async () => {

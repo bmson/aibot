@@ -322,6 +322,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
     expect(sqlAccesses).toEqual([]);
   });
 
+  it('runs every registered code job on Firestore', () => {
+    // A job registered in CODE_JOBS but not admitted as portable is silently
+    // skipped under Firestore even when its port and emulator test exist.
+    expect(sqlOnlyCodeJobs()).toEqual([]);
+  });
+
   it('names every SQL-only code job and leaves portable ones runnable', () => {
     // Shrinks to nothing as the last jobs are ported; each one left is named.
     for (const job of sqlOnlyCodeJobs())

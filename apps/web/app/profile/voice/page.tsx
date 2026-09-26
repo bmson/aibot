@@ -42,8 +42,8 @@ async function getFirestoreVoiceOverview() {
 
 export default async function VoicePage() {
   await requireOwner();
-  const readOnly = loadConfig().PERSISTENCE_DRIVER === 'firestore';
-  const { voiceStats, voiceImports, voiceProfile } = readOnly
+  const firestore = loadConfig().PERSISTENCE_DRIVER === 'firestore';
+  const { voiceStats, voiceImports, voiceProfile } = firestore
     ? await getFirestoreVoiceOverview()
     : await getVoiceOverview(getDb());
   const importViews: VoiceImportView[] = voiceImports.map((row) => ({
@@ -59,7 +59,7 @@ export default async function VoicePage() {
   return (
     <PageShell size="reading">
       <PageHeader
-        back={{ href: readOnly ? '/profile/memories' : '/profile', label: 'Memory' }}
+        back={{ href: '/profile', label: 'Memory' }}
         title="Your writing voice"
         intro="The voice the assistant imitates when it drafts on your behalf, and the sent messages it learned that voice from."
       />
@@ -69,7 +69,6 @@ export default async function VoicePage() {
         uploaded={voiceStats.uploaded}
         imports={importViews}
         profile={voiceProfile}
-        readOnly={readOnly}
         profileEditable
         uploadable
       />
