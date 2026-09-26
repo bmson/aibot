@@ -241,7 +241,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect((await readTask(scheduled.id)).status).toBe('done');
     });
 
-    it('converges racing first uses on one Notifications conversation', async () => {
+    // Six transactions contend for one marker; under the emulator's shared lock
+    // manager this takes ~3.5s and can pass 5s, so it gets the Firestore
+    // package's emulator budget.
+    it('converges racing first uses on one Notifications conversation', {
+      timeout: 30_000,
+    }, async () => {
       const finals = await Promise.all(
         ['First check', 'Second check'].map((title) =>
           saveTask(

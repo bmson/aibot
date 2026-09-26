@@ -55,6 +55,7 @@ export function VoiceSamplesPanel({
   profile,
   readOnly = false,
   profileEditable = !readOnly,
+  uploadable = !readOnly,
 }: {
   total: number;
   auto: number;
@@ -63,6 +64,7 @@ export function VoiceSamplesPanel({
   profile: { description: string; dos: string[]; donts: string[]; signature: string };
   readOnly?: boolean;
   profileEditable?: boolean;
+  uploadable?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [confirming, setConfirming] = useState(false);
@@ -127,7 +129,7 @@ export function VoiceSamplesPanel({
         </div>
 
         {/* Upload */}
-        {!readOnly && (
+        {uploadable && (
           <form
             action="/api/import/upload"
             method="post"

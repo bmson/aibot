@@ -1,5 +1,9 @@
 import type { Db } from '@assistant/db';
 import { conversationSegments, conversations, messages } from '@assistant/db';
+import type {
+  ConversationSegmentationRepository,
+  ConversationSegmentInput,
+} from '@assistant/persistence';
 import { and, asc, eq, gt, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { ModelRouter } from '../model-router/router.js';
 
@@ -102,25 +106,104 @@ function roleLabel(role: string): string {
   return role === 'assistant' ? 'assistant' : 'owner';
 }
 
+/** Where segmentation reads threads and records segments: SQL or a portable repository. */
+interface SegmentStore {
+  recentConversations(limit: number): Promise<Array<{ id: string; agentId: string }>>;
+  unsegmentedMessages(conversationId: string, agentId: string, limit: number): Promise<Msg[]>;
+  commitSegment(input: ConversationSegmentInput): Promise<boolean>;
+}
+
+function repositoryStore(
+  repository: ConversationSegmentationRepository,
+  agentId: string | undefined,
+): SegmentStore {
+  if (!agentId) throw new Error('Portable chat segmentation requires an agent');
+  return {
+    recentConversations: async (limit) =>
+      (await repository.recentConversations(agentId, limit)).map(({ id }) => ({ id, agentId })),
+    unsegmentedMessages: (conversationId, owner, limit) =>
+      repository.unsegmentedMessages(owner, conversationId, limit),
+    commitSegment: (input) => repository.commitSegment(input),
+  };
+}
+
+function sqlStore(db: Db, agentId: string | undefined): SegmentStore {
+  return {
+    recentConversations: (limit) =>
+      db
+        .select({ id: conversations.id, agentId: conversations.agentId })
+        .from(conversations)
+        .where(
+          and(
+            inArray(conversations.trust, ['owner', 'assistant']),
+            agentId ? eq(conversations.agentId, agentId) : sql`true`,
+          ),
+        )
+        .orderBy(sql`${conversations.updatedAt} desc`)
+        .limit(limit),
+    unsegmentedMessages: async (conversationId, _agentId, limit) => {
+      const [watermark] = await db
+        .select({ endedAt: conversationSegments.endedAt })
+        .from(conversationSegments)
+        .where(eq(conversationSegments.conversationId, conversationId))
+        .orderBy(sql`${conversationSegments.endedAt} desc`)
+        .limit(1);
+
+      const rows = await db
+        .select({
+          id: messages.id,
+          role: messages.role,
+          text: messages.text,
+          createdAt: messages.createdAt,
+          embedding: messages.embedding,
+        })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, conversationId),
+            inArray(messages.role, ['user', 'assistant']),
+            isNotNull(messages.embedding),
+            sql`length(${messages.text}) > 0`,
+            watermark ? gt(messages.createdAt, watermark.endedAt) : sql`true`,
+          ),
+        )
+        .orderBy(asc(messages.createdAt))
+        .limit(limit);
+
+      const msgs: Msg[] = [];
+      for (const r of rows) {
+        const embedding = toVector(r.embedding);
+        if (embedding) {
+          msgs.push({ id: r.id, role: r.role, text: r.text, createdAt: r.createdAt, embedding });
+        }
+      }
+      return msgs;
+    },
+    commitSegment: async (input) => {
+      const [row] = await db
+        .insert(conversationSegments)
+        .values(input)
+        .onConflictDoNothing({
+          target: [conversationSegments.conversationId, conversationSegments.startMessageId],
+        })
+        .returning({ id: conversationSegments.id });
+      return Boolean(row);
+    },
+  };
+}
+
 export async function segmentConversations(
-  deps: { db: Db; router: Summarizer },
+  deps: { db: Db; router: Summarizer; segments?: ConversationSegmentationRepository },
   options: SegmentationOptions = {},
 ): Promise<SegmentationResult> {
   const opts = { ...DEFAULTS, ...options };
   const now = options.now ?? new Date();
-  const { db, router } = deps;
+  const { router } = deps;
+  const store = deps.segments
+    ? repositoryStore(deps.segments, options.agentId)
+    : sqlStore(deps.db, options.agentId);
 
-  const convos = await db
-    .select({ id: conversations.id, agentId: conversations.agentId })
-    .from(conversations)
-    .where(
-      and(
-        inArray(conversations.trust, ['owner', 'assistant']),
-        options.agentId ? eq(conversations.agentId, options.agentId) : sql`true`,
-      ),
-    )
-    .orderBy(sql`${conversations.updatedAt} desc`)
-    .limit(opts.maxConversations);
+  const convos = await store.recentConversations(opts.maxConversations);
 
   let segmentsCreated = 0;
   let conversationsScanned = 0;
@@ -128,46 +211,23 @@ export async function segmentConversations(
     if (segmentsCreated >= opts.maxSegments) break;
     conversationsScanned += 1;
 
-    const [watermark] = await db
-      .select({ endedAt: conversationSegments.endedAt })
-      .from(conversationSegments)
-      .where(eq(conversationSegments.conversationId, convo.id))
-      .orderBy(sql`${conversationSegments.endedAt} desc`)
-      .limit(1);
-
-    const rows = await db
-      .select({
-        id: messages.id,
-        role: messages.role,
-        text: messages.text,
-        createdAt: messages.createdAt,
-        embedding: messages.embedding,
-      })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.conversationId, convo.id),
-          inArray(messages.role, ['user', 'assistant']),
-          isNotNull(messages.embedding),
-          sql`length(${messages.text}) > 0`,
-          watermark ? gt(messages.createdAt, watermark.endedAt) : sql`true`,
-        ),
-      )
-      .orderBy(asc(messages.createdAt))
-      .limit(opts.perConversationMessageCap);
-
-    const msgs: Msg[] = [];
-    for (const r of rows) {
-      const embedding = toVector(r.embedding);
-      if (embedding) {
-        msgs.push({ id: r.id, role: r.role, text: r.text, createdAt: r.createdAt, embedding });
-      }
-    }
+    const msgs = await store.unsegmentedMessages(
+      convo.id,
+      convo.agentId,
+      opts.perConversationMessageCap,
+    );
     const groups = groupByTopic(msgs, opts, now);
 
     for (const group of groups) {
       if (segmentsCreated >= opts.maxSegments) break;
-      const created = await commitSegment(db, router, convo.agentId, convo.id, group, opts.taskId);
+      const created = await commitSegment(
+        store,
+        router,
+        convo.agentId,
+        convo.id,
+        group,
+        opts.taskId,
+      );
       if (created) segmentsCreated += 1;
     }
   }
@@ -214,7 +274,7 @@ function groupByTopic(msgs: Msg[], opts: ResolvedOptions, now: Date): Msg[][] {
 }
 
 async function commitSegment(
-  db: Db,
+  store: SegmentStore,
   router: Summarizer,
   agentId: string,
   conversationId: string,
@@ -232,24 +292,17 @@ async function commitSegment(
   const summary = await summarize(router, transcript, taskId);
   const [embedding] = await router.embed([summary], { taskId });
 
-  const [row] = await db
-    .insert(conversationSegments)
-    .values({
-      agentId,
-      conversationId,
-      startMessageId: first.id,
-      endMessageId: last.id,
-      summary,
-      embedding: embedding ?? null,
-      messageCount: group.length,
-      startedAt: first.createdAt,
-      endedAt: last.createdAt,
-    })
-    .onConflictDoNothing({
-      target: [conversationSegments.conversationId, conversationSegments.startMessageId],
-    })
-    .returning({ id: conversationSegments.id });
-  return Boolean(row);
+  return store.commitSegment({
+    agentId,
+    conversationId,
+    startMessageId: first.id,
+    endMessageId: last.id,
+    summary,
+    embedding: embedding ?? null,
+    messageCount: group.length,
+    startedAt: first.createdAt,
+    endedAt: last.createdAt,
+  });
 }
 
 async function summarize(

@@ -16,6 +16,7 @@ import type {
   AppendMessageInput,
   ExecutionPersistence,
   MessageRepository,
+  OwnerNoticeRepository,
 } from '@assistant/persistence';
 import {
   and,
@@ -570,7 +571,7 @@ export async function backgroundNoticeIds(
  * conversational.
  */
 export async function postOwnerNotice(
-  db: Db,
+  store: Db | OwnerNoticeRepository,
   input: {
     agentId: string;
     text: string;
@@ -579,6 +580,17 @@ export async function postOwnerNotice(
     destination?: 'primary' | 'notifications';
   },
 ): Promise<{ conversationId: string }> {
+  if ('kind' in store && store.kind === 'owner-notice-repository') {
+    if (input.destination === 'notifications')
+      throw new Error('Portable owner notices post to the primary thread only');
+    return store.post({
+      agentId: input.agentId,
+      text: input.text,
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+      ...(input.extraParts ? { extraParts: input.extraParts } : {}),
+    });
+  }
+  const db = store as Db;
   const conversationId =
     input.destination === 'notifications'
       ? await getOrCreateNotificationsConversation(db, input.agentId)

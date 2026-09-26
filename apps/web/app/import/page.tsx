@@ -58,44 +58,38 @@ function toView(row: ImportSourceSnapshot, quarantinedNow: number, now: Date): S
 
 export default async function ImportPage() {
   await requireOwner();
-  const readOnly = loadConfig().PERSISTENCE_DRIVER === 'firestore';
   const now = new Date();
-  const { sources, quarantineBySource, unstartedFiles } = readOnly
-    ? await getFirestorePageImports()
-    : await getApplication().getImports();
+  const { sources, quarantineBySource, unstartedFiles } =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? await getFirestorePageImports()
+      : await getApplication().getImports();
 
   return (
     <PageShell size="reading">
       <PageHeader
         back={{ href: '/documents', label: 'Documents' }}
         title="Backstory import"
-        intro={
-          readOnly
-            ? 'View past imports and files waiting in your workspace.'
-            : 'Add email archives, chat exports, or notes to help the assistant understand your history. You can review anything it learns about other people before it is remembered.'
-        }
+        intro="Add email archives, chat exports, or notes to help the assistant understand your history. You can review anything it learns about other people before it is remembered."
       />
 
       {/* Upload */}
-      {!readOnly && (
-        <UploadPanel
-          className="mt-8"
-          title="Upload an archive"
-          action="/api/import/upload"
-          submitLabel="Upload and import"
-          labelSummary="Choose a custom label"
-          labelName="source"
-          labelCaption="Label"
-          labelPlaceholder="For example, old work email"
-          hint={
-            <>
-              Files can be up to 25MB. For larger archives, add the file to{' '}
-              <code className="rounded bg-sunken px-1">import/</code> and start them from the list
-              below.
-            </>
-          }
-        />
-      )}
+      <UploadPanel
+        className="mt-8"
+        title="Upload an archive"
+        action="/api/import/upload"
+        submitLabel="Upload and import"
+        labelSummary="Choose a custom label"
+        labelName="source"
+        labelCaption="Label"
+        labelPlaceholder="For example, old work email"
+        hint={
+          <>
+            Files can be up to 25MB. For larger archives, add the file to{' '}
+            <code className="rounded bg-sunken px-1">import/</code> and start them from the list
+            below.
+          </>
+        }
+      />
 
       {/* Unstarted workspace files */}
       {unstartedFiles.length > 0 ? (
@@ -108,12 +102,10 @@ export default async function ImportPage() {
                 className="flex items-center justify-between gap-3 rounded-lg border border-edge px-3 py-2"
               >
                 <p className="min-w-0 truncate text-sm">{f.name}</p>
-                {!readOnly && (
-                  <StartImportButton
-                    path={`import/${f.name}`}
-                    suggestedTag={f.name.replace(/\.[a-z0-9]+$/i, '').toLowerCase()}
-                  />
-                )}
+                <StartImportButton
+                  path={`import/${f.name}`}
+                  suggestedTag={f.name.replace(/\.[a-z0-9]+$/i, '').toLowerCase()}
+                />
               </div>
             ))}
           </div>
@@ -134,7 +126,6 @@ export default async function ImportPage() {
               <SourceCard
                 key={`${row.id}:${row.updatedAt.getTime()}`}
                 view={toView(row, quarantineBySource[row.source] ?? 0, now)}
-                readOnly={readOnly}
               />
             ))}
           </div>
