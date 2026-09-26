@@ -86,6 +86,7 @@ export * from './task-creation.js';
 export * from './task-lifecycle.js';
 export * from './voice-context.js';
 export * from './voice-profile.js';
+export * from './voice-purge.js';
 export * from './watches.js';
 export * from './workspace-anomalies.js';
 export * from './workspace-capabilities.js';

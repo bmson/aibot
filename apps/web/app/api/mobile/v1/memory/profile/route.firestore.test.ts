@@ -66,7 +66,7 @@ describe.skipIf(!localEmulator)(
         }),
       );
 
-    it('allows profile edits through the proxy but keeps unsupported actions gated', async () => {
+    it('allows profile reads and edits through the proxy', async () => {
       const { proxy } = await import('../../../../../../proxy.js');
       expect(
         proxy(new NextRequest('http://localhost/api/mobile/v1/memory/profile', { method: 'GET' }))
@@ -76,10 +76,6 @@ describe.skipIf(!localEmulator)(
         proxy(new NextRequest('http://localhost/api/mobile/v1/memory/profile', { method: 'POST' }))
           .status,
       ).toBe(200);
-      auth.allowed.mockResolvedValue(true);
-      // Voice-sample purge still needs the PostgreSQL voice corpus.
-      const response = await post({ action: 'purge-voice' });
-      expect(response.status).toBe(503);
     });
 
     it('saves bounded voice edits from mobile arrays without PostgreSQL', async () => {
@@ -192,6 +188,53 @@ describe.skipIf(!localEmulator)(
       } finally {
         await store.doc('agents', extra).delete();
       }
+    });
+
+    it('purges imported and uploaded voice samples and stops running voice imports', async () => {
+      auth.allowed.mockResolvedValue(true);
+      const sample = (context: string) => {
+        const id = randomUUID();
+        return store.doc('writingSamples', id).set({ id, agentId, context, text: context });
+      };
+      // Start from a known corpus; earlier cases seed samples of their own.
+      const earlier = await store.collection('writingSamples').get();
+      await Promise.all(earlier.docs.map((doc) => doc.ref.delete()));
+      await Promise.all([
+        sample('auto:mail'),
+        sample('auto:sent'),
+        sample('upload:takeout'),
+        sample('owner:typed'),
+      ]);
+      const runningTask = randomUUID();
+      const finishedTask = randomUUID();
+      await store.doc('tasks', runningTask).set({ id: runningTask, agentId, status: 'running' });
+      await store.doc('tasks', finishedTask).set({ id: finishedTask, agentId, status: 'done' });
+      const voiceSource = randomUUID();
+      const otherSource = randomUUID();
+      await store.doc('importSources', voiceSource).set({
+        id: voiceSource,
+        agentId,
+        source: 'voice-samples:takeout',
+        taskId: runningTask,
+        workspacePath: 'imports/voice-takeout.mbox',
+      });
+      await store.doc('importSources', otherSource).set({
+        id: otherSource,
+        agentId,
+        source: 'chatgpt:export',
+        taskId: finishedTask,
+        workspacePath: 'imports/chatgpt.zip',
+      });
+
+      const response = await post({ action: 'purge-voice' });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true, deleted: 3 });
+      const left = await store.collection('writingSamples').where('agentId', '==', agentId).get();
+      expect(left.docs.map((doc) => doc.get('context'))).toEqual(['owner:typed']);
+      expect((await store.doc('tasks', runningTask).get()).get('status')).toBe('cancelled');
+      expect((await store.doc('tasks', finishedTask).get()).get('status')).toBe('done');
+      expect((await store.doc('importSources', voiceSource).get()).exists).toBe(false);
+      expect((await store.doc('importSources', otherSource).get()).exists).toBe(true);
     });
   },
 );

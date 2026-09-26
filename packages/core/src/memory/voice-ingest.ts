@@ -12,6 +12,7 @@ import {
   type ImportCommandRepository,
   type ImportJobFence,
   type ImportJobRepository,
+  type VoiceSamplePurgeRepository,
   validateEmbedding,
 } from '@assistant/persistence';
 import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
@@ -627,9 +628,18 @@ export async function voiceSampleStats(db: Db): Promise<VoiceSampleStats> {
  * Also clears the voice import_sources husks and cancels any in-flight ingest.
  */
 export async function purgeVoiceSamples(
-  db: Db,
+  storage: Db | VoiceSamplePurgeRepository,
   workspace?: { delete(relPath: string): Promise<void> },
 ): Promise<{ deleted: number }> {
+  if ('kind' in storage && storage.kind === 'voice-sample-purge-repository') {
+    const { deleted, workspacePaths } = await (storage as VoiceSamplePurgeRepository).purge();
+    for (const path of workspace ? workspacePaths : [])
+      await workspace?.delete(path).catch((err) => {
+        console.error(`voice purge: workspace delete failed for ${path}`, err);
+      });
+    return { deleted };
+  }
+  const db = storage as Db;
   const purgeable = or(
     like(writingSamples.context, 'auto:%'),
     like(writingSamples.context, `${UPLOAD_SAMPLE_PREFIX}%`),

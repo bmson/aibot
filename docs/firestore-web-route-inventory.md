@@ -39,7 +39,7 @@ Degraded (4):
 | `documents` POST | Ready: every type the PostgreSQL path accepts, filed through `FirestoreDocumentCatalogRepository` with its `documents.extract` or `documents.process` job. |
 | `documents/[id]` DELETE | Ready: `FirestoreDocumentDeletionRepository` cancels queued jobs, deletes chunks, the file row and the dedup claim, and the caller deletes the bytes. |
 | `improvements/[id]` POST | `apply` on a `model_role` proposal throws ("require PostgreSQL model and role records"); dismiss and advisory apply work. |
-| `memory/profile` POST | `voice-profile` and `recompile` work; `organize`, `purge-voice`, `forget-all` return `503`. |
+| `memory/profile` POST | Every action works in Firestore mode; `purge-voice` runs through `FirestoreVoiceSamplePurgeRepository`. |
 
 Gated (1): `live/scoreboard` GET (reads only the agent timezone, which already has a Firestore path).
 
@@ -94,7 +94,7 @@ SQL (7):
 | `/import` | Ready | Upload, start, purge, delete and review run through `getImportCommands()`. |
 | `/profile/memories` | Degraded | Read-only memory hub substituted for `/profile`. |
 | `/profile/about` | Degraded | Read-only owner facts; confirm/correct/forget unavailable. |
-| `/profile/voice` | Degraded | Profile edit and sample upload work; voice-sample purge does not. |
+| `/profile/voice` | Ready | Profile edit, sample upload and voice-sample purge (`FirestoreVoiceSamplePurgeRepository`) work. |
 | `/people`, `/people/[id]` | Degraded | Read-only directory and contact detail; POST (people Server Actions) proxy-blocked. |
 | `/profile/people/[id]` | Gated | Pure redirect to `/people/[id]`. |
 | `/anomalies` | SQL | `listAnomalies(db)`; Firestore repository already exists. |
@@ -119,7 +119,7 @@ SQL (7):
 | `chat/actions.ts` | Degraded | `recordRecallFeedbackAction` |
 | `tasks/actions.ts` | Degraded | `retryTask`, `revokeAutonomyGrant`, `raiseTaskBudgetAndRetry`, `cancelTask` |
 | `settings/actions.ts` | Degraded | `rotateMobileToken` explicitly refused |
-| `profile/actions.ts` | Degraded | commitments (resolve/dismiss/snooze/correct), memory commands (confirm/correct/forget/prominence/approve/reject/create), organize, purge voice, merge/delete people (explicitly refused). People, occasions, voice profile, card recompile and erase are portable. |
+| `profile/actions.ts` | Degraded | commitments (resolve/dismiss/snooze/correct), memory commands (confirm/correct/forget/prominence/approve/reject/create), organize, merge/delete people (explicitly refused). People, occasions, voice profile, card recompile and erase are portable. |
 | `anomalies/actions.ts` | SQL | dismiss, suspend policy |
 | `improvements/actions.ts` | SQL | apply, dismiss |
 | `documents/actions.ts` | SQL | delete document |
