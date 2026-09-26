@@ -1,3 +1,4 @@
+import { sqlOnlyCodeJobs } from '@assistant/core';
 import type { TaskRow } from '@assistant/db';
 import type { InstalledModuleSet, ModuleChannel } from '@assistant/modules';
 import { describe, expect, it, vi } from 'vitest';
@@ -232,9 +233,12 @@ describe('executorDeps code-job availability', () => {
 
   it('completes SQL-only jobs benignly under Firestore and keeps portable ones', () => {
     const jobs = executorDeps(depsFor('firestore'));
-    expect(jobs.jobUnavailable?.('dream.run')).toBe(
-      'dream.run skipped because it is not yet available on Firestore persistence',
-    );
+    // Shrinks to nothing as the last jobs are ported; each one left is named.
+    for (const job of sqlOnlyCodeJobs())
+      expect(jobs.jobUnavailable?.(job)).toBe(
+        `${job} skipped because it is not yet available on Firestore persistence`,
+      );
+    expect(jobs.jobUnavailable?.('graph.curiosity')).toBeNull();
     expect(jobs.jobUnavailable?.('memory.consolidate')).toBeNull();
     expect(jobs.jobUnavailable?.('reminder.notify')).toBeNull();
   });
