@@ -51,6 +51,7 @@ const child = spawn(
     'apps/agent/src/firestore-chat-segmentation.test.ts',
     'apps/agent/src/firestore-lookup-tools.test.ts',
     'apps/agent/src/firestore-push-notifier.test.ts',
+    'apps/agent/src/firestore-sms-channel.test.ts',
     'apps/agent/src/firestore-imports.test.ts',
     'apps/web/app/import/actions.firestore.test.ts',
     'apps/web/app/import/page.test.tsx',

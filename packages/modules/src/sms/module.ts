@@ -1,4 +1,5 @@
-import { loadVoiceContext, rewriteInVoice } from '@assistant/core';
+import { getAgent, loadVoiceContext, rewriteInVoice } from '@assistant/core';
+import type { SmsChannelRepository, VoiceContextRepository } from '@assistant/persistence';
 import { registerSmsTools, TwilioClient } from '@assistant/tools/modules/sms';
 import { defineModule, type ModuleHooks } from '../platform.js';
 import {
@@ -17,16 +18,45 @@ import { smsMeta } from './meta.js';
  */
 const unconfiguredTwilioClient = () => new TwilioClient('', '', '');
 
+/** A repository the persistence bundle lacks: installing still works, using it fails loudly. */
+function missing<T extends object>(name: string): T {
+  return new Proxy({} as T, {
+    get(_target, property) {
+      if (property === 'then') return undefined;
+      throw new Error(`sms: persistence has no ${name} repository (${String(property)})`);
+    },
+  });
+}
+
 export const smsModule = defineModule<TwilioClient>({
   meta: smsMeta,
   absent: unconfiguredTwilioClient,
-  create: ({ config, db, registry, router }) => {
+  create: ({ config, db, registry, router, persistence }) => {
     const client = new TwilioClient(
       config.TWILIO_ACCOUNT_SID,
       config.TWILIO_AUTH_TOKEN,
       config.TWILIO_FROM_NUMBER,
     );
-    const channelDeps: SmsChannelDeps = { config, db, registry, twilio: client };
+    // Channel state and the owner's voice come from the persistence bundle on
+    // either driver. The owner is the configured Firestore agent, or
+    // PostgreSQL's single agent row.
+    const smsChannel = persistence.smsChannel ?? missing<SmsChannelRepository>('SMS channel');
+    const voiceContext =
+      persistence.voiceContext ?? missing<VoiceContextRepository>('voice context');
+    const channelDeps: SmsChannelDeps = {
+      config,
+      registry,
+      twilio: client,
+      persistence: { ...persistence, smsChannel },
+      owner:
+        config.PERSISTENCE_DRIVER === 'firestore'
+          ? async () => {
+              const owner = await persistence.executionContext.getAgent(config.FIRESTORE_AGENT_ID);
+              if (!owner) throw new Error('sms: the configured owner is missing');
+              return owner;
+            }
+          : () => getAgent(db),
+    };
 
     // The channel hooks exist on the unconfigured branch too: routes must
     // answer (the webhook 404s only when the module is DISABLED, not when it
@@ -83,7 +113,7 @@ export const smsModule = defineModule<TwilioClient>({
       sender: client,
       ownerPhone: config.OWNER_PHONE,
       prepareOutbound: async (text) => {
-        const voice = await loadVoiceContext(db, router, 'sms', text);
+        const voice = await loadVoiceContext(voiceContext, router, 'sms', text);
         const result = await rewriteInVoice(router, {
           draft: text,
           register: 'sms',

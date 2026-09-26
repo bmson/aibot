@@ -103,10 +103,10 @@ Imported installations carry these schedules. The SQL jobs are **Disabled** (`fi
 | code | Ready | `code.execute` staging Ready | `/webhooks/code/callback` Ready (`executionJobs.recordCallback`) | Disabled (config); every row Ready |
 | documents | Ready | `documents.search` SQL (pgvector chunks) | `/webhooks/document/callback`, `documents.process` SQL; `documents.extract` Ready | Disabled (config) |
 | push | Ready | none | Owner notifier through `persistence.deviceTokens` (list, invalidate on APNs 410), behind the Firestore nudge policy (`firestore-push-notifier.test.ts`) | **Ready** (allowed) |
-| sms | Ready | `sms.send` voice rewrite (`loadVoiceContext(db)`) SQL | inbound `/webhooks/twilio/sms`, approval codes, final delivery, notifier: SQL | Disabled (config) |
-| google | Ready | Gmail/Docs/Sheets/Slides/Calendar HTTP tools; `gmail.send` voice rewrite SQL; `drive.ingest` SQL; `applications.*` SQL | Gmail Pub/Sub + sync + watch renewal (distributed lock on a reserved PG connection), email channel delivery, application confirmations: SQL | Disabled (config) |
+| sms | Ready | `sms.send` voice rewrite through `persistence.voiceContext` | Inbound `/webhooks/twilio/sms`, approval codes, final delivery, metering and the `channel:sms` limit, and the notifier leg through `persistence.smsChannel` and the shared cost, approval, message and task repositories (`firestore-sms-channel.test.ts`) | **Ready** (allowed) |
+| google | Ready | Gmail/Docs/Sheets/Slides/Calendar HTTP tools; `gmail.send`/`gmail.create_draft` voice rewrite through `persistence.voiceContext`; `drive.ingest` SQL; `applications.*` SQL | Gmail Pub/Sub + sync + watch renewal (distributed lock on a reserved PG connection), email channel delivery, application confirmations: SQL | Disabled (config) |
 
-Owner notifications in Firestore mode post to the dashboard (`firestoreDashboardOwnerNotifier`) and fan out to the module phone legs through `persistence.nudgePolicy` (quiet hours and the ambient daily cap), exactly as PostgreSQL does. Each module leg is isolated, so a failing channel never silences the next. `owner.notify` pings through the same gate. The SMS leg itself is still SQL, which is why `sms` stays out of `FIRESTORE_PORTABLE_MODULES`.
+Owner notifications in Firestore mode post to the dashboard (`firestoreDashboardOwnerNotifier`) and fan out to the module phone legs through `persistence.nudgePolicy` (quiet hours and the ambient daily cap), exactly as PostgreSQL does. Each module leg is isolated, so a failing channel never silences the next. `owner.notify` pings through the same gate.
 
 ## Built-in tools
 
@@ -132,4 +132,4 @@ The Firestore composition registers `memory.save`, `memory.recall`, `task.schedu
 2. The google module's Gmail sync, email delivery, application confirmations, `drive.ingest` and `email.extract` (open PRs), then `google` in `FIRESTORE_PORTABLE_MODULES`.
 3. Canaries (`CANARY_ENABLED` must stay false) and agent-side location pings (`LOCATION_PING_SECRET` must stay empty).
 
-`validateAgentPersistenceConfig` admits the modules in `FIRESTORE_PORTABLE_MODULES` (reminders, calendar, browser, code, search, maps, watches, push). Add a module there only once every row for it above is Ready.
+`validateAgentPersistenceConfig` admits the modules in `FIRESTORE_PORTABLE_MODULES` (reminders, calendar, browser, code, search, maps, watches, push, sms). Add a module there only once every row for it above is Ready.

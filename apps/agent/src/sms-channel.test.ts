@@ -1,5 +1,14 @@
 import { createHmac } from 'node:crypto';
-import { agents, approvals, createDb, type Db, tasks, toolCalls } from '@assistant/db';
+import { getAgent } from '@assistant/core';
+import {
+  agents,
+  approvals,
+  createDb,
+  createPostgresExecutionPersistence,
+  type Db,
+  tasks,
+  toolCalls,
+} from '@assistant/db';
 import { deliverSmsFinal, handleInboundSms, type SmsChannelDeps } from '@assistant/modules';
 import { ToolRegistry } from '@assistant/tools';
 import { eq, inArray, sql } from 'drizzle-orm';
@@ -46,7 +55,13 @@ function fakeDeps(): SmsChannelDeps {
       TWILIO_AUTH_TOKEN: AUTH_TOKEN,
       PUBLIC_URL,
     } as SmsChannelDeps['config'],
-    db,
+    persistence: {
+      ...createPostgresExecutionPersistence(db),
+      smsChannel: createPostgresExecutionPersistence(db).smsChannel as NonNullable<
+        ReturnType<typeof createPostgresExecutionPersistence>['smsChannel']
+      >,
+    },
+    owner: () => getAgent(db),
     registry: fakeRegistry(),
     twilio: {
       configured: () => true,

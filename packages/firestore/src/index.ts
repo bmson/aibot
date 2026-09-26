@@ -131,6 +131,7 @@ export { FirestoreSituationPackReadRepository } from './situation-packs.js';
 export { FirestoreSituationToolRepository } from './situation-tools.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { FirestoreSkillMutationRepository } from './skill-mutations.js';
+export { FirestoreSmsChannelRepository } from './sms-channel.js';
 export { createInstallationStore, InstallationStore } from './store.js';
 export { FirestoreSuggestionDecisionRepository } from './suggestion-decisions.js';
 export { FirestoreSuggestionRepository, suggestionIdFor } from './suggestions.js';
@@ -139,6 +140,7 @@ export { FirestoreTaskActivityCommandRepository } from './task-activity-commands
 export { FirestoreTaskRepository } from './task-lifecycle.js';
 export { FirestoreTaskLeaseRepository } from './tasks.js';
 export { FirestoreToolExecutionRepository } from './tool-execution.js';
+export { FirestoreVoiceContextRepository } from './voice-context.js';
 export { FirestoreVoiceProfileRepository } from './voice-profile.js';
 export { FirestoreWatchRepository } from './watches.js';
 export { FirestoreWorkspaceAnomalyRepository } from './workspace-anomalies.js';
