@@ -145,8 +145,11 @@ export function validateCutoverConfig(config: CutoverConfig): CutoverConfig {
     fail('asset backup and restore prefixes must differ');
   if (!GS_PREFIX.test(`${config.firestoreBackup?.gcsPrefix ?? ''}/`))
     fail('firestoreBackup.gcsPrefix');
-  if (!/^assistant-restore-[a-z0-9-]{1,45}$/.test(config.firestoreBackup.restoreDatabaseId))
-    fail('firestoreBackup.restoreDatabaseId must start with assistant-restore-');
+  // The managed backup refuses a restore ID with fewer than 8 characters after the prefix.
+  if (!/^assistant-restore-[a-z0-9-]{8,40}$/.test(config.firestoreBackup.restoreDatabaseId))
+    fail(
+      'firestoreBackup.restoreDatabaseId must be assistant-restore- and at least 8 more characters',
+    );
   if (!Array.isArray(config.services) || config.services.length === 0) fail('services');
   for (const service of config.services) {
     if (!NAME.test(service.name)) fail(`service name ${service.name}`);
@@ -201,6 +204,7 @@ export type CutoverDeps = {
 export type SecretRef = { env: string; secret: string; version: string };
 export type ServiceInventory = {
   name: string;
+  serviceAccount: string | null;
   url: string | null;
   latestReadyRevision: string | null;
   traffic: Array<{ revision: string | null; percent: number; latest: boolean }>;
@@ -286,7 +290,7 @@ type RunService = {
     latestReadyRevisionName?: string;
     traffic?: Array<{ revisionName?: string; percent?: number; latestRevision?: boolean }>;
   };
-  spec?: { template?: { spec?: { containers?: Container[] } } };
+  spec?: { template?: { spec?: { serviceAccountName?: string; containers?: Container[] } } };
 };
 type RunJob = {
   metadata?: { name?: string };
@@ -296,6 +300,7 @@ type RunJob = {
 export function serviceInventory(item: RunService): ServiceInventory {
   return {
     name: item.metadata?.name ?? '',
+    serviceAccount: item.spec?.template?.spec?.serviceAccountName ?? null,
     url: item.status?.url ?? null,
     latestReadyRevision: item.status?.latestReadyRevisionName ?? null,
     traffic: (item.status?.traffic ?? []).map((entry) => ({
@@ -595,6 +600,26 @@ function stepsDefinition(): StepDefinition[] {
           'target Firestore database has point-in-time recovery',
           target?.pointInTimeRecoveryEnablement === 'POINT_IN_TIME_RECOVERY_ENABLED',
         );
+        // Once switched, each service reads and writes the target as its runtime
+        // identity; without a grant every request is refused.
+        const policy = await deps.gcloud.json<{
+          bindings?: Array<{
+            role?: string;
+            members?: string[];
+            condition?: { expression?: string };
+          }>;
+        }>(['projects', 'get-iam-policy', config.gcp.project]);
+        for (const service of config.services) {
+          const account = inventory.services.find(
+            (item) => item.name === service.name,
+          )?.serviceAccount;
+          check(
+            checks,
+            `service ${service.name} runtime identity can use the target Firestore database`,
+            Boolean(account) &&
+              firestoreAccessGranted(policy.bindings ?? [], `serviceAccount:${account}`, config),
+          );
+        }
         check(
           checks,
           'restore rehearsal database does not exist yet',
@@ -1491,6 +1516,28 @@ type ImportSummary = {
   snapshotSha256?: string;
   bundleChecksum?: string;
 };
+
+const FIRESTORE_DATA_ROLES = new Set([
+  'roles/datastore.user',
+  'roles/datastore.owner',
+  'roles/editor',
+  'roles/owner',
+]);
+
+/** A data-access role on the whole project, or conditioned on exactly the target database. */
+function firestoreAccessGranted(
+  bindings: Array<{ role?: string; members?: string[]; condition?: { expression?: string } }>,
+  member: string,
+  config: CutoverConfig,
+): boolean {
+  const target = `resource.name == "projects/${config.gcp.project}/databases/${config.firestoreDatabaseId}"`;
+  return bindings.some(
+    (binding) =>
+      FIRESTORE_DATA_ROLES.has(binding.role ?? '') &&
+      (binding.members ?? []).includes(member) &&
+      (!binding.condition?.expression || binding.condition.expression.trim() === target),
+  );
+}
 
 function serviceInventoryForJob(item: RunJob) {
   return containerSummary(item.spec?.template?.spec?.template?.spec?.containers?.[0]);

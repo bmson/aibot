@@ -254,6 +254,15 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
   ];
   const executions: Array<{ job: string; name: string; created: string; summary: unknown }> = [];
   const loggedQueries = new Set<string>();
+  const iamPolicy = {
+    bindings: ['assistant-web', 'assistant-agent'].map((name) => ({
+      role: 'roles/datastore.user',
+      members: [`serviceAccount:${name}@${PROJECT}.iam.gserviceaccount.com`],
+      condition: {
+        expression: `resource.name == "projects/${PROJECT}/databases/assistant-production"`,
+      },
+    })),
+  };
   const bundle = bundleFixture();
   const bundleBytes = Buffer.from(JSON.stringify(bundle));
   const snapshotUri = `gs://${BUCKET}/workspace/assistant/migration/snapshots/assistant-workspace-export-abc.json`;
@@ -283,7 +292,10 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
       },
       spec: {
         template: {
-          spec: { containers: [{ image: service.image, env: envEntries(service.env) }] },
+          spec: {
+            serviceAccountName: `${name}@${PROJECT}.iam.gserviceaccount.com`,
+            containers: [{ image: service.image, env: envEntries(service.env) }],
+          },
         },
       },
     };
@@ -355,6 +367,7 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
         if (key === 'secrets list')
           return [...secrets].map((name) => ({ name: `projects/1/secrets/${name}` }));
         if (key === 'firestore databases list') return databases;
+        if (key.startsWith('projects get-iam-policy')) return iamPolicy;
         if (key === 'run jobs executions')
           return executions
             .filter((item) => item.job === args[5])
@@ -714,6 +727,7 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
     subscriptions,
     endpoint,
     objects,
+    iamPolicy,
     backupCalls,
   };
 }
@@ -757,6 +771,10 @@ describe('cutover configuration', () => {
       firestoreDatabaseId: 'assistant-restore-x',
     };
     expect(() => validateCutoverConfig(restoreTarget)).toThrow('restore rehearsal');
+    // The managed backup refuses fewer than 8 characters after the prefix.
+    const shortRestore = structuredClone(config);
+    shortRestore.firestoreBackup.restoreDatabaseId = 'assistant-restore-final';
+    expect(() => validateCutoverConfig(shortRestore)).toThrow('at least 8 more characters');
   });
 
   it('parses the last JSON object printed by a CLI', () => {
@@ -851,6 +869,22 @@ describe('cutover orchestration', () => {
     const assets = await runCutoverStep('assets', config, world.deps, store, { confirm: 'assets' });
     expect(assets.status).toBe('failed');
     expect(JSON.stringify(assets.result)).toContain('"sizeMismatches":["present-1"]');
+  });
+
+  it('refuses a preflight when a runtime identity cannot use the target database', async () => {
+    const { config, store, world } = setup();
+    // Access to a rehearsal database does not count for the production target.
+    const agent = world.iamPolicy.bindings[1];
+    if (agent?.condition)
+      agent.condition.expression = `resource.name == "projects/${PROJECT}/databases/assistant-rehearsal"`;
+    const preflight = await runCutoverStep('preflight', config, world.deps, store);
+    expect(preflight.status).toBe('failed');
+    const failed = (preflight.result as { checks: Array<{ name: string; ok: boolean }> }).checks
+      .filter((item) => !item.ok)
+      .map((item) => item.name);
+    expect(failed).toEqual([
+      'service assistant-agent runtime identity can use the target Firestore database',
+    ]);
   });
 
   it('requires a per-step confirmation before any production change', async () => {
