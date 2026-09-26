@@ -102,7 +102,6 @@
   "packages/modules/src/watches/email-watches.ts",
   "packages/modules/src/watches/fire.ts",
   "packages/modules/src/watches/web-watches.ts",
-  "packages/tools/src/applications.ts",
   "packages/tools/src/builtin/index.ts",
   "packages/tools/src/builtin/weather.ts",
   "packages/tools/src/dispatcher.ts",

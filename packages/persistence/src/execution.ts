@@ -1,3 +1,4 @@
+import type { ApplicationConfirmationRepository } from './application-confirmations.js';
 import type { ApprovalPolicyRepository } from './approval-policies.js';
 import type { ApprovalRepository } from './approvals.js';
 import type { AssistantHealthRepository } from './assistant-health.js';
@@ -96,6 +97,8 @@ export interface ExecutionPersistence {
   readonly voiceContext?: VoiceContextRepository;
   /** Present where the SMS channel keeps its state portably. */
   readonly smsChannel?: SmsChannelRepository;
+  /** Present where application confirmation watches are kept portably. */
+  readonly applications?: ApplicationConfirmationRepository;
   /** Present where background producers post their dashboard copy portably. */
   readonly ownerNotices?: OwnerNoticeRepository;
   /** Present where producers record one-tap suggestions portably. */

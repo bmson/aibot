@@ -26,6 +26,13 @@ const { default: composition } = await import('../../../assistant.config.js');
  * docs/firestore-agent-runtime-inventory.md.
  */
 const PORTABLE_TOOLS = [
+  'applications.append_confirmation_doc',
+  'applications.apply_confirmation',
+  'applications.cancel_confirmation',
+  'applications.list_confirmations',
+  'applications.watch_confirmation',
+  // Job launches stage through execution persistence; their result callbacks
+  // (webhooks, not tools) are still SQL — see the inventory.
   // Job launches stage through execution persistence, and their result
   // callbacks (webhooks, not tools) record through it too.
   'browser.execute',
@@ -97,12 +104,6 @@ const SQL_DEPENDENT_TOOLS = [
   // Document library ingest and chunk search.
   'drive.ingest',
   'documents.search',
-  // Application-confirmation tracking.
-  'applications.append_confirmation_doc',
-  'applications.apply_confirmation',
-  'applications.cancel_confirmation',
-  'applications.list_confirmations',
-  'applications.watch_confirmation',
 ];
 
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
@@ -182,7 +183,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       ]);
       expect(
         deps.modules.sweepSteps.filter((step) => !step.portable).map((step) => step.name),
-      ).toEqual(['reapExpiredApplicationWatches']);
+      ).toEqual([]);
 
       // The complete maintenance pass, with every module installed, runs on
       // Firestore alone. Step failures are logged rather than thrown, so the

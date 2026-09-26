@@ -22,6 +22,7 @@ import {
   messages as storedMessages,
   tasks,
 } from '@assistant/db';
+import type { ExecutionPersistence } from '@assistant/persistence';
 import {
   collectGmailAttachments,
   extractGmailText,
@@ -34,7 +35,10 @@ import type { WorkspaceStore } from '@assistant/tools/workspace';
 import { and, eq, gte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { InboundEmailEvent, OwnerNotifier } from '../platform.js';
-import { processApplicationConfirmation } from './application-confirmations.js';
+import {
+  applicationPersistence,
+  processApplicationConfirmation,
+} from './application-confirmations.js';
 import { scoreEmailImportance } from './email-importance.js';
 import { emailIngestForwarded } from './runtime.js';
 
@@ -46,6 +50,7 @@ import { emailIngestForwarded } from './runtime.js';
 export interface EmailSyncDeps {
   config: Config;
   db: Db;
+  persistence: ExecutionPersistence;
   router: ModelRouter;
   workspace: WorkspaceStore;
   googleClient: GoogleClient;
@@ -922,14 +927,17 @@ export async function processMessage(
 
   const text = extractGmailText(msg.payload).slice(0, 20000);
   const authenticated = gmailSenderAuthenticated(msg.payload, from);
-  const application = await processApplicationConfirmation(deps, {
-    agentId,
-    messageId: msg.id,
-    from,
-    subject,
-    body: text,
-    authenticated,
-  });
+  const application = await processApplicationConfirmation(
+    { persistence: applicationPersistence(deps.persistence), notifyOwner: deps.notifyOwner },
+    {
+      agentId,
+      messageId: msg.id,
+      from,
+      subject,
+      body: text,
+      authenticated,
+    },
+  );
   if (application.kind !== 'ignored') return 'triaged';
 
   // Anticipation layer: fan the authenticated message out to every installed

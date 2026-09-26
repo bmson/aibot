@@ -5,13 +5,12 @@ import {
   markTaskNeedsAttention,
   persistMessage,
 } from '@assistant/core';
-import {
-  type ApplicationConfirmationRow,
-  applicationConfirmations,
-  type Db,
-  tasks,
-  toolCalls,
-} from '@assistant/db';
+import type { Db } from '@assistant/db';
+import type {
+  ApplicationConfirmationRepository,
+  ApplicationConfirmationRecord as ApplicationConfirmationRow,
+  ExecutionPersistence,
+} from '@assistant/persistence';
 import {
   type ApplicationActionState,
   ApplicationDocumentUpdateSchema,
@@ -20,18 +19,21 @@ import {
   parseApplicationActionState,
 } from '@assistant/tools';
 import type { ToolDispatcher } from '@assistant/tools/dispatcher';
-import { and, eq, gt, lte, sql } from 'drizzle-orm';
 import type { ModuleTaskHandler, OwnerNotifier } from '../platform.js';
 
-/** What confirmation matching consumes: the database and the owner-notifier port. */
+/** What confirmation matching consumes: the watch records, tasks, messages, and the owner-notifier port. */
 export interface ApplicationConfirmationDeps {
-  db: Db;
+  persistence: Pick<ExecutionPersistence, 'tasks' | 'messages'> & {
+    applications: ApplicationConfirmationRepository;
+  };
   notifyOwner: OwnerNotifier['notifyOwner'];
 }
 
 /** The deterministic task executors additionally dispatch the google tools. */
 export interface ApplicationConfirmationTaskDeps extends ApplicationConfirmationDeps {
   dispatcher: ToolDispatcher;
+  /** Only for the tool context the dispatcher hands to tools; they read persistence instead. */
+  db: Db;
 }
 
 const MAX_TOKEN_CANDIDATES = 1_000;
@@ -91,7 +93,7 @@ async function postNotice(
   suffix: string,
 ): Promise<void> {
   if (!record.conversationId) return;
-  await persistMessage(deps.db, {
+  await persistMessage(deps.persistence.messages, {
     conversationId: record.conversationId,
     taskId,
     role: 'assistant',
@@ -107,7 +109,7 @@ async function reportAmbiguous(
   input: ApplicationConfirmationInput,
   matches: ApplicationConfirmationRow[],
 ): Promise<void> {
-  const { task, created } = await enqueueTask(deps.db, {
+  const { task, created } = await enqueueTask(deps.persistence.tasks, {
     type: 'adhoc',
     event: {
       source: 'internal',
@@ -125,10 +127,10 @@ async function reportAmbiguous(
     deferNotification: true,
   });
   if (created) {
-    const claimed = await claimTask(deps.db, task.id);
+    const claimed = await claimTask(deps.persistence.tasks, task.id);
     if (claimed) {
       await markTaskNeedsAttention(
-        deps.db,
+        deps.persistence.tasks,
         claimed,
         `Authenticated confirmation from ${input.from.toLowerCase()} matched ${matches.length} active applications; no Sheet or Doc was changed.`,
       );
@@ -157,7 +159,7 @@ async function enqueueAuthorizedUpdate(
   input: ApplicationConfirmationInput,
   record: ApplicationConfirmationRow,
 ): Promise<ApplicationConfirmationResult> {
-  const { task } = await enqueueTask(deps.db, {
+  const { task } = await enqueueTask(deps.persistence.tasks, {
     type: 'adhoc',
     event: {
       source: 'internal',
@@ -195,7 +197,7 @@ async function executeAmbiguousApplicationConfirmationTask(
   taskId: string,
   generation?: number,
 ): Promise<ApplicationConfirmationTaskResult> {
-  const [queued] = await deps.db.select().from(tasks).where(eq(tasks.id, taskId));
+  const queued = await deps.persistence.tasks.getTask(taskId);
   const trigger = queued?.trigger as
     | { source?: unknown; payload?: Record<string, unknown> }
     | undefined;
@@ -207,12 +209,12 @@ async function executeAmbiguousApplicationConfirmationTask(
     return { outcome: 'not_claimable' };
   }
   if (queued.status === 'needs_attention') return { outcome: 'needs_attention' };
-  const claimed = await claimTask(deps.db, queued.id, generation);
+  const claimed = await claimTask(deps.persistence.tasks, queued.id, generation);
   if (!claimed) return { outcome: 'not_claimable' };
   const count = Number(trigger.payload.matchCount);
   const from = typeof trigger.payload.from === 'string' ? trigger.payload.from : 'the sender';
   await markTaskNeedsAttention(
-    deps.db,
+    deps.persistence.tasks,
     claimed,
     `Authenticated confirmation from ${from} matched ${Number.isInteger(count) ? count : 'multiple'} active applications; no Sheet or Doc was changed.`,
   );
@@ -250,11 +252,7 @@ function normalizedActionState(record: ApplicationConfirmationRow): ApplicationA
 }
 
 async function loadApplicationRecord(deps: ApplicationConfirmationDeps, id: string) {
-  const [record] = await deps.db
-    .select()
-    .from(applicationConfirmations)
-    .where(eq(applicationConfirmations.id, id));
-  return record;
+  return deps.persistence.applications.get(id);
 }
 
 async function setActionOutcome(
@@ -267,14 +265,10 @@ async function setActionOutcome(
   const current = await loadApplicationRecord(deps, id);
   if (!current) throw new Error('application confirmation disappeared during execution');
   const state = normalizedActionState(current);
-  const [updated] = await deps.db
-    .update(applicationConfirmations)
-    .set({
-      actionState: { ...state, [action]: { status, error: error.slice(0, 2_000) } },
-      updatedAt: new Date(),
-    })
-    .where(eq(applicationConfirmations.id, id))
-    .returning();
+  const updated = await deps.persistence.applications.updateActionState(id, {
+    actionState: { ...state, [action]: { status, error: error.slice(0, 2_000) } },
+    now: new Date(),
+  });
   if (!updated) throw new Error('failed to checkpoint application action outcome');
   return updated;
 }
@@ -289,12 +283,9 @@ async function rejectedOutcomeIsUnknown(
     action === 'sheet'
       ? `application-confirmation-apply-${recordId}`
       : `application-confirmation-doc-${recordId}`;
-  const [prior] = await deps.db
-    .select({ status: toolCalls.status })
-    .from(toolCalls)
-    .where(eq(toolCalls.idempotencyKey, idempotencyKey));
-  if (prior?.status === 'failed') return false;
-  if (prior?.status === 'executing') return true;
+  const prior = await deps.persistence.applications.toolCallStatus(idempotencyKey);
+  if (prior === 'failed') return false;
+  if (prior === 'executing') return true;
   return /already executing|ambiguous side-effect retry/i.test(reason);
 }
 
@@ -374,16 +365,12 @@ async function reconcileSucceededLedger(
               recoveredFromRecord: true,
             };
           })();
-    await deps.db
-      .update(toolCalls)
-      .set({ status: 'succeeded', result, finishedAt: new Date() })
-      .where(
-        and(
-          eq(toolCalls.taskId, taskId),
-          eq(toolCalls.toolName, definition.name),
-          eq(toolCalls.status, 'executing'),
-        ),
-      );
+    await deps.persistence.applications.settleExecutingToolCall(
+      taskId,
+      definition.name,
+      result,
+      new Date(),
+    );
   }
 }
 
@@ -393,7 +380,7 @@ export async function executeApplicationConfirmationTask(
   taskId: string,
   generation?: number,
 ): Promise<ApplicationConfirmationTaskResult> {
-  const [queued] = await deps.db.select().from(tasks).where(eq(tasks.id, taskId));
+  const queued = await deps.persistence.tasks.getTask(taskId);
   const trigger = queued?.trigger as
     | { source?: unknown; payload?: Record<string, unknown> }
     | undefined;
@@ -412,11 +399,12 @@ export async function executeApplicationConfirmationTask(
   if (queued.status === 'needs_attention' || queued.status === 'failed') {
     return { outcome: 'needs_attention', applicationId };
   }
-  const claimed = await claimTask(deps.db, queued.id, generation);
+  const tasks = deps.persistence.tasks;
+  const claimed = await claimTask(tasks, queued.id, generation);
   if (!claimed) return { outcome: 'not_claimable', applicationId };
 
   if (plannedActions(record).length === 0) {
-    await markTaskNeedsAttention(deps.db, claimed, 'No pre-authorized confirmation action exists.');
+    await markTaskNeedsAttention(tasks, claimed, 'No pre-authorized confirmation action exists.');
     return { outcome: 'needs_attention', applicationId };
   }
   if (
@@ -429,7 +417,7 @@ export async function executeApplicationConfirmationTask(
     ].includes(record.status)
   ) {
     await markTaskNeedsAttention(
-      deps.db,
+      tasks,
       claimed,
       `Application confirmation record is ${record.status}; no update was attempted.`,
     );
@@ -505,11 +493,12 @@ export async function executeApplicationConfirmationTask(
     .flatMap((action) => (state[action]?.error ? [`${action}: ${state[action]?.error}`] : []))
     .join('; ')
     .slice(0, 2_000);
-  const [finalRecord] = await deps.db
-    .update(applicationConfirmations)
-    .set({ status, actionState: state, lastError: errors || null, updatedAt: new Date() })
-    .where(eq(applicationConfirmations.id, record.id))
-    .returning();
+  const finalRecord = await deps.persistence.applications.updateActionState(record.id, {
+    status,
+    actionState: state,
+    lastError: errors || null,
+    now: new Date(),
+  });
   if (finalRecord) record = finalRecord;
 
   const copy = resultCopy(record, state);
@@ -523,10 +512,10 @@ export async function executeApplicationConfirmationTask(
     .notifyOwner({ taskId: claimed.id, text: copy.notice })
     .catch((err) => console.error('application confirmation owner notification failed', err));
   if (status === 'updated') {
-    await completeTask(deps.db, claimed, { status: 'done', progress: copy.progress });
+    await completeTask(tasks, claimed, { status: 'done', progress: copy.progress });
     return { outcome: 'done', applicationId };
   }
-  await markTaskNeedsAttention(deps.db, claimed, copy.progress);
+  await markTaskNeedsAttention(tasks, claimed, copy.progress);
   return { outcome: 'needs_attention', applicationId };
 }
 
@@ -542,21 +531,12 @@ export async function reapExpiredApplicationWatches(
   deps: ApplicationConfirmationDeps,
   now = new Date(),
 ): Promise<number> {
-  const expired = await deps.db
-    .update(applicationConfirmations)
-    .set({ status: 'expired', updatedAt: now })
-    .where(
-      and(
-        eq(applicationConfirmations.status, 'awaiting_confirmation'),
-        lte(applicationConfirmations.expiresAt, now),
-      ),
-    )
-    .returning();
+  const expired = await deps.persistence.applications.expireDue(now);
 
   for (const record of expired) {
     const text = `I watched ${record.expectedSenderEmails.join(', ')} for the ${record.company} — ${record.role} confirmation until ${record.expiresAt.toISOString().slice(0, 10)} and it never arrived. I made no Sheet or Doc update.`;
     if (record.conversationId) {
-      await persistMessage(deps.db, {
+      await persistMessage(deps.persistence.messages, {
         conversationId: record.conversationId,
         role: 'assistant',
         origin: 'assistant',
@@ -586,27 +566,14 @@ export async function processApplicationConfirmation(
   const from = input.from.trim().toLowerCase();
   if (!from || !input.messageId) return { kind: 'ignored' };
 
-  await deps.db
-    .update(applicationConfirmations)
-    .set({ status: 'expired', updatedAt: now })
-    .where(
-      and(
-        eq(applicationConfirmations.agentId, input.agentId),
-        eq(applicationConfirmations.status, 'awaiting_confirmation'),
-        lte(applicationConfirmations.expiresAt, now),
-      ),
-    );
+  const applications = deps.persistence.applications;
+  await applications.expireDue(now, input.agentId);
 
   const confirmationMessageId = `gmail:${input.messageId}`;
-  const [alreadyClaimed] = await deps.db
-    .select()
-    .from(applicationConfirmations)
-    .where(
-      and(
-        eq(applicationConfirmations.agentId, input.agentId),
-        eq(applicationConfirmations.confirmationMessageId, confirmationMessageId),
-      ),
-    );
+  const alreadyClaimed = await applications.byConfirmationMessage(
+    input.agentId,
+    confirmationMessageId,
+  );
   if (alreadyClaimed) {
     if (alreadyClaimed.status === 'confirmation_received') {
       return enqueueAuthorizedUpdate(deps, input, alreadyClaimed);
@@ -618,17 +585,7 @@ export async function processApplicationConfirmation(
     };
   }
 
-  const candidates = await deps.db
-    .select()
-    .from(applicationConfirmations)
-    .where(
-      and(
-        eq(applicationConfirmations.agentId, input.agentId),
-        eq(applicationConfirmations.status, 'awaiting_confirmation'),
-        gt(applicationConfirmations.expiresAt, now),
-        sql`${from} = ANY(${applicationConfirmations.expectedSenderEmails})`,
-      ),
-    );
+  const candidates = await applications.awaitingFrom(input.agentId, from, now);
   if (candidates.length === 0) return { kind: 'ignored' };
 
   const hashes = confirmationTokenHashes(`${input.subject}\n${input.body}`);
@@ -640,35 +597,28 @@ export async function processApplicationConfirmation(
   }
 
   const match = matches[0] as ApplicationConfirmationRow;
-  const [claimed] = await deps.db
-    .update(applicationConfirmations)
-    .set({
-      status: 'confirmation_received',
-      confirmationMessageId,
-      confirmationFrom: from,
-      confirmedAt: now,
-      lastError: null,
-      updatedAt: now,
-    })
-    .where(
-      and(
-        eq(applicationConfirmations.id, match.id),
-        eq(applicationConfirmations.status, 'awaiting_confirmation'),
-        gt(applicationConfirmations.expiresAt, now),
-      ),
-    )
-    .returning();
+  const claimed = await applications.claim(match.id, {
+    confirmationMessageId,
+    confirmationFrom: from,
+    now,
+  });
   if (!claimed) {
-    const [current] = await deps.db
-      .select()
-      .from(applicationConfirmations)
-      .where(eq(applicationConfirmations.id, match.id));
+    const current = await applications.get(match.id);
     return current
       ? { kind: 'replay', applicationId: current.id, status: current.status }
       : { kind: 'ignored' };
   }
 
   return enqueueAuthorizedUpdate(deps, input, claimed);
+}
+
+/** The persistence the confirmation flow needs, from either driver's bundle. */
+export function applicationPersistence(
+  persistence: ExecutionPersistence,
+): ApplicationConfirmationDeps['persistence'] {
+  const { applications } = persistence;
+  if (!applications) throw new Error('application confirmations need a persistence repository');
+  return { ...persistence, applications };
 }
 
 /**
@@ -682,6 +632,7 @@ export const applicationConfirmationTaskHandlers: readonly ModuleTaskHandler[] =
       executeApplicationConfirmationTask(
         {
           db: services.db,
+          persistence: applicationPersistence(services.persistence),
           notifyOwner: services.ownerNotifier.notifyOwner,
           dispatcher: services.dispatcher,
         },
@@ -693,7 +644,10 @@ export const applicationConfirmationTaskHandlers: readonly ModuleTaskHandler[] =
     kind: 'application_confirmation_ambiguous',
     run: (services, taskId, generation) =>
       executeAmbiguousApplicationConfirmationTask(
-        { db: services.db, notifyOwner: services.ownerNotifier.notifyOwner },
+        {
+          persistence: applicationPersistence(services.persistence),
+          notifyOwner: services.ownerNotifier.notifyOwner,
+        },
         taskId,
         generation,
       ),

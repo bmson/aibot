@@ -13,6 +13,7 @@ import {
   costEvents,
   costReservations,
   createDb,
+  createPostgresExecutionPersistence,
   type Db,
   messages,
   tasks,
@@ -20,6 +21,7 @@ import {
 } from '@assistant/db';
 import {
   type ApplicationConfirmationTaskDeps,
+  applicationPersistence,
   executeApplicationConfirmationTask,
   processApplicationConfirmation,
 } from '@assistant/modules';
@@ -252,10 +254,16 @@ function workflowHarness() {
     },
     callbackUrl: 'http://localhost:8787/webhooks/browser/callback',
   });
-  registerApplicationTools(registry, { client: google });
+  const persistence = applicationPersistence(createPostgresExecutionPersistence(db));
+  registerApplicationTools(registry, {
+    client: google,
+    applications: persistence.applications,
+    tasks: persistence.tasks,
+  });
   const dispatcher = new ToolDispatcher(db, registry);
   const agentDeps = {
     db,
+    persistence,
     dispatcher,
     registry,
     googleClient: google,

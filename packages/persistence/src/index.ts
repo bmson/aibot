@@ -1,5 +1,6 @@
 export * from './active-jobs.js';
 export * from './application-chat.js';
+export * from './application-confirmations.js';
 export * from './approval-policies.js';
 export * from './approvals.js';
 export * from './assistant-health.js';

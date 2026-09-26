@@ -1,6 +1,7 @@
 export { FirestoreActiveJobLookup } from './active-jobs.js';
 export { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
 export { FirestoreApplicationChatPersistence } from './application-chat.js';
+export { FirestoreApplicationConfirmationRepository } from './application-confirmations.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 export { FirestoreApprovalRepository } from './approvals.js';
 export { FirestoreAssistantHealthRepository } from './assistant-health.js';

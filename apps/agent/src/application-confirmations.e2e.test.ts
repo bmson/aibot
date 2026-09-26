@@ -6,6 +6,7 @@ import {
   costEvents,
   costReservations,
   createDb,
+  createPostgresExecutionPersistence,
   type Db,
   messages,
   tasks,
@@ -14,6 +15,7 @@ import {
 import {
   type ApplicationConfirmationTaskDeps,
   applicationConfirmationTaskHandlers,
+  applicationPersistence,
   confirmationTokenHashes,
   type EmailSyncDeps,
   executeApplicationConfirmationTask,
@@ -86,7 +88,12 @@ function harness(
 ): Harness {
   const api = vi.fn(implementation);
   const client = { api, configured: () => true } as unknown as GoogleClient;
-  const registry = registerApplicationTools(new ToolRegistry(), { client });
+  const persistence = applicationPersistence(createPostgresExecutionPersistence(db));
+  const registry = registerApplicationTools(new ToolRegistry(), {
+    client,
+    applications: persistence.applications,
+    tasks: persistence.tasks,
+  });
   const dispatcher = new ToolDispatcher(db, registry);
   // The stub routes the confirmation task kinds through the real module
   // handlers (as the installed google module would) and no-ops the rest.
@@ -102,6 +109,7 @@ function harness(
   } as unknown as InstalledModuleSet;
   const deps = {
     db,
+    persistence,
     dispatcher,
     registry,
     googleClient: client,
