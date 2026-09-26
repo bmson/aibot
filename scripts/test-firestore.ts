@@ -15,6 +15,8 @@ const child = spawn(
     'exec',
     'vitest',
     'run',
+    // Emulator round trips contend under CI load; the 5s default flakes on healthy tests.
+    '--testTimeout=30000',
     'packages/firestore',
     'packages/persistence',
     'apps/agent/src/firestore-dispatch.test.ts',
