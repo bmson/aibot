@@ -1,12 +1,7 @@
-import {
-  isSupportedFirestoreTextDocument,
-  uploadFirestoreTextDocument,
-} from '@assistant/application/documents';
+import { uploadDocument } from '@assistant/application/documents';
 import { isModuleEnabled, loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
-import {
-  FirestoreDocumentCatalogRepository,
-  FirestoreDocumentReadRepository,
-} from '@assistant/firestore';
+import { FirestoreDocumentReadRepository } from '@assistant/firestore';
+import { getFirestoreDocumentStores } from '@/lib/firestore-documents';
 import { getApplication, getFirestoreInstallationStore, getWorkspace } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -65,24 +60,11 @@ export async function POST(request: Request): Promise<Response> {
   }
   try {
     if (config.PERSISTENCE_DRIVER === 'firestore') {
-      if (!isSupportedFirestoreTextDocument(file.type, file.name)) {
-        return mobileJson(
-          { error: 'Firestore uploads currently support text documents only' },
-          { status: 415 },
-        );
-      }
-      const bytes = Buffer.from(await file.arrayBuffer());
-      const result = await uploadFirestoreTextDocument({
-        catalog: new FirestoreDocumentCatalogRepository(
-          getFirestoreInstallationStore(),
-          config.FIRESTORE_AGENT_ID,
-        ),
-        workspace: getWorkspace(),
-        agentId: config.FIRESTORE_AGENT_ID,
+      const result = await uploadDocument(getFirestoreDocumentStores(), getWorkspace(), {
         name: file.name,
         title: String(form?.get('title') ?? ''),
         mime: file.type,
-        bytes,
+        bytes: Buffer.from(await file.arrayBuffer()),
       });
       return mobileJson({ ok: true, duplicate: result.duplicate }, { status: 201 });
     }

@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { type Db, type DocumentRow, documentChunks, documents, files, tasks } from '@assistant/db';
-import type { DocumentCatalogRepository, Records } from '@assistant/persistence';
+import type {
+  DocumentCatalogRepository,
+  DocumentDeletionRepository,
+  Records,
+} from '@assistant/persistence';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getQueueNotifier } from '../queue.js';
 import { enqueueTask } from '../workflow/machine.js';
@@ -231,11 +235,23 @@ export async function documentStats(db: Db, agentId: string): Promise<DocumentSt
 
 /** Remove a document, its in-flight jobs, inventory, chunks, and stored bytes. */
 export async function purgeDocument(
-  db: Db,
+  storage: Db | DocumentDeletionRepository,
   agentId: string,
   documentId: string,
   workspace?: { delete(relativePath: string): Promise<void> },
 ): Promise<{ deleted: boolean }> {
+  if ('kind' in storage && storage.kind === 'document-deletion-repository') {
+    const { deleted, workspacePaths } = await (storage as DocumentDeletionRepository).purge(
+      agentId,
+      documentId,
+    );
+    for (const path of workspace ? workspacePaths : [])
+      await workspace?.delete(path).catch((error) => {
+        console.error(`document purge: workspace delete failed for ${path}`, error);
+      });
+    return { deleted };
+  }
+  const db = storage as Db;
   const [document] = await db
     .select()
     .from(documents)

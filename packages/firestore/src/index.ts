@@ -15,6 +15,7 @@ export { FirestoreConversationSearchRepository } from './conversation-search.js'
 export { FirestoreCostRepository } from './costs.js';
 export { FirestoreDeviceTokenRepository } from './device-tokens.js';
 export { FirestoreDocumentCatalogRepository } from './document-catalog.js';
+export { FirestoreDocumentDeletionRepository } from './document-deletion.js';
 export { FirestoreDocumentExtractionRepository } from './document-extraction.js';
 export { FirestoreDocumentProcessorRepository } from './document-processor.js';
 export { FirestoreDocumentSearchRepository } from './document-search.js';

@@ -36,8 +36,8 @@ Degraded (4):
 
 | Handler | Missing in Firestore mode |
 |---|---|
-| `documents` POST | Returns `501`. Text uploads are in flight in PR #360. |
-| `documents/[id]` DELETE | Returns `501`; no portable document/chunk/file/bytes deletion. |
+| `documents` POST | Ready: every type the PostgreSQL path accepts, filed through `FirestoreDocumentCatalogRepository` with its `documents.extract` or `documents.process` job. |
+| `documents/[id]` DELETE | Ready: `FirestoreDocumentDeletionRepository` cancels queued jobs, deletes chunks, the file row and the dedup claim, and the caller deletes the bytes. |
 | `improvements/[id]` POST | `apply` on a `model_role` proposal throws ("require PostgreSQL model and role records"); dismiss and advisory apply work. |
 | `memory/profile` POST | `voice-profile` and `recompile` work; `organize`, `purge-voice`, `forget-all` return `503`. |
 
@@ -68,7 +68,7 @@ SQL (8):
 | `maps/snapshot` GET | Gated | No persistence at all. |
 | `ready` GET | SQL | `checkReadiness(db)` runs `select 1`. |
 | `files` GET | SQL | `downloadArtifact(db, workspace)` checks a `files` row. |
-| `documents/upload` POST | SQL | `uploadDocument(db, workspace)` |
+| `documents/upload` POST | Ready | `uploadDocument` with the Firestore document stores. |
 | `import/upload` POST | SQL | `uploadImport(db, workspace)` |
 
 ## Pages
@@ -98,7 +98,7 @@ SQL (8):
 | `/profile/people/[id]` | Gated | Pure redirect to `/people/[id]`. |
 | `/anomalies` | SQL | `listAnomalies(db)`; Firestore repository already exists. |
 | `/improvements` | SQL | `listImprovementProposals(db)`; Firestore repository already exists. |
-| `/documents` | SQL | `getDocumentsOverview(db)` |
+| `/documents` | Ready | `FirestoreDocumentReadRepository.list`. |
 | `/profile` | SQL | memory hub overview, commitments, recall feedback summary |
 
 ## Server Actions
@@ -120,7 +120,7 @@ SQL (8):
 | `profile/actions.ts` | Degraded | commitments (resolve/dismiss/snooze/correct), memory commands (confirm/correct/forget/prominence/approve/reject/create), organize, purge voice, merge/delete people (explicitly refused). People, occasions, voice profile, card recompile and erase are portable. |
 | `anomalies/actions.ts` | SQL | dismiss, suspend policy |
 | `improvements/actions.ts` | SQL | apply, dismiss |
-| `documents/actions.ts` | SQL | delete document |
+| `documents/actions.ts` | Ready | delete document through `FirestoreDocumentDeletionRepository`. |
 | `import/actions.ts` | SQL | start, purge, delete, review |
 
 ## Structural gap
