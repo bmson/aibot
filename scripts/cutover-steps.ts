@@ -441,6 +441,28 @@ function check(checks: Array<{ name: string; ok: boolean }>, name: string, ok: b
 }
 
 /** The JSON summary line a Cloud Run job printed, found in Cloud Logging. */
+function findSummary<T>(
+  entries: Array<{ textPayload?: string; jsonPayload?: unknown }>,
+  requiredKey: string,
+): T | null {
+  for (const entry of entries) {
+    // Cloud Logging stores a single-line JSON stdout write as jsonPayload and
+    // anything else (including pretty-printed JSON) as textPayload.
+    let parsed: unknown = entry.jsonPayload;
+    if (!parsed) {
+      const text = entry.textPayload?.trim();
+      if (!text?.startsWith('{')) continue;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        continue; // Not the summary line.
+      }
+    }
+    if (parsed && typeof parsed === 'object' && requiredKey in parsed) return parsed as T;
+  }
+  return null;
+}
+
 async function jobSummary<T extends Record<string, unknown>>(
   context: StepContext,
   job: string,
@@ -464,30 +486,23 @@ async function jobSummary<T extends Record<string, unknown>>(
   if (!name || (execution.status?.succeededCount ?? 0) < 1)
     throw new Error(`No successful ${job} execution started after ${notBefore}`);
   if (!/^[a-z0-9-]+$/.test(name)) throw new Error('Unexpected Cloud Run execution name');
-  const entries = await gcloud.json<Array<{ textPayload?: string; jsonPayload?: unknown }>>([
-    'logging',
-    'read',
-    `resource.type="cloud_run_job" AND resource.labels.job_name="${job}" AND labels."run.googleapis.com/execution_name"="${name}"`,
-    '--limit',
-    '200',
-    '--freshness',
-    '2d',
-  ]);
-  for (const entry of entries) {
-    // Cloud Logging stores a single-line JSON stdout write as jsonPayload and
-    // anything else (including pretty-printed JSON) as textPayload.
-    let parsed: unknown = entry.jsonPayload;
-    if (!parsed) {
-      const text = entry.textPayload?.trim();
-      if (!text?.startsWith('{')) continue;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        continue; // Not the summary line.
-      }
-    }
-    if (parsed && typeof parsed === 'object' && requiredKey in parsed)
-      return { execution: name, summary: parsed as T };
+  // Entries become readable a few seconds after the execution completes, so an
+  // immediate read can miss the summary. Poll for about a minute before failing.
+  for (let attempt = 0; attempt < 7; attempt++) {
+    if (attempt > 0) await context.deps.clock.sleep(10_000);
+    const summary = findSummary<T>(
+      await gcloud.json<Array<{ textPayload?: string; jsonPayload?: unknown }>>([
+        'logging',
+        'read',
+        `resource.type="cloud_run_job" AND resource.labels.job_name="${job}" AND labels."run.googleapis.com/execution_name"="${name}"`,
+        '--limit',
+        '200',
+        '--freshness',
+        '2d',
+      ]),
+      requiredKey,
+    );
+    if (summary) return { execution: name, summary };
   }
   throw new Error(`Execution ${name} did not log a ${job} summary`);
 }

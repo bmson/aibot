@@ -247,6 +247,7 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
     },
   ];
   const executions: Array<{ job: string; name: string; created: string; summary: unknown }> = [];
+  const loggedQueries = new Set<string>();
   const bundle = bundleFixture();
   const bundleBytes = Buffer.from(JSON.stringify(bundle));
   const snapshotUri = `gs://${BUCKET}/workspace/assistant/migration/snapshots/assistant-workspace-export-abc.json`;
@@ -355,7 +356,13 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
               metadata: { name: item.name, creationTimestamp: item.created },
               status: { succeededCount: 1 },
             }));
-        if (key.startsWith('logging read'))
+        if (key.startsWith('logging read')) {
+          // Like Cloud Logging, an execution's entries are not readable on the
+          // first query right after it completes.
+          if (!loggedQueries.has(args[2] as string)) {
+            loggedQueries.add(args[2] as string);
+            return [];
+          }
           return (
             executions
               .filter((item) => (args[2] as string).includes(`"${item.name}"`))
@@ -367,6 +374,7 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
                   : { textPayload: JSON.stringify(item.summary, null, 2) },
               )
           );
+        }
         if (key === 'storage objects describe')
           return { generation: '99', size: String(bundleBytes.length) };
         throw new Error(`unexpected gcloud json ${args.join(' ')}`);
