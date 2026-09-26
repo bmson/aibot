@@ -63,11 +63,32 @@ export type CutoverConfig = {
   dispatcher: {
     schedulerJobs: string[];
     queues: string[];
-    pushSubscriptions: Array<{ name: string; endpoint: string }>;
+    pushSubscriptions: Array<{ name: string } & PushTarget>;
     /** Legacy Cloud Tasks retained while paused would be delivered to the Firestore runtime. */
     acceptLegacyTaskBacklog: boolean;
   };
 };
+
+/**
+ * Where a push subscription delivers, and the OIDC identity Pub/Sub signs each
+ * push with. Re-pointing a subscription without its identity would strip the
+ * token the webhook verifies, so the pair always travels together.
+ */
+export type PushTarget = { endpoint: string; oidcServiceAccount?: string; oidcAudience?: string };
+
+export function pushConfigArgs(name: string, target: PushTarget): string[] {
+  return [
+    'pubsub',
+    'subscriptions',
+    'modify-push-config',
+    name,
+    `--push-endpoint=${target.endpoint}`,
+    ...(target.oidcServiceAccount
+      ? [`--push-auth-service-account=${target.oidcServiceAccount}`]
+      : []),
+    ...(target.oidcAudience ? [`--push-auth-token-audience=${target.oidcAudience}`] : []),
+  ];
+}
 
 const SHA = /^[0-9a-f]{40}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -304,7 +325,14 @@ export async function captureInventory(config: CutoverConfig, deps: CutoverDeps)
       region,
     ]),
     deps.gcloud.json<
-      Array<{ name?: string; topic?: string; pushConfig?: { pushEndpoint?: string } }>
+      Array<{
+        name?: string;
+        topic?: string;
+        pushConfig?: {
+          pushEndpoint?: string;
+          oidcToken?: { serviceAccountEmail?: string; audience?: string };
+        };
+      }>
     >(['pubsub', 'subscriptions', 'list']),
     deps.gcloud.json<Array<{ name?: string }>>(['secrets', 'list']),
   ]);
@@ -335,10 +363,18 @@ export async function captureInventory(config: CutoverConfig, deps: CutoverDeps)
     secrets: secrets.map((item) => lastSegment(item.name)).sort(),
   };
   // Push endpoints can carry verification tokens; keep the full values out of step evidence.
-  const pushEndpoints = Object.fromEntries(
+  const pushEndpoints: Record<string, PushTarget> = Object.fromEntries(
     subscriptions
       .filter((item) => item.pushConfig?.pushEndpoint)
-      .map((item) => [lastSegment(item.name), item.pushConfig?.pushEndpoint as string]),
+      .map((item) => {
+        const oidc = item.pushConfig?.oidcToken;
+        const target: PushTarget = {
+          endpoint: item.pushConfig?.pushEndpoint as string,
+          ...(oidc?.serviceAccountEmail ? { oidcServiceAccount: oidc.serviceAccountEmail } : {}),
+          ...(oidc?.audience ? { oidcAudience: oidc.audience } : {}),
+        };
+        return [lastSegment(item.name), target];
+      }),
   );
   return { inventory, pushEndpoints };
 }
@@ -557,6 +593,16 @@ function stepsDefinition(): StepDefinition[] {
             `queue ${queue} exists`,
             inventory.queues.some((i) => i.name === queue),
           );
+        for (const subscription of config.dispatcher.pushSubscriptions) {
+          const live = pushEndpoints[subscription.name];
+          check(
+            checks,
+            `push subscription ${subscription.name} keeps its live OIDC identity`,
+            live !== undefined &&
+              (live.oidcServiceAccount ?? '') === (subscription.oidcServiceAccount ?? '') &&
+              (live.oidcAudience ?? '') === (subscription.oidcAudience ?? ''),
+          );
+        }
         check(
           checks,
           'source database secret exists',
@@ -1351,14 +1397,8 @@ function stepsDefinition(): StepDefinition[] {
         for (const queue of config.dispatcher.queues)
           if (current.queues.find((item) => item.name === queue)?.state !== 'RUNNING')
             await deps.gcloud.run(['tasks', 'queues', 'resume', queue, '--location', region]);
-        for (const subscription of config.dispatcher.pushSubscriptions)
-          await deps.gcloud.run([
-            'pubsub',
-            'subscriptions',
-            'modify-push-config',
-            subscription.name,
-            `--push-endpoint=${subscription.endpoint}`,
-          ]);
+        for (const { name, ...target } of config.dispatcher.pushSubscriptions)
+          await deps.gcloud.run(pushConfigArgs(name, target));
         const { inventory } = await captureInventory(config, deps);
         const idle = dispatchIdle(inventory);
         const same = (a: string[], b: string[]) =>
@@ -1886,7 +1926,7 @@ export async function rollbackCutover(
   // 4. Resume the exact legacy dispatch resources recorded before quiesce.
   const pushEndpoints = JSON.parse(
     (await deps.readFile(store.privatePath('push-endpoints.json'))).toString('utf8'),
-  ) as Record<string, string>;
+  ) as Record<string, PushTarget | string>;
   if (attempted('quiesce')) {
     for (const job of preflight.schedulerJobs.filter((item) => item.state === 'ENABLED'))
       await run(`resume scheduler ${job.name}`, [
@@ -1906,14 +1946,12 @@ export async function rollbackCutover(
         '--location',
         region,
       ]);
-    for (const [name, endpoint] of Object.entries(pushEndpoints))
-      await run(`restore push ${name}`, [
-        'pubsub',
-        'subscriptions',
-        'modify-push-config',
-        name,
-        `--push-endpoint=${endpoint}`,
-      ]);
+    // Evidence written before OIDC identities were recorded holds the bare endpoint.
+    for (const [name, target] of Object.entries(pushEndpoints))
+      await run(
+        `restore push ${name}`,
+        pushConfigArgs(name, typeof target === 'string' ? { endpoint: target } : target),
+      );
   }
   const { inventory } = await captureInventory(config, deps);
   const restoredTraffic = preflight.services

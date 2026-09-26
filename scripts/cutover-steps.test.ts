@@ -11,6 +11,7 @@ import {
   type CutoverDeps,
   cutoverStatus,
   lastJsonObject,
+  type PushTarget,
   rollbackCutover,
   runCutoverStep,
   STEP_NAMES,
@@ -24,6 +25,10 @@ const BUCKET = `${PROJECT}-workspace`;
 const SECRET_URL =
   'postgres://app:hunter2-secret@ep-main-1-pooler.us-west-2.aws.neon.tech/neondb?sslmode=require';
 const AGENT = '11111111-2222-4333-8444-555555555555';
+const PUSH_IDENTITY = {
+  oidcServiceAccount: `assistant-gmail-push@${PROJECT}.iam.gserviceaccount.com`,
+  oidcAudience: 'https://assistant-agent-x.a.run.app/webhooks/gmail',
+};
 const RECOVERY_PREFIX = `gs://${BUCKET}/workspace/assistant/migration-recovery/run/`;
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 
@@ -96,6 +101,8 @@ function baseConfig(dir: string): CutoverConfig {
         {
           name: 'gmail-events-push',
           endpoint: 'https://assistant-agent-x.a.run.app/webhooks/gmail',
+          oidcServiceAccount: PUSH_IDENTITY.oidcServiceAccount,
+          oidcAudience: PUSH_IDENTITY.oidcAudience,
         },
       ],
       acceptLegacyTaskBacklog: false,
@@ -223,10 +230,13 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
     ],
   ]);
   const queues = new Map([['agent-steps', 'RUNNING']]);
-  const subscriptions = new Map<string, string>([
+  const subscriptions = new Map<string, PushTarget>([
     [
       'gmail-events-push',
-      'https://assistant-agent-x.a.run.app/webhooks/gmail?token=push-token-secret',
+      {
+        endpoint: 'https://assistant-agent-x.a.run.app/webhooks/gmail?token=push-token-secret',
+        ...PUSH_IDENTITY,
+      },
     ],
   ]);
   const secrets = new Set(['database-url', 'auth-secret']);
@@ -318,10 +328,22 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
           }));
         if (key === 'tasks list --queue') return [];
         if (key === 'pubsub subscriptions list')
-          return [...subscriptions.entries()].map(([name, endpoint]) => ({
+          return [...subscriptions.entries()].map(([name, target]) => ({
             name: `projects/${PROJECT}/subscriptions/${name}`,
             topic: `projects/${PROJECT}/topics/gmail-events`,
-            pushConfig: endpoint ? { pushEndpoint: endpoint } : {},
+            pushConfig: target.endpoint
+              ? {
+                  pushEndpoint: target.endpoint,
+                  ...(target.oidcServiceAccount
+                    ? {
+                        oidcToken: {
+                          serviceAccountEmail: target.oidcServiceAccount,
+                          audience: target.oidcAudience,
+                        },
+                      }
+                    : {}),
+                }
+              : {},
           }));
         if (key === 'secrets list')
           return [...secrets].map((name) => ({ name: `projects/1/secrets/${name}` }));
@@ -358,7 +380,17 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
         return '';
       }
       if (key === 'pubsub subscriptions modify-push-config') {
-        subscriptions.set(args[3] as string, (args[4] as string).replace('--push-endpoint=', ''));
+        // Like Pub/Sub, a push config without an auth flag carries no OIDC token.
+        const flag = (prefix: string) =>
+          args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+        const endpoint = flag('--push-endpoint=') ?? '';
+        const oidcServiceAccount = flag('--push-auth-service-account=');
+        const oidcAudience = flag('--push-auth-token-audience=');
+        subscriptions.set(args[3] as string, {
+          endpoint,
+          ...(endpoint && oidcServiceAccount ? { oidcServiceAccount } : {}),
+          ...(endpoint && oidcAudience ? { oidcAudience } : {}),
+        });
         return '';
       }
       if (key === 'run services update') {
@@ -723,6 +755,11 @@ describe('cutover orchestration', () => {
     expect(world.scheduler.get('assistant-sweep')?.state).toBe('ENABLED');
     expect(world.scheduler.get('assistant-canaries')?.state).toBe('PAUSED');
     expect(world.queues.get('agent-steps')).toBe('PAUSED');
+    // Re-pointing the push subscription keeps the OIDC identity its webhook verifies.
+    expect(world.subscriptions.get('gmail-events-push')).toEqual({
+      endpoint: 'https://assistant-agent-x.a.run.app/webhooks/gmail',
+      ...PUSH_IDENTITY,
+    });
 
     // The switched services carry no database env or secret and run the release image.
     for (const name of ['assistant-web', 'assistant-agent']) {
@@ -761,6 +798,20 @@ describe('cutover orchestration', () => {
       expect(text).not.toContain('push-token-secret');
       expect(statSync(join(store.directory, name)).mode & 0o077).toBe(0);
     }
+  });
+
+  it('refuses a push subscription whose configured OIDC identity differs from the live one', async () => {
+    const { config, store, world } = setup();
+    const [push] = config.dispatcher.pushSubscriptions;
+    config.dispatcher.pushSubscriptions = [
+      { name: push?.name as string, endpoint: push?.endpoint as string },
+    ];
+    const preflight = await runCutoverStep('preflight', config, world.deps, store);
+    expect(preflight.status).toBe('failed');
+    expect(JSON.stringify(preflight)).toContain(
+      'push subscription gmail-events-push keeps its live OIDC identity',
+    );
+    expect(JSON.stringify(preflight)).not.toContain('assistant-gmail-push@');
   });
 
   it('requires a per-step confirmation before any production change', async () => {
@@ -871,7 +922,10 @@ describe('cutover rollback', () => {
     expect(world.endpoint.disabled).toBe(false);
     expect(world.scheduler.get('assistant-sweep')?.state).toBe('ENABLED');
     expect(world.queues.get('agent-steps')).toBe('RUNNING');
-    expect(world.subscriptions.get('gmail-events-push')).toContain('?token=');
+    expect(world.subscriptions.get('gmail-events-push')).toEqual({
+      endpoint: 'https://assistant-agent-x.a.run.app/webhooks/gmail?token=push-token-secret',
+      ...PUSH_IDENTITY,
+    });
     expect(world.services.get('assistant-agent')?.traffic).toEqual([
       { revisionName: 'assistant-agent-00001', percent: 100 },
     ]);
