@@ -23,6 +23,7 @@ export { FirestoreDocumentProcessorRepository } from './document-processor.js';
 export { FirestoreDocumentSearchRepository } from './document-search.js';
 export { FirestoreDocumentReadRepository } from './documents.js';
 export { FirestoreEmailSyncRepository } from './email-sync.js';
+export { FirestoreEmailExtractionRepository } from './email-extraction.js';
 export { createFirestoreExecutionPersistence } from './execution.js';
 export { FirestoreExecutionContextRepository } from './execution-context.js';
 export { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';

@@ -94,6 +94,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'health.monitor',
   'watch.suggest',
   'documents.process',
+  'email.extract',
   'pulse.check',
   'graph.curiosity',
 ]);
@@ -383,8 +384,12 @@ export async function runCodeJob(
     }
     case 'email.extract': {
       await deps.heartbeat?.();
-      const r = await runEmailIngestExtraction(deps, { taskId: task.id });
-      const pending = await pendingEmailExtractionCount(deps.db);
+      const extraction = deps.persistence?.emailExtraction;
+      const r = await runEmailIngestExtraction(
+        { ...deps, ...(extraction ? { store: extraction } : {}) },
+        { taskId: task.id },
+      );
+      const pending = await pendingEmailExtractionCount(extraction ?? deps.db);
       return {
         // A backlog drains across runs rather than in one long job: report it
         // so a mailbox that is falling behind is visible in the task summary.

@@ -15,6 +15,7 @@ import type {
   DocumentSearchRepository,
 } from './document-catalog.js';
 import type { EmailSyncRepository } from './email-sync.js';
+import type { EmailExtractionRepository } from './email-extraction.js';
 import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
 import type { ExecutionJobRepository } from './execution-jobs.js';
@@ -113,6 +114,8 @@ export interface ExecutionPersistence {
   readonly documentSearch?: DocumentSearchRepository;
   /** Present where the document processor lifecycle is kept portably. */
   readonly documentProcessor?: DocumentProcessorRepository;
+  /** Present where the `email.extract` job has a portable adapter. */
+  readonly emailExtraction?: EmailExtractionRepository;
   /** Present where background producers post their dashboard copy portably. */
   readonly ownerNotices?: OwnerNoticeRepository;
   /** Present where producers record one-tap suggestions portably. */

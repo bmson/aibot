@@ -14,6 +14,7 @@ import { FirestoreDocumentCatalogRepository } from './document-catalog.js';
 import { FirestoreDocumentProcessorRepository } from './document-processor.js';
 import { FirestoreDocumentSearchRepository } from './document-search.js';
 import { FirestoreEmailSyncRepository } from './email-sync.js';
+import { FirestoreEmailExtractionRepository } from './email-extraction.js';
 import { FirestoreExecutionContextRepository } from './execution-context.js';
 import { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 import { FirestoreExecutionJobRepository } from './execution-jobs.js';
@@ -99,6 +100,7 @@ export function createFirestoreExecutionPersistence(
     documentCatalog: new FirestoreDocumentCatalogRepository(store, agentId),
     documentSearch: new FirestoreDocumentSearchRepository(store, agentId, skillEmbeddingSpace),
     documentProcessor: new FirestoreDocumentProcessorRepository(store, agentId),
+    emailExtraction: new FirestoreEmailExtractionRepository(store, agentId, skillEmbeddingSpace),
     ownerNotices: firestoreOwnerNotices(notifications),
     suggestions: new FirestoreSuggestionRepository(store),
     briefing: new FirestoreBriefingRepository(store),
