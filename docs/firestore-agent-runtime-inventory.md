@@ -58,7 +58,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `memory.graph_date_backfill` | knowledge-graph-date-backfill | SQL |
 | `chat.segment` | chat-segmentation | Ready (`firestore-chat-segmentation.test.ts`). Groups only vectors in `FIRESTORE_EMBEDDING_SPACE` and stamps new segments with it; one segment per start message. |
 | `anomaly.scan` | anomaly-scan | SQL |
-| `skill.reflect` | skill-reflection | SQL |
+| `skill.reflect` | skill-reflection | Ready (`firestore-skill-reflection.test.ts`). Reads the owner's finished tasks and their tool calls through `persistence.skillReflection`, and writes skills under the same owner and privacy-erasure fence as owner edits. An owner-authored skill is never overwritten, and a full 500-skill library is left as it is. |
 | `self.improve` | self-improve | SQL |
 | `ambient.refresh` | ambient-refresh (every 30 min) | SQL |
 | `dream.run` | dream | SQL |
