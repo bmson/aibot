@@ -31,6 +31,7 @@ import {
   FirestoreGoalProgressRepository,
   FirestoreGoalReadRepository,
   FirestoreGraphRecallRepository,
+  FirestoreImportJobRepository,
   FirestoreMcpConnectionReadRepository,
   FirestoreMissionRepository,
   FirestoreOccasionToolRepository,
@@ -60,6 +61,7 @@ import {
   type ExecutionPersistence,
   embeddingModelId,
   type GoalToolRepository,
+  type ImportJobRepository,
   type ModelRoutingRepository,
   type NudgePolicyRepository,
   type Records,
@@ -106,6 +108,7 @@ export interface AgentDeps {
   firestoreStore?: InstallationStore;
   firestoreTasks?: FirestoreTaskRepository;
   documentExtractionRepository?: DocumentExtractionRepository;
+  importJobRepository?: ImportJobRepository;
   router: ModelRouter;
   registry: ToolRegistry;
   dispatcher: ToolDispatcher;
@@ -445,6 +448,11 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
     store,
     config.FIRESTORE_AGENT_ID,
   );
+  const importJobRepository = new FirestoreImportJobRepository(
+    store,
+    config.FIRESTORE_AGENT_ID,
+    embeddingSpace,
+  );
   const db = unavailableSqlDb();
   const router = new ModelRouter(
     persistence.modelRouting,
@@ -582,6 +590,7 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
     firestoreStore: store,
     firestoreTasks: persistence.tasks,
     documentExtractionRepository,
+    importJobRepository,
     persistence,
     router,
     registry,
