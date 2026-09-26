@@ -9,6 +9,11 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
+import type {
+  AnomalyScanRepository,
+  ExecutionPersistence,
+  NewAnomaly,
+} from '@assistant/persistence';
 import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 
 /**
@@ -96,67 +101,41 @@ interface PendingAnomaly {
 
 /** Run the nightly anomaly scan for one selected agent, inserting new anomalies and alerting its owner. */
 export async function runAnomalyScan(
-  deps: { db: Db; heartbeat?: () => Promise<void> },
+  deps: {
+    db: Db;
+    heartbeat?: () => Promise<void>;
+    /** The portable scan store and Notifications writer; without them the scan uses PostgreSQL. */
+    persistence?: Pick<ExecutionPersistence, 'anomalyScan' | 'notifications' | 'messages'>;
+  },
   opts: { agentId?: string; taskId?: string; now?: Date } = {},
 ): Promise<AnomalyScanResult> {
   const { db } = deps;
+  const store = deps.persistence?.anomalyScan ?? postgresAnomalyScan(db);
   const now = opts.now ?? new Date();
   await deps.heartbeat?.();
 
-  const [fallbackAgent] = opts.agentId
-    ? []
-    : await db.select({ id: agents.id }).from(agents).limit(1);
+  const [fallbackAgent] =
+    opts.agentId || deps.persistence?.anomalyScan
+      ? []
+      : await db.select({ id: agents.id }).from(agents).limit(1);
   const agentId = opts.agentId ?? fallbackAgent?.id;
   if (!agentId) return { flagged: 0, byKind: {} };
 
-  const policies = await db
-    .select({ id: approvalPolicies.id, toolName: approvalPolicies.toolName })
-    .from(approvalPolicies)
-    .where(eq(approvalPolicies.agentId, agentId));
+  const policies = await store.policies(agentId);
   if (policies.length === 0) return { flagged: 0, byKind: {} };
   const policyById = new Map(policies.map((p) => [p.id, p]));
 
   const baselineStart = new Date(now.getTime() - (FREQ_BASELINE_DAYS + 1) * 24 * 3600 * 1000);
   const windowStart = new Date(now.getTime() - LOOKBACK_HOURS * 3600 * 1000);
 
-  const rows = await db
-    .select({
-      id: toolCalls.id,
-      toolName: toolCalls.toolName,
-      createdAt: toolCalls.createdAt,
-      policyId: sql<string | null>`${toolCalls.decision}->>'policyId'`,
-    })
-    .from(toolCalls)
-    .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
-    .where(
-      and(
-        eq(tasks.agentId, agentId),
-        eq(toolCalls.risk, 'autonomous'),
-        inArray(toolCalls.status, ['succeeded', 'executing']),
-        gte(toolCalls.createdAt, baselineStart),
-        sql`${toolCalls.decision}->>'policyId' is not null`,
-      ),
-    );
-  const scoped: AutoExec[] = rows
-    .filter((r) => r.policyId !== null && policyById.has(r.policyId))
-    .map((r) => ({
-      id: r.id,
-      toolName: r.toolName,
-      policyId: r.policyId as string,
-      createdAt: r.createdAt,
-    }));
+  const scoped = await store.autoExecutions(
+    agentId,
+    baselineStart,
+    policies.map((policy) => policy.id),
+  );
 
   // Dismissed frequency observations raise the floor for that policy.
-  const dismissed = await db
-    .select({ policyId: anomalies.policyId, observed: anomalies.observed })
-    .from(anomalies)
-    .where(
-      and(
-        eq(anomalies.agentId, agentId),
-        eq(anomalies.kind, 'frequency'),
-        eq(anomalies.status, 'dismissed'),
-      ),
-    );
+  const dismissed = await store.dismissedFrequency(agentId);
   const dismissedFloor = new Map<string, number>();
   for (const d of dismissed) {
     if (!d.policyId) continue;
@@ -238,13 +217,7 @@ export async function runAnomalyScan(
   if (pending.length === 0) return { flagged: 0, byKind: {} };
 
   await deps.heartbeat?.();
-  const inserted = await db
-    .insert(anomalies)
-    .values(pending.map((p) => ({ agentId, ...p })))
-    .onConflictDoNothing({
-      target: [anomalies.agentId, anomalies.kind, anomalies.subjectKey, anomalies.windowLabel],
-    })
-    .returning();
+  const inserted = await store.insert(agentId, pending);
 
   const byKind: Record<string, number> = {};
   for (const a of inserted) byKind[a.kind] = (byKind[a.kind] ?? 0) + 1;
@@ -252,7 +225,9 @@ export async function runAnomalyScan(
   if (inserted.length > 0) {
     const lines = inserted.map((a) => `• ${a.detail}`);
     await notifyOwnerInNotifications(
-      db,
+      deps.persistence?.anomalyScan
+        ? { notifications: deps.persistence.notifications, messages: deps.persistence.messages }
+        : db,
       agentId,
       [
         `⚠️ ${inserted.length} approval ${inserted.length === 1 ? 'anomaly' : 'anomalies'} detected:`,
@@ -268,11 +243,24 @@ export async function runAnomalyScan(
 
 /** Post a message into the owner's Notifications conversation (mirrors owner.notify). */
 export async function notifyOwnerInNotifications(
-  db: Db,
+  store: Db | Pick<ExecutionPersistence, 'notifications' | 'messages'>,
   agentId: string,
   text: string,
   taskId?: string,
 ): Promise<void> {
+  if ('notifications' in store) {
+    const conversationId = await store.notifications.getOrCreate(agentId);
+    await store.messages.append({
+      conversationId,
+      ...(taskId ? { taskId } : {}),
+      role: 'assistant',
+      origin: 'assistant',
+      parts: [{ type: 'text', text }],
+      text,
+    });
+    return;
+  }
+  const db = store;
   const [existing] = await db
     .select({ id: conversations.id })
     .from(conversations)
@@ -294,6 +282,71 @@ export async function notifyOwnerInNotifications(
     parts: [{ type: 'text', text }],
     text,
   });
+}
+
+/** The scan's PostgreSQL reads and ledger, with the queries it has always run. */
+function postgresAnomalyScan(db: Db): AnomalyScanRepository {
+  return {
+    kind: 'anomaly-scan-repository',
+    policies: (agentId) =>
+      db
+        .select({ id: approvalPolicies.id, toolName: approvalPolicies.toolName })
+        .from(approvalPolicies)
+        .where(eq(approvalPolicies.agentId, agentId)),
+    async autoExecutions(agentId, since, policyIds) {
+      const allowed = new Set(policyIds);
+      const rows = await db
+        .select({
+          id: toolCalls.id,
+          toolName: toolCalls.toolName,
+          createdAt: toolCalls.createdAt,
+          policyId: sql<string | null>`${toolCalls.decision}->>'policyId'`,
+        })
+        .from(toolCalls)
+        .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
+        .where(
+          and(
+            eq(tasks.agentId, agentId),
+            eq(toolCalls.risk, 'autonomous'),
+            inArray(toolCalls.status, ['succeeded', 'executing']),
+            gte(toolCalls.createdAt, since),
+            sql`${toolCalls.decision}->>'policyId' is not null`,
+          ),
+        );
+      return rows
+        .filter((row) => row.policyId !== null && allowed.has(row.policyId))
+        .map((row) => ({
+          id: row.id,
+          toolName: row.toolName,
+          policyId: row.policyId as string,
+          createdAt: row.createdAt,
+        }));
+    },
+    async dismissedFrequency(agentId) {
+      const rows = await db
+        .select({ policyId: anomalies.policyId, observed: anomalies.observed })
+        .from(anomalies)
+        .where(
+          and(
+            eq(anomalies.agentId, agentId),
+            eq(anomalies.kind, 'frequency'),
+            eq(anomalies.status, 'dismissed'),
+          ),
+        );
+      return rows.flatMap((row) =>
+        row.policyId ? [{ policyId: row.policyId, observed: row.observed }] : [],
+      );
+    },
+    async insert(agentId, pending: NewAnomaly[]) {
+      return db
+        .insert(anomalies)
+        .values(pending.map((anomaly) => ({ agentId, ...anomaly })))
+        .onConflictDoNothing({
+          target: [anomalies.agentId, anomalies.kind, anomalies.subjectKey, anomalies.windowLabel],
+        })
+        .returning();
+    },
+  };
 }
 
 // ── Dashboard operations ─────────────────────────────────────────────────────

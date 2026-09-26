@@ -1,5 +1,6 @@
 export { FirestoreActiveJobLookup } from './active-jobs.js';
 export { FirestoreAmbientSnapshotRepository } from './ambient-snapshots.js';
+export { FirestoreAnomalyScanRepository } from './anomaly-scan.js';
 export { FirestoreApplicationChatPersistence } from './application-chat.js';
 export { FirestoreApplicationConfirmationRepository } from './application-confirmations.js';
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';

@@ -1,4 +1,5 @@
 import type { ApplicationConfirmationRepository } from './application-confirmations.js';
+import type { AnomalyScanRepository } from './anomaly-scan.js';
 import type { ApprovalPolicyRepository } from './approval-policies.js';
 import type { ApprovalRepository } from './approvals.js';
 import type { AssistantHealthRepository } from './assistant-health.js';
@@ -116,6 +117,8 @@ export interface ExecutionPersistence {
   readonly documentProcessor?: DocumentProcessorRepository;
   /** Present where the `email.extract` job has a portable adapter. */
   readonly emailExtraction?: EmailExtractionRepository;
+  /** Present where the `anomaly.scan` job has a portable adapter. */
+  readonly anomalyScan?: AnomalyScanRepository;
   /** Present where background producers post their dashboard copy portably. */
   readonly ownerNotices?: OwnerNoticeRepository;
   /** Present where producers record one-tap suggestions portably. */
