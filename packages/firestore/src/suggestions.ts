@@ -5,6 +5,7 @@ import type {
   SuggestionRepository,
 } from '@assistant/persistence';
 import type { QueryDocumentSnapshot } from '@google-cloud/firestore';
+import { withEmulatorTransactionRetry } from './emulator-transaction.js';
 import { assertPrivacyErasureInactiveInTransaction } from './privacy-erasure.js';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
@@ -52,29 +53,32 @@ export class FirestoreSuggestionRepository implements SuggestionRepository {
       .where('agentId', '==', input.agentId)
       .where('sourceRef', '==', input.sourceRef)
       .limit(1);
-    return this.store.db.runTransaction(async (tx) => {
-      await assertPrivacyErasureInactiveInTransaction(tx, this.store, input.agentId);
-      const [byId, bySource] = await Promise.all([tx.get(ref), tx.get(existing)]);
-      if (byId.exists || !bySource.empty) return null;
-      const now = this.store.now();
-      const row: SuggestionRecord = {
-        id,
-        createdAt: now,
-        updatedAt: now,
-        agentId: input.agentId,
-        status: input.status ?? 'pending',
-        expiresAt: input.expiresAt,
-        conversationId: input.conversationId ?? null,
-        origin: input.origin,
-        snoozedUntil: null,
-        summary: input.summary,
-        proposedAction: input.proposedAction,
-        sourceRef: input.sourceRef,
-        acceptedTaskId: null,
-      };
-      tx.create(ref, encodeRecord(row));
-      return row;
-    });
+    // Idempotent: a retry finds the row a committed attempt created and returns null.
+    return withEmulatorTransactionRetry(() =>
+      this.store.db.runTransaction(async (tx) => {
+        await assertPrivacyErasureInactiveInTransaction(tx, this.store, input.agentId);
+        const [byId, bySource] = await Promise.all([tx.get(ref), tx.get(existing)]);
+        if (byId.exists || !bySource.empty) return null;
+        const now = this.store.now();
+        const row: SuggestionRecord = {
+          id,
+          createdAt: now,
+          updatedAt: now,
+          agentId: input.agentId,
+          status: input.status ?? 'pending',
+          expiresAt: input.expiresAt,
+          conversationId: input.conversationId ?? null,
+          origin: input.origin,
+          snoozedUntil: null,
+          summary: input.summary,
+          proposedAction: input.proposedAction,
+          sourceRef: input.sourceRef,
+          acceptedTaskId: null,
+        };
+        tx.create(ref, encodeRecord(row));
+        return row;
+      }),
+    );
   }
 
   async listOpen(agentId: string, now: Date): Promise<SuggestionRecord[]> {
