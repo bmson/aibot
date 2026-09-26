@@ -1,10 +1,16 @@
-import { type Db, skills, type TaskRow, tasks, toolCalls } from '@assistant/db';
+import { type Db, skills, tasks, toolCalls } from '@assistant/db';
+import {
+  type ExecutionPersistence,
+  type ReflectionTask,
+  type SkillReflectionRepository,
+  skillEmbeddingText,
+} from '@assistant/persistence';
 import { and, desc, eq, gte, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
-import { saveSkill } from './skills.js';
+import { writeSkill } from './skills.js';
 
 /**
  * Skill reflection (Phase 26): nightly, review recently completed tasks that did
@@ -56,7 +62,7 @@ const REFLECT_SYSTEM = [
 ].join('\n');
 
 /** Taint check inlined to avoid importing the executor (would cycle via jobs.ts). */
-function taskIsTainted(task: Pick<TaskRow, 'trust' | 'trigger' | 'state'>): boolean {
+function taskIsTainted(task: Pick<ReflectionTask, 'trust' | 'trigger' | 'state'>): boolean {
   const state = (task.state ?? {}) as { untrustedContext?: unknown };
   if (state.untrustedContext === true) return true;
   if (task.trust === 'known' || task.trust === 'unknown') return true;
@@ -69,7 +75,7 @@ function taskIsTainted(task: Pick<TaskRow, 'trust' | 'trigger' | 'state'>): bool
   return !(task.trust === 'owner' && trigger.payload?.quotesExternalContent === false);
 }
 
-function taskGoal(task: TaskRow): string {
+function taskGoal(task: ReflectionTask): string {
   const payload = (task.trigger as { payload?: Record<string, unknown> } | null)?.payload ?? {};
   const instruction =
     (typeof payload.instruction === 'string' && payload.instruction) ||
@@ -89,46 +95,28 @@ export interface SkillReflectionResult {
 }
 
 export async function runSkillReflection(
-  deps: { db: Db; router: ModelRouter; heartbeat?: () => Promise<void> },
+  deps: {
+    db: Db;
+    router: ModelRouter;
+    heartbeat?: () => Promise<void>;
+    /** The portable reflection store; without it the job reads and writes PostgreSQL. */
+    persistence?: Pick<ExecutionPersistence, 'skillReflection'>;
+  },
   opts: { taskId?: string; since?: Date } = {},
 ): Promise<SkillReflectionResult> {
   const { db, router } = deps;
+  const store = deps.persistence?.skillReflection ?? postgresSkillReflection(db);
   const since = opts.since ?? new Date(Date.now() - WINDOW_HOURS * 3600 * 1000);
 
   return withSpan('skill.reflect', {}, async () => {
     const result: SkillReflectionResult = { tasksReviewed: 0, skillsDrafted: 0 };
     await deps.heartbeat?.();
 
-    const candidates = await db
-      .select()
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.status, 'done'),
-          inArray(tasks.trust, ['owner', 'assistant']),
-          gte(tasks.createdAt, since),
-        ),
-      )
-      .orderBy(desc(tasks.createdAt))
-      .limit(40);
+    const candidates = await store.candidates(since, 40);
     if (candidates.length === 0) return result;
 
     // Skip tasks that already taught a skill (idempotent across nightly runs).
-    const alreadySourced = new Set(
-      (
-        await db
-          .select({ sourceTaskId: skills.sourceTaskId })
-          .from(skills)
-          .where(
-            inArray(
-              skills.sourceTaskId,
-              candidates.map((t) => t.id),
-            ),
-          )
-      )
-        .map((r) => r.sourceTaskId)
-        .filter((id): id is string => Boolean(id)),
-    );
+    const alreadySourced = new Set(await store.sourcedTaskIds(candidates.map((t) => t.id)));
 
     const eligible = candidates.filter((t) => !taskIsTainted(t) && !alreadySourced.has(t.id));
 
@@ -136,16 +124,7 @@ export async function runSkillReflection(
       if (result.tasksReviewed >= MAX_TASKS) break;
       await deps.heartbeat?.();
 
-      const calls = await db
-        .select({
-          toolName: toolCalls.toolName,
-          status: toolCalls.status,
-          error: toolCalls.error,
-          args: toolCalls.args,
-        })
-        .from(toolCalls)
-        .where(eq(toolCalls.taskId, task.id))
-        .orderBy(toolCalls.step);
+      const calls = await store.toolCalls(task.id);
       const succeeded = calls.filter((c) => c.status === 'succeeded');
       if (succeeded.length < MIN_SUCCEEDED_CALLS) continue;
       result.tasksReviewed += 1;
@@ -186,20 +165,91 @@ export async function runSkillReflection(
       }
 
       const draft = outcome.object;
-      if (!draft.worthSkill || !draft.name.trim() || !draft.steps.trim()) continue;
-      const saved = await saveSkill(db, router, {
-        agentId: task.agentId,
-        name: draft.name,
-        preconditions: draft.preconditions,
-        steps: draft.steps,
-        gotchas: draft.gotchas,
+      const name = draft.name.trim().slice(0, 200);
+      const steps = draft.steps.trim();
+      if (!draft.worthSkill || !name || !steps) continue;
+      // Reflection must not clobber a hand-authored skill.
+      if (await store.ownerAuthored(task.agentId, name)) continue;
+      const skill = {
+        name,
+        preconditions: draft.preconditions.trim(),
+        steps,
+        gotchas: draft.gotchas.trim(),
         sourceTaskId: task.id,
         // The task is owner/assistant-trust and passed the taint gate above.
-        originTrust: task.trust === 'owner' ? 'owner' : 'assistant',
-      });
-      if (saved.saved) result.skillsDrafted += 1;
+        originTrust: task.trust === 'owner' ? ('owner' as const) : ('assistant' as const),
+      };
+      const [embedding] = await router.embed([skillEmbeddingText(skill)]);
+      if (embedding && (await store.saveReflected(task.agentId, skill, embedding)))
+        result.skillsDrafted += 1;
     }
 
     return result;
   });
+}
+
+/** The reflection's PostgreSQL reads and upsert, with the queries it has always run. */
+function postgresSkillReflection(db: Db): SkillReflectionRepository {
+  return {
+    kind: 'skill-reflection-repository',
+    candidates: (since, limit) =>
+      db
+        .select({
+          id: tasks.id,
+          agentId: tasks.agentId,
+          trust: tasks.trust,
+          trigger: tasks.trigger,
+          state: tasks.state,
+          plan: tasks.plan,
+          progress: tasks.progress,
+        })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.status, 'done'),
+            inArray(tasks.trust, ['owner', 'assistant']),
+            gte(tasks.createdAt, since),
+          ),
+        )
+        .orderBy(desc(tasks.createdAt))
+        .limit(limit),
+    async sourcedTaskIds(taskIds) {
+      const rows = await db
+        .select({ sourceTaskId: skills.sourceTaskId })
+        .from(skills)
+        .where(inArray(skills.sourceTaskId, taskIds));
+      return rows.map((r) => r.sourceTaskId).filter((id): id is string => Boolean(id));
+    },
+    toolCalls: (taskId) =>
+      db
+        .select({
+          toolName: toolCalls.toolName,
+          status: toolCalls.status,
+          error: toolCalls.error,
+          args: toolCalls.args,
+        })
+        .from(toolCalls)
+        .where(eq(toolCalls.taskId, taskId))
+        .orderBy(toolCalls.step),
+    async ownerAuthored(agentId, name) {
+      const [existing] = await db
+        .select({ ownerAuthored: skills.ownerAuthored })
+        .from(skills)
+        .where(and(eq(skills.agentId, agentId), eq(skills.name, name)));
+      return existing?.ownerAuthored ?? false;
+    },
+    async saveReflected(agentId, skill, embedding) {
+      const [existing] = await db
+        .select({ id: skills.id })
+        .from(skills)
+        .where(and(eq(skills.agentId, agentId), eq(skills.name, skill.name)));
+      const row = await writeSkill(
+        db,
+        { agentId, ...skill, ownerAuthored: false },
+        embedding,
+        false,
+      );
+      return Boolean(row) && !existing;
+    },
+  };
 }

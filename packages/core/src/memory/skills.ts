@@ -61,20 +61,45 @@ export async function saveSkill(
   }
 
   const [embedding] = await router.embed([skillText({ name, preconditions, steps, gotchas })]);
-  const [row] = await db
-    .insert(skills)
-    .values({
+  const row = await writeSkill(
+    db,
+    {
       agentId: input.agentId,
       name,
       preconditions,
       steps,
       gotchas,
-      embedding,
       sourceTaskId: input.sourceTaskId,
       originTrust,
       ownerAuthored: input.ownerAuthored ?? false,
-      lastVerifiedAt: sql`now()`,
-    })
+    },
+    embedding,
+    existing?.ownerAuthored ?? false,
+  );
+  if (!row) return { saved: false, skill: null };
+  return { saved: !existing, skill: row };
+}
+
+/** Insert a skill, or revise the same-named one and revive it. */
+export async function writeSkill(
+  db: Db,
+  skill: {
+    agentId: string;
+    name: string;
+    preconditions: string;
+    steps: string;
+    gotchas: string;
+    sourceTaskId?: string;
+    originTrust: string;
+    ownerAuthored: boolean;
+  },
+  embedding: number[] | undefined,
+  wasOwnerAuthored: boolean,
+): Promise<SkillRow | undefined> {
+  const { preconditions, steps, gotchas } = skill;
+  const [row] = await db
+    .insert(skills)
+    .values({ ...skill, embedding, lastVerifiedAt: sql`now()` })
     .onConflictDoUpdate({
       target: [skills.agentId, skills.name],
       set: {
@@ -85,13 +110,12 @@ export async function saveSkill(
         // A revision revives a deprecated skill and re-verifies it.
         deprecated: false,
         lastVerifiedAt: sql`now()`,
-        ownerAuthored: input.ownerAuthored ? true : (existing?.ownerAuthored ?? false),
+        ownerAuthored: skill.ownerAuthored ? true : wasOwnerAuthored,
         updatedAt: sql`now()`,
       },
     })
     .returning();
-  if (!row) return { saved: false, skill: null };
-  return { saved: !existing, skill: row };
+  return row;
 }
 
 function isSkillContextRepository(

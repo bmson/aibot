@@ -44,6 +44,7 @@ import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
 import type { SkillContextRepository } from './skill-context.js';
 import type { SmsChannelRepository } from './sms-channel.js';
+import type { SkillReflectionRepository } from './skill-reflection.js';
 import type { SuggestionRepository } from './suggestions.js';
 import type { TaskRepository } from './task-lifecycle.js';
 import type { VoiceContextRepository } from './voice-context.js';
@@ -129,4 +130,6 @@ export interface ExecutionPersistence {
   readonly pulse?: PulseRepository;
   /** Present where the `chat.segment` job has a portable adapter. */
   readonly conversationSegmentation?: ConversationSegmentationRepository;
+  /** Present where the `skill.reflect` job has a portable adapter. */
+  readonly skillReflection?: SkillReflectionRepository;
 }

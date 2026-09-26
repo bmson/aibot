@@ -41,6 +41,7 @@ import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 import { FirestoreReminderDeliveryRepository } from './reminders.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
 import { FirestoreSmsChannelRepository } from './sms-channel.js';
+import { FirestoreSkillReflectionRepository } from './skill-reflection.js';
 import type { InstallationStore } from './store.js';
 import { FirestoreSuggestionRepository } from './suggestions.js';
 import { FirestoreTaskRepository } from './task-lifecycle.js';
@@ -111,5 +112,6 @@ export function createFirestoreExecutionPersistence(
       store,
       skillEmbeddingSpace,
     ),
+    skillReflection: new FirestoreSkillReflectionRepository(store, agentId, skillEmbeddingSpace),
   };
 }

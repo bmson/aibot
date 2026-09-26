@@ -139,6 +139,7 @@ export { FirestoreSituationToolRepository } from './situation-tools.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { FirestoreSkillMutationRepository } from './skill-mutations.js';
 export { FirestoreSmsChannelRepository } from './sms-channel.js';
+export { FirestoreSkillReflectionRepository } from './skill-reflection.js';
 export { createInstallationStore, InstallationStore } from './store.js';
 export { FirestoreSuggestionDecisionRepository } from './suggestion-decisions.js';
 export { FirestoreSuggestionRepository, suggestionIdFor } from './suggestions.js';

@@ -72,6 +72,7 @@ export * from './skill-context.js';
 export * from './skill-library.js';
 export * from './skill-mutations.js';
 export * from './sms-channel.js';
+export * from './skill-reflection.js';
 export * from './suggestions.js';
 export * from './task-activity.js';
 export * from './task-activity-commands.js';
