@@ -88,7 +88,7 @@ SQL (7):
 | `/profile/knowledge` | Ready | One bounded Firestore snapshot serves the header, library, map, entity focus, and cleanup views. |
 | `/chat/[id]` | Degraded | `firestorePreview` hides inline approval, budget and suggestion decisions, recall feedback, card refresh, the Stop button and the Activity link. |
 | `/tasks/[id]` | Degraded | Retry, revoke autonomy, raise budget and cancel call `getDb()`. |
-| `/settings` | Ready | Pairing and token rotation (no SQL), the Noticing panel (`FirestoreProactiveHealthRepository` counts) and the Spending link render in Firestore mode. MCP connections are editable and inspectable; execution follows the agent's Firestore MCP gate. |
+| `/settings` | Ready | Pairing and token rotation (no SQL), the Noticing panel (`FirestoreProactiveHealthRepository` counts) and the Spending link render in Firestore mode. MCP connections are editable, inspectable and executable (the Firestore agent registers MCP tools in every environment, as PostgreSQL does). |
 | `/import` | Ready | Upload, start, purge, delete and review run through `getImportCommands()`. |
 | `/profile/memories` | Degraded | Read-only memory hub substituted for `/profile`. |
 | `/profile/about` | Degraded | Read-only owner facts; confirm/correct/forget unavailable. |

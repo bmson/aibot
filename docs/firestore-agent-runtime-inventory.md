@@ -110,7 +110,7 @@ Owner notifications in Firestore mode post to the dashboard (`firestoreDashboard
 
 ## Built-in tools
 
-The Firestore composition registers `memory.save`, `memory.recall`, `task.schedule`, `goals.list`, `goals.create`, `goals.update_progress`, `mission.update`, `owner.notify`, `weather.lookup`, `sports.scores`, `web.fetch`, `workspace.read/write/list`, the record tools below, and (opt-in, non-production) MCP tools.
+The Firestore composition registers `memory.save`, `memory.recall`, `task.schedule`, `goals.list`, `goals.create`, `goals.update_progress`, `mission.update`, `owner.notify`, `weather.lookup`, `sports.scores`, `web.fetch`, `workspace.read/write/list`, the record tools below, and the owner's MCP tools (`mcp.list_connections/list_tools/call`) from Firestore connection snapshots, in every environment.
 
 | Tool | State |
 |---|---|

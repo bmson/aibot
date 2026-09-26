@@ -278,11 +278,7 @@ export default async function SettingsPage() {
           hint="remote tool servers available to this assistant"
         />
         <Card className="mt-3">
-          <McpConnectionsPanel
-            connections={mcpConnections}
-            discoveryAvailable
-            executionAvailable={!firestore}
-          />
+          <McpConnectionsPanel connections={mcpConnections} discoveryAvailable />
         </Card>
       </section>
 

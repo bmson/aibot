@@ -169,7 +169,7 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     expect(html).toContain('Noticing');
     expect(html).toContain('No push device is registered');
     expect(html).toContain('MCP connections');
-    expect(html).toContain('MCP tool execution is not yet available with Firestore persistence.');
+    expect(html).toContain('every remote call still follows your approval rules');
     expect(html).toContain('Add');
   });
 

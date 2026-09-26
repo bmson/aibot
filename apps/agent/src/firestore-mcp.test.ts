@@ -25,14 +25,19 @@ afterEach(() => {
 });
 
 describe('Firestore MCP tool composition', () => {
-  it('keeps Firestore MCP tools disabled in production', () => {
-    const registry = new ToolRegistry();
-    expect(
-      registerFirestoreMcpTools(registry, {} as InstallationStore, 'owner', {
-        NODE_ENV: 'production',
-        FIRESTORE_MCP_TOOLS_ENABLED: 'true',
-      }).get('mcp.call'),
-    ).toBeUndefined();
+  it('registers Firestore MCP tools in production, as PostgreSQL does', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      const registry = registerFirestoreMcpTools(
+        new ToolRegistry(),
+        {} as InstallationStore,
+        'owner',
+      );
+      expect(registry.get('mcp.call')?.tool.risk).toBe('approval');
+      expect(registry.get('mcp.list_connections')).toBeDefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('with PostgreSQL unavailable', () => {
@@ -111,10 +116,7 @@ describe('Firestore MCP tool composition', () => {
             throw new Error(`Unexpected PostgreSQL access: ${String(property)}`);
           },
         });
-        const enabledRegistry = registerFirestoreMcpTools(new ToolRegistry(), store, agentId, {
-          NODE_ENV: 'test',
-          FIRESTORE_MCP_TOOLS_ENABLED: 'true',
-        });
+        const enabledRegistry = registerFirestoreMcpTools(new ToolRegistry(), store, agentId);
         expect(enabledRegistry.get('mcp.call')?.tool.risk).toBe('approval');
         expect(enabledRegistry.get('mcp.call')?.flags).toMatchObject({
           networkEgress: true,
