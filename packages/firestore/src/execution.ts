@@ -10,6 +10,8 @@ import { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenan
 import { FirestoreConversationSegmentationRepository } from './conversation-segmentation.js';
 import { FirestoreCostRepository } from './costs.js';
 import { FirestoreDeviceTokenRepository } from './device-tokens.js';
+import { FirestoreDocumentCatalogRepository } from './document-catalog.js';
+import { FirestoreEmailSyncRepository } from './email-sync.js';
 import { FirestoreExecutionContextRepository } from './execution-context.js';
 import { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 import { FirestoreExecutionJobRepository } from './execution-jobs.js';
@@ -91,6 +93,8 @@ export function createFirestoreExecutionPersistence(
     voiceContext: new FirestoreVoiceContextRepository(store, agentId, skillEmbeddingSpace),
     smsChannel: new FirestoreSmsChannelRepository(store, agentId),
     applications: new FirestoreApplicationConfirmationRepository(store, agentId),
+    emailSync: new FirestoreEmailSyncRepository(store, agentId),
+    documentCatalog: new FirestoreDocumentCatalogRepository(store, agentId),
     ownerNotices: firestoreOwnerNotices(notifications),
     suggestions: new FirestoreSuggestionRepository(store),
     briefing: new FirestoreBriefingRepository(store),

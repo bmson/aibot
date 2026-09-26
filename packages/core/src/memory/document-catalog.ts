@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { type Db, type DocumentRow, documentChunks, documents, files, tasks } from '@assistant/db';
+import type { DocumentCatalogRepository, Records } from '@assistant/persistence';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getQueueNotifier } from '../queue.js';
 import { enqueueTask } from '../workflow/machine.js';
@@ -31,11 +33,57 @@ export interface StartDocumentResult {
  * keeping dashboard routes free of PDF/Office runtime dependencies.
  */
 export async function startDocumentIngest(
-  db: Db,
+  store: Db | DocumentCatalogRepository,
   input: StartDocumentInput,
 ): Promise<StartDocumentResult> {
   const extractor = extractorFor(input.mime, input.title);
   const status = extractor === 'unsupported' ? 'unsupported' : 'pending';
+  if ('kind' in store && store.kind === 'document-catalog-repository') {
+    // The portable catalog files the records, the dedupe claim, and the
+    // extraction task with its wake intent in one transaction.
+    const now = new Date();
+    const file: Records['files'] = {
+      id: randomUUID(),
+      createdAt: now,
+      agentId: input.agentId,
+      taskId: null,
+      workspacePath: input.workspacePath,
+      mime: input.mime,
+      bytes: input.bytes,
+      sha256: input.sha256,
+    };
+    const created = await store.createDocumentCatalog({
+      file,
+      document: {
+        id: randomUUID(),
+        createdAt: now,
+        updatedAt: now,
+        agentId: input.agentId,
+        fileId: file.id,
+        title: input.title.slice(0, 300),
+        mime: input.mime,
+        source: input.source ?? 'upload',
+        sourceRef: input.sourceRef ?? '',
+        trust: input.trust ?? 'owner',
+        sha256: input.sha256,
+        status,
+        extractor,
+        chunkCount: 0,
+        charCount: 0,
+        error: null,
+        processorTokenHash: null,
+        processorStartedAt: null,
+        processorAttempts: 0,
+        processedTextPath: null,
+      },
+    });
+    return {
+      document: created.document as DocumentRow,
+      taskId: created.task?.id ?? null,
+      duplicate: created.duplicate,
+    };
+  }
+  const db = store as Db;
 
   type EnqueuedTask = { id: string; queueGeneration: number };
   const result = await db.transaction(async (tx) => {

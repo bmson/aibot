@@ -154,6 +154,8 @@ export const googleModule = defineModule<GoogleClient>({
         {
           name: 'email-sync',
           everyTicks: 15,
+          // Sync state, the mailbox lock, and ingest go through persistence.
+          portable: true,
           run: async (services) => {
             if (!client.configured() || !gmailSyncEnabled(services.config)) return;
             await sync(services);

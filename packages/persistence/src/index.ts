@@ -17,6 +17,7 @@ export * from './cost-policy.js';
 export * from './device-tokens.js';
 export * from './dispatch.js';
 export * from './document-catalog.js';
+export * from './email-sync.js';
 export * from './embedding.js';
 export * from './execution.js';
 export * from './execution-context.js';

@@ -1551,6 +1551,22 @@
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "expectedSenderEmails", "arrayConfig": "CONTAINS" }
       ]
+    },
+    {
+      "collectionGroup": "emailIngest",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "triaged", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "writingSamples",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agentId", "order": "ASCENDING" },
+        { "fieldPath": "context", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [
