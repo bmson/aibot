@@ -23,9 +23,9 @@ export { FirestoreDocumentExtractionRepository } from './document-extraction.js'
 export { FirestoreDocumentProcessorRepository } from './document-processor.js';
 export { FirestoreDocumentSearchRepository } from './document-search.js';
 export { FirestoreDocumentReadRepository } from './documents.js';
-export { FirestoreEmailSyncRepository } from './email-sync.js';
-export { FirestoreEmailExtractionRepository } from './email-extraction.js';
 export { FirestoreDreamRepository } from './dream.js';
+export { FirestoreEmailExtractionRepository } from './email-extraction.js';
+export { FirestoreEmailSyncRepository } from './email-sync.js';
 export { createFirestoreExecutionPersistence } from './execution.js';
 export { FirestoreExecutionContextRepository } from './execution-context.js';
 export { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
@@ -133,8 +133,8 @@ export {
   type RuntimeDataPreflight,
 } from './runtime-data-preflight.js';
 export { FirestoreScheduleRepository } from './schedules.js';
-export { FirestoreSelfMaintenanceRepository } from './self-maintenance.js';
 export { FirestoreSelfImprovementRepository } from './self-improvement.js';
+export { FirestoreSelfMaintenanceRepository } from './self-maintenance.js';
 export { FirestoreSettingsRepository } from './settings.js';
 export { createFirestoreSettingsPersistence } from './settings-persistence.js';
 export { FirestoreShellPresenceRepository } from './shell-presence.js';
@@ -144,8 +144,8 @@ export { FirestoreSituationPackReadRepository } from './situation-packs.js';
 export { FirestoreSituationToolRepository } from './situation-tools.js';
 export { FirestoreSkillContextRepository } from './skill-context.js';
 export { FirestoreSkillMutationRepository } from './skill-mutations.js';
-export { FirestoreSmsChannelRepository } from './sms-channel.js';
 export { FirestoreSkillReflectionRepository } from './skill-reflection.js';
+export { FirestoreSmsChannelRepository } from './sms-channel.js';
 export { createInstallationStore, InstallationStore } from './store.js';
 export { FirestoreSuggestionDecisionRepository } from './suggestion-decisions.js';
 export { FirestoreSuggestionRepository, suggestionIdFor } from './suggestions.js';

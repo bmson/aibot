@@ -1,5 +1,5 @@
-import type { ApplicationConfirmationRepository } from './application-confirmations.js';
 import type { AnomalyScanRepository } from './anomaly-scan.js';
+import type { ApplicationConfirmationRepository } from './application-confirmations.js';
 import type { ApprovalPolicyRepository } from './approval-policies.js';
 import type { ApprovalRepository } from './approvals.js';
 import type { AssistantHealthRepository } from './assistant-health.js';
@@ -15,9 +15,9 @@ import type {
   DocumentProcessorRepository,
   DocumentSearchRepository,
 } from './document-catalog.js';
-import type { EmailSyncRepository } from './email-sync.js';
-import type { EmailExtractionRepository } from './email-extraction.js';
 import type { DreamRepository } from './dream.js';
+import type { EmailExtractionRepository } from './email-extraction.js';
+import type { EmailSyncRepository } from './email-sync.js';
 import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
 import type { ExecutionJobRepository } from './execution-jobs.js';
@@ -45,11 +45,11 @@ import type { AmbientSnapshotRepository, OwnerContextRepository } from './owner-
 import type { PulseRepository } from './pulse.js';
 import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
-import type { SelfMaintenanceRepository } from './self-maintenance.js';
 import type { SelfImprovementRepository } from './self-improvement.js';
+import type { SelfMaintenanceRepository } from './self-maintenance.js';
 import type { SkillContextRepository } from './skill-context.js';
-import type { SmsChannelRepository } from './sms-channel.js';
 import type { SkillReflectionRepository } from './skill-reflection.js';
+import type { SmsChannelRepository } from './sms-channel.js';
 import type { SuggestionRepository } from './suggestions.js';
 import type { TaskRepository } from './task-lifecycle.js';
 import type { VoiceContextRepository } from './voice-context.js';
