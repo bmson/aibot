@@ -174,8 +174,9 @@ export async function provisionTargetFirestoreIndexes(
       const config = [`field-path=${field.fieldPath}`];
       if (field.order) config.push(`order=${field.order.toLowerCase()}`);
       if (field.arrayConfig) config.push(`array-config=${field.arrayConfig.toLowerCase()}`);
+      // gcloud 586+ only accepts the JSON form documented for vector indexes.
       if (field.vectorConfig)
-        config.push(`vector-config={dimension=${field.vectorConfig.dimension},flat}`);
+        config.push(`vector-config={"dimension":"${field.vectorConfig.dimension}","flat":"{}"}`);
       args.push(`--field-config=${config.join(',')}`);
     }
     const result = await runner.run('gcloud', args);
