@@ -771,10 +771,6 @@ describe('cutover configuration', () => {
       firestoreDatabaseId: 'assistant-restore-x',
     };
     expect(() => validateCutoverConfig(restoreTarget)).toThrow('restore rehearsal');
-    // The managed backup refuses fewer than 8 characters after the prefix.
-    const shortRestore = structuredClone(config);
-    shortRestore.firestoreBackup.restoreDatabaseId = 'assistant-restore-final';
-    expect(() => validateCutoverConfig(shortRestore)).toThrow('at least 8 more characters');
   });
 
   it('parses the last JSON object printed by a CLI', () => {

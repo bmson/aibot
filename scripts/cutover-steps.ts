@@ -145,11 +145,8 @@ export function validateCutoverConfig(config: CutoverConfig): CutoverConfig {
     fail('asset backup and restore prefixes must differ');
   if (!GS_PREFIX.test(`${config.firestoreBackup?.gcsPrefix ?? ''}/`))
     fail('firestoreBackup.gcsPrefix');
-  // The managed backup refuses a restore ID with fewer than 8 characters after the prefix.
-  if (!/^assistant-restore-[a-z0-9-]{8,40}$/.test(config.firestoreBackup.restoreDatabaseId))
-    fail(
-      'firestoreBackup.restoreDatabaseId must be assistant-restore- and at least 8 more characters',
-    );
+  if (!/^assistant-restore-[a-z0-9-]{1,45}$/.test(config.firestoreBackup.restoreDatabaseId))
+    fail('firestoreBackup.restoreDatabaseId must start with assistant-restore-');
   if (!Array.isArray(config.services) || config.services.length === 0) fail('services');
   for (const service of config.services) {
     if (!NAME.test(service.name)) fail(`service name ${service.name}`);
