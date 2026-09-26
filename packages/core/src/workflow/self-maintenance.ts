@@ -5,6 +5,7 @@ import {
   type SelfMaintenanceRow,
   selfMaintenance,
 } from '@assistant/db';
+import type { ExecutionPersistence, SelfMaintenanceRepository } from '@assistant/persistence';
 import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { loadConfig } from '../config.js';
@@ -156,30 +157,27 @@ export interface SelfMaintenanceResult {
  * a protected path is recorded `blocked`, so the fence's refusals are auditable.
  */
 export async function runSelfMaintenance(
-  deps: { db: Db; router: ModelRouter; heartbeat?: () => Promise<void> },
+  deps: {
+    db: Db;
+    router: ModelRouter;
+    heartbeat?: () => Promise<void>;
+    /** The portable backlog store; without it the job reads and writes PostgreSQL. */
+    persistence?: Pick<ExecutionPersistence, 'selfMaintenance'>;
+  },
   opts: { agentId?: string; taskId?: string } = {},
 ): Promise<SelfMaintenanceResult> {
   const { db, router } = deps;
+  const store = deps.persistence?.selfMaintenance ?? postgresSelfMaintenance(db);
   return withSpan('self.maintain', {}, async () => {
     await deps.heartbeat?.();
-    const [fallbackAgent] = opts.agentId
-      ? []
-      : await db.select({ id: agents.id }).from(agents).limit(1);
+    const [fallbackAgent] =
+      opts.agentId || deps.persistence?.selfMaintenance
+        ? []
+        : await db.select({ id: agents.id }).from(agents).limit(1);
     const agentId = opts.agentId ?? fallbackAgent?.id;
     if (!agentId) return { backlog: 0, blocked: 0 };
 
-    const open = await db
-      .select({
-        id: improvementProposals.id,
-        kind: improvementProposals.kind,
-        title: improvementProposals.title,
-        rationale: improvementProposals.rationale,
-      })
-      .from(improvementProposals)
-      .where(
-        and(eq(improvementProposals.agentId, agentId), eq(improvementProposals.status, 'open')),
-      )
-      .limit(20);
+    const open = await store.openProposals(agentId, 20);
     if (open.length === 0) return { backlog: 0, blocked: 0 };
 
     const prompt = [
@@ -214,31 +212,54 @@ export async function runSelfMaintenance(
       if (!item.codeShaped) continue;
       // The fence decides status: a protected target is recorded, never worked.
       const isBlocked = !item.targetArea || isProtectedPath(item.targetArea);
-      const [row] = await db
-        .insert(selfMaintenance)
-        .values({
-          agentId,
-          title: item.title.trim().slice(0, 200),
-          diagnosis: item.diagnosis,
-          targetArea: item.targetArea,
-          status: isBlocked ? 'blocked' : 'backlog',
-          blockedReason: isBlocked
-            ? item.targetArea
-              ? 'targets a protected path (autonomy/trust/infra) — self-maintenance may not touch it'
-              : 'no target file identified'
-            : null,
-        })
-        .onConflictDoNothing({
-          target: [selfMaintenance.agentId, selfMaintenance.title],
-        })
-        .returning({ id: selfMaintenance.id });
-      if (row) {
+      const inserted = await store.insert(agentId, {
+        title: item.title.trim().slice(0, 200),
+        diagnosis: item.diagnosis,
+        targetArea: item.targetArea,
+        status: isBlocked ? 'blocked' : 'backlog',
+        blockedReason: isBlocked
+          ? item.targetArea
+            ? 'targets a protected path (autonomy/trust/infra) — self-maintenance may not touch it'
+            : 'no target file identified'
+          : null,
+      });
+      if (inserted) {
         if (isBlocked) blocked += 1;
         else backlog += 1;
       }
     }
     return { backlog, blocked };
   });
+}
+
+/** The backlog's PostgreSQL reads and ledger, with the queries it has always run. */
+function postgresSelfMaintenance(db: Db): SelfMaintenanceRepository {
+  return {
+    kind: 'self-maintenance-repository',
+    openProposals: (agentId, limit) =>
+      db
+        .select({
+          id: improvementProposals.id,
+          kind: improvementProposals.kind,
+          title: improvementProposals.title,
+          rationale: improvementProposals.rationale,
+        })
+        .from(improvementProposals)
+        .where(
+          and(eq(improvementProposals.agentId, agentId), eq(improvementProposals.status, 'open')),
+        )
+        .limit(limit),
+    async insert(agentId, item) {
+      const [row] = await db
+        .insert(selfMaintenance)
+        .values({ agentId, ...item })
+        .onConflictDoNothing({
+          target: [selfMaintenance.agentId, selfMaintenance.title],
+        })
+        .returning({ id: selfMaintenance.id });
+      return Boolean(row);
+    },
+  };
 }
 
 // ── PR primitive (gated; inert without a GitHub token) ────────────────────────

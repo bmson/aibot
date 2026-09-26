@@ -62,7 +62,7 @@ Today `validateAgentPersistenceConfig` restricts Firestore agent mode to `ASSIST
 | `self.improve` | self-improve | SQL |
 | `ambient.refresh` | ambient-refresh (every 30 min) | SQL |
 | `dream.run` | dream | SQL |
-| `self.maintain` | self-maintain | SQL |
+| `self.maintain` | self-maintain | Ready (`firestore-self-maintenance.test.ts`). Reads the owner's open proposals and records fenced backlog items through `persistence.selfMaintenance`. Items are unique per title, including imported ones. The PR primitive is unchanged and stays inert without a GitHub token. |
 | `health.monitor` | assistant-health-monitor | SQL |
 | `documents.process` | document-processing (every 15 min) | SQL |
 | `import.run`, `voice.ingest` | on demand | Ready (`firestore-imports.test.ts`). Window commits and the voice checkpoint are lease-fenced. |
