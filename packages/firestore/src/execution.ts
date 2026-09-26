@@ -16,6 +16,7 @@ import { FirestoreDocumentProcessorRepository } from './document-processor.js';
 import { FirestoreDocumentSearchRepository } from './document-search.js';
 import { FirestoreEmailSyncRepository } from './email-sync.js';
 import { FirestoreEmailExtractionRepository } from './email-extraction.js';
+import { FirestoreDreamRepository } from './dream.js';
 import { FirestoreExecutionContextRepository } from './execution-context.js';
 import { FirestoreExecutionEvidenceRepository } from './execution-evidence.js';
 import { FirestoreExecutionJobRepository } from './execution-jobs.js';
@@ -115,5 +116,6 @@ export function createFirestoreExecutionPersistence(
     ),
     skillReflection: new FirestoreSkillReflectionRepository(store, agentId, skillEmbeddingSpace),
     selfMaintenance: new FirestoreSelfMaintenanceRepository(store, agentId),
+    dream: new FirestoreDreamRepository(store, agentId),
   };
 }

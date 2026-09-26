@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   agents,
   approvals,
@@ -11,6 +11,12 @@ import {
   tasks,
   toolCalls,
 } from '@assistant/db';
+import type {
+  CodeJobLease,
+  DreamRepository,
+  ExecutionPersistence,
+  ExtractedMemoryFact,
+} from '@assistant/persistence';
 import { and, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
@@ -81,60 +87,40 @@ export interface DreamResult {
 
 /** Nightly dream session for one selected agent. */
 export async function runDream(
-  deps: { db: Db; router: ModelRouter; heartbeat?: () => Promise<void> },
-  opts: { agentId?: string; taskId?: string; now?: Date } = {},
+  deps: {
+    db: Db;
+    router: ModelRouter;
+    heartbeat?: () => Promise<void>;
+    /**
+     * The portable reads, notes and hypothesis writer; without them the dream
+     * uses PostgreSQL. Hypotheses need the task lease on this path.
+     */
+    persistence?: Pick<
+      ExecutionPersistence,
+      'dream' | 'memoryExtraction' | 'notifications' | 'messages'
+    >;
+  },
+  opts: { agentId?: string; taskId?: string; now?: Date; lease?: () => CodeJobLease } = {},
 ): Promise<DreamResult> {
   const { db, router } = deps;
+  const portable = deps.persistence?.dream ? deps.persistence : null;
+  const store = portable?.dream ?? postgresDream(db);
   const now = opts.now ?? new Date();
   const since = new Date(now.getTime() - WINDOW_HOURS * 3600 * 1000);
   const approvalSince = new Date(now.getTime() - APPROVAL_WINDOW_DAYS * 24 * 3600 * 1000);
 
   return withSpan('dream.run', {}, async () => {
     await deps.heartbeat?.();
-    const [fallbackAgent] = opts.agentId
-      ? []
-      : await db.select({ id: agents.id }).from(agents).limit(1);
+    const [fallbackAgent] =
+      opts.agentId || portable ? [] : await db.select({ id: agents.id }).from(agents).limit(1);
     const agentId = opts.agentId ?? fallbackAgent?.id;
     if (!agentId) return { footnotes: 0, hypotheses: 0, anticipations: 0 };
 
     // The day's failures (counterfactual fuel).
-    const failedTasks = await db
-      .select({ id: tasks.id, type: tasks.type, progress: tasks.progress, status: tasks.status })
-      .from(tasks)
-      .where(
-        and(
-          eq(tasks.agentId, agentId),
-          inArray(tasks.status, ['needs_attention', 'failed']),
-          gte(tasks.updatedAt, since),
-        ),
-      )
-      .limit(20);
-    const failedCalls = await db
-      .select({ toolName: toolCalls.toolName, error: toolCalls.error })
-      .from(toolCalls)
-      .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
-      .where(
-        and(
-          eq(tasks.agentId, agentId),
-          eq(toolCalls.status, 'failed'),
-          gte(toolCalls.createdAt, since),
-        ),
-      )
-      .limit(40);
+    const failedTasks = await store.failedTasks(agentId, since, 20);
+    const failedCalls = await store.failedToolCalls(agentId, since, 40);
     // Recent approval decisions (behavioral patterns — repeated approve/deny).
-    const decisions = await db
-      .select({ summary: approvals.summary, status: approvals.status })
-      .from(approvals)
-      .innerJoin(tasks, eq(tasks.id, approvals.taskId))
-      .where(
-        and(
-          eq(tasks.agentId, agentId),
-          gte(approvals.requestedAt, approvalSince),
-          inArray(approvals.status, ['approved', 'denied']),
-        ),
-      )
-      .orderBy(desc(approvals.requestedAt))
-      .limit(40);
+    const decisions = await store.approvalDecisions(agentId, approvalSince, 40);
 
     if (failedTasks.length === 0 && failedCalls.length === 0 && decisions.length < 3) {
       return { footnotes: 0, hypotheses: 0, anticipations: 0 };
@@ -175,51 +161,91 @@ export async function runDream(
       );
     }
     const dream = outcome.object;
+    const hypothesisExpiry = new Date(now.getTime() + HYPOTHESIS_TTL_DAYS * 24 * 3600 * 1000);
 
     // Behavioral hypotheses → low-confidence QUARANTINED memories (owner reviews).
     let hypothesesSaved = 0;
-    for (const h of dream.hypotheses) {
-      const content = h.claim.trim();
-      const contentHash = createHash('sha256').update(`dream:${content}`).digest('hex');
-      if (await isTombstoned(db, contentHash)) continue;
-      const [embedding] = await router.embed([content], { taskId: opts.taskId });
-      await deps.heartbeat?.();
-      const subject = h.subject ? await resolveSubjectContact(db, { subject: h.subject }) : null;
-      const [saved] = await db
-        .insert(memories)
-        .values({
-          agentId,
+    if (portable) {
+      const extraction = portable.memoryExtraction;
+      if (dream.hypotheses.length > 0 && (!extraction || !opts.lease))
+        throw new Error('Portable dream hypotheses need memory extraction and the task lease');
+      const facts: ExtractedMemoryFact[] = [];
+      for (const h of dream.hypotheses) {
+        const content = h.claim.trim();
+        const [embedding] = await router.embed([content], { taskId: opts.taskId });
+        await deps.heartbeat?.();
+        if (!embedding) continue;
+        facts.push({
+          content,
+          contentHash: createHash('sha256').update(`dream:${content}`).digest('hex'),
+          embedding,
           category: 'knowledge',
           kind: 'preference',
-          content,
-          contentHash,
-          embedding,
           importance: 2,
-          confidence: String(Math.min(h.confidence, MAX_HYPOTHESIS_CONFIDENCE)),
+          confidence: Math.min(h.confidence, MAX_HYPOTHESIS_CONFIDENCE).toFixed(2),
+          domain: null,
+          validFrom: null,
+          expiresAt: hypothesisExpiry,
+          subject: h.subject,
+          relationship: '',
+        });
+      }
+      if (facts.length > 0 && extraction && opts.lease) {
+        // One checkpoint per dream task: a reclaimed run never re-saves them.
+        const applied = await extraction.applyMemories({
+          agentId,
+          lease: opts.lease(),
+          checkpointKey: 'dream.hypotheses',
           originTrust: 'assistant',
           quarantined: true, // awaits the owner's confirm/reject on Profile
-          subjectContactId: subject?.contactId,
+          facts,
+          occasions: [],
           source: 'dream',
-          sourceTaskId: opts.taskId,
-          expiresAt: new Date(now.getTime() + HYPOTHESIS_TTL_DAYS * 24 * 3600 * 1000),
-        })
-        .onConflictDoNothing({ target: memories.contentHash })
-        .returning({ id: memories.id });
-      if (saved) hypothesesSaved += 1;
+        });
+        hypothesesSaved = applied?.saved ?? 0;
+      }
+    } else {
+      for (const h of dream.hypotheses) {
+        const content = h.claim.trim();
+        const contentHash = createHash('sha256').update(`dream:${content}`).digest('hex');
+        if (await isTombstoned(db, contentHash)) continue;
+        const [embedding] = await router.embed([content], { taskId: opts.taskId });
+        await deps.heartbeat?.();
+        const subject = h.subject ? await resolveSubjectContact(db, { subject: h.subject }) : null;
+        const [saved] = await db
+          .insert(memories)
+          .values({
+            agentId,
+            category: 'knowledge',
+            kind: 'preference',
+            content,
+            contentHash,
+            embedding,
+            importance: 2,
+            confidence: String(Math.min(h.confidence, MAX_HYPOTHESIS_CONFIDENCE)),
+            originTrust: 'assistant',
+            quarantined: true, // awaits the owner's confirm/reject on Profile
+            subjectContactId: subject?.contactId,
+            source: 'dream',
+            sourceTaskId: opts.taskId,
+            expiresAt: hypothesisExpiry,
+          })
+          .onConflictDoNothing({ target: memories.contentHash })
+          .returning({ id: memories.id });
+        if (saved) hypothesesSaved += 1;
+      }
     }
 
     // Owner-facing notes (footnotes + anticipations) → dream_notes (7-day TTL).
     const expiresAt = new Date(now.getTime() + DREAM_NOTE_TTL_DAYS * 24 * 3600 * 1000);
-    const noteRows = [
-      ...dream.footnotes.map((content) => ({ agentId, kind: 'footnote', content, expiresAt })),
+    await store.addNotes(agentId, opts.taskId ?? randomUUID(), [
+      ...dream.footnotes.map((content) => ({ kind: 'footnote' as const, content, expiresAt })),
       ...dream.anticipations.map((content) => ({
-        agentId,
-        kind: 'anticipation',
+        kind: 'anticipation' as const,
         content,
         expiresAt,
       })),
-    ];
-    if (noteRows.length > 0) await db.insert(dreamNotes).values(noteRows);
+    ]);
 
     // A single consolidated "while you slept" note, only if there's something to say.
     if (dream.footnotes.length > 0) {
@@ -228,9 +254,20 @@ export async function runDream(
           ? `\n\n${hypothesesSaved} pattern${hypothesesSaved === 1 ? '' : 's'} I noticed are waiting for you to confirm or dismiss on the What I remember page.`
           : ''
       }`;
-      await notifyOwnerInNotifications(db, agentId, body, opts.taskId).catch((err) =>
-        console.error('dream: owner notify failed', err),
-      );
+      const notify = portable
+        ? async () => {
+            const conversationId = await portable.notifications.getOrCreate(agentId);
+            await portable.messages.append({
+              conversationId,
+              ...(opts.taskId ? { taskId: opts.taskId } : {}),
+              role: 'assistant',
+              origin: 'assistant',
+              parts: [{ type: 'text', text: body }],
+              text: body,
+            });
+          }
+        : () => notifyOwnerInNotifications(db, agentId, body, opts.taskId);
+      await notify().catch((err) => console.error('dream: owner notify failed', err));
     }
 
     return {
@@ -239,6 +276,56 @@ export async function runDream(
       anticipations: dream.anticipations.length,
     };
   });
+}
+
+/** The dream's PostgreSQL reads and notes, with the queries it has always run. */
+function postgresDream(db: Db): DreamRepository {
+  return {
+    kind: 'dream-repository',
+    failedTasks: (agentId, since, limit) =>
+      db
+        .select({ type: tasks.type, progress: tasks.progress, status: tasks.status })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.agentId, agentId),
+            inArray(tasks.status, ['needs_attention', 'failed']),
+            gte(tasks.updatedAt, since),
+          ),
+        )
+        .limit(limit),
+    failedToolCalls: (agentId, since, limit) =>
+      db
+        .select({ toolName: toolCalls.toolName, error: toolCalls.error })
+        .from(toolCalls)
+        .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
+        .where(
+          and(
+            eq(tasks.agentId, agentId),
+            eq(toolCalls.status, 'failed'),
+            gte(toolCalls.createdAt, since),
+          ),
+        )
+        .limit(limit),
+    approvalDecisions: (agentId, since, limit) =>
+      db
+        .select({ summary: approvals.summary, status: approvals.status })
+        .from(approvals)
+        .innerJoin(tasks, eq(tasks.id, approvals.taskId))
+        .where(
+          and(
+            eq(tasks.agentId, agentId),
+            gte(approvals.requestedAt, since),
+            inArray(approvals.status, ['approved', 'denied']),
+          ),
+        )
+        .orderBy(desc(approvals.requestedAt))
+        .limit(limit),
+    async addNotes(agentId, _taskId, notes) {
+      if (notes.length > 0)
+        await db.insert(dreamNotes).values(notes.map((note) => ({ agentId, ...note })));
+    },
+  };
 }
 
 /** Recent dream notes (for the morning brief / a dashboard). */

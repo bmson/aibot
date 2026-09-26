@@ -21,6 +21,7 @@ export * from './document-catalog.js';
 export * from './document-deletion.js';
 export * from './email-sync.js';
 export * from './email-extraction.js';
+export * from './dream.js';
 export * from './embedding.js';
 export * from './execution.js';
 export * from './execution-context.js';

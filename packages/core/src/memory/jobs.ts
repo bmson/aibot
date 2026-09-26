@@ -134,6 +134,7 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'watch.suggest',
   'import.run',
   'voice.ingest',
+  'dream.run',
   'pulse.check',
   'anomaly.scan',
   'skill.reflect',
@@ -601,7 +602,12 @@ export async function runCodeJob(
     }
     case 'dream.run': {
       await deps.heartbeat?.();
-      const r = await runDream(deps, { agentId: task.agentId, taskId: task.id });
+      const r = await runDream(deps, {
+        agentId: task.agentId,
+        taskId: task.id,
+        // Read at commit: every heartbeat renewal rotates the lease token.
+        lease: () => ({ taskId: task.id, leaseToken: task.leaseToken ?? '' }),
+      });
       return {
         done: true,
         summary: `dream: ${r.footnotes} footnote(s), ${r.hypotheses} hypothesis(es), ${r.anticipations} anticipation(s)`,

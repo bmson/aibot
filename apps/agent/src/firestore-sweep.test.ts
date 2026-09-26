@@ -152,12 +152,17 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
     expect(sqlAccesses).toEqual([]);
   });
 
-  it('fires portable schedules past SQL-only jobs and a goal session whose goal is gone', async () => {
+  it('fires portable schedules past disabled jobs and a goal session whose goal is gone', async () => {
     const schedules = new FirestoreScheduleRepository(store);
     const due = new Date(Date.now() - 60_000);
     const ensure = (name: string, taskTemplate: Record<string, unknown>) =>
       schedules.ensure({ agentId, name, cron: '0 9 * * *', taskTemplate, nextRunAt: due });
-    const dream = await ensure('dream', { type: 'scheduled', job: 'dream.run' });
+    // GraphRAG is off here, so the curiosity schedule advances without a task,
+    // exactly as a job that cannot run on this persistence would.
+    const curiosity = await ensure('knowledge-graph-curiosity', {
+      type: 'scheduled',
+      job: 'graph.curiosity',
+    });
     const goal = await ensure('goal-session', { type: 'scheduled', goalId: randomUUID() });
     const consolidation = await ensure('memory-consolidation', {
       type: 'scheduled',
@@ -168,7 +173,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
     expect(result).toMatchObject({ ready: true, report: { schedulesFired: 1 } });
     const tasks = await store.collection('tasks').get();
     expect(tasks.docs.map((doc) => doc.get('trigger.payload.job'))).toEqual(['memory.consolidate']);
-    for (const skipped of [dream, consolidation]) {
+    for (const skipped of [curiosity, consolidation]) {
       const row = (await store.doc('schedules', skipped.id).get()).data();
       expect(row?.nextRunAt.toDate().getTime()).toBeGreaterThan(Date.now());
     }

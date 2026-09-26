@@ -232,9 +232,10 @@ describe('executorDeps code-job availability', () => {
 
   it('completes SQL-only jobs benignly under Firestore and keeps portable ones', () => {
     const jobs = executorDeps(depsFor('firestore'));
-    expect(jobs.jobUnavailable?.('dream.run')).toBe(
-      'dream.run skipped because it is not yet available on Firestore persistence',
+    expect(jobs.jobUnavailable?.('memory.graph_date_backfill')).toBe(
+      'memory.graph_date_backfill skipped because it is not yet available on Firestore persistence',
     );
+    expect(jobs.jobUnavailable?.('dream.run')).toBeNull();
     expect(jobs.jobUnavailable?.('memory.consolidate')).toBeNull();
     expect(jobs.jobUnavailable?.('reminder.notify')).toBeNull();
   });

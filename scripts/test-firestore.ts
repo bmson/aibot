@@ -51,6 +51,7 @@ const child = spawn(
     'apps/agent/src/firestore-briefing.test.ts',
     'apps/agent/src/firestore-skill-reflection.test.ts',
     'apps/agent/src/firestore-self-maintenance.test.ts',
+    'apps/agent/src/firestore-dream.test.ts',
     'apps/agent/src/firestore-pulse.test.ts',
     'apps/agent/src/firestore-chat-segmentation.test.ts',
     'apps/agent/src/firestore-lookup-tools.test.ts',

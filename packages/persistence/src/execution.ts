@@ -17,6 +17,7 @@ import type {
 } from './document-catalog.js';
 import type { EmailSyncRepository } from './email-sync.js';
 import type { EmailExtractionRepository } from './email-extraction.js';
+import type { DreamRepository } from './dream.js';
 import type { ExecutionContextRepository } from './execution-context.js';
 import type { ExecutionEvidenceRepository } from './execution-evidence.js';
 import type { ExecutionJobRepository } from './execution-jobs.js';
@@ -135,4 +136,6 @@ export interface ExecutionPersistence {
   readonly skillReflection?: SkillReflectionRepository;
   /** Present where the `self.maintain` job has a portable adapter. */
   readonly selfMaintenance?: SelfMaintenanceRepository;
+  /** Present where the `dream.run` job has a portable adapter. */
+  readonly dream?: DreamRepository;
 }
