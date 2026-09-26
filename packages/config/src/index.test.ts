@@ -68,7 +68,7 @@ describe('config', () => {
     );
   });
 
-  it('requires an explicit Firestore identity and permits only portable modules', () => {
+  it('requires an explicit Firestore identity and permits every portable module', () => {
     const config = loadConfig({ PERSISTENCE_DRIVER: 'firestore' });
     expect(validateAgentPersistenceConfig(config, {})).toEqual(
       expect.arrayContaining([
@@ -76,8 +76,10 @@ describe('config', () => {
         expect.stringContaining('ASSISTANT_WORKSPACE_ID'),
         expect.stringContaining('FIRESTORE_AGENT_ID'),
         expect.stringContaining('FIRESTORE_EMBEDDING_SPACE'),
-        expect.stringContaining('ASSISTANT_MODULES=google still needs PostgreSQL'),
       ]),
+    );
+    expect(validateAgentPersistenceConfig(config, {}).join('\n')).not.toContain(
+      'still needs PostgreSQL',
     );
     expect(() => parseFirestoreEmbeddingSpace('{"provider":"test"}')).toThrow(
       'FIRESTORE_EMBEDDING_SPACE',
@@ -95,10 +97,18 @@ describe('config', () => {
     };
     resetConfigForTest();
     expect(validateAgentPersistenceConfig(loadConfig(env), env)).toEqual([]);
+    resetConfigForTest();
     expect(
-      validateAgentPersistenceConfig({ ...loadConfig(env), ASSISTANT_MODULES: ['google'] }, env),
+      validateAgentPersistenceConfig(loadConfig({ ...env, ASSISTANT_MODULES: 'all' }), env),
+    ).toEqual([]);
+    // A module added later without a port is still refused.
+    expect(
+      validateAgentPersistenceConfig(
+        { ...loadConfig(env), ASSISTANT_MODULES: ['future' as never] },
+        env,
+      ),
     ).toContain(
-      'ASSISTANT_MODULES=google still needs PostgreSQL; Firestore agent mode supports reminders,calendar,browser,code,search,maps,watches,push,sms,documents',
+      'ASSISTANT_MODULES=future still needs PostgreSQL; Firestore agent mode supports reminders,calendar,browser,code,search,maps,watches,push,sms,documents,google',
     );
     expect(
       validateAgentPersistenceConfig(loadConfig(env), {

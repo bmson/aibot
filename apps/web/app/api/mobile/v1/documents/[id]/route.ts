@@ -22,10 +22,7 @@ export async function GET(
   const { id } = await params;
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid document id' }, { status: 400 });
   if (config.PERSISTENCE_DRIVER === 'firestore') {
-    const problems = validateAgentPersistenceConfig({
-      ...config,
-      ASSISTANT_MODULES: config.ASSISTANT_MODULES.filter((module) => module !== 'documents'),
-    });
+    const problems = validateAgentPersistenceConfig(config);
     if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
     const result = await new FirestoreDocumentReadRepository(
       getFirestoreInstallationStore(),

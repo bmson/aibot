@@ -434,18 +434,16 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
     }
   });
 
-  it('rejects other unsupported modules instead of bypassing persistence validation', async () => {
-    vi.stubEnv('ASSISTANT_MODULES', 'documents,google');
+  it('refuses an invalid Firestore configuration instead of bypassing validation', async () => {
+    vi.stubEnv('CANARY_ENABLED', 'true');
     resetConfigForTest();
     try {
       const { GET } = await import('./route.js');
       const response = await GET(new Request(url));
       expect(response.status).toBe(503);
-      expect((await response.json()).error).toContain(
-        'ASSISTANT_MODULES=google still needs PostgreSQL',
-      );
+      expect((await response.json()).error).toContain('CANARY_ENABLED must be false');
     } finally {
-      vi.stubEnv('ASSISTANT_MODULES', 'documents');
+      vi.stubEnv('CANARY_ENABLED', 'false');
       resetConfigForTest();
     }
   });

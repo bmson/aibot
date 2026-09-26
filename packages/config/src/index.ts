@@ -390,9 +390,14 @@ export const FIRESTORE_PORTABLE_MODULES: readonly AssistantModule[] = [
   'push',
   'sms',
   'documents',
+  'google',
 ];
 
-/** Firestore agent mode stays narrow until the remaining runtime ports migrate. */
+/**
+ * Firestore agent mode's configuration guard. Every module is portable today;
+ * the module check stays so a module added later without a port is refused
+ * instead of silently reaching SQL.
+ */
 export function validateAgentPersistenceConfig(
   config: Config,
   env: NodeJS.ProcessEnv = process.env,

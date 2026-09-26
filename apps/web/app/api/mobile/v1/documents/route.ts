@@ -18,10 +18,7 @@ export async function GET(request: Request): Promise<Response> {
   }
   const config = loadConfig();
   if (config.PERSISTENCE_DRIVER === 'firestore') {
-    const problems = validateAgentPersistenceConfig({
-      ...config,
-      ASSISTANT_MODULES: config.ASSISTANT_MODULES.filter((module) => module !== 'documents'),
-    });
+    const problems = validateAgentPersistenceConfig(config);
     if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
     const result = await new FirestoreDocumentReadRepository(
       getFirestoreInstallationStore(),
@@ -40,10 +37,7 @@ export async function POST(request: Request): Promise<Response> {
     return mobileJson({ error: 'documents module disabled' }, { status: 404 });
   }
   if (config.PERSISTENCE_DRIVER === 'firestore') {
-    const problems = validateAgentPersistenceConfig({
-      ...config,
-      ASSISTANT_MODULES: config.ASSISTANT_MODULES.filter((module) => module !== 'documents'),
-    });
+    const problems = validateAgentPersistenceConfig(config);
     if (problems.length) return mobileJson({ error: problems.join('; ') }, { status: 503 });
   }
   const contentLength = Number(request.headers.get('content-length') ?? 0);
