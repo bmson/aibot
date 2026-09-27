@@ -464,6 +464,21 @@ export interface Records {
     completionCostPerMTok: string | null;
     latencyClass: string;
   };
+  /** An owner-connected model provider. The API key is sealed; never expose it. */
+  modelConnections: {
+    id: string;
+    createdAt: Date;
+    updatedAt: Date;
+    kind: string;
+    label: string;
+    baseUrl: string | null;
+    apiKeyEncrypted: string | null;
+    vertexProject: string | null;
+    vertexLocation: string | null;
+    enabled: boolean;
+    lastTestedAt: Date | null;
+    lastError: string | null;
+  };
   modelRoles: {
     updatedAt: Date;
     role: string;

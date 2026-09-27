@@ -100,6 +100,12 @@ export const MIGRATION_TABLES = [
   { table: 'mcp_connections', collection: 'mcpConnections', id: 'id', scope: 'agent' },
   { table: 'model_call_audit', collection: 'modelCallAudit', id: 'id', scope: 'installation' },
   { table: 'model_calls', collection: 'modelCalls', id: 'id', scope: 'installation' },
+  {
+    table: 'model_connections',
+    collection: 'modelConnections',
+    id: 'id',
+    scope: 'installation',
+  },
   { table: 'model_roles', collection: 'modelRoles', id: 'role', scope: 'installation' },
   { table: 'models', collection: 'models', id: 'id', scope: 'installation' },
   { table: 'notification_prefs', collection: 'notificationPrefs', id: 'agent_id', scope: 'agent' },

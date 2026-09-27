@@ -28,7 +28,9 @@ export { createPostgresMemorySupersedeRepository } from './memory-supersede-repo
 export { createPostgresMemoryToolRepository } from './memory-tool-repository.js';
 export { createPostgresMessageRepository } from './message-repository.js';
 export { createPostgresMissionRepository } from './mission-repository.js';
+export { createPostgresModelCatalogRepository } from './model-catalog-repository.js';
 export * from './model-config.js';
+export { createPostgresModelConnectionRepository } from './model-connection-repository.js';
 export { createPostgresModelRoutingRepository } from './model-routing-repository.js';
 export { createPostgresNotificationsConversationRepository } from './notifications-conversation-repository.js';
 export { createPostgresNudgePolicyRepository } from './nudge-policy-repository.js';

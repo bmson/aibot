@@ -22,7 +22,7 @@ vi.mock('@assistant/core/model-router', () => ({
       return router.embed(...args);
     }
   },
-  createConfiguredModelProvider: vi.fn(),
+  createConnectedModelProviders: vi.fn(),
 }));
 
 import {

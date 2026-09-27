@@ -65,6 +65,10 @@ export { FirestoreMemoryToolRepository } from './memory-tools.js';
 export { FirestoreMessageRepository } from './messages.js';
 export { FirestoreMissionRepository } from './missions.js';
 export { getFirestoreMobileCosts } from './mobile-costs.js';
+export {
+  FirestoreModelCatalogRepository,
+  FirestoreModelConnectionRepository,
+} from './model-connections.js';
 export { FirestoreModelRoutingRepository } from './model-routing.js';
 export { FirestoreOccasionToolRepository } from './occasion-tools.js';
 export {

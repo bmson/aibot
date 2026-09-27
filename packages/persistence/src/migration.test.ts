@@ -90,8 +90,8 @@ describe('workspace migration format', () => {
 
   it('enumerates the complete PostgreSQL schema without duplicate tables', async () => {
     const { MIGRATION_TABLES } = await import('./migration.js');
-    expect(MIGRATION_TABLES).toHaveLength(66);
-    expect(new Set(MIGRATION_TABLES.map(({ table }) => table))).toHaveProperty('size', 66);
+    expect(MIGRATION_TABLES).toHaveLength(67);
+    expect(new Set(MIGRATION_TABLES.map(({ table }) => table))).toHaveProperty('size', 67);
   });
 
   it('rejects records outside the selected workspace and missing references', () => {

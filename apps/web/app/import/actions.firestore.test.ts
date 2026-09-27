@@ -23,7 +23,7 @@ vi.mock('@assistant/core/model-router', () => ({
       throw new Error('Import commands never embed');
     }
   },
-  createConfiguredModelProvider: vi.fn(),
+  createConnectedModelProviders: vi.fn(),
 }));
 // The installation's workspace store, in memory: uploaded bytes land here.
 vi.mock('@assistant/tools/workspace', () => {

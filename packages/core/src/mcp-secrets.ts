@@ -8,7 +8,7 @@ const ALGORITHM = 'aes-256-gcm';
 function encryptionKey(version = VERSION): Buffer {
   const configured = loadConfig().MCP_ENC_KEY;
   if (!configured) {
-    throw new Error('MCP_ENC_KEY is required to store or use bearer credentials.');
+    throw new Error('MCP_ENC_KEY is required to store or use saved credentials.');
   }
   // v1 derived a key from an arbitrary string. Keep that read path so credentials
   // saved during the initial rollout remain usable while all new writes require
@@ -56,3 +56,11 @@ export function decryptMcpBearerToken(payload: string): string {
     decipher.final(),
   ]).toString('utf8');
 }
+
+/**
+ * The same sealed format for every other owner-entered credential (model
+ * provider API keys). One key, one format, one rotation story: MCP_ENC_KEY
+ * already reaches both the web and agent services.
+ */
+export const encryptStoredCredential = encryptMcpBearerToken;
+export const decryptStoredCredential = decryptMcpBearerToken;

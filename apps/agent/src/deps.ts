@@ -7,7 +7,7 @@ import {
   validateAgentPersistenceConfig,
 } from '@assistant/config';
 import {
-  createConfiguredModelProvider,
+  createConnectedModelProviders,
   type DocumentProcessorConfig,
   findPrimaryConversation,
   getAgent,
@@ -20,7 +20,12 @@ import {
 import { compileOwnerCard } from '@assistant/core/memory/consolidation';
 import { supersedeContradictedFacts } from '@assistant/core/memory/supersede';
 import { evaluateOutOfBandPing } from '@assistant/core/proactive/nudge-policy';
-import { createDb, createPostgresExecutionPersistence, type Db } from '@assistant/db';
+import {
+  createDb,
+  createPostgresExecutionPersistence,
+  createPostgresModelConnectionRepository,
+  type Db,
+} from '@assistant/db';
 import {
   createFirestoreExecutionPersistence,
   createInstallationStore,
@@ -34,6 +39,7 @@ import {
   FirestoreImportJobRepository,
   FirestoreMcpConnectionReadRepository,
   FirestoreMissionRepository,
+  FirestoreModelConnectionRepository,
   FirestoreOccasionToolRepository,
   FirestoreOwnerNoticeRepository,
   FirestoreReminderRepository,
@@ -459,11 +465,12 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
     embeddingSpace,
   );
   const db = unavailableSqlDb();
+  const modelConnections = new FirestoreModelConnectionRepository(store);
   const router = new ModelRouter(
     persistence.modelRouting,
     config.OPENROUTER_API_KEY,
     config.LLM_AUDIT_CAPTURE,
-    createConfiguredModelProvider(config),
+    createConnectedModelProviders(config, () => modelConnections.list()),
   );
   const workspacePrefix = `workspace/${config.ASSISTANT_WORKSPACE_ID}`;
   const workspaceRoot = path.join(repoRoot, '.workspace');
@@ -628,11 +635,12 @@ export function buildDeps(): AgentDeps {
     sourceWritesFenced: config.POSTGRES_SOURCE_WRITES_FENCED,
   });
   const persistence = createPostgresExecutionPersistence(db);
+  const modelConnections = createPostgresModelConnectionRepository(db);
   const router = new ModelRouter(
     persistence.modelRouting,
     config.OPENROUTER_API_KEY,
     config.LLM_AUDIT_CAPTURE,
-    createConfiguredModelProvider(config),
+    createConnectedModelProviders(config, () => modelConnections.list()),
   );
   const workspacePrefix = `workspace/${config.ASSISTANT_WORKSPACE_ID}`;
   const workspaceRoot = path.join(repoRoot, '.workspace');

@@ -1193,6 +1193,38 @@ export const importSources = pgTable(
 
 // ── Models, routing, budgets ─────────────────────────────────────────────────
 
+/**
+ * Model providers the owner connected in Settings → AI providers. A model id's
+ * namespace names its connection (see connectionIdForModel in
+ * @assistant/core/model-router): built-in kinds use their kind as the id,
+ * OpenAI-compatible gateways an owner-chosen slug.
+ */
+export const modelConnections = pgTable(
+  'model_connections',
+  {
+    id: text('id').primaryKey(),
+    /** openrouter | openai | vertex | openai_compatible */
+    kind: text('kind').notNull(),
+    label: text('label').notNull(),
+    /** OpenAI-compatible gateways only. */
+    baseUrl: text('base_url'),
+    /** AES-GCM payload sealed with MCP_ENC_KEY; never expose this field. */
+    apiKeyEncrypted: text('api_key_encrypted'),
+    vertexProject: text('vertex_project'),
+    vertexLocation: text('vertex_location'),
+    enabled: boolean('enabled').notNull().default(true),
+    lastTestedAt: timestamp('last_tested_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'model_connections_kind_check',
+      sql`${t.kind} IN ('openrouter','openai','vertex','openai_compatible')`,
+    ),
+  ],
+);
+
 /** Capability matrix — what the router may pick. Swapping models = editing rows. */
 export const models = pgTable(
   'models',
@@ -2130,6 +2162,7 @@ export const selfMaintenance = pgTable(
 
 export type AgentRow = typeof agents.$inferSelect;
 export type McpConnectionRow = typeof mcpConnections.$inferSelect;
+export type ModelConnectionRow = typeof modelConnections.$inferSelect;
 export type GoalRow = typeof goals.$inferSelect;
 export type ConversationRow = typeof conversations.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;

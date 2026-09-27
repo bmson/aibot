@@ -67,6 +67,8 @@
   },
   "dependencies": {
     "@ai-sdk/google-vertex": "5.0.88",
+    "@ai-sdk/openai": "4.0.72",
+    "@ai-sdk/openai-compatible": "3.0.53",
     "@assistant/config": "workspace:*",
     "@assistant/db": "workspace:*",
     "@assistant/persistence": "workspace:*",

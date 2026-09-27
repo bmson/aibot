@@ -50,3 +50,29 @@ deliberating roles continue to request reasoning even when it is optional.
 `pnpm exec tsx scripts/smoke-models.ts [model-id ...]` runs synthetic live
 checks through the router, including streamed replies. It requires the existing
 OpenRouter key and a local seeded database, where usage is metered.
+
+## Provider connections
+
+Models can come from more than one provider at once. Each model ID names the
+connection that serves it:
+
+| Model ID | Served by |
+| --- | --- |
+| `minimax/minimax-m2.7` (no prefix) | OpenRouter |
+| `openai:gpt-5.1` | OpenAI, with a platform.openai.com API key |
+| `vertex:gemini-2.5-flash` | Google Vertex, through the service's own credentials |
+| `gw:<connection>:<model>` | An OpenAI-compatible gateway the owner added (Groq, Together, LiteLLM, Ollama) |
+
+Connections are stored in `model_connections` (Firestore `modelConnections`),
+with API keys sealed by `MCP_ENC_KEY` and opened only when the adapter is
+built. The router re-reads the list every 30 seconds, so a connection saved
+in the app takes effect without a redeploy. A connection that is turned off
+refuses its models outright; calls already in flight are still metered.
+
+Until the owner saves a connection of a kind, the environment stands in for it:
+`OPENROUTER_API_KEY` for OpenRouter (not when `LLM_PROVIDER=vertex`) and
+`VERTEX_PROJECT`/`VERTEX_LOCATION` for Vertex. Existing installations need no
+migration. Roles may mix providers, and a fallback may be on a different
+provider than its primary, because both are set explicitly per role. The
+embedding role stays on the installation's embedding space; moving it to a
+different provider means re-embedding stored memories.

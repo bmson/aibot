@@ -95,7 +95,7 @@ import {
 } from '@assistant/config';
 import { encodeMessageCursor } from '@assistant/core/chat';
 import { encryptMcpBearerToken } from '@assistant/core/mcp-secrets';
-import { createConfiguredModelProvider, ModelRouter } from '@assistant/core/model-router';
+import { createConnectedModelProviders, ModelRouter } from '@assistant/core/model-router';
 import {
   goalAutomationCadence,
   goalAutomationInstruction,
@@ -105,6 +105,7 @@ import {
   createDb,
   createPostgresCardRefreshRepository,
   createPostgresGeneratedCardRepository,
+  createPostgresModelConnectionRepository,
   type Db,
 } from '@assistant/db';
 import {
@@ -120,6 +121,7 @@ import {
   FirestoreImportCommandRepository,
   FirestoreLocationPingRepository,
   FirestoreMcpConnectionMutationRepository,
+  FirestoreModelConnectionRepository,
   FirestoreOwnerKnowledgeGraphFactRepository,
   FirestoreRecallFeedbackRepository,
   FirestoreShellStatusRepository,
@@ -294,12 +296,15 @@ export function getCardRefresh() {
 
 export function getRouter(): ModelRouter {
   const config = loadConfig();
-  globalCache.__assistantRouter ??= new ModelRouter(
-    getDb(),
-    config.OPENROUTER_API_KEY,
-    config.LLM_AUDIT_CAPTURE,
-    createConfiguredModelProvider(config),
-  );
+  if (!globalCache.__assistantRouter) {
+    const connections = createPostgresModelConnectionRepository(getDb());
+    globalCache.__assistantRouter = new ModelRouter(
+      getDb(),
+      config.OPENROUTER_API_KEY,
+      config.LLM_AUDIT_CAPTURE,
+      createConnectedModelProviders(config, () => connections.list()),
+    );
+  }
   return globalCache.__assistantRouter;
 }
 
@@ -519,11 +524,12 @@ function createFirestoreChatApplication() {
   const chat = new FirestoreApplicationChatPersistence(store, config.FIRESTORE_AGENT_ID);
   const recallFeedback = new FirestoreRecallFeedbackRepository(store);
   const shellStatus = new FirestoreShellStatusRepository(store, config.FIRESTORE_AGENT_ID);
+  const modelConnections = new FirestoreModelConnectionRepository(store);
   const router = new ModelRouter(
     persistence.modelRouting,
     config.OPENROUTER_API_KEY,
     config.LLM_AUDIT_CAPTURE,
-    createConfiguredModelProvider(config),
+    createConnectedModelProviders(config, () => modelConnections.list()),
   );
   const ownerGraphFacts = new FirestoreOwnerKnowledgeGraphFactRepository(
     store,
