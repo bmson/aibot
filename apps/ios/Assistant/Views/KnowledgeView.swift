@@ -151,7 +151,7 @@ struct KnowledgeConnectionEditor: View {
         AssistantForm {
             Section {
                 Text(
-                    "Describe the relationship and add a source note to support it. Corrections keep the original source for reference."
+                    "Say how these two are related. A correction keeps the original source for reference."
                 )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -218,8 +218,9 @@ struct KnowledgeConnectionEditor: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            Section("Source note") {
-                TextEditor(text: $note).frame(minHeight: 110)
+            Section("Note (optional)") {
+                TextField("How you know, e.g. met at university", text: $note, axis: .vertical)
+                    .lineLimit(2...5)
             }
             if let saveError {
                 Section { Text(saveError).foregroundStyle(.red) }
@@ -240,8 +241,7 @@ struct KnowledgeConnectionEditor: View {
                             || objectLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || (predicate == "__custom"
                                 && customPredicate.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    .isEmpty)
-                            || note.trimmingCharacters(in: .whitespacesAndNewlines).count < 3)
+                                    .isEmpty))
             }
         }
     }

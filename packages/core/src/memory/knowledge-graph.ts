@@ -936,8 +936,25 @@ export interface OwnerGraphFactInput {
   subject: { label: string; kind: GraphEntityKind; id?: string; contactId?: string };
   predicate: string;
   object: { label: string; kind: GraphEntityKind; id?: string };
-  /** Owner-written evidence note — never hidden behind an inferred edge. */
+  /**
+   * Optional context in the owner's words. The owner stating the relationship
+   * is itself the provenance, so an empty note still saves a readable source.
+   */
   note: string;
+}
+
+/**
+ * The durable memory an owner-drawn relationship is saved as. It reads as the
+ * claim itself, with the owner's note appended when there is one.
+ */
+function ownerFactContent(
+  subject: string,
+  predicate: string,
+  object: string,
+  note: string,
+): string {
+  const claim = `${subject} ${predicate.replaceAll('_', ' ')} ${object}.`;
+  return note ? `${claim} Owner note: ${note}` : claim;
 }
 
 export interface OwnerGraphFactResult {
@@ -1012,15 +1029,14 @@ export async function createOwnerKnowledgeGraphFact(
   // extracted one instead of starting a synonym of it.
   const predicate = canonicalPredicate(cleanPredicate(input.predicate)).id;
   const note = input.note.replace(/\s+/g, ' ').trim().slice(0, 1_000);
-  if (!subjectParsed.success || !objectParsed.success || !predicate || note.length < 3) {
-    return { error: 'Add both entities, a relationship, and a short source note.' };
+  if (!subjectParsed.success || !objectParsed.success || !predicate) {
+    return { error: 'Add both items and how they are related.' };
   }
   const subject = { ...subjectParsed.data, label: cleanLabel(subjectParsed.data.label) };
   const object = { ...objectParsed.data, label: cleanLabel(objectParsed.data.label) };
   if (!subject.label || !object.label) return { error: 'Entity names cannot be empty.' };
 
-  const readablePredicate = predicate.replaceAll('_', ' ');
-  const content = `${subject.label} ${readablePredicate} ${object.label}. Owner note: ${note}`;
+  const content = ownerFactContent(subject.label, predicate, object.label, note);
   const contentHash = createHash('sha256').update(content).digest('hex');
   if (await isTombstoned(deps.db, contentHash)) {
     return { error: 'This fact was previously removed, so it was not added again.' };
@@ -1178,12 +1194,12 @@ export async function createOwnerKnowledgeGraphFactWithRepository(
   const objectParsed = GraphEntitySchema.safeParse(objectRow);
   const predicate = canonicalPredicate(cleanPredicate(input.predicate)).id;
   const note = input.note.replace(/\s+/g, ' ').trim().slice(0, 1_000);
-  if (!subjectParsed.success || !objectParsed.success || !predicate || note.length < 3)
-    return { error: 'Add both entities, a relationship, and a short source note.' };
+  if (!subjectParsed.success || !objectParsed.success || !predicate)
+    return { error: 'Add both items and how they are related.' };
   const subject = { ...subjectParsed.data, label: cleanLabel(subjectParsed.data.label) };
   const object = { ...objectParsed.data, label: cleanLabel(objectParsed.data.label) };
   if (!subject.label || !object.label) return { error: 'Entity names cannot be empty.' };
-  const content = `${subject.label} ${predicate.replaceAll('_', ' ')} ${object.label}. Owner note: ${note}`;
+  const content = ownerFactContent(subject.label, predicate, object.label, note);
   const contentHash = createHash('sha256').update(content).digest('hex');
   for (const [endpoint, row] of [
     [subject, subjectRow],
