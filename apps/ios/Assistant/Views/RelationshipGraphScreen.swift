@@ -397,10 +397,10 @@ struct RelationshipGraphScreen: View {
                 searchResults = []; searchFailed = false; searching = false
                 guard !query.isEmpty else { return }
                 searching = true
-                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-                let result = await model.knowledge(query: query)
-                guard !Task.isCancelled, query == search.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
-                searchResults = result?.entities ?? []; searching = false; searchFailed = result == nil
+                do { try await Task.sleep(for: .milliseconds(300)) } catch { searching = false; return }
+                let result = await model.searchKnowledge(query: query)
+                guard !Task.isCancelled else { return }
+                searchResults = result ?? []; searching = false; searchFailed = result == nil
             }
         }
     }
@@ -1083,10 +1083,10 @@ struct GraphConnectSheet: View {
             results = []; searchFailed = false; searching = false
             guard !query.isEmpty else { return }
             let expected = query; searching = true
-            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-            let response = await model.knowledge(query: expected)
-            guard !Task.isCancelled, expected == query else { return }
-            results = response?.entities ?? []; searchFailed = response == nil; searching = false
+            do { try await Task.sleep(for: .milliseconds(300)) } catch { searching = false; return }
+            let response = await model.searchKnowledge(query: expected)
+            guard !Task.isCancelled else { return }
+            results = response ?? []; searchFailed = response == nil; searching = false
         }
     }
 }

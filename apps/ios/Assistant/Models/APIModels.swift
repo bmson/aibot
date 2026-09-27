@@ -1479,6 +1479,10 @@ struct KnowledgeEntity: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+struct KnowledgeSearchResponse: Codable, Sendable {
+    let entities: [KnowledgeEntity]
+}
+
 struct KnowledgePresentation: Codable, Hashable, Sendable {
     let sentence: String
     let label: String

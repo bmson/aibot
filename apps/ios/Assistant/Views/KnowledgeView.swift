@@ -481,12 +481,12 @@ struct KnowledgeItemEditor: View {
         }
         searching = true
         searchTask = Task {
-            try? await Task.sleep(for: .milliseconds(250))
+            try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
-            let result = await model.knowledge(query: trimmed)
+            let result = await model.searchKnowledge(query: trimmed)
             guard !Task.isCancelled else { return }
             // Never offer the item as its own merge target.
-            mergeResults = (result?.entities ?? []).filter { $0.id != item.id }
+            mergeResults = (result ?? []).filter { $0.id != item.id }
             searching = false
         }
     }

@@ -315,6 +315,19 @@ struct APIClient: Sendable {
         return try await perform(makeRequest(url: url), as: KnowledgeOverview.self)
     }
 
+    /// Find-as-you-type over graph items: names and kinds only. An older
+    /// server ignores `mode` and answers with the browse overview, which also
+    /// carries `entities`, so this decodes either.
+    func searchKnowledge(query: String) async throws -> [KnowledgeEntity] {
+        var components = URLComponents(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [.init(name: "mode", value: "search"), .init(name: "q", value: query)]
+        guard let url = components?.url else { throw APIError.invalidServerURL }
+        return try await perform(makeRequest(url: url), as: KnowledgeSearchResponse.self).entities
+    }
+
     func relationshipGraph(personID: String? = nil, entityID: String? = nil, query: String = "") async throws -> RelationshipGraphSnapshot {
         var components = URLComponents(url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge/graph"), resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "person", value: personID), URLQueryItem(name: "entity", value: entityID), URLQueryItem(name: "q", value: query.isEmpty ? nil : query)].filter { $0.value != nil }

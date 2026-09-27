@@ -4,12 +4,14 @@ import {
   getKnowledgeGraphOverview,
   getKnowledgeGraphReviewQueue,
   presentKnowledgeGraphRelation,
+  searchKnowledgeGraphEntities,
 } from '@assistant/application';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import {
   getFirestoreKnowledgeGraphOverview,
   getFirestoreKnowledgeGraphReviewQueue,
 } from '@assistant/firestore';
+import { getFirestoreKnowledgeCuration } from '@/lib/firestore-knowledge';
 import {
   addOwnerKnowledgeGraphFactForCurrentPersistence,
   getDb,
@@ -32,11 +34,42 @@ function withPresentation<
   };
 }
 
+/**
+ * Find-as-you-type over graph items. Reads names and kinds only: the browse
+ * overview below loads every entity, relation and memory to answer one page,
+ * and a burst of keystrokes against it ran the server out of memory.
+ */
+async function searchEntities(raw: string) {
+  const query = raw.trim().slice(0, 120);
+  if (!query) return [];
+  const input = { query, limit: 50 };
+  const rows =
+    loadConfig().PERSISTENCE_DRIVER === 'firestore'
+      ? await getFirestoreKnowledgeCuration().searchEntities(input)
+      : await searchKnowledgeGraphEntities(getDb(), input);
+  // Names that start with what was typed come first, then names with a word
+  // that does — "Bal" should find Baldvin before Annabel.
+  const needle = query.toLocaleLowerCase();
+  const rank = (label: string) => {
+    const name = label.toLocaleLowerCase();
+    if (name.startsWith(needle)) return 0;
+    return name.split(/\s+/).some((word) => word.startsWith(needle)) ? 1 : 2;
+  };
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => rank(a.row.label) - rank(b.row.label) || a.index - b.index)
+    .slice(0, 30)
+    .map(({ row }) => row);
+}
+
 /** Compact graph browsing plus the owner-backed connection creator for iPhone. */
 export async function GET(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const url = new URL(request.url);
   const config = loadConfig();
+  if (url.searchParams.get('mode') === 'search') {
+    return mobileJson({ entities: await searchEntities(url.searchParams.get('q') ?? '') });
+  }
   if (config.PERSISTENCE_DRIVER === 'firestore') {
     const problems = validateAgentPersistenceConfig(config);
     if (problems.length) throw new Error(problems.join('; '));
