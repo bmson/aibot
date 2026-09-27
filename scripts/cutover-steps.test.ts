@@ -197,6 +197,8 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
       image: `old-${name}`,
       env: [
         { name: 'PERSISTENCE_DRIVER', value: 'postgres' },
+        // A value pinned on the service by an earlier release.
+        { name: 'BUILD_SHA', value: 'stale-release' },
         {
           name: 'DATABASE_URL',
           valueFrom: { secretKeyRef: { name: 'database-url', key: 'latest' } },
@@ -810,6 +812,8 @@ describe('cutover orchestration', () => {
       expect(env.some((item) => item.name === 'DATABASE_URL')).toBe(false);
       expect(env.some((item) => item.name === 'POSTGRES_SOURCE_WRITES_FENCED')).toBe(false);
       expect(env.find((item) => item.name === 'PERSISTENCE_DRIVER')?.value).toBe('firestore');
+      // The release SHA comes from the image; an env value would pin it for later releases.
+      expect(env.some((item) => item.name === 'BUILD_SHA')).toBe(false);
     }
     const live = store.read<{ jobDatabaseDependencies: Array<{ name: string }> }>(
       15,

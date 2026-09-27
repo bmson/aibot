@@ -24,6 +24,7 @@ Before the maintenance window:
 1. Merge and release the commit that will serve production. Its migration image must be deployed (`assistant-migrate` runs `migrate:<releaseSha>`), and the web/agent images for the Firestore composition must be built from the same commit.
 2. Rehearse the [Neon provider fence](firestore-source-write-fence.md#neon-provider-fence-design) on a disposable Neon branch.
 3. Create an empty target Firestore database with PITR and ready indexes (`pnpm firestore:indexes`). Confirm the Firestore composition passed its PostgreSQL-offline acceptance run.
+   Grant each serving identity (`assistant-web@`, `assistant-agent@`) `roles/datastore.user` on the target database, for example conditioned on `resource.name == "projects/<project>/databases/<target>"`. Access granted for a rehearsal database does not carry over. Preflight refuses to run without the grant, because once `switch-services` runs every Firestore call would be denied.
 4. Write the configuration file. It holds no secrets and should be kept with the evidence:
 
 ```json
@@ -184,12 +185,31 @@ Delete these files together with the database. After a READY report, the report 
 - the `Deploy production` workflow stops building the backup and migration images;
 - every release asserts that the live services agree with the variable.
 
+The deploy identity reads Firestore metadata for these gates. It needs a role with `datastore.databases.get`, `datastore.databases.getMetadata`, `datastore.backups.list`, `datastore.backups.get`, `datastore.locations.list`, `datastore.indexes.list` and `datastore.indexes.get`. Production uses the custom role `assistantReleaseFirestoreGates`, which grants no document access.
+
 The Firestore release runs no database step. Before it rolls out any revision, three gates must pass:
 
 1. Both service templates are database-free.
 2. A managed Firestore recovery point covers the pre-release state: point-in-time recovery, or a READY scheduled backup no older than `FIRESTORE_BACKUP_MAX_AGE_HOURS` (default 26).
 3. `pnpm firestore:indexes verify` matches the release's index manifest.
 
+
+## Production cutover (2026-09-26)
+
+All 15 steps passed on release `1d2d062c`, and Firestore (`assistant-production`) has been authoritative since `switch-services` at about 23:37 UTC. The write-fence window, from `quiesce` to `switch-services`, ran from 19:38 to 23:37 UTC. It included a 30-minute drain proof (3 × 900 s), several retries, and the managed backup and restore.
+
+- **Data.** 79,393 source records were imported as 97,484 documents and independently verified. 22 present assets and the 12 recovered objects were backed up and restored with SHA-256 parity. 5 references remain unresolved and need owner accepted-loss decisions at retirement.
+- **Tooling fixes found during the run** (#432, #433, and the `BUILD_SHA` fix):
+  - `gcloud` 586 vector-index syntax
+  - the push-subscription OIDC identity through dispatcher and rollback
+  - job summaries logged as `jsonPayload`, and log ingestion lag
+  - `assets` treating expected findings as fatal
+  - a preflight check for runtime Firestore access
+  - `switch-services` pinning `BUILD_SHA`
+- **Outage.** From 23:37 to 23:53 UTC, the agent and web identities had Firestore access only on a rehearsal database, so every Firestore call was denied: agent `/ready` and Gmail push returned 503. Pub/Sub redelivered the pushes after the grant.
+- **Evidence.** The owner's checkout holds it under `.workspace/firestore-cutover/final`, next to `cutover.json`.
+
+Retirement follows the report above once the observation window has passed.
 
 ## Active work
 
