@@ -33,3 +33,18 @@ export {
   type LiveGeneratedCardPayload,
   savableFlightCard,
 } from './card.js';
+export {
+  flightsInEmail,
+  groundedFlights,
+  type MentionedFlight,
+  mayMentionFlight,
+} from './detect.js';
+export {
+  cardForTrackedFlight,
+  type TrackedFlightMatch,
+  type TrackFlightDeps,
+  type TrackFlightInput,
+  type TrackFlightOutcome,
+  trackedFlightMatch,
+  trackFlight,
+} from './track.js';

@@ -313,6 +313,14 @@ describe('flight questions', () => {
     expect(ask('What is the status of my shipment A123?')?.kind).not.toBe('flight');
     expect(ask('is my order AB1234 delayed?')?.kind).not.toBe('flight');
     expect(ask('is flight B6 1 delayed?')?.kind).toBe('flight');
+  });
+
+  it('route a flight the owner simply mentions', () => {
+    expect(ask("I'm flying FI614 on Friday")?.kind).toBe('flight');
+    expect(ask('My flight home is BA283 next week.')?.kind).toBe('flight');
+    expect(ask('Here is my boarding pass for DL45')?.kind).toBe('flight');
+    expect(ask('my flight is at 5 pm, remind me')?.kind).not.toBe('flight');
+    expect(ask('I fly to Paris in 2 weeks')?.kind).not.toBe('flight');
     expect(ask('what is the Giants score?')?.kind).toBe('sports');
   });
 

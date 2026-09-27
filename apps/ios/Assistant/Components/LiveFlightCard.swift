@@ -90,42 +90,34 @@ struct FollowFlightControl: View {
     @State private var following = false
     @State private var working = false
     @State private var unavailable = false
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                guard !working else { return }
-                working = true
-                Task {
-                    if following {
-                        await FlightActivityManager.shared.stopFollowing(flight.id)
-                        following = false
-                    } else {
-                        following = await FlightActivityManager.shared.follow(flight, until: until)
-                        unavailable = !following
-                    }
-                    working = false
+        Button {
+            guard !working else { return }
+            working = true
+            Task {
+                if following {
+                    await FlightActivityManager.shared.stopFollowing(flight.id)
+                    following = false
+                } else {
+                    following = await FlightActivityManager.shared.follow(flight, until: until)
+                    unavailable = !following
                 }
-            } label: {
-                Label(
-                    following ? "Following on Lock Screen" : "Follow on Lock Screen",
-                    systemImage: following ? "checkmark.circle.fill" : "lock.iphone"
-                )
-                .fixedSize(horizontal: true, vertical: false)
+                working = false
             }
-            .font(.caption.weight(.semibold))
-            .buttonStyle(AssistantActionButtonStyle(kind: following ? .neutral : .secondary))
-            .disabled(working)
-            .accessibilityHint(following
-                ? "Stops showing this flight on the Lock Screen."
-                : "Shows this flight's times, gate and countdown on the Lock Screen and in the Dynamic Island.")
-            if unavailable {
-                Text("Live Activities are off for Assistant. Turn them on in Settings to follow a flight.")
-                    .font(.caption)
-                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        } label: {
+            Label(following ? "On Lock Screen" : "Lock Screen", systemImage: following ? "checkmark.circle.fill" : "lock.iphone")
+        }
+        .buttonStyle(CardActionButtonStyle())
+        .disabled(working)
+        .accessibilityLabel(following ? "Following on Lock Screen" : "Follow on Lock Screen")
+        .accessibilityHint(following
+            ? "Stops showing this flight on the Lock Screen."
+            : "Shows this flight's times, gate and countdown on the Lock Screen and in the Dynamic Island.")
+        .alert("Live Activities are off", isPresented: $unavailable) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Turn on Live Activities for Assistant in Settings to follow a flight on the Lock Screen.")
         }
         .onAppear { following = FlightActivityManager.shared.isFollowing(flight.id) }
     }
@@ -139,15 +131,15 @@ struct LiveCardStamp: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 6) {
-            if live {
-                Circle().fill(AssistantTheme.accent(for: colorScheme)).frame(width: 6, height: 6)
-            }
+        HStack(spacing: 5) {
+            Circle()
+                .fill(live ? AssistantTheme.accent(for: colorScheme) : AssistantTheme.inkMuted(for: colorScheme))
+                .frame(width: 6, height: 6)
             Text(label)
                 .font(.caption.weight(.semibold))
                 .monospacedDigit()
+                .foregroundStyle(live ? AssistantTheme.accent(for: colorScheme) : AssistantTheme.inkMuted(for: colorScheme))
         }
-        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
         .accessibilityElement(children: .combine)
     }
 

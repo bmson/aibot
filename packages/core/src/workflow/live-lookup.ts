@@ -47,7 +47,7 @@ const SPORTS_IMPERATIVE = /\b(?:show|give|get|check|track|follow|create|make|bui
  */
 const FLIGHT_IDENT_STRICT = /\b[A-Za-z]{2,3}\d{1,4}[A-Za-z]?\b|\b[A-Z]{2,3}[ -]\d{1,4}\b/;
 const FLIGHT_IDENT_LOOSE = /\b(?:[A-Za-z]{2,3}|[A-Za-z]\d|\d[A-Za-z])[ -]?\d{1,4}[A-Za-z]?\b/;
-const FLIGHT_WORD = /\bflights?\b/i;
+const FLIGHT_WORD = /\b(?:flights?|flying|fly|boarding pass)\b/i;
 /** What people ask about a flight, and nothing a parcel also has. */
 const FLIGHT_CONTEXT =
   /\b(?:on time|delay(?:ed|s)?|late|gate|land(?:s|ed|ing)?|depart(?:s|ed|ing|ure)?|arriv(?:e|es|al|ing)|take ?off|boarding|terminal|baggage)\b/i;
@@ -55,8 +55,15 @@ const NOT_FLIGHT =
   /\b(?:package|parcel|shipment|order|delivery|tracking|invoice|receipt|return|model|version|part)\b/i;
 const FLIGHT_IMPERATIVE = /\b(?:track|follow|watch|check|show|give|get)\b/i;
 
-/** "Is FI614 on time?", "track flight UA 1", "when does BA283 land?" */
+/**
+ * "Is FI614 on time?", "track flight UA 1", "when does BA283 land?" — and a
+ * flight the owner simply mentions: "I'm flying FI614 on Friday" is as much a
+ * cue to look it up as a question is.
+ */
 function isFlightRequest(request: string, asks: boolean): boolean {
+  // A statement names its flight in the strict shape: "at 5" is a time.
+  if (FLIGHT_WORD.test(request) && FLIGHT_IDENT_STRICT.test(request) && !NOT_FLIGHT.test(request))
+    return true;
   if (!asks && !FLIGHT_IMPERATIVE.test(request)) return false;
   if (FLIGHT_WORD.test(request)) return FLIGHT_IDENT_LOOSE.test(request);
   return (

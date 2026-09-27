@@ -255,14 +255,20 @@ export function registerWatchTools(
             const email = row.kind === 'email' ? emailWatchMatchSchema.safeParse(row.match) : null;
             const web = row.kind === 'web' ? parseWebWatchMatch(row.match) : null;
             // A flight followed on the phone's Lock Screen, pushed by the flights module.
-            const flight =
-              row.kind === 'flight' ? (row.match as { ident?: unknown } | null)?.ident : undefined;
+            const flightMatch =
+              row.kind === 'flight'
+                ? (row.match as { ident?: unknown; date?: unknown } | null)
+                : null;
+            const flight = flightMatch?.ident;
+            const followed = Boolean((row.state as { pushToken?: unknown } | null)?.pushToken);
             const matching = email?.success
               ? matchSummary(email.data)
               : web
                 ? describeWebWatch(web)
                 : typeof flight === 'string'
-                  ? `Keeping flight ${flight} current on the Lock Screen`
+                  ? followed
+                    ? `Keeping flight ${flight} current on the Lock Screen`
+                    : `Tracking flight ${flight}${typeof flightMatch?.date === 'string' ? ` on ${flightMatch.date}` : ''}; its live card appears two days before`
                   : '(unreadable match)';
             return {
               watchId: row.id,

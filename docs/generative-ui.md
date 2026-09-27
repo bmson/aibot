@@ -81,6 +81,29 @@ sends a final `end` (dismissed an hour later) once the flight is at the
 gate, and stops when APNs says the owner dismissed the activity. It needs
 the `APNS_*` key the push module already uses.
 
+**Noticed, not asked.** A flight the owner mentions is tracked without a
+question. In chat, a statement naming a flight ("I'm flying FI614 on
+Friday") routes to `flights.status` like a question does, and `flights.track`
+files one further out. In mail, the flights module observes every inbound
+message: a cheap prefilter (an airline word and a printed flight number)
+gates a small `extract` call, and only flight numbers the email states word
+for word survive. A flight within two days becomes a live saved card at once;
+one further out waits as a `flight` watch that the sweep turns into the card
+two days before, telling the owner once. The watch is also the record that
+the flight is known, so the check-in reminder adds nothing. The card and the
+notice come from FlightAware, never from the email.
+
+### Design
+
+Generated cards share one grid and type scale (`CardStyle`): blocks 20pt
+apart, a block's parts 12, a label 4 above its value, equal columns across a
+12pt gutter; an uppercase eyebrow for labels, body and value for facts, a
+monospaced figure for anything read at a glance, and a display size for the
+one thing a block is about. The journey reads like a boarding pass, statuses
+take the colour of what they mean, a countdown does not repeat a clock the
+journey already shows, figures in a table align right, and actions share one
+row of equal tiles (a single action is a plain button).
+
 ### Layer 3 — inputs (deferred)
 
 Not built. The composer rewrites every model-authored `ask_assistant` prompt

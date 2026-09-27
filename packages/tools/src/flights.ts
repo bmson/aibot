@@ -1,11 +1,17 @@
-import { type FlightsFetch, lookupFlight } from '@assistant/core/flights';
+import { type FlightsFetch, lookupFlight, trackFlight } from '@assistant/core/flights';
+import type { GeneratedCardRepository, WatchRepository } from '@assistant/persistence';
 import { z } from 'zod';
 import { register } from './register.js';
 import type { ToolRegistry } from './registry.js';
 
 export function registerFlightTools(
   registry: ToolRegistry,
-  deps: { apiKey: string; fetchImpl?: FlightsFetch },
+  deps: {
+    apiKey: string;
+    fetchImpl?: FlightsFetch;
+    /** Where a tracked flight's waiting watch and card are kept. */
+    tracking?: { watches: WatchRepository; generatedCards: GeneratedCardRepository };
+  },
 ) {
   register(
     registry,
@@ -47,5 +53,46 @@ export function registerFlightTools(
     // is times, codes and gate numbers rather than third-party prose.
     {},
   );
+
+  const tracking = deps.tracking;
+  if (tracking)
+    register(
+      registry,
+      {
+        name: 'flights.track',
+        description:
+          'Keep track of a flight the owner is taking, before they ask about it: "I\'m flying FI614 on December 1", "keep an eye on my flight BA283 next Friday". Give the flight number and the departure date (YYYY-MM-DD, in the departure city). A flight within two days becomes a live card on the Cards page now; one further out is checked two days before departure, when the card appears and the owner is told. Tracking the same flight twice does nothing. Use flights.status instead for a question about a flight right now.',
+        inputSchema: z.object({
+          flight: z.string().min(2).max(12),
+          date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        }),
+        risk: 'autonomous',
+        acceptsUntrustedInput: false,
+        execute: async (args, ctx) => {
+          try {
+            return await trackFlight(
+              {
+                watches: tracking.watches,
+                generatedCards: tracking.generatedCards,
+                apiKey: deps.apiKey,
+                ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+              },
+              {
+                agentId: ctx.agentId,
+                flight: args.flight,
+                date: args.date,
+                source: 'chat',
+                now: ctx.now(),
+                ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
+              },
+            );
+          } catch (err) {
+            return { error: `The flight could not be tracked: ${String(err)}` };
+          }
+        },
+      },
+      // It files a watch and a card: a private write, like watch.create.
+      { privateWrite: true },
+    );
   return registry;
 }

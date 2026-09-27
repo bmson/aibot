@@ -90,7 +90,8 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
   it('points flight numbers at the flights tool (v42)', () => {
     const prompt = buildSystemPrompt(agent, {});
     expect(prompt).toContain('flights.status for any flight number');
-    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(42);
+    expect(prompt).toContain('call flights.track');
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(43);
   });
 
   it('points scores and trips at their tools and keeps the reply to the takeaway (v41)', () => {

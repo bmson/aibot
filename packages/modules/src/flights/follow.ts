@@ -1,4 +1,5 @@
 import {
+  cardForTrackedFlight,
   type FlightAlertBasis,
   type FlightStatus,
   type FlightsFetch,
@@ -8,8 +9,10 @@ import {
   flightAlertBasis,
   flightLivePolicy,
   flightStateFingerprint,
+  type TrackedFlightMatch,
+  trackedFlightMatch,
 } from '@assistant/core/flights';
-import type { WatchRecord, WatchRepository } from '@assistant/persistence';
+import type { GeneratedCardRepository, WatchRecord, WatchRepository } from '@assistant/persistence';
 import type { ApnsLiveActivityPush, ApnsResult } from '@assistant/tools/modules/push';
 import { z } from 'zod';
 
@@ -50,7 +53,11 @@ export type FlightFollowState = z.infer<typeof FlightFollowStateSchema>;
 export interface FlightFollowDeps {
   watches: WatchRepository;
   apiKey: string;
-  sendLiveActivity: (push: ApnsLiveActivityPush) => Promise<ApnsResult>;
+  /** Absent without an APNs key: followed flights then update only in the app. */
+  sendLiveActivity?: (push: ApnsLiveActivityPush) => Promise<ApnsResult>;
+  /** For waiting flights noticed in mail or chat, which become saved cards. */
+  generatedCards?: GeneratedCardRepository;
+  notifyOwner?: (input: { text: string; urgency?: 'ambient' | 'interrupt' }) => Promise<void>;
   fetchImpl?: FlightsFetch;
 }
 
@@ -84,6 +91,8 @@ function logged(watch: WatchRecord) {
 async function pushOne(deps: FlightFollowDeps, watch: WatchRecord, now: Date): Promise<boolean> {
   if (!watch.nextPollAt) return false;
   const expectedNextPollAt = watch.nextPollAt;
+  const waiting = trackedFlightMatch(watch);
+  if (waiting && !waiting.flightId) return cardWaitingFlight(deps, watch, waiting, now);
   const match = FlightFollowMatchSchema.safeParse(watch.match);
   const state = FlightFollowStateSchema.safeParse(watch.state);
   if (!match.success || !state.success) {
@@ -98,6 +107,7 @@ async function pushOne(deps: FlightFollowDeps, watch: WatchRecord, now: Date): P
     return false;
   }
   const prior = state.data;
+  const sendLiveActivity = deps.sendLiveActivity;
 
   let flight: FlightStatus | undefined;
   try {
@@ -130,7 +140,7 @@ async function pushOne(deps: FlightFollowDeps, watch: WatchRecord, now: Date): P
 
   if (!policy) {
     // At the gate or cancelled: one last state, then the activity leaves.
-    const result = await deps.sendLiveActivity({
+    const result = await send(sendLiveActivity, {
       token: prior.pushToken,
       environment: prior.environment,
       event: 'end',
@@ -160,7 +170,7 @@ async function pushOne(deps: FlightFollowDeps, watch: WatchRecord, now: Date): P
     });
     return false;
   }
-  const result = await deps.sendLiveActivity({
+  const result = await send(sendLiveActivity, {
     token: prior.pushToken,
     environment: prior.environment,
     event: 'update',
@@ -181,6 +191,87 @@ async function pushOne(deps: FlightFollowDeps, watch: WatchRecord, now: Date): P
     nextPollAt,
   });
   return result.ok;
+}
+
+/** Without an APNs key there is no push: the read still re-paces the watch. */
+function send(
+  sendLiveActivity: FlightFollowDeps['sendLiveActivity'],
+  push: ApnsLiveActivityPush,
+): Promise<ApnsResult> {
+  return sendLiveActivity
+    ? sendLiveActivity(push)
+    : Promise.resolve({ ok: false, unregistered: false, status: 0, reason: 'push not configured' });
+}
+
+/**
+ * A flight noticed in mail or chat, now close enough for FlightAware to know
+ * it: file it as a live card on the Cards page and tell the owner once. Until
+ * it appears, try again on the watch's own pace; the watch expires two days
+ * after the flight in any case.
+ */
+async function cardWaitingFlight(
+  deps: FlightFollowDeps,
+  watch: WatchRecord,
+  match: TrackedFlightMatch,
+  now: Date,
+): Promise<boolean> {
+  const expectedNextPollAt = watch.nextPollAt as Date;
+  if (!deps.generatedCards) return false;
+  const card = await cardForTrackedFlight(
+    {
+      watches: deps.watches,
+      generatedCards: deps.generatedCards,
+      apiKey: deps.apiKey,
+      ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+    },
+    {
+      agentId: watch.agentId,
+      ident: match.ident,
+      date: match.date,
+      conversationId: watch.conversationId,
+      now,
+    },
+  );
+  if (!card) {
+    await deps.watches.updateWeb({
+      watchId: watch.id,
+      state: watch.state,
+      now,
+      expectedNextPollAt,
+    });
+    return false;
+  }
+  // Carded: the watch stays as the record that this flight is known, and is
+  // not read again before it expires.
+  await deps.watches.updateWeb({
+    watchId: watch.id,
+    state: { ...(watch.state as object), waiting: false, carded: true, flightId: card.flight.id },
+    now,
+    expectedNextPollAt,
+    nextPollAt: watch.expiresAt,
+  });
+  await deps.notifyOwner?.({ text: flightNotice(card.flight), urgency: 'ambient' });
+  return true;
+}
+
+/** "FI614 Reykjavik → New York leaves Fri 16:40, on time, gate D4." */
+export function flightNotice(flight: FlightStatus): string {
+  const clock = flight.departure.best
+    ? new Intl.DateTimeFormat('en-US', {
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+        timeZone: flight.origin.timeZone || 'UTC',
+      }).format(new Date(flight.departure.best))
+    : '';
+  const route = `${flight.origin.city || flight.origin.code} → ${flight.destination.city || flight.destination.code}`;
+  const parts = [
+    `${flight.ident} ${route}${clock ? ` leaves ${clock}` : ''}`,
+    flight.statusText.toLowerCase(),
+    flight.gateOrigin ? `gate ${flight.gateOrigin}` : '',
+  ].filter(Boolean);
+  return `${parts.join(', ')}. It's on your Cards page and updates live.`;
 }
 
 function alertFor(

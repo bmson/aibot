@@ -1163,6 +1163,13 @@ enum MessageResponseCard: Identifiable {
         /// payload beside the spec, never inside it (core/flights/card.ts).
         var live: FlightLive? = nil
 
+        /// The clocks a journey block already shows, top level or in a section.
+        var journeyClockFacts: Set<String> {
+            Set((blocks + blocks.flatMap(\.children))
+                .filter { $0.type == "journey" }
+                .flatMap { [$0.values["departFact"]?.string, $0.values["arriveFact"]?.string].compactMap { $0 } })
+        }
+
         var blockSections: (preview: [GeneratedBlock], details: [GeneratedBlock]) {
             var preview: [GeneratedBlock] = []
             var details: [GeneratedBlock] = []
@@ -3556,7 +3563,7 @@ struct RichResponseCards: View {
         // A live card is a dashboard: its countdown and progress are the
         // point, so nothing folds away under "More details".
         let sections = card.live != nil ? (preview: card.blocks, details: []) : card.blockSections
-        return VStack(alignment: .leading, spacing: 16) {
+        return VStack(alignment: .leading, spacing: CardStyle.blockSpacing) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: generatedSymbol(card.icon))
                     .font(.system(size: 16, weight: .semibold))
@@ -3578,6 +3585,10 @@ struct RichResponseCards: View {
                             .font(.caption)
                             .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                     }
+                    if let live = card.live {
+                        LiveCardStamp(updatedAt: card.updatedAt, live: live.isCurrent)
+                            .padding(.top, 2)
+                    }
                 }
                 Spacer(minLength: 8)
                 ShareLink(item: GeneratedCardValue.shareText(card)) {
@@ -3591,12 +3602,14 @@ struct RichResponseCards: View {
             }
 
             ForEach(sections.preview) { block in
-                generatedBlock(block, facts: facts, cardId: card.id)
+                generatedBlock(block, facts: facts, cardId: card.id, shownElsewhere: card.journeyClockFacts)
             }
             if !sections.details.isEmpty {
                 DisclosureGroup("More details") {
-                    VStack(alignment: .leading, spacing: 16) {
-                        ForEach(sections.details) { block in generatedBlock(block, facts: facts, cardId: card.id) }
+                    VStack(alignment: .leading, spacing: CardStyle.blockSpacing) {
+                        ForEach(sections.details) { block in
+                            generatedBlock(block, facts: facts, cardId: card.id, shownElsewhere: card.journeyClockFacts)
+                        }
                     }
                     .padding(.top, 12)
                 }
@@ -3604,21 +3617,41 @@ struct RichResponseCards: View {
                 .tint(AssistantTheme.accent(for: colorScheme))
             }
 
-            if let live = card.live {
-                FollowFlightControl(flight: live.flight, until: live.until)
-                LiveCardStamp(updatedAt: card.updatedAt, live: live.isCurrent)
-            } else {
+            if card.live == nil {
                 GeneratedCardFreshness(card: card, refresh: onRefresh)
             }
 
+            // A revealed secret is a value, not a button, so it sits above
+            // the row. Everything else shares one row of equal tiles — the
+            // flight's Lock Screen control first, when there is one.
             let actions = card.actions.filter { $0.type != "refresh" }
-            if !actions.isEmpty {
-                Divider()
-                AssistantFlowLayout(spacing: 8) {
-                    ForEach(actions) { action in
-                        generatedAction(action, card: card, facts: facts)
+            ForEach(actions.filter { $0.type == "reveal_sensitive" }) { action in
+                generatedAction(action, card: card, facts: facts)
+            }
+            let tiles = actions.filter { $0.type != "reveal_sensitive" && actionAvailable($0, facts: facts) }
+            let follow = card.live.map { $0.flight }
+            let tileCount = tiles.count + (follow == nil ? 0 : 1)
+            if tileCount > 0 {
+                let perRow = dynamicTypeSize.isAccessibilitySize ? 1 : 3
+                let leading = follow == nil ? 0 : 1
+                Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                    GridRow {
+                        if let follow, let live = card.live {
+                            FollowFlightControl(flight: follow, until: live.until)
+                        }
+                        ForEach(tiles.prefix(max(perRow - leading, 0))) { action in
+                            generatedAction(action, card: card, facts: facts)
+                        }
+                    }
+                    ForEach(Array(stride(from: max(perRow - leading, 0), to: tiles.count, by: perRow)), id: \.self) { start in
+                        GridRow {
+                            ForEach(tiles[start..<min(start + perRow, tiles.count)]) { action in
+                                generatedAction(action, card: card, facts: facts)
+                            }
+                        }
                     }
                 }
+                .environment(\.cardActionSolo, tileCount == 1)
             }
 
             // Last in the card, after the actions: the answer, then what acts
@@ -3637,7 +3670,8 @@ struct RichResponseCards: View {
     private func generatedBlock(
         _ block: MessageResponseCard.GeneratedBlock,
         facts: [String: MessageResponseCard.GeneratedFact],
-        cardId: String
+        cardId: String,
+        shownElsewhere: Set<String> = []
     ) -> some View {
         if block.type == "section" {
             VStack(alignment: .leading, spacing: 12) {
@@ -3648,12 +3682,12 @@ struct RichResponseCards: View {
                         .accessibilityAddTraits(.isHeader)
                 }
                 ForEach(block.children) { child in
-                    generatedLeafBlock(child, facts: facts, cardId: cardId)
+                    generatedLeafBlock(child, facts: facts, cardId: cardId, shownElsewhere: shownElsewhere)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            generatedLeafBlock(block, facts: facts, cardId: cardId)
+            generatedLeafBlock(block, facts: facts, cardId: cardId, shownElsewhere: shownElsewhere)
         }
     }
 
@@ -3661,36 +3695,51 @@ struct RichResponseCards: View {
     private func generatedLeafBlock(
         _ block: MessageResponseCard.GeneratedBlock,
         facts: [String: MessageResponseCard.GeneratedFact],
-        cardId: String
+        cardId: String,
+        shownElsewhere: Set<String> = []
     ) -> some View {
         switch block.type {
         case "hero":
+            // The one thing the card is about, set large; no rules around it,
+            // the spacing does the separating.
             if let id = block.values["titleFact"]?.string, let fact = facts[id] {
-                VStack(alignment: .leading, spacing: 5) {
-                    generatedFactValue(fact, prominent: true)
+                VStack(alignment: .leading, spacing: CardStyle.labelSpacing) {
+                    if fact.sensitive {
+                        SensitiveCardValue(fact: fact, prominent: true)
+                    } else {
+                        Text(fact.value)
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
                     if let subtitleId = block.values["subtitleFact"]?.string,
                        let subtitle = facts[subtitleId] {
-                        generatedFactValue(subtitle, prominent: false)
+                        if subtitle.sensitive {
+                            SensitiveCardValue(fact: subtitle)
+                        } else {
+                            Text(subtitle.value)
+                                .font(CardStyle.body)
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 12)
-                .overlay(alignment: .top) { Divider() }
-                .overlay(alignment: .bottom) { Divider() }
             }
         case "facts":
             let ids = block.values["factIds"]?.arrayStrings ?? []
             // A lone fact owns the row. At large text sizes, keep each value
             // readable instead of squeezing a reference into half a card.
-            LazyVGrid(columns: ids.count == 1 || dynamicTypeSize.isAccessibilitySize
-                ? [GridItem(.flexible())]
-                : [GridItem(.adaptive(minimum: 140))], alignment: .leading, spacing: 14) {
+            LazyVGrid(
+                columns: CardStyle.columns(min(ids.count, 2), accessibility: dynamicTypeSize.isAccessibilitySize),
+                alignment: .leading,
+                spacing: CardStyle.partSpacing + 4
+            ) {
                 ForEach(ids, id: \.self) { id in
                     if let fact = facts[id] {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(CardText.presentationLabel(fact.label))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        VStack(alignment: .leading, spacing: CardStyle.labelSpacing) {
+                            CardEyebrow(fact.label)
                             generatedFactValue(fact, prominent: false)
                         }
                     }
@@ -3715,10 +3764,8 @@ struct RichResponseCards: View {
                                 }
                             }
                             .padding(.top, 5)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(CardText.presentationLabel(fact.label))
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            VStack(alignment: .leading, spacing: CardStyle.labelSpacing) {
+                                CardEyebrow(fact.label)
                                 generatedFactValue(fact, prominent: false)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -3766,7 +3813,7 @@ struct RichResponseCards: View {
         default:
             // The layout blocks added since (GeneratedCardBlocks.swift); a
             // type neither knows draws nothing and leaves the card intact.
-            GeneratedCardBlockView(block: block, facts: facts, cardId: cardId)
+            GeneratedCardBlockView(block: block, facts: facts, cardId: cardId, shownElsewhere: shownElsewhere)
         }
     }
 
@@ -3778,7 +3825,7 @@ struct RichResponseCards: View {
             SensitiveCardValue(fact: fact, prominent: prominent)
         } else {
             Text(fact.value)
-                .font(prominent ? .title3.weight(.semibold) : .callout.weight(.medium))
+                .font(prominent ? .title3.weight(.semibold) : CardStyle.value)
                 .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -3818,6 +3865,27 @@ struct RichResponseCards: View {
         }
     }
 
+    /// Whether an action can be drawn from what the card holds; one that
+    /// cannot takes no tile in the row.
+    private func actionAvailable(
+        _ action: MessageResponseCard.GeneratedAction,
+        facts: [String: MessageResponseCard.GeneratedFact]
+    ) -> Bool {
+        let fact = action.factId.flatMap { facts[$0] }
+        switch action.type {
+        case "open_url":
+            guard let value = fact?.value, let url = URL(string: value) else { return false }
+            return ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+        case "copy_value": return fact != nil
+        case "directions": return fact.map { !$0.sensitive } ?? false
+        case "add_to_calendar":
+            guard let start = action.startFact.flatMap({ facts[$0] }), !start.sensitive else { return false }
+            return GeneratedCardValue.instant(start.value) != nil
+        case "ask_assistant": return !(action.prompt ?? "").isEmpty && onSend != nil
+        default: return false
+        }
+    }
+
     @ViewBuilder
     private func generatedAction(
         _ action: MessageResponseCard.GeneratedAction,
@@ -3829,19 +3897,20 @@ struct RichResponseCards: View {
            let value = fact?.value,
            let url = URL(string: value),
            ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
-            Link(action.label, destination: url)
-                .font(.caption.weight(.semibold))
-                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            Link(destination: url) { Label(action.label, systemImage: "arrow.up.right.square") }
+                .buttonStyle(CardActionButtonStyle())
         } else if action.type == "reveal_sensitive", let fact {
             SensitiveCardValue(fact: fact, format: "")
         } else if action.type == "copy_value", let fact {
-            Button(copiedAction == "\(card.id)-\(action.id)" ? "Copied" : action.label) {
+            let copied = copiedAction == "\(card.id)-\(action.id)"
+            Button {
                 UIPasteboard.general.string = fact.value
                 copiedAction = "\(card.id)-\(action.id)"
                 AccessibilityNotification.Announcement("Copied").post()
+            } label: {
+                Label(copied ? "Copied" : action.label, systemImage: copied ? "checkmark" : "doc.on.doc")
             }
-            .font(.caption.weight(.semibold))
-            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            .buttonStyle(CardActionButtonStyle())
         } else if action.type == "add_to_calendar",
                   let start = action.startFact.flatMap({ facts[$0] }), !start.sensitive,
                   let draft = CalendarDraft(
@@ -3855,18 +3924,15 @@ struct RichResponseCards: View {
                   let url = GeneratedCardValue.directionsURL(fact.value) {
             Link(destination: url) {
                 Label(action.label, systemImage: "arrow.triangle.turn.up.right.diamond")
-                    .fixedSize(horizontal: true, vertical: false)
             }
-            .font(.caption.weight(.semibold))
-            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            .buttonStyle(CardActionButtonStyle())
             .accessibilityHint("Opens directions in Maps.")
         } else if action.type == "ask_assistant", let prompt = action.prompt, !prompt.isEmpty {
-            Button(action.label) { onSend?(prompt) }
-            .font(.caption.weight(.semibold))
-            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-            .disabled(
-                onSend == nil
-            )
+            Button { onSend?(prompt) } label: {
+                Label(action.label, systemImage: "bubble.left.and.text.bubble.right")
+            }
+            .buttonStyle(CardActionButtonStyle())
+            .disabled(onSend == nil)
         }
     }
 

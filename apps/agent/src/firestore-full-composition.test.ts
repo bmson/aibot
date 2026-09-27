@@ -60,6 +60,7 @@ const PORTABLE_TOOLS = [
   'drive.search',
   // Keyed lookup, like maps.directions: nothing stored.
   'flights.status',
+  'flights.track',
   'gmail.create_draft',
   'gmail.modify',
   'gmail.read_thread',

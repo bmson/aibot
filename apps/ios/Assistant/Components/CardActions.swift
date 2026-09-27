@@ -36,10 +36,8 @@ struct AddToCalendarButton: View {
             presented = draft
         } label: {
             Label(label, systemImage: "calendar.badge.plus")
-                .fixedSize(horizontal: true, vertical: false)
         }
-        .font(.caption.weight(.semibold))
-        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+        .buttonStyle(CardActionButtonStyle())
         .accessibilityHint("Opens a new calendar event with these details for you to review.")
         .sheet(item: $presented) { draft in
             CalendarEventEditor(draft: draft) { presented = nil }
