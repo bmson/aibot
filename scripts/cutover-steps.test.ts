@@ -161,7 +161,13 @@ function bundleFixture() {
         sha256: null,
         taskId: null,
       }),
-      record('import_sources', 'recovered-1', { workspacePath: 'imports/b.zip', status: 'done' }),
+      // Written while the bytes were missing, so its recorded size is stale.
+      record('files', 'recovered-1', {
+        workspacePath: 'imports/b.zip',
+        bytes: 0,
+        sha256: null,
+        taskId: null,
+      }),
       record('files', 'missing-1', {
         workspacePath: 'traces/c.zip',
         bytes: 0,
@@ -247,6 +253,16 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
     },
   ];
   const executions: Array<{ job: string; name: string; created: string; summary: unknown }> = [];
+  const loggedQueries = new Set<string>();
+  const iamPolicy = {
+    bindings: ['assistant-web', 'assistant-agent'].map((name) => ({
+      role: 'roles/datastore.user',
+      members: [`serviceAccount:${name}@${PROJECT}.iam.gserviceaccount.com`],
+      condition: {
+        expression: `resource.name == "projects/${PROJECT}/databases/assistant-production"`,
+      },
+    })),
+  };
   const bundle = bundleFixture();
   const bundleBytes = Buffer.from(JSON.stringify(bundle));
   const snapshotUri = `gs://${BUCKET}/workspace/assistant/migration/snapshots/assistant-workspace-export-abc.json`;
@@ -276,7 +292,10 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
       },
       spec: {
         template: {
-          spec: { containers: [{ image: service.image, env: envEntries(service.env) }] },
+          spec: {
+            serviceAccountName: `${name}@${PROJECT}.iam.gserviceaccount.com`,
+            containers: [{ image: service.image, env: envEntries(service.env) }],
+          },
         },
       },
     };
@@ -348,6 +367,7 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
         if (key === 'secrets list')
           return [...secrets].map((name) => ({ name: `projects/1/secrets/${name}` }));
         if (key === 'firestore databases list') return databases;
+        if (key.startsWith('projects get-iam-policy')) return iamPolicy;
         if (key === 'run jobs executions')
           return executions
             .filter((item) => item.job === args[5])
@@ -355,10 +375,25 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
               metadata: { name: item.name, creationTimestamp: item.created },
               status: { succeededCount: 1 },
             }));
-        if (key.startsWith('logging read'))
-          return executions
-            .filter((item) => (args[2] as string).includes(`"${item.name}"`))
-            .map((item) => ({ textPayload: JSON.stringify(item.summary) }));
+        if (key.startsWith('logging read')) {
+          // Like Cloud Logging, an execution's entries are not readable on the
+          // first query right after it completes.
+          if (!loggedQueries.has(args[2] as string)) {
+            loggedQueries.add(args[2] as string);
+            return [];
+          }
+          return (
+            executions
+              .filter((item) => (args[2] as string).includes(`"${item.name}"`))
+              // Like Cloud Logging: a single-line JSON write lands in jsonPayload,
+              // anything else (here, pretty-printed JSON) in textPayload.
+              .map((item) =>
+                item.job === 'assistant-workspace-export'
+                  ? { jsonPayload: item.summary }
+                  : { textPayload: JSON.stringify(item.summary, null, 2) },
+              )
+          );
+        }
         if (key === 'storage objects describe')
           return { generation: '99', size: String(bundleBytes.length) };
         throw new Error(`unexpected gcloud json ${args.join(' ')}`);
@@ -498,10 +533,17 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
       });
       return { code: 0, stdout: 'Running\n' };
     }
+    // Like the real audit: exit 2 for the manifest's missing object and the
+    // recovered object's stale size.
     if (args[0] === 'workspace:assets-audit')
       return {
-        code: 0,
-        stdout: JSON.stringify({ references: 3, digestMismatches: 0, sizeMismatches: 0 }),
+        code: 2,
+        stdout: JSON.stringify({
+          references: 3,
+          missingObjects: 1,
+          digestMismatches: 0,
+          sizeMismatches: 1,
+        }),
       };
     if (args[0] === 'workspace:assets-recover')
       return {
@@ -685,6 +727,7 @@ function fakeWorld(options: { leaveDatabaseSecretOn?: string; restoreHashes?: st
     subscriptions,
     endpoint,
     objects,
+    iamPolicy,
     backupCalls,
   };
 }
@@ -812,6 +855,32 @@ describe('cutover orchestration', () => {
       'push subscription gmail-events-push keeps its live OIDC identity',
     );
     expect(JSON.stringify(preflight)).not.toContain('assistant-gmail-push@');
+  });
+
+  it('fails assets on a size mismatch that no recovery hash explains', async () => {
+    const { config, store, world } = setup();
+    await runAll(config, world.deps, store, 'verify-import');
+    const live = world.objects.get(`${BUCKET}/workspace/assistant/files/a.pdf`);
+    if (live) live.size = 8;
+    const assets = await runCutoverStep('assets', config, world.deps, store, { confirm: 'assets' });
+    expect(assets.status).toBe('failed');
+    expect(JSON.stringify(assets.result)).toContain('"sizeMismatches":["present-1"]');
+  });
+
+  it('refuses a preflight when a runtime identity cannot use the target database', async () => {
+    const { config, store, world } = setup();
+    // Access to a rehearsal database does not count for the production target.
+    const agent = world.iamPolicy.bindings[1];
+    if (agent?.condition)
+      agent.condition.expression = `resource.name == "projects/${PROJECT}/databases/assistant-rehearsal"`;
+    const preflight = await runCutoverStep('preflight', config, world.deps, store);
+    expect(preflight.status).toBe('failed');
+    const failed = (preflight.result as { checks: Array<{ name: string; ok: boolean }> }).checks
+      .filter((item) => !item.ok)
+      .map((item) => item.name);
+    expect(failed).toEqual([
+      'service assistant-agent runtime identity can use the target Firestore database',
+    ]);
   });
 
   it('requires a per-step confirmation before any production change', async () => {

@@ -201,6 +201,8 @@ export type CutoverDeps = {
 export type SecretRef = { env: string; secret: string; version: string };
 export type ServiceInventory = {
   name: string;
+  /** Absent in evidence recorded before runtime identities were captured. */
+  serviceAccount?: string | null;
   url: string | null;
   latestReadyRevision: string | null;
   traffic: Array<{ revision: string | null; percent: number; latest: boolean }>;
@@ -286,7 +288,7 @@ type RunService = {
     latestReadyRevisionName?: string;
     traffic?: Array<{ revisionName?: string; percent?: number; latestRevision?: boolean }>;
   };
-  spec?: { template?: { spec?: { containers?: Container[] } } };
+  spec?: { template?: { spec?: { serviceAccountName?: string; containers?: Container[] } } };
 };
 type RunJob = {
   metadata?: { name?: string };
@@ -296,6 +298,7 @@ type RunJob = {
 export function serviceInventory(item: RunService): ServiceInventory {
   return {
     name: item.metadata?.name ?? '',
+    serviceAccount: item.spec?.template?.spec?.serviceAccountName ?? null,
     url: item.status?.url ?? null,
     latestReadyRevision: item.status?.latestReadyRevisionName ?? null,
     traffic: (item.status?.traffic ?? []).map((entry) => ({
@@ -441,6 +444,28 @@ function check(checks: Array<{ name: string; ok: boolean }>, name: string, ok: b
 }
 
 /** The JSON summary line a Cloud Run job printed, found in Cloud Logging. */
+function findSummary<T>(
+  entries: Array<{ textPayload?: string; jsonPayload?: unknown }>,
+  requiredKey: string,
+): T | null {
+  for (const entry of entries) {
+    // Cloud Logging stores a single-line JSON stdout write as jsonPayload and
+    // anything else (including pretty-printed JSON) as textPayload.
+    let parsed: unknown = entry.jsonPayload;
+    if (!parsed) {
+      const text = entry.textPayload?.trim();
+      if (!text?.startsWith('{')) continue;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        continue; // Not the summary line.
+      }
+    }
+    if (parsed && typeof parsed === 'object' && requiredKey in parsed) return parsed as T;
+  }
+  return null;
+}
+
 async function jobSummary<T extends Record<string, unknown>>(
   context: StepContext,
   job: string,
@@ -464,25 +489,23 @@ async function jobSummary<T extends Record<string, unknown>>(
   if (!name || (execution.status?.succeededCount ?? 0) < 1)
     throw new Error(`No successful ${job} execution started after ${notBefore}`);
   if (!/^[a-z0-9-]+$/.test(name)) throw new Error('Unexpected Cloud Run execution name');
-  const entries = await gcloud.json<Array<{ textPayload?: string }>>([
-    'logging',
-    'read',
-    `resource.type="cloud_run_job" AND resource.labels.job_name="${job}" AND labels."run.googleapis.com/execution_name"="${name}"`,
-    '--limit',
-    '200',
-    '--freshness',
-    '2d',
-  ]);
-  for (const entry of entries) {
-    const text = entry.textPayload?.trim();
-    if (!text?.startsWith('{')) continue;
-    try {
-      const parsed = JSON.parse(text) as T;
-      if (parsed && typeof parsed === 'object' && requiredKey in parsed)
-        return { execution: name, summary: parsed };
-    } catch {
-      // Not the summary line.
-    }
+  // Entries become readable a few seconds after the execution completes, so an
+  // immediate read can miss the summary. Poll for about a minute before failing.
+  for (let attempt = 0; attempt < 7; attempt++) {
+    if (attempt > 0) await context.deps.clock.sleep(10_000);
+    const summary = findSummary<T>(
+      await gcloud.json<Array<{ textPayload?: string; jsonPayload?: unknown }>>([
+        'logging',
+        'read',
+        `resource.type="cloud_run_job" AND resource.labels.job_name="${job}" AND labels."run.googleapis.com/execution_name"="${name}"`,
+        '--limit',
+        '200',
+        '--freshness',
+        '2d',
+      ]),
+      requiredKey,
+    );
+    if (summary) return { execution: name, summary };
   }
   throw new Error(`Execution ${name} did not log a ${job} summary`);
 }
@@ -502,9 +525,16 @@ export function lastJsonObject(stdout: string): Record<string, unknown> {
   throw new Error('Command did not print a JSON result');
 }
 
-async function runCli(context: StepContext, command: string, args: string[], env = {}) {
+async function runCli(
+  context: StepContext,
+  command: string,
+  args: string[],
+  env = {},
+  acceptedCodes: number[] = [0],
+) {
   const { code, stdout } = await context.deps.commands(command, args, env);
-  if (code !== 0) throw new Error(`${command} ${args[0] ?? ''} exited with status ${code}`);
+  if (!acceptedCodes.includes(code))
+    throw new Error(`${command} ${args[0] ?? ''} exited with status ${code}`);
   return lastJsonObject(stdout);
 }
 
@@ -568,6 +598,26 @@ function stepsDefinition(): StepDefinition[] {
           'target Firestore database has point-in-time recovery',
           target?.pointInTimeRecoveryEnablement === 'POINT_IN_TIME_RECOVERY_ENABLED',
         );
+        // Once switched, each service reads and writes the target as its runtime
+        // identity; without a grant every request is refused.
+        const policy = await deps.gcloud.json<{
+          bindings?: Array<{
+            role?: string;
+            members?: string[];
+            condition?: { expression?: string };
+          }>;
+        }>(['projects', 'get-iam-policy', config.gcp.project]);
+        for (const service of config.services) {
+          const account = inventory.services.find(
+            (item) => item.name === service.name,
+          )?.serviceAccount;
+          check(
+            checks,
+            `service ${service.name} runtime identity can use the target Firestore database`,
+            Boolean(account) &&
+              firestoreAccessGranted(policy.bindings ?? [], `serviceAccount:${account}`, config),
+          );
+        }
         check(
           checks,
           'restore rehearsal database does not exist yet',
@@ -1465,6 +1515,28 @@ type ImportSummary = {
   bundleChecksum?: string;
 };
 
+const FIRESTORE_DATA_ROLES = new Set([
+  'roles/datastore.user',
+  'roles/datastore.owner',
+  'roles/editor',
+  'roles/owner',
+]);
+
+/** A data-access role on the whole project, or conditioned on exactly the target database. */
+function firestoreAccessGranted(
+  bindings: Array<{ role?: string; members?: string[]; condition?: { expression?: string } }>,
+  member: string,
+  config: CutoverConfig,
+): boolean {
+  const target = `resource.name == "projects/${config.gcp.project}/databases/${config.firestoreDatabaseId}"`;
+  return bindings.some(
+    (binding) =>
+      FIRESTORE_DATA_ROLES.has(binding.role ?? '') &&
+      (binding.members ?? []).includes(member) &&
+      (!binding.condition?.expression || binding.condition.expression.trim() === target),
+  );
+}
+
 function serviceInventoryForJob(item: RunJob) {
   return containerSummary(item.spec?.template?.spec?.template?.spec?.containers?.[0]);
 }
@@ -1515,13 +1587,16 @@ async function assetsStep(context: StepContext): Promise<StepResult> {
   const { config, deps, store } = context;
   const bundlePath = store.privatePath('final-snapshot.json');
   const common = ['--bucket', config.workspaceBucket, '--gcloud-auth'];
-  const audit = await runCli(context, 'pnpm', [
-    'workspace:assets-audit',
-    '--bundle',
-    bundlePath,
-    '--verify-digests',
-    ...common,
-  ]);
+  // The audit exits 2 when it finds missing or mismatched objects. Missing
+  // objects are expected here (the recovery manifest accounts for them), so keep
+  // its report and let the checks below decide.
+  const audit = await runCli(
+    context,
+    'pnpm',
+    ['workspace:assets-audit', '--bundle', bundlePath, '--verify-digests', ...common],
+    {},
+    [0, 2],
+  );
   const recovery = await runCli(context, 'pnpm', [
     'workspace:assets-recover',
     '--bundle',
@@ -1566,6 +1641,7 @@ async function assetsStep(context: StepContext): Promise<StepResult> {
   let restored = 0;
   const unaccountedMissing: string[] = [];
   const recoveredVerified: string[] = [];
+  const sizeMismatches: string[] = [];
   for (const reference of references) {
     const live = {
       bucket: config.workspaceBucket,
@@ -1587,6 +1663,14 @@ async function assetsStep(context: StepContext): Promise<StepResult> {
       recovered.destination.bytes === stat.size
     )
       recoveredVerified.push(reference.id);
+    // A recovered object's row was written while its bytes were missing, so its
+    // recorded size can be stale; the recovery hash above verifies those bytes.
+    if (
+      reference.expectedBytes !== undefined &&
+      stat.size !== reference.expectedBytes &&
+      !recoveredVerified.includes(reference.id)
+    )
+      sizeMismatches.push(reference.id);
     const backup = { bucket: backupRoot.bucket, name: `${backupRoot.name}${reference.path}` };
     if (!(await copyVerified(source, backup, digest))) continue;
     backedUp++;
@@ -1624,10 +1708,11 @@ async function assetsStep(context: StepContext): Promise<StepResult> {
     backedUp === present,
   );
   check(checks, 'every backup restores with identical SHA-256', restored === present);
+  check(checks, 'audit found no digest mismatch', audit.digestMismatches === 0);
   check(
     checks,
-    'audit found no digest or size mismatch',
-    audit.digestMismatches === 0 && audit.sizeMismatches === 0,
+    'no size mismatch outside hash-verified recovered objects',
+    sizeMismatches.length === 0,
   );
   return {
     passed: checks.every((item) => item.ok),
@@ -1643,6 +1728,7 @@ async function assetsStep(context: StepContext): Promise<StepResult> {
       backupPrefix: config.assets.backupPrefix,
       restorePrefix: config.assets.restorePrefix,
       recoveredVerified,
+      sizeMismatches,
       unaccountedMissing,
       unresolved,
     },
