@@ -20,6 +20,7 @@ Run `pnpm config:check` after any change.
 | `calls` | Approved phone calls the assistant holds live (discloses it is an AI), with mid-call check-ins | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` (or `TWILIO_VOICE_FROM_NUMBER`), a voice model chosen in Settings → AI providers; `pnpm setup:phone` does all of it | Twilio webhooks + a WebSocket on the agent |
 | `code` | Sandboxed code execution | none | local child process or a Cloud Run Job |
 | `documents` | Office/PDF ingestion pipeline | none | document processor locally or a Cloud Run Job |
+| `flights` | Live flight status, gates and delays (FlightAware AeroAPI) | `AEROAPI_KEY` | none |
 | `google` | Gmail, Calendar, Drive, Docs, Sheets, Slides, job confirmations, forwarded-mail ingest | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `BOT_GOOGLE_REFRESH_TOKEN`; `EMAIL_INGEST_MODE` for forwarded-mail ingest, with `EMAIL_INGEST_IMPORTANCE_THRESHOLD`, `EMAIL_INGEST_MAX_TRIAGE_PER_DAY` and `EMAIL_OUTBOUND_DOMAINS` | Gmail Pub/Sub and Scheduler in production |
 | `maps` | Directions, travel times, and route maps (Apple Maps Server API) | `MAPKIT_KEY_ID`, `MAPKIT_TEAM_ID`, `MAPKIT_PRIVATE_KEY`, or none when the `APNS_*` key has MapKit enabled | none |
 | `push` | APNs owner channel (proactive notices and approval pings to the iOS app) | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_PRIVATE_KEY`, `APNS_BUNDLE_ID` | none |

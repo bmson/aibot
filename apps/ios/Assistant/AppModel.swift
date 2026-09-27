@@ -312,6 +312,13 @@ final class AppModel: ObservableObject {
         return try? await client.liveScoreboard(leagues: leagues)
     }
 
+    /// Quiet on failure, like the scoreboard: a flight card keeps its last
+    /// reading rather than raising a banner while the provider is unreachable.
+    func liveFlight(id: String) async -> LiveFlightPayload? {
+        guard let client else { return nil }
+        return try? await client.liveFlight(id: id)
+    }
+
     func knowledge(query: String = "", kind: String = "", page: Int = 1) async -> KnowledgeOverview? {
         guard let client else { return nil }
         do { return try await client.knowledge(query: query, kind: kind, page: page) }

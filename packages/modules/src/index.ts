@@ -17,6 +17,7 @@ export { type CallBridge, callsModule } from './calls/module.js';
 export { codeModule } from './code/module.js';
 export * from './compose.js';
 export { documentsModule } from './documents/module.js';
+export { flightsModule } from './flights/module.js';
 export {
   type ApplicationConfirmationTaskDeps,
   applicationConfirmationTaskHandlers,

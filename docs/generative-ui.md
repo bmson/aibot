@@ -57,10 +57,25 @@ whole card.
 
 ### Layer 2 — live data
 
-Blocks bound to a refreshable source instead of a snapshot, reusing the card
-refresh machinery (`card-refresh.ts`). A new `flights.status` tool (AeroAPI or
-similar) and a flight-status Live Activity driven by APNs push, alongside the
-existing `AssistantActivityExtension`. Scores move onto the same path.
+**Flights (this change).** `flights.status` (FlightAware AeroAPI, `flights`
+module, `AEROAPI_KEY`) answers any flight number. Its row compiles into a
+generated card with no model (`core/flights/card.ts`): journey, gate or
+arrival metrics, progress in the air, and a countdown to pushback or landing.
+Times carry each airport's own offset, so a Keflavík departure reads 16:40
+anywhere. The payload's `live` field — the runtime's finding, never the
+composer's — names the flight, a poll pace (30 min far out, 2 min around
+departure and landing) and when to stop. The phone re-reads
+`GET /api/mobile/v1/live/flight?id=` while the card is on screen and swaps
+the spec in place; "Follow on Lock Screen" starts a Live Activity
+(`FlightActivityAttributes`) that every read updates, and that the app
+refreshes each time it comes forward.
+
+**Next: push.** A followed flight only moves while the app runs. The APNs
+client (`tools/push/apns.ts`) and device registration already exist; the
+missing half is requesting the activity with `pushType: .token`, storing the
+token beside the flight, and a sweep that re-reads followed flights on the
+same pace and sends `liveactivity` pushes. `ContentState` is already plain
+numbers so the server can encode it.
 
 ### Layer 3 — inputs
 

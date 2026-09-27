@@ -2,6 +2,7 @@ import { browserToolLabels } from './browser/labels.js';
 import { callsToolLabels } from './calls/labels.js';
 import { codeToolLabels } from './code/labels.js';
 import { documentsToolLabels } from './documents/labels.js';
+import { flightsToolLabels } from './flights/labels.js';
 import { googleToolLabels } from './google/labels.js';
 import { mapsToolLabels } from './maps/labels.js';
 import { searchToolLabels } from './search/labels.js';
@@ -20,6 +21,7 @@ const allToolLabels = [
   callsToolLabels,
   codeToolLabels,
   documentsToolLabels,
+  flightsToolLabels,
   googleToolLabels,
   mapsToolLabels,
   searchToolLabels,

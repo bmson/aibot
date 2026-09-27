@@ -58,6 +58,8 @@ const PORTABLE_TOOLS = [
   'drive.ingest',
   'drive.read',
   'drive.search',
+  // Keyed lookup, like maps.directions: nothing stored.
+  'flights.status',
   'gmail.create_draft',
   'gmail.modify',
   'gmail.read_thread',
@@ -159,6 +161,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
         APNS_TEAM_ID: 'TEAM123456',
         APNS_PRIVATE_KEY: Buffer.from('not-a-real-key').toString('base64'),
         APNS_BUNDLE_ID: 'test.bundle',
+        AEROAPI_KEY: 'aero-key',
       });
     }
 

@@ -12,6 +12,7 @@
     "./conversation-context": "./src/conversation-context.ts",
     "./cost": "./src/cost.ts",
     "./events": "./src/events.ts",
+    "./flights": "./src/flights/index.ts",
     "./generative-card": "./src/generative-card.ts",
     "./maps": "./src/maps/apple.ts",
     "./mcp-secrets": "./src/mcp-secrets.ts",

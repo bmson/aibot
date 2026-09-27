@@ -87,6 +87,12 @@ describe('buildSystemPrompt forwarding rule (D3)', () => {
     expect(PROMPT_VERSION).toBeGreaterThanOrEqual(23);
   });
 
+  it('points flight numbers at the flights tool (v42)', () => {
+    const prompt = buildSystemPrompt(agent, {});
+    expect(prompt).toContain('flights.status for any flight number');
+    expect(PROMPT_VERSION).toBeGreaterThanOrEqual(42);
+  });
+
   it('points scores and trips at their tools and keeps the reply to the takeaway (v41)', () => {
     const prompt = buildSystemPrompt(agent, {});
     expect(prompt).toContain('sports.scores for any game');

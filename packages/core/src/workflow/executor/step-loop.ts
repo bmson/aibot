@@ -235,12 +235,14 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
   // A registry without the scores tool (a trimmed install or trust tier) takes
   // a sports question down the general search-then-fetch path instead of
   // failing on a tool that is not there.
+  // A flight number without the flights module is searched for the same way.
   // Likewise a trip question without the maps module is left to the model,
   // which can say it has no route source rather than fail on a missing tool.
   const available = (name: string) =>
     dispatcher.toolDefs(task.trust as Trust).some((tool) => tool.name === name);
   const liveLookups = detectedLookups.flatMap((lookup): LiveLookup[] =>
-    lookup.kind === 'sports' && !available('sports.scores')
+    (lookup.kind === 'sports' && !available('sports.scores')) ||
+    (lookup.kind === 'flight' && !available('flights.status'))
       ? [{ ...lookup, kind: 'web' }]
       : lookup.kind === 'directions' &&
           (!available('maps.directions') ||

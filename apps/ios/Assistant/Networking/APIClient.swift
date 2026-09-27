@@ -279,6 +279,17 @@ struct APIClient: Sendable {
         return try await perform(makeRequest(url: url), as: LiveScoresPayload.self)
     }
 
+    /// One flight read again by its FlightAware id, recompiled as a card.
+    func liveFlight(id: String) async throws -> LiveFlightPayload {
+        var components = URLComponents(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/live/flight"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "id", value: id)]
+        guard let url = components?.url else { throw APIError.invalidServerURL }
+        return try await perform(makeRequest(url: url), as: LiveFlightPayload.self)
+    }
+
     func situationPacks() async throws -> SituationOverview {
         try await get("api/mobile/v1/packs")
     }

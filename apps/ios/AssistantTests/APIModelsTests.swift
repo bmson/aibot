@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 import CoreLocation
 @testable import Assistant
@@ -1081,6 +1082,101 @@ final class APIModelsTests: XCTestCase {
 
         XCTAssertEqual(GeneratedCardValue.coordinate("64.1466, -21.9426")?.latitude, 64.1466)
         XCTAssertNil(GeneratedCardValue.coordinate("Laugavegur 1, Reykjavik"))
+    }
+
+    private func flightCardPart(phase: String = "scheduled", live: Bool = true) -> MessagePart {
+        let flight: JSONValue = .object([
+            "id": .string("ICE614-1759300000-schedule-0001"),
+            "ident": .string("FI614"),
+            "origin": .object(["code": .string("KEF"), "city": .string("Reykjavik")]),
+            "destination": .object(["code": .string("JFK"), "city": .string("New York")]),
+            "departure": .object(["best": .string("2026-10-02T17:05:00+00:00")]),
+            "arrival": .object(["best": .string("2026-10-02T18:35:00-04:00")]),
+            "gateOrigin": .string("D4"),
+            "terminalOrigin": .string("1"),
+            "gateDestination": .string(""),
+            "baggageClaim": .string(""),
+            "phase": .string(phase),
+            "statusText": .string("Delayed 25 min"),
+            "progressPercent": .number(45),
+        ])
+        var data: [String: JSONValue] = [
+            "kind": .string("generated-card"),
+            "id": .string("flight-card"),
+            "grounding": .string("evidence"),
+            "accompaniesProse": .bool(true),
+            "spec": .object([
+                "version": .number(1),
+                "title": .string("FI614 to New York"),
+                "sourceLabel": .string("FlightAware"),
+                "accessibilityLabel": .string("FI614"),
+                "facts": .array([.object(["id": .string("gate"), "label": .string("Gate"), "value": .string("D4")])]),
+                "blocks": .array([.object(["type": .string("facts"), "factIds": .array([.string("gate")])])]),
+            ]),
+        ]
+        if live {
+            data["live"] = .object([
+                "kind": .string("flight"),
+                "id": .string("ICE614-1759300000-schedule-0001"),
+                "pollSeconds": .number(120),
+                "until": .string("2099-01-01T00:00:00.000Z"),
+                "flight": flight,
+            ])
+        }
+        return MessagePart(type: "data-card", data: .object(data))
+    }
+
+    func testFlightCardCarriesItsLiveWiringAndLockScreenState() {
+        guard case let .generated(card)? = MessageResponseCard(part: flightCardPart()),
+              let live = card.live else {
+            return XCTFail("Expected a live flight card")
+        }
+        XCTAssertEqual(live.pollSeconds, 120)
+        XCTAssertTrue(live.isCurrent)
+        XCTAssertEqual(live.flight.ident, "FI614")
+
+        let state = live.flight.activityState(now: Date(timeIntervalSince1970: 0))
+        // Each time keeps its own airport's clock.
+        XCTAssertEqual(state.departOffset, 0)
+        XCTAssertEqual(state.arriveOffset, -4 * 3600)
+        XCTAssertEqual(state.departEpoch, ISO8601DateFormatter().date(from: "2026-10-02T17:05:00Z")?.timeIntervalSince1970)
+        XCTAssertEqual(state.gate, "D4")
+        XCTAssertEqual(state.progress, 0.45)
+        XCTAssertFalse(state.isAirborne)
+        XCTAssertEqual(state.nextMoment, state.departure)
+
+        // No live key: an ordinary card.
+        guard case let .generated(plain)? = MessageResponseCard(part: flightCardPart(live: false)) else {
+            return XCTFail("Expected a generated card")
+        }
+        XCTAssertNil(plain.live)
+    }
+
+    func testLiveFlightReadReplacesTheCardInPlace() {
+        guard case var .generated(card)? = MessageResponseCard(part: flightCardPart()) else {
+            return XCTFail("Expected a generated card")
+        }
+        card.steps = [.init(id: "0-flights.status", tool: "flights.status", count: "", detail: "", failed: false, error: "")]
+        let payload = LiveFlightPayload(
+            fetchedAt: "2026-10-02T17:20:00.000Z",
+            spec: .object([
+                "version": .number(1),
+                "title": .string("FI614 to New York"),
+                "sourceLabel": .string("FlightAware"),
+                "accessibilityLabel": .string("FI614"),
+                "facts": .array([.object(["id": .string("gate"), "label": .string("Gate"), "value": .string("D6")])]),
+                "blocks": .array([.object(["type": .string("facts"), "factIds": .array([.string("gate")])])]),
+            ]),
+            flight: nil,
+            live: nil
+        )
+        let refreshed = LiveGeneratedCardHost<EmptyView>.card(from: payload, replacing: card)
+        XCTAssertEqual(refreshed?.id, "flight-card")
+        XCTAssertEqual(refreshed?.facts.first?.value, "D6")
+        XCTAssertEqual(refreshed?.steps.count, 1)
+        XCTAssertEqual(refreshed?.updatedAt, "2026-10-02T17:20:00.000Z")
+        // The server stopped sending live: the flight is done, so is polling.
+        XCTAssertNil(refreshed?.live)
     }
 
     func testGeneratedCardCarriesTheStepsBehindIt() {

@@ -13,6 +13,7 @@ export const assistantModuleNames = [
   'calls',
   'code',
   'documents',
+  'flights',
   'google',
   'maps',
   'push',

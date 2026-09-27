@@ -178,6 +178,7 @@ const READ_SOURCES = new Set([
   'web.search',
   'web.fetch',
   'sports.scores',
+  'flights.status',
 ]);
 export interface CardRefreshSource {
   toolName: string;

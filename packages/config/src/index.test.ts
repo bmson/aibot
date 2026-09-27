@@ -108,7 +108,7 @@ describe('config', () => {
         env,
       ),
     ).toContain(
-      'ASSISTANT_MODULES=future still needs PostgreSQL; Firestore agent mode supports reminders,calendar,calls,browser,code,search,maps,watches,push,sms,documents,google',
+      'ASSISTANT_MODULES=future still needs PostgreSQL; Firestore agent mode supports reminders,calendar,calls,browser,code,search,maps,flights,watches,push,sms,documents,google',
     );
     expect(
       validateAgentPersistenceConfig(loadConfig(env), {

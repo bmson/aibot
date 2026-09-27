@@ -228,6 +228,11 @@ const ConfigSchema = z.object({
   MAPKIT_TEAM_ID: z.string().default(''),
   MAPKIT_PRIVATE_KEY: z.string().default(''),
   /**
+   * FlightAware AeroAPI key (flight status, live flight cards). The Personal
+   * tier bills per query; the flights module stands down when this is unset.
+   */
+  AEROAPI_KEY: z.string().default(''),
+  /**
    * Age-based pruning of conversation/tool/model history. 0 (the default)
    * keeps everything forever — deleting history is an owner policy decision,
    * so the platform ships the machinery and leaves the knob off. A positive
@@ -397,6 +402,7 @@ export const FIRESTORE_PORTABLE_MODULES: readonly AssistantModule[] = [
   'code',
   'search',
   'maps',
+  'flights',
   'watches',
   'push',
   'sms',

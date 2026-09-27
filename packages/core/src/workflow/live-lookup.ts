@@ -7,7 +7,7 @@ import {
 import type { ActionEvidence } from './response-contract.js';
 
 export type LiveLookup = {
-  kind: 'weather' | 'web' | 'sports' | 'directions';
+  kind: 'weather' | 'web' | 'sports' | 'directions' | 'flight';
   request: string;
   /**
    * A trip whose destination is an event on the owner's calendar ("my 3pm",
@@ -38,6 +38,31 @@ const SPORT_WORD =
 const NOT_SPORTS =
   /\b(?:credit|test|exam|sat|act|gre|fico|risk|health|sleep|readiness|lighthouse|nps|quiz)\s+scores?\b|\bmy\b[^.?!]{0,40}\b(?:game|match|practice|score)\b/i;
 const SPORTS_IMPERATIVE = /\b(?:show|give|get|check|track|follow|create|make|build|render)\b/i;
+
+/**
+ * A flight number: "FI614", "ba283" run together in any case, or "FI 614"
+ * with a space when the airline code is capitalised — lower-case "at 5" is a
+ * time, not a flight. The looser shapes ("U2 8821", "B6 1") also match order
+ * and part numbers ("A123"), so they count only beside the word "flight".
+ */
+const FLIGHT_IDENT_STRICT = /\b[A-Za-z]{2,3}\d{1,4}[A-Za-z]?\b|\b[A-Z]{2,3}[ -]\d{1,4}\b/;
+const FLIGHT_IDENT_LOOSE = /\b(?:[A-Za-z]{2,3}|[A-Za-z]\d|\d[A-Za-z])[ -]?\d{1,4}[A-Za-z]?\b/;
+const FLIGHT_WORD = /\bflights?\b/i;
+/** What people ask about a flight, and nothing a parcel also has. */
+const FLIGHT_CONTEXT =
+  /\b(?:on time|delay(?:ed|s)?|late|gate|land(?:s|ed|ing)?|depart(?:s|ed|ing|ure)?|arriv(?:e|es|al|ing)|take ?off|boarding|terminal|baggage)\b/i;
+const NOT_FLIGHT =
+  /\b(?:package|parcel|shipment|order|delivery|tracking|invoice|receipt|return|model|version|part)\b/i;
+const FLIGHT_IMPERATIVE = /\b(?:track|follow|watch|check|show|give|get)\b/i;
+
+/** "Is FI614 on time?", "track flight UA 1", "when does BA283 land?" */
+function isFlightRequest(request: string, asks: boolean): boolean {
+  if (!asks && !FLIGHT_IMPERATIVE.test(request)) return false;
+  if (FLIGHT_WORD.test(request)) return FLIGHT_IDENT_LOOSE.test(request);
+  return (
+    FLIGHT_IDENT_STRICT.test(request) && FLIGHT_CONTEXT.test(request) && !NOT_FLIGHT.test(request)
+  );
+}
 
 /**
  * A trip question: "directions to Oracle Park", "how long to drive to SFO",
@@ -88,6 +113,9 @@ export function detectLiveLookup(
     return MY_EVENT.test(request)
       ? { kind: 'directions', request, destination: 'calendar' }
       : { kind: 'directions', request };
+  // Before the personal-read router, which reads "my flight" as a mailbox
+  // search. A flight number is the status provider's to answer.
+  if (isFlightRequest(request, asks)) return { kind: 'flight', request };
   if (detectPersonalReadRequest(history)) return undefined;
   if (/\binvestigate\b[\s\S]*\b(?:team|club|company|match)\b/i.test(request))
     return { kind: 'web', request };
@@ -358,6 +386,11 @@ export function nextLiveLookup(
       return { toolName: 'maps.directions' };
     return undefined;
   }
+  if (lookup.kind === 'flight') {
+    if (!rows.some((row) => row.toolName === 'flights.status'))
+      return { toolName: 'flights.status' };
+    return undefined;
+  }
   if (lookup.kind === 'sports') {
     const scores = rows.filter((row) => row.toolName === 'sports.scores');
     if (!scores.length) return { toolName: 'sports.scores' };
@@ -407,6 +440,7 @@ export function attributeLookupEvidence(
         ? [...take('calendar.list_events'), ...take('maps.directions')]
         : take('maps.directions');
     if (lookup.kind === 'web') return webChain();
+    if (lookup.kind === 'flight') return take('flights.status');
     const scores = take('sports.scores');
     return scores.length === 0 || scores.some(sportsAnswered) ? scores : [...scores, ...webChain()];
   });
@@ -528,7 +562,9 @@ export function liveLookupCorpus(evidence: ActionEvidence[]): string {
   const structured = rows
     .filter(
       (row) =>
-        (row.toolName === 'maps.directions' || row.toolName === 'sports.scores') &&
+        (row.toolName === 'maps.directions' ||
+          row.toolName === 'sports.scores' ||
+          row.toolName === 'flights.status') &&
         successfulLookup(row),
     )
     .map((row) => JSON.stringify(row.result));
@@ -641,6 +677,16 @@ export function liveLookupFailure(
     return routed
       ? undefined
       : "I couldn't get a route from Apple Maps for this trip, so I haven't estimated a travel time. The lookup needs to be retried.";
+  }
+  if (lookup.kind === 'flight') {
+    // "No such flight in that window" is an answer, not a failed lookup.
+    const found = evidence.some(
+      (row) =>
+        row.fromCurrentTask !== false && row.toolName === 'flights.status' && successfulLookup(row),
+    );
+    return found
+      ? undefined
+      : "I couldn't reach FlightAware for this flight, so I haven't confirmed its status. The lookup needs to be retried.";
   }
   const names = lookup.kind === 'weather' ? ['weather.lookup'] : ['web.fetch'];
   const rows = evidence.filter(

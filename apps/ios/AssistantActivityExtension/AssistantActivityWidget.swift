@@ -6,6 +6,7 @@ import WidgetKit
 struct AssistantActivityWidgetBundle: WidgetBundle {
     var body: some Widget {
         AssistantActivityWidget()
+        FlightActivityWidget()
     }
 }
 

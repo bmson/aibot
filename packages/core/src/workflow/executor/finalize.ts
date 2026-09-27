@@ -18,6 +18,7 @@ import { assistantMessageParts, PROMPT_VERSION, persistMessage } from '../../cha
 import { type Cue, stripCueTags } from '../../chat-cues.js';
 import { isForwardedIngest } from '../../email-provenance.js';
 import type { PendingFinal, TaskState } from '../../events.js';
+import { flightCardPayload, savableFlightCard } from '../../flights/card.js';
 import {
   cardRuntimeProvenance,
   type GeneratedCardPayload,
@@ -574,9 +575,19 @@ export async function stageModelFinalResponse(
   const scoreboard = refreshCardId
     ? undefined
     : specializedCards.find((card) => card.kind === 'scoreboard');
+  // A flight arrives already compiled from its status row, and live, the same
+  // way; saving it files that card rather than composing a second one.
+  const flightCard = refreshCardId
+    ? undefined
+    : specializedCards.find((card) => card.kind === 'generated-card' && 'live' in card);
+  const liveCard = scoreboard ?? flightCard;
   let savedScoreCard: GeneratedCardPayload | undefined;
-  if (scoreboard && cardRequested && !checked.blocked) {
-    const compiled = scoreboardCardSpec(evidence);
+  if (liveCard && cardRequested && !checked.blocked) {
+    const compiled = scoreboard
+      ? scoreboardCardSpec(evidence)
+      : flightCard
+        ? savableFlightCard(flightCard)
+        : null;
     savedScoreCard = compiled
       ? await persistGeneratedCard(generatedCardsRepository, {
           agentId: task.agentId,
@@ -600,7 +611,7 @@ export async function stageModelFinalResponse(
     }
   }
   if (
-    !scoreboard &&
+    !liveCard &&
     (refreshCardId || cardRequested || answerCardPreferred || specializedCards.length === 0) &&
     (!refreshCardId || refreshEvidence) &&
     !checked.blocked &&
@@ -619,20 +630,26 @@ export async function stageModelFinalResponse(
             )
             .join('\n'),
         ].join('\n');
-    const generated = await generateEvidenceCard({
-      router: deps.router,
-      taskId: task.id,
-      sourceText,
-      evidence: refreshCardId ? (refreshEvidence ?? []) : evidence,
-      sourceKey: task.externalEventId ?? task.id,
-      explicitRequest: Boolean(refreshCardId) || cardRequested,
-      evidenceOnly: Boolean(refreshCardId),
-      // A turn that called no tool has only its own reply to stand on. The
-      // composer admits it as evidence in that case alone, under the same
-      // verbatim rule, which is what the phone's hand-written kinds used to do
-      // with a regex per fact.
-      answerText: checked.text,
-    });
+    // A saved flight refreshes from its status row the way it was built:
+    // compiled, not composed.
+    const refreshedFlight =
+      refreshCardId && refreshEvidence ? flightCardPayload(refreshEvidence, new Date()) : null;
+    const generated = refreshedFlight
+      ? savableFlightCard(refreshedFlight)
+      : await generateEvidenceCard({
+          router: deps.router,
+          taskId: task.id,
+          sourceText,
+          evidence: refreshCardId ? (refreshEvidence ?? []) : evidence,
+          sourceKey: task.externalEventId ?? task.id,
+          explicitRequest: Boolean(refreshCardId) || cardRequested,
+          evidenceOnly: Boolean(refreshCardId),
+          // A turn that called no tool has only its own reply to stand on. The
+          // composer admits it as evidence in that case alone, under the same
+          // verbatim rule, which is what the phone's hand-written kinds used to do
+          // with a regex per fact.
+          answerText: checked.text,
+        });
     if (generated) {
       /*
        * A card read out of this turn's own reply is a view of the answer, not
@@ -707,9 +724,9 @@ export async function stageModelFinalResponse(
     ? generatedCard
       ? `Refreshed “${generatedCard.spec.title}” from its sources.\n\n${truncateAtBoundary(checked.text.trim(), 500)}`
       : 'I could not verify the latest source data, so I left your saved card unchanged. Please try again.'
-    : scoreboard && cardRequested && !checked.blocked
+    : liveCard && cardRequested && !checked.blocked
       ? savedScoreCard
-        ? `${checked.text.trim()}\n\nSaved “${savedScoreCard.spec.title}” to your Cards page; the scoreboard here stays live while the game is on.`
+        ? `${checked.text.trim()}\n\nSaved “${savedScoreCard.spec.title}” to your Cards page; ${scoreboard ? 'the scoreboard here stays live while the game is on' : 'the card here stays live until the flight lands'}.`
         : CARD_NOT_BUILT
       : cardRequested && !checked.blocked
         ? generatedCard

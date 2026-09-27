@@ -24,6 +24,11 @@ struct RootView: View {
         .environment(\.liveScoreboard) { [model] leagues in
             await model.liveScoreboard(leagues: leagues)
         }
+        // Flight cards read their flight again through this, and so do the
+        // flights followed on the Lock Screen.
+        .environment(\.liveFlight) { [model] id in
+            await model.liveFlight(id: id)
+        }
     }
 
     private func rootContent(
@@ -169,6 +174,7 @@ struct RootView: View {
                 Task {
                     await NotificationManager.shared.refreshAuthorizationStatus()
                     await NotificationManager.shared.registerForRemoteNotificationsIfAuthorized()
+                    await FlightActivityManager.shared.refreshAll { id in await model.liveFlight(id: id) }
                     await model.refreshAll(reportFailure: false)
                     await model.reportForegroundActivity()
                     await model.shareLocationIfEnabled()

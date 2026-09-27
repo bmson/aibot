@@ -1,3 +1,4 @@
+import { flightCardPayload } from '../flights/card.js';
 import type { LiveLookup } from './live-lookup.js';
 import type { PersonalReadRequest } from './read-intent.js';
 import type { ActionEvidence } from './response-contract.js';
@@ -731,6 +732,17 @@ export function knowledgeGraphResponseCards(evidence: ActionEvidence[]): Respons
   });
 }
 
+/**
+ * A flight from `flights.status`, as a generated card compiled without a
+ * model (flights/card.ts). It sits under the reply's one-line takeaway and
+ * carries `live`, which tells the client which flight to read again and how
+ * often while it is on screen.
+ */
+export function flightResponseCards(evidence: ActionEvidence[], now = new Date()): ResponseCard[] {
+  const card = flightCardPayload(evidence, now);
+  return card ? [{ ...card, accompaniesProse: true }] : [];
+}
+
 /** Web search hits stay a flat list of tappable links with provenance visible. */
 /** How often a client re-reads a live game; the provider cache holds 20s. */
 const SCOREBOARD_POLL_SECONDS = 30;
@@ -1266,6 +1278,7 @@ function isCurrentLocalWeatherRequest(requestText: string): boolean {
 const LOOKUP_KIND_OF_CARD: Partial<Record<ResponseCard['kind'], LiveLookup['kind']>> = {
   weather: 'weather',
   scoreboard: 'sports',
+  'generated-card': 'flight',
   route: 'directions',
   'web-search-results': 'web',
 };
@@ -1315,6 +1328,7 @@ export function responseCardsForFinal(input: {
       ...sheetRowsResponseCards(input.evidence),
       ...weatherLookupResponseCards(input.evidence),
       ...scoreboardResponseCards(input.evidence),
+      ...flightResponseCards(input.evidence),
       ...routeResponseCards(input.evidence),
       ...searchResponseCards(input.evidence),
     ],

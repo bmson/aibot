@@ -102,6 +102,7 @@ APNS_BUNDLE_ID="$(envval APNS_BUNDLE_ID)"
 MAPKIT_KEY_ID="$(envval MAPKIT_KEY_ID)"
 MAPKIT_TEAM_ID="$(envval MAPKIT_TEAM_ID)"
 MAPKIT_PRIVATE_KEY="$(envval MAPKIT_PRIVATE_KEY)"
+AEROAPI_KEY="$(envval AEROAPI_KEY)"
 
 [ -n "$PROD_DATABASE_URL" ] || { echo "PROD_DATABASE_URL missing from .env"; exit 1; }
 [ -n "$OPENROUTER_API_KEY" ] || { echo "OPENROUTER_API_KEY missing from .env"; exit 1; }
@@ -340,6 +341,7 @@ make_secret search-api-key "$SEARCH_API_KEY"
 make_secret github-token "$GITHUB_TOKEN"
 make_secret apns-private-key "$APNS_PRIVATE_KEY"
 make_secret mapkit-private-key "$MAPKIT_PRIVATE_KEY"
+make_secret aeroapi-key "$AEROAPI_KEY"
 
 # Explicit per-runtime secret grants. In particular, the browser can read only
 # its profile key and never receives database, model, OAuth, or Twilio secrets.
@@ -362,7 +364,7 @@ if module_enabled browser; then
 fi
 for secret in database-url openrouter-api-key google-oauth-client-id google-oauth-client-secret \
   bot-google-refresh-token internal-api-secret auth-secret twilio-auth-token profile-enc-key mcp-enc-key \
-  search-api-key github-token mobile-api-token apns-private-key mapkit-private-key; do
+  search-api-key github-token mobile-api-token apns-private-key mapkit-private-key aeroapi-key; do
   revoke_legacy_secret_access "$secret"
 done
 
@@ -436,6 +438,15 @@ if module_enabled maps; then
     WEB_MAPS_SECRETS=",APNS_PRIVATE_KEY=apns-private-key:latest"
     grant_secret apns-private-key "$WEB_SA"
   fi
+fi
+# The web service re-reads a flight for the phone's live card, so it holds the
+# same AeroAPI key the agent looks flights up with.
+WEB_FLIGHTS_SECRETS=""
+if module_enabled flights && [ -n "$AEROAPI_KEY" ]; then
+  AGENT_SECRETS="${AGENT_SECRETS},AEROAPI_KEY=aeroapi-key:latest"
+  WEB_FLIGHTS_SECRETS=",AEROAPI_KEY=aeroapi-key:latest"
+  grant_secret aeroapi-key "$AGENT_SA"
+  grant_secret aeroapi-key "$WEB_SA"
 fi
 CANARY_VALUE="$(envval CANARY_ENABLED)"
 if [ -z "$CANARY_VALUE" ]; then
@@ -658,7 +669,7 @@ gcloud run deploy assistant-web \
   --memory 1Gi --cpu 1 --min-instances 1 --max-instances 2 --timeout 300 \
   --cpu-boost \
   --set-env-vars "^|^ASSISTANT_NAME=${ASSISTANT_NAME}|ASSISTANT_EMAIL=${ASSISTANT_EMAIL}|ASSISTANT_WORKSPACE_ID=${ASSISTANT_WORKSPACE_ID}|ASSISTANT_TIMEZONE=${ASSISTANT_TIMEZONE}|ASSISTANT_LOCALE=${ASSISTANT_LOCALE}|ASSISTANT_MODULES=${PLAN_MODULES}|QUEUE_DRIVER=cloudtasks|FILES_DRIVER=gcs|WORKSPACE_BUCKET=${PROJECT}-workspace|GCP_PROJECT=${PROJECT}|GCP_LOCATION=${REGION}|CLOUD_TASKS_QUEUE=${QUEUE}|OWNER_NAME=${OWNER_NAME}|OWNER_EMAIL=${OWNER_EMAIL}|AUTH_TRUST_HOST=true|AUTH_DEV_BYPASS=false|INTERNAL_AUTH_MODE=oidc|INTERNAL_OIDC_SERVICE_ACCOUNT=${INTERNAL_INVOKER_SA}|CHAT_RECALL_ENABLED=${CHAT_RECALL_VALUE}|OTEL_EXPORTER=none${WEB_MAIL_ENV}${AUDIT_ENV}${WEB_MAPS_ENV}" \
-  --set-secrets "DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,AUTH_SECRET=auth-secret:latest,AUTH_GOOGLE_ID=google-oauth-client-id:latest,AUTH_GOOGLE_SECRET=google-oauth-client-secret:latest,MOBILE_API_TOKEN=mobile-api-token:latest,MCP_ENC_KEY=mcp-enc-key:latest${WEB_MAPS_SECRETS}" \
+  --set-secrets "DATABASE_URL=database-url:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,AUTH_SECRET=auth-secret:latest,AUTH_GOOGLE_ID=google-oauth-client-id:latest,AUTH_GOOGLE_SECRET=google-oauth-client-secret:latest,MOBILE_API_TOKEN=mobile-api-token:latest,MCP_ENC_KEY=mcp-enc-key:latest${WEB_MAPS_SECRETS}${WEB_FLIGHTS_SECRETS}" \
   --quiet
 
 WEB_URL="$(gcloud run services describe assistant-web --region "$REGION" --format='value(status.url)')"

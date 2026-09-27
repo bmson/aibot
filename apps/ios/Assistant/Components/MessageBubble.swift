@@ -1149,12 +1149,15 @@ enum MessageResponseCard: Identifiable {
         let facts: [GeneratedFact]
         let blocks: [GeneratedBlock]
         let actions: [GeneratedAction]
-        let steps: [CardStep]
+        var steps: [CardStep]
         var updatedAt: String? = nil
         var stale: Bool? = nil
         var refreshState: String? = nil
         var refreshError: String? = nil
         var refreshable: Bool = false
+        /// A flight the server says is still worth reading again. Rides the
+        /// payload beside the spec, never inside it (core/flights/card.ts).
+        var live: FlightLive? = nil
 
         var blockSections: (preview: [GeneratedBlock], details: [GeneratedBlock]) {
             var preview: [GeneratedBlock] = []
@@ -1655,7 +1658,8 @@ enum MessageResponseCard: Identifiable {
                 stale: data["stale"]?.boolValue,
                 refreshState: data["refreshState"]?.string,
                 refreshError: data["refreshError"]?.string,
-                refreshable: spec["refreshable"]?.boolValue ?? actions.contains { $0.type == "refresh" }
+                refreshable: spec["refreshable"]?.boolValue ?? actions.contains { $0.type == "refresh" },
+                live: FlightLive(json: data["live"])
             ))
         default:
             return nil
@@ -2307,7 +2311,11 @@ struct RichResponseCards: View {
                     details: details
                 )
             case let .generated(card):
-                generatedCard(card)
+                if card.live != nil {
+                    LiveGeneratedCardHost(card: card) { current in generatedCard(current) }
+                } else {
+                    generatedCard(card)
+                }
             case let .briefing(card):
                 BriefingCardView(card: card)
                     .responseCardSurface(colorScheme: colorScheme, colorSchemeContrast: colorSchemeContrast, inset: 22)
@@ -3538,7 +3546,9 @@ struct RichResponseCards: View {
 
     private func generatedCard(_ card: MessageResponseCard.GeneratedCard) -> some View {
         let facts = Dictionary(card.facts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let sections = card.blockSections
+        // A live card is a dashboard: its countdown and progress are the
+        // point, so nothing folds away under "More details".
+        let sections = card.live != nil ? (preview: card.blocks, details: []) : card.blockSections
         return VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: generatedSymbol(card.icon))
@@ -3578,7 +3588,12 @@ struct RichResponseCards: View {
                 .tint(AssistantTheme.accent(for: colorScheme))
             }
 
-            GeneratedCardFreshness(card: card, refresh: onRefresh)
+            if let live = card.live {
+                FollowFlightControl(flight: live.flight)
+                LiveCardStamp(updatedAt: card.updatedAt, live: live.isCurrent)
+            } else {
+                GeneratedCardFreshness(card: card, refresh: onRefresh)
+            }
 
             let actions = card.actions.filter { $0.type != "refresh" }
             if !actions.isEmpty {

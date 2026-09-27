@@ -3,6 +3,7 @@ import { callsMeta } from './calls/meta.js';
 import { codeMeta } from './code/meta.js';
 import type { ModuleMeta } from './contract.js';
 import { documentsMeta } from './documents/meta.js';
+import { flightsMeta } from './flights/meta.js';
 import { calendarMeta } from './google/calendar-meta.js';
 import { googleMeta } from './google/meta.js';
 import { mapsMeta } from './maps/meta.js';
@@ -23,6 +24,7 @@ export const assistantModuleMetas: readonly ModuleMeta[] = [
   callsMeta,
   codeMeta,
   documentsMeta,
+  flightsMeta,
   googleMeta,
   mapsMeta,
   pushMeta,

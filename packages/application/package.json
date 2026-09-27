@@ -18,6 +18,7 @@
     "./health": "./src/health.ts",
     "./imports": "./src/imports.ts",
     "./knowledge-graph": "./src/knowledge-graph.ts",
+    "./live-flights": "./src/live-flights.ts",
     "./live-scores": "./src/live-scores.ts",
     "./maps": "./src/maps.ts",
     "./model-providers": "./src/model-providers.ts",
