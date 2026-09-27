@@ -366,6 +366,52 @@ describe('the layout vocabulary', () => {
   });
 });
 
+describe('actions the phone performs', () => {
+  const withActions = (actions: object[]) =>
+    GenerativeCardSpecV1Schema.parse({
+      ...flightCard,
+      blocks: [{ type: 'metrics', factIds: ['gate', 'seat'] }],
+      actions,
+    });
+
+  it('keeps a calendar entry on zoned instants and directions to a place', () => {
+    const card = withActions([
+      {
+        id: 'cal',
+        type: 'add_to_calendar',
+        label: 'Add to Calendar',
+        startFact: 'dep',
+        locationFact: 'from',
+      },
+      { id: 'go', type: 'directions', label: 'Directions', factId: 'from' },
+    ]);
+    expect(
+      validateGroundedCard(card, flightEvidence)?.actions.map((action) => action.type),
+    ).toEqual(['add_to_calendar', 'directions']);
+  });
+
+  it('drops a calendar entry on a wall-clock time, and keeps the card', () => {
+    const card = withActions([
+      { id: 'cal', type: 'add_to_calendar', label: 'Add to Calendar', startFact: 'board' },
+    ]);
+    const validated = validateGroundedCard(card, flightEvidence);
+    expect(validated?.actions).toEqual([]);
+    expect(validated?.blocks).toHaveLength(1);
+  });
+
+  it('never routes to a secret, and still refuses an invented reference', () => {
+    const secret = GenerativeCardSpecV1Schema.parse({
+      ...withActions([{ id: 'go', type: 'directions', label: 'Directions', factId: 'from' }]),
+      facts: flightFacts.map((fact) => (fact.id === 'from' ? { ...fact, sensitive: true } : fact)),
+    });
+    expect(validateGroundedCard(secret, flightEvidence)?.actions).toEqual([]);
+    const dangling = withActions([
+      { id: 'cal', type: 'add_to_calendar', label: 'Add to Calendar', startFact: 'missing' },
+    ]);
+    expect(validateGroundedCard(dangling, flightEvidence)).toBeNull();
+  });
+});
+
 describe('an explicitly requested card', () => {
   it('reaches the compiler even though the request carries no cardable keyword', async () => {
     const asked = stubRouter();

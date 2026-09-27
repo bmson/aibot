@@ -1052,6 +1052,8 @@ struct SavedCardRecord: Codable, Identifiable, Sendable {
     var refreshState: String? = nil
     var refreshError: String? = nil
     var refreshTaskId: String? = nil
+    /// A saved flight still worth reading again (application/cards.ts).
+    var live: JSONValue? = nil
 
     var messagePart: MessagePart {
         var data: [String: JSONValue] = [
@@ -1065,6 +1067,7 @@ struct SavedCardRecord: Codable, Identifiable, Sendable {
         if let refreshState { data["refreshState"] = .string(refreshState) }
         if let refreshError { data["refreshError"] = .string(refreshError) }
         if let refreshTaskId { data["refreshTaskId"] = .string(refreshTaskId) }
+        if let live { data["live"] = live }
         return .init(type: "data-card", data: .object(data))
     }
 }

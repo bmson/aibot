@@ -10,6 +10,8 @@ export interface QuestionCase {
   sports?: 'live';
   /** Stub `maps.directions` with a drive to Oracle Park. */
   maps?: 'route';
+  /** Stub `flights.status` with FI614 in the air, ten minutes late. */
+  flights?: 'en-route';
   /** Stub `calendar.list_events` with one upcoming event, with or without a location. */
   calendar?: 'next-meeting' | 'no-location';
   mailbox?: 'hotel' | 'empty';
@@ -34,6 +36,8 @@ export interface QuestionCase {
     scoreboard?: boolean;
     /** A route card rides the reply. */
     route?: boolean;
+    /** A live flight card rides the reply. */
+    flight?: boolean;
     cardValues?: string[];
   };
 }
@@ -160,6 +164,22 @@ export const QUESTION_CASES: QuestionCase[] = [
       excludes: ['ahead 7-3'],
       tools: ['sports.scores'],
       statuses: ['needs_attention', 'failed'],
+    },
+  },
+  {
+    id: 'flight-status-live',
+    // Not from the September audit: flight status did not exist then.
+    records: [],
+    request: 'Is FI614 on time?',
+    flights: 'en-route',
+    script: [
+      { toolCalls: [{ toolName: 'flights.status', input: { flight: 'FI614' } }] },
+      { text: 'FI614 is in the air and running about 10 minutes late, arriving at gate B22.' },
+    ],
+    expect: {
+      matches: ['FI614', '10 min', 'B22'],
+      tools: ['flights.status'],
+      flight: true,
     },
   },
   {

@@ -58,6 +58,25 @@ export function flightCardSpec(flight: FlightStatus, corpus: string): Generative
         ]
   ).filter((id): id is string => Boolean(id));
   const progress = fact('progress', flight.progressText, 'Flight progress');
+  const beforeTakeoff = flight.phase === 'scheduled' || flight.phase === 'taxiing';
+  const airport = beforeTakeoff
+    ? fact('origin_airport', flight.origin.name, 'Departure airport')
+    : undefined;
+
+  // What the owner can do with it, on their own tap: put the flight in their
+  // calendar, and get to the airport while there is still a flight to catch.
+  const actions: GenerativeCardSpecV1['actions'] = [];
+  if (depart && arrive && from)
+    actions.push({
+      id: 'calendar',
+      type: 'add_to_calendar',
+      label: 'Add to Calendar',
+      startFact: depart,
+      endFact: arrive,
+      locationFact: from,
+    });
+  if (airport && flight.phase === 'scheduled')
+    actions.push({ id: 'directions', type: 'directions', label: 'Directions', factId: airport });
 
   const blocks: GenerativeCardSpecV1['blocks'] = [];
   if (from && to)
@@ -93,7 +112,7 @@ export function flightCardSpec(flight: FlightStatus, corpus: string): Generative
       accessibilityLabel: flight.line.slice(0, 200) || flight.ident,
       facts,
       blocks,
-      actions: [],
+      actions,
       // The chat's copy follows the flight live; a saved copy is made
       // refreshable by persistGeneratedCard from its recorded source.
       refreshable: false,

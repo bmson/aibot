@@ -10,6 +10,7 @@ import type {
   CardRefreshResult,
   GeneratedCardRepository,
 } from '@assistant/persistence';
+import { z } from 'zod';
 
 const ACTIVE_REFRESH_STATES = [
   'pending',
@@ -31,6 +32,27 @@ export interface SavedCardView {
   refreshState: 'idle' | 'refreshing' | 'failed';
   refreshError?: string;
   refreshTaskId?: string;
+  /**
+   * A saved flight still worth reading again, as the chat card carries it.
+   * The phone's live polling takes over from here and drops it at the gate.
+   */
+  live?: SavedCardLive;
+}
+
+const SavedCardLiveSchema = z.object({
+  kind: z.literal('flight'),
+  id: z.string().min(1).max(80),
+  pollSeconds: z.number().int().positive(),
+  until: z.string().datetime({ offset: true }),
+  flight: z.record(z.string(), z.unknown()),
+});
+
+export type SavedCardLive = z.infer<typeof SavedCardLiveSchema>;
+
+/** The stored `_live`, while it is still live. */
+function savedCardLive(spec: unknown, now: Date): SavedCardLive | undefined {
+  const parsed = SavedCardLiveSchema.safeParse((spec as { _live?: unknown } | null)?._live);
+  return parsed.success && Date.parse(parsed.data.until) > now.getTime() ? parsed.data : undefined;
 }
 
 export async function listSavedCards(
@@ -66,6 +88,7 @@ export async function listSavedCards(
     const failed =
       refresh && !running && (refresh.status !== 'done' || row.updatedAt < refresh.createdAt);
     const provenance = cardRuntimeProvenance(row.spec);
+    const live = savedCardLive(row.spec, now);
     const spec = {
       ...parsed.data,
       refreshable: Boolean(provenance),
@@ -96,6 +119,7 @@ export async function listSavedCards(
             }
           : {}),
         ...(refresh ? { refreshTaskId: refresh.id } : {}),
+        ...(live ? { live } : {}),
       },
     ];
   });

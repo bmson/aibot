@@ -81,18 +81,28 @@ sends a final `end` (dismissed an hour later) once the flight is at the
 gate, and stops when APNs says the owner dismissed the activity. It needs
 the `APNS_*` key the push module already uses.
 
-### Layer 3 — inputs
+### Layer 3 — inputs (deferred)
 
-`text`, `picker`, `date`, `stepper`, `toggle` inputs and a `submit` action. A
-submit produces a structured `ask_assistant` request — never a direct side
-effect — so booking forms, RSVPs and expense entries go through the same
-approval policies as any other action.
+Not built. The composer rewrites every model-authored `ask_assistant` prompt
+to a fixed string, because a prompt lifted from evidence would reach the
+owner's own turn. A form would need the same care: fields that prefill the
+composer for the owner to read and send, never a submit that speaks for
+them. Worth doing when a real flow asks for it.
 
-### Layer 4 — device capabilities
+### Layer 4 — device actions
 
-Actions handled by native code, each behind its own permission:
-`add_to_calendar`, `start_live_activity`, `open_maps`. NFC and Wallet passes
-are out of scope.
+**Built.** `add_to_calendar` (`startFact`, optional `endFact` and
+`locationFact`, all zoned instants) opens the system event sheet prefilled;
+nothing is written unless the owner taps Add, and the sheet needs no calendar
+permission. `directions` opens Apple Maps to a place fact. Every generated
+card has a share button that sends its title and non-sensitive facts as text.
+An action the phone could not perform — a calendar entry on a wall-clock
+time, directions to a sensitive fact — is dropped and the card kept. Flight
+cards offer both, directions only before takeoff.
+
+Saved flight cards stay live on the Cards page: the save stores the card's
+`live` wiring beside the spec (`_live`), and the Cards API returns it until
+the flight's `until` passes.
 
 ### Layer 5 — learning loop
 

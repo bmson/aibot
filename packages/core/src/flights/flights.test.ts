@@ -233,6 +233,23 @@ describe('the flight card', () => {
     expect((card as { live?: { pollSeconds: number } }).live?.pollSeconds).toBe(600);
   });
 
+  it('offers the calendar and, before takeoff, the way to the airport', () => {
+    const [before] = flightResponseCards(evidence(), NOW);
+    const actions = (
+      before as unknown as { spec: { actions: Array<{ type: string; factId?: string }> } }
+    ).spec.actions;
+    expect(actions.map((action) => action.type)).toEqual(['add_to_calendar', 'directions']);
+    const [inAir] = flightResponseCards(
+      evidence({ actual_out: '2026-10-02T17:02:00Z', actual_off: '2026-10-02T17:15:00Z' }),
+      NOW,
+    );
+    expect(
+      (inAir as unknown as { spec: { actions: Array<{ type: string }> } }).spec.actions.map(
+        (action) => action.type,
+      ),
+    ).toEqual(['add_to_calendar']);
+  });
+
   it('shows where you come out once the flight is in the air', () => {
     const [card] = flightResponseCards(
       evidence({

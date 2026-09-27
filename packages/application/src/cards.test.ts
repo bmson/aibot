@@ -294,6 +294,39 @@ describe('saved card source refresh', () => {
     );
   });
 
+  it('keeps a saved flight live while the flight is, and drops it after', async () => {
+    const live = (until: string) => ({
+      kind: 'flight',
+      id: 'ICE614-1759300000-schedule-0001',
+      pollSeconds: 300,
+      until,
+      flight: { id: 'ICE614-1759300000-schedule-0001', ident: 'FI614' },
+    });
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const flying = await persistGeneratedCard(cardRepository, {
+      agentId,
+      conversationId,
+      payload: payload(),
+      evidence: evidence(),
+      live: live(future),
+    });
+    const landed = await persistGeneratedCard(cardRepository, {
+      agentId,
+      conversationId,
+      payload: payload(),
+      evidence: evidence(),
+      live: live(past),
+    });
+    cardIds.push(flying.id, landed.id);
+    const views = await listSavedCards(cardRepository, agentId, [flying.id, landed.id]);
+    const byId = new Map(views.map((view) => [view.id, view]));
+    expect(byId.get(flying.id)?.live).toMatchObject({ kind: 'flight', until: future });
+    expect(byId.get(landed.id)?.live).toBeUndefined();
+    // The wiring rides beside the spec, never inside it.
+    expect(byId.get(flying.id)?.spec).not.toHaveProperty('_live');
+  });
+
   it('recognizes only the established explicit client refresh prompt', () => {
     const id = randomUUID();
     expect(

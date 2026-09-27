@@ -8,6 +8,7 @@ import {
   gradeAuditedOutput,
   type ModelRouter,
 } from '@assistant/core';
+import { normalizeFlight } from '@assistant/core/flights';
 import {
   approvals,
   conversations,
@@ -145,6 +146,14 @@ export function evaluateQuestion(
       (part.data as { kind?: string } | null)?.kind === 'route',
   );
   if (fixture.expect.route && !hasRoute) failures.push('formatting: missing route card');
+  const hasFlight = result.parts.some(
+    (part) =>
+      typeof part === 'object' &&
+      part !== null &&
+      'data' in part &&
+      (part.data as { kind?: string; live?: { kind?: string } } | null)?.live?.kind === 'flight',
+  );
+  if (fixture.expect.flight && !hasFlight) failures.push('formatting: missing live flight card');
   if (fixture.expect.card && !cards.length)
     failures.push('formatting: missing persisted generated card');
   const cardFacts = cards
@@ -270,6 +279,36 @@ function replayRegistry(
         mapsUrl:
           'https://maps.apple.com/?saddr=37.7857%2C-122.4011&daddr=37.7786%2C-122.3893&dirflg=d',
       }),
+      {},
+    );
+  if (fixture.flights)
+    add(
+      'flights.status',
+      'Live status of one flight from FlightAware.',
+      z.object({ flight: z.string(), date: z.string().optional() }),
+      () => {
+        // Relative to the replay's own clock, so the flight is always in the
+        // air and the card always live.
+        const at = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+        return {
+          flight: normalizeFlight({
+            ident_iata: 'FI614',
+            fa_flight_id: 'ICE614-1759300000-schedule-0001',
+            origin: { code_iata: 'KEF', city: 'Reykjavik', timezone: 'Atlantic/Reykjavik' },
+            destination: { code_iata: 'JFK', city: 'New York', timezone: 'America/New_York' },
+            gate_destination: 'B22',
+            terminal_destination: '7',
+            departure_delay: 600,
+            arrival_delay: 600,
+            progress_percent: 45,
+            scheduled_out: at(-160),
+            actual_out: at(-150),
+            actual_off: at(-140),
+            scheduled_in: at(170),
+            estimated_in: at(180),
+          }),
+        };
+      },
       {},
     );
   if (fixture.calendar)

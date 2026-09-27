@@ -30,6 +30,7 @@
 		B00000000000000000000092 /* System/FlightActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000092 /* System/FlightActivityAttributes.swift */; };
 		B00000000000000000000093 /* System/FlightActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000092 /* System/FlightActivityAttributes.swift */; };
 		B00000000000000000000094 /* FlightActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000093 /* FlightActivityWidget.swift */; };
+		B00000000000000000000095 /* Components/CardActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000095 /* Components/CardActions.swift */; };
 		B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* System/AssistantActivityAttributes.swift */; };
 		B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000015 /* System/LiveActivityManager.swift */; };
 		B00000000000000000000015 /* System/NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000016 /* System/NotificationManager.swift */; };
@@ -129,6 +130,7 @@
 		C00000000000000000000091 /* System/FlightActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/FlightActivityManager.swift; sourceTree = "<group>"; };
 		C00000000000000000000092 /* System/FlightActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/FlightActivityAttributes.swift; sourceTree = "<group>"; };
 		C00000000000000000000093 /* FlightActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlightActivityWidget.swift; sourceTree = "<group>"; };
+		C00000000000000000000095 /* Components/CardActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/CardActions.swift; sourceTree = "<group>"; };
 		C00000000000000000000014 /* System/AssistantActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/AssistantActivityAttributes.swift; sourceTree = "<group>"; };
 		C00000000000000000000015 /* System/LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/LiveActivityManager.swift; sourceTree = "<group>"; };
 		C00000000000000000000016 /* System/NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/NotificationManager.swift; sourceTree = "<group>"; };
@@ -235,6 +237,7 @@
 				C00000000000000000000090 /* Models/FlightModels.swift */,
 				C00000000000000000000091 /* System/FlightActivityManager.swift */,
 				C00000000000000000000092 /* System/FlightActivityAttributes.swift */,
+				C00000000000000000000095 /* Components/CardActions.swift */,
 				C00000000000000000000014 /* System/AssistantActivityAttributes.swift */,
 				C00000000000000000000015 /* System/LiveActivityManager.swift */,
 				C00000000000000000000016 /* System/NotificationManager.swift */,
@@ -450,6 +453,7 @@
 				B00000000000000000000090 /* Models/FlightModels.swift in Sources */,
 				B00000000000000000000091 /* System/FlightActivityManager.swift in Sources */,
 				B00000000000000000000092 /* System/FlightActivityAttributes.swift in Sources */,
+				B00000000000000000000095 /* Components/CardActions.swift in Sources */,
 				B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */,
 				B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */,
 				B00000000000000000000015 /* System/NotificationManager.swift in Sources */,

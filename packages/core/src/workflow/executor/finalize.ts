@@ -588,6 +588,7 @@ export async function stageModelFinalResponse(
       : flightCard
         ? savableFlightCard(flightCard)
         : null;
+    const live = flightCard && 'live' in flightCard ? (flightCard.live as object) : undefined;
     savedScoreCard = compiled
       ? await persistGeneratedCard(generatedCardsRepository, {
           agentId: task.agentId,
@@ -595,6 +596,7 @@ export async function stageModelFinalResponse(
           payload: compiled,
           evidence,
           sourceText: ownerRequest,
+          ...(live ? { live } : {}),
         }).catch((error) => {
           console.error('scoreboard card persistence failed', error);
           return undefined;
@@ -669,6 +671,7 @@ export async function stageModelFinalResponse(
             evidence: refreshCardId ? (refreshEvidence ?? []) : evidence,
             sourceText,
             refreshCardId,
+            ...(refreshedFlight?.live ? { live: refreshedFlight.live } : {}),
           }).catch((error) => {
             console.error('generated card persistence failed', error);
             return undefined;

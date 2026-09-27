@@ -1053,6 +1053,10 @@ enum MessageResponseCard: Identifiable {
         let label: String
         let factId: String?
         let prompt: String?
+        /// add_to_calendar: fact ids of zoned instants and a place.
+        var startFact: String? = nil
+        var endFact: String? = nil
+        var locationFact: String? = nil
     }
 
     /// One call behind a composed card, as the runtime reported it
@@ -1615,7 +1619,10 @@ enum MessageResponseCard: Identifiable {
                         type: type,
                         label: label,
                         factId: action["factId"]?.string,
-                        prompt: action["prompt"]?.string
+                        prompt: action["prompt"]?.string,
+                        startFact: action["startFact"]?.string,
+                        endFact: action["endFact"]?.string,
+                        locationFact: action["locationFact"]?.string
                     )
                 }
             }()
@@ -3572,6 +3579,15 @@ struct RichResponseCards: View {
                             .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                     }
                 }
+                Spacer(minLength: 8)
+                ShareLink(item: GeneratedCardValue.shareText(card)) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Share \(card.title)")
             }
 
             ForEach(sections.preview) { block in
@@ -3826,6 +3842,24 @@ struct RichResponseCards: View {
             }
             .font(.caption.weight(.semibold))
             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+        } else if action.type == "add_to_calendar",
+                  let start = action.startFact.flatMap({ facts[$0] }), !start.sensitive,
+                  let draft = CalendarDraft(
+                      title: card.title,
+                      start: start.value,
+                      end: action.endFact.flatMap { facts[$0]?.value },
+                      location: action.locationFact.flatMap { facts[$0] }.flatMap { $0.sensitive ? nil : $0.value }
+                  ) {
+            AddToCalendarButton(label: action.label, draft: draft)
+        } else if action.type == "directions", let fact, !fact.sensitive,
+                  let url = GeneratedCardValue.directionsURL(fact.value) {
+            Link(destination: url) {
+                Label(action.label, systemImage: "arrow.triangle.turn.up.right.diamond")
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .font(.caption.weight(.semibold))
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            .accessibilityHint("Opens directions in Maps.")
         } else if action.type == "ask_assistant", let prompt = action.prompt, !prompt.isEmpty {
             Button(action.label) { onSend?(prompt) }
             .font(.caption.weight(.semibold))
