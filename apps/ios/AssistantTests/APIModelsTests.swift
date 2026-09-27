@@ -1023,6 +1023,66 @@ final class APIModelsTests: XCTestCase {
         XCTAssertTrue(generated.steps.isEmpty)
     }
 
+    func testGeneratedCardSectionCarriesItsLeafBlocks() {
+        let card = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("generated-card"),
+                "id": .string("flight-1"),
+                "spec": .object([
+                    "version": .number(1),
+                    "title": .string("FI 614 to New York"),
+                    "sourceLabel": .string("Icelandair email"),
+                    "accessibilityLabel": .string("Flight FI 614"),
+                    "facts": .array([
+                        .object(["id": .string("gate"), "label": .string("Gate"), "value": .string("D4")]),
+                        .object(["id": .string("seat"), "label": .string("Seat"), "value": .string("14A")]),
+                    ]),
+                    "blocks": .array([
+                        .object([
+                            "type": .string("section"),
+                            "title": .string("At the airport"),
+                            "blocks": .array([
+                                .object(["type": .string("metrics"), "factIds": .array([.string("gate"), .string("seat")])]),
+                                // Sections do not nest; a nested one is dropped, not drawn.
+                                .object(["type": .string("section"), "title": .string("Nested"), "blocks": .array([])]),
+                            ]),
+                        ]),
+                    ]),
+                ]),
+            ])
+        )
+        guard case let .generated(generated)? = MessageResponseCard(part: card),
+              let section = generated.blocks.first else {
+            return XCTFail("Expected a generated card with a section")
+        }
+        XCTAssertEqual(section.type, "section")
+        XCTAssertEqual(section.children.map(\.type), ["metrics"])
+        XCTAssertEqual(section.children.first?.values["factIds"]?.arrayStrings, ["gate", "seat"])
+    }
+
+    func testGeneratedCardValuesReadOnlyWhatTheServerAdmits() {
+        XCTAssertEqual(GeneratedCardValue.number("1,190 USD"), 1190)
+        XCTAssertEqual(GeneratedCardValue.number("$38.50"), 38.5)
+        XCTAssertEqual(GeneratedCardValue.number("-3 °C"), -3)
+        XCTAssertNil(GeneratedCardValue.number("Gate D4"))
+        XCTAssertNil(GeneratedCardValue.number("1 hour 15 minutes"))
+
+        XCTAssertEqual(GeneratedCardValue.fraction(value: "3", total: "5"), 0.6)
+        XCTAssertEqual(GeneratedCardValue.fraction(value: "76%", total: nil), 0.76)
+        XCTAssertNil(GeneratedCardValue.fraction(value: "140%", total: nil))
+        XCTAssertNil(GeneratedCardValue.fraction(value: "6", total: "5"))
+
+        let departure = GeneratedCardValue.instant("2026-10-02T16:40:00+00:00")
+        XCTAssertEqual(departure?.zone.secondsFromGMT(), 0)
+        XCTAssertEqual(GeneratedCardValue.instant("2026-10-02T09:40:00-07:00")?.zone.secondsFromGMT(), -7 * 3600)
+        XCTAssertEqual(departure?.date, GeneratedCardValue.instant("2026-10-02T09:40:00-07:00")?.date)
+        XCTAssertNil(GeneratedCardValue.instant("7:40 AM"))
+
+        XCTAssertEqual(GeneratedCardValue.coordinate("64.1466, -21.9426")?.latitude, 64.1466)
+        XCTAssertNil(GeneratedCardValue.coordinate("Laugavegur 1, Reykjavik"))
+    }
+
     func testGeneratedCardCarriesTheStepsBehindIt() {
         let card = MessagePart(
             type: "data-card",

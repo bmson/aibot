@@ -1035,6 +1035,16 @@ enum MessageResponseCard: Identifiable {
         let id: String
         let type: String
         let values: [String: JSONValue]
+
+        /// A section's blocks. Sections hold leaf blocks only, one level deep.
+        var children: [GeneratedBlock] {
+            guard type == "section", case let .array(values)? = values["blocks"] else { return [] }
+            return values.enumerated().compactMap { index, value in
+                guard case let .object(child) = value,
+                      let childType = child["type"]?.string, childType != "section" else { return nil }
+                return .init(id: "\(id)-\(index)-\(childType)", type: childType, values: child)
+            }
+        }
     }
 
     struct GeneratedAction: Identifiable {
@@ -3555,12 +3565,12 @@ struct RichResponseCards: View {
             }
 
             ForEach(sections.preview) { block in
-                generatedBlock(block, facts: facts)
+                generatedBlock(block, facts: facts, cardId: card.id)
             }
             if !sections.details.isEmpty {
                 DisclosureGroup("More details") {
                     VStack(alignment: .leading, spacing: 16) {
-                        ForEach(sections.details) { block in generatedBlock(block, facts: facts) }
+                        ForEach(sections.details) { block in generatedBlock(block, facts: facts, cardId: card.id) }
                     }
                     .padding(.top, 12)
                 }
@@ -3595,7 +3605,32 @@ struct RichResponseCards: View {
     @ViewBuilder
     private func generatedBlock(
         _ block: MessageResponseCard.GeneratedBlock,
-        facts: [String: MessageResponseCard.GeneratedFact]
+        facts: [String: MessageResponseCard.GeneratedFact],
+        cardId: String
+    ) -> some View {
+        if block.type == "section" {
+            VStack(alignment: .leading, spacing: 12) {
+                if let title = block.values["title"]?.string, !title.isEmpty {
+                    Text(CardText.presentationLabel(title))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                        .accessibilityAddTraits(.isHeader)
+                }
+                ForEach(block.children) { child in
+                    generatedLeafBlock(child, facts: facts, cardId: cardId)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            generatedLeafBlock(block, facts: facts, cardId: cardId)
+        }
+    }
+
+    @ViewBuilder
+    private func generatedLeafBlock(
+        _ block: MessageResponseCard.GeneratedBlock,
+        facts: [String: MessageResponseCard.GeneratedFact],
+        cardId: String
     ) -> some View {
         switch block.type {
         case "hero":
@@ -3698,7 +3733,9 @@ struct RichResponseCards: View {
                 }
             }
         default:
-            EmptyView()
+            // The layout blocks added since (GeneratedCardBlocks.swift); a
+            // type neither knows draws nothing and leaves the card intact.
+            GeneratedCardBlockView(block: block, facts: facts, cardId: cardId)
         }
     }
 
@@ -3738,6 +3775,14 @@ struct RichResponseCards: View {
         case "map": "map.fill"
         case "music": "music.note"
         case "star": "star.fill"
+        case "train": "tram.fill"
+        case "car": "car.fill"
+        case "hotel": "bed.double.fill"
+        case "food": "fork.knife"
+        case "money": "creditcard.fill"
+        case "health": "heart.fill"
+        case "weather": "cloud.sun.fill"
+        case "checklist": "checklist"
         default: "sparkles"
         }
     }
@@ -4742,7 +4787,7 @@ private extension View {
     }
 }
 
-private extension JSONValue {
+extension JSONValue {
     var objectValue: [String: JSONValue]? {
         guard case let .object(value) = self else { return nil }
         return value

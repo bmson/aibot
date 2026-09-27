@@ -4,6 +4,7 @@ import {
   answerLooksCardShaped,
   GenerativeCardSpecV1Schema,
   generateEvidenceCard,
+  numericFactValue,
   scoreboardCardSpec,
   validateGroundedCard,
 } from './generative-card.js';
@@ -201,6 +202,169 @@ const hotelLookup: ActionEvidence[] = [
     fromCurrentTask: false,
   },
 ];
+
+const flightEvidence = [
+  'TOOL_1 gmail.read_thread',
+  'Icelandair FI 614 from Reykjavik (KEF) to New York (JFK).',
+  'Departs 2026-10-02T16:40:00+00:00, arrives 18:25 local. Gate D4, seat 14A, boarding 16:00.',
+  'Check-in steps: Checked in, Bag dropped, Security, Boarding. Current: Bag dropped.',
+  'Fares: Economy 412 USD, Saga 1,190 USD.',
+].join('\n');
+
+const flightFacts = [
+  { id: 'from', label: 'From', value: 'Reykjavik (KEF)', source: 'gmail.read_thread' },
+  { id: 'to', label: 'To', value: 'New York (JFK)', source: 'gmail.read_thread' },
+  { id: 'dep', label: 'Departs', value: '2026-10-02T16:40:00+00:00', source: 'gmail.read_thread' },
+  { id: 'arr', label: 'Arrives', value: '18:25 local', source: 'gmail.read_thread' },
+  { id: 'gate', label: 'Gate', value: 'D4', source: 'gmail.read_thread' },
+  { id: 'seat', label: 'Seat', value: '14A', source: 'gmail.read_thread' },
+  { id: 'board', label: 'Boarding', value: '16:00', source: 'gmail.read_thread' },
+  { id: 's1', label: 'Step', value: 'Checked in', source: 'gmail.read_thread' },
+  { id: 's2', label: 'Step', value: 'Bag dropped', source: 'gmail.read_thread' },
+  { id: 's3', label: 'Step', value: 'Security', source: 'gmail.read_thread' },
+  { id: 'eco', label: 'Economy', value: '412 USD', source: 'gmail.read_thread' },
+  { id: 'saga', label: 'Saga', value: '1,190 USD', source: 'gmail.read_thread' },
+  { id: 'eco_name', label: 'Fare', value: 'Economy', source: 'gmail.read_thread' },
+  { id: 'saga_name', label: 'Fare', value: 'Saga', source: 'gmail.read_thread' },
+];
+
+const flightCard = {
+  version: 1 as const,
+  title: 'FI 614 to New York',
+  icon: 'plane' as const,
+  accessibilityLabel: 'Flight FI 614 from Reykjavik to New York, gate D4, seat 14A',
+  sourceLabel: 'Icelandair email',
+  facts: flightFacts,
+  blocks: [
+    {
+      type: 'journey' as const,
+      mode: 'flight' as const,
+      fromFact: 'from',
+      toFact: 'to',
+      departFact: 'dep',
+      arriveFact: 'arr',
+    },
+    { type: 'metrics' as const, factIds: ['gate', 'seat', 'board'] },
+    { type: 'countdown' as const, dateFact: 'dep' },
+    {
+      type: 'section' as const,
+      title: 'Before you fly',
+      blocks: [{ type: 'stages' as const, factIds: ['s1', 's2', 's3'], currentFact: 's2' }],
+    },
+    {
+      type: 'table' as const,
+      columns: ['Fare', 'Price'],
+      rows: [
+        ['eco_name', 'eco'],
+        ['saga_name', 'saga'],
+      ],
+    },
+    {
+      type: 'chart' as const,
+      kind: 'bar' as const,
+      points: [
+        { labelFact: 'eco_name', valueFact: 'eco' },
+        { labelFact: 'saga_name', valueFact: 'saga' },
+      ],
+    },
+  ],
+  actions: [],
+};
+
+describe('the layout vocabulary', () => {
+  it('accepts a grounded card built from the richer blocks', () => {
+    const parsed = GenerativeCardSpecV1Schema.parse(flightCard);
+    expect(validateGroundedCard(parsed, flightEvidence)).toEqual(parsed);
+  });
+
+  it('follows fact references into sections and table cells', () => {
+    const dangling = GenerativeCardSpecV1Schema.parse({
+      ...flightCard,
+      blocks: [
+        {
+          type: 'section',
+          title: 'Fares',
+          blocks: [{ type: 'table', columns: ['Fare', 'Price'], rows: [['eco_name', 'missing']] }],
+        },
+      ],
+    });
+    expect(validateGroundedCard(dangling, flightEvidence)).toBeNull();
+  });
+
+  it('holds section headings and column labels to the script rule', () => {
+    const drifted = GenerativeCardSpecV1Schema.parse({
+      ...flightCard,
+      blocks: [
+        {
+          type: 'section',
+          title: '出発前',
+          blocks: [{ type: 'metrics', factIds: ['gate', 'seat'] }],
+        },
+      ],
+    });
+    expect(validateGroundedCard(drifted, flightEvidence)).toBeNull();
+  });
+
+  it('drops a countdown to a time with no zone and keeps the rest of the card', () => {
+    const parsed = GenerativeCardSpecV1Schema.parse({
+      ...flightCard,
+      blocks: [
+        { type: 'countdown', dateFact: 'board' },
+        { type: 'metrics', factIds: ['gate', 'seat'] },
+      ],
+    });
+    expect(validateGroundedCard(parsed, flightEvidence)?.blocks).toEqual([
+      { type: 'metrics', factIds: ['gate', 'seat'] },
+    ]);
+  });
+
+  it('refuses a card when no block can be drawn', () => {
+    const parsed = GenerativeCardSpecV1Schema.parse({
+      ...flightCard,
+      blocks: [
+        {
+          type: 'chart',
+          kind: 'line',
+          points: [
+            { labelFact: 'gate', valueFact: 'from' },
+            { labelFact: 'seat', valueFact: 'to' },
+          ],
+        },
+        { type: 'stages', factIds: ['s1', 's2'], currentFact: 's3' },
+      ],
+    });
+    expect(validateGroundedCard(parsed, flightEvidence)).toBeNull();
+  });
+
+  it('draws progress only over a real fraction', () => {
+    const corpus = 'Delivery: stop 3 of 5 stops. Battery 76%. Upload 140%.';
+    const card = (block: object) =>
+      GenerativeCardSpecV1Schema.parse({
+        ...flightCard,
+        facts: [
+          { id: 'done', label: 'Stop', value: '3', source: 'x' },
+          { id: 'total', label: 'Stops', value: '5', source: 'x' },
+          { id: 'pct', label: 'Battery', value: '76%', source: 'x' },
+          { id: 'over', label: 'Upload', value: '140%', source: 'x' },
+        ],
+        blocks: [block, { type: 'metrics', factIds: ['done', 'total'] }],
+      });
+    const kept = (block: object) => validateGroundedCard(card(block), corpus)?.blocks.length;
+    expect(kept({ type: 'progress', valueFact: 'done', totalFact: 'total' })).toBe(2);
+    expect(kept({ type: 'progress', valueFact: 'pct' })).toBe(2);
+    expect(kept({ type: 'progress', valueFact: 'over' })).toBe(1);
+    expect(kept({ type: 'progress', valueFact: 'total', totalFact: 'done' })).toBe(1);
+  });
+
+  it('reads the figure out of a formatted value', () => {
+    expect(numericFactValue('1,190 USD')).toBe(1190);
+    expect(numericFactValue('$38.50')).toBe(38.5);
+    expect(numericFactValue('-3 °C')).toBe(-3);
+    expect(numericFactValue('76%')).toBe(76);
+    expect(numericFactValue('Gate D4')).toBeUndefined();
+    expect(numericFactValue('1 hour 15 minutes')).toBeUndefined();
+  });
+});
 
 describe('an explicitly requested card', () => {
   it('reaches the compiler even though the request carries no cardable keyword', async () => {
