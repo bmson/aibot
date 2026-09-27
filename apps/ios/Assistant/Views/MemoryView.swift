@@ -1,481 +1,537 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Owner-facing memory controls. This deliberately uses the same vocabulary as
-/// the web library: approve quarantined facts, confirm ordinary facts, control
-/// prominence, correct text, and forget facts with a tombstone.
+/// The memory home.
+///
+/// One screen, read top to bottom: the map of who and what the assistant
+/// knows, anything waiting on the owner, a handful of the facts it holds, and
+/// a short list of places to go for the rest. Each fact is one row — tap to
+/// read and act on it, swipe for the common moves — rather than a card
+/// carrying three buttons, which is what made the old page a wall of controls.
 struct MemoryView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showingCreateMemory = false
-    @State private var editingFact: WorkspaceMemoryFact?
-    @State private var pendingFactID: String?
-    @State private var showingPersonCreator = false
-    @State private var editingPerson: WorkspacePerson?
-    @State private var addingFactForPerson: WorkspacePerson?
-    @State private var managingPerson: WorkspacePerson?
-    @State private var profileActionInFlight: String?
-    @State private var showingVoiceImporter = false
-    @State private var showingVoiceProfile = false
-    @State private var voiceRegister = "email_casual"
+    @State private var openFact: WorkspaceMemoryFact?
+    @State private var forgetting: WorkspaceMemoryFact?
+    @State private var graph: RelationshipGraphSnapshot?
+    @State private var graphFailed = false
+    @State private var showsMap = false
+
+    /// Enough to recognise the memory, not so many that the page becomes the
+    /// library. The library is one tap away.
+    private let factPreviewCount = 5
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if let memory = model.workspace?.memory {
-                    memoryContent(memory)
-                } else {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, minHeight: 220)
-                }
+        List {
+            if let memory = model.workspace?.memory {
+                content(memory)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 220)
+                    .listRowBackground(Color.clear)
             }
-            .padding(16)
-            .padding(.bottom, 28)
-            .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
         .navigationTitle("Memory")
         .assistantSubmenuChrome()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("Add memory", systemImage: "plus") { showingCreateMemory = true }
-                        .disabled(model.workspace?.memory.ownerContactId == nil)
-                    Button("Add person", systemImage: "person.badge.plus") {
-                        showingPersonCreator = true
-                    }
-                    Button("Add writing samples", systemImage: "text.quote") {
-                        showingVoiceImporter = true
-                    }
-                    Divider()
-                    Button("Organize memory", systemImage: "sparkles") {
-                        updateProfile(action: "organize")
-                    }
-                    Button("Refresh profile summary", systemImage: "arrow.clockwise") {
-                        updateProfile(action: "recompile")
-                    }
-                } label: {
-                    Label("Memory actions", systemImage: "ellipsis.circle")
-                }
-                .disabled(profileActionInFlight != nil)
+                Button("Add memory", systemImage: "plus") { showingCreateMemory = true }
+                    .disabled(model.workspace?.memory.ownerContactId == nil)
             }
         }
-        .refreshable { await model.refreshWorkspace() }
-        .task { if model.workspace == nil { await model.refreshWorkspace() } }
-        .fileImporter(
-            isPresented: $showingVoiceImporter,
-            allowedContentTypes: [.plainText, .json, .data],
-            allowsMultipleSelection: false
-        ) { result in
-            guard case let .success(urls) = result, let url = urls.first else {
-                if case let .failure(error) = result { model.reportError(error) }
-                return
-            }
-            uploadVoiceSamples(from: url)
+        .refreshable {
+            await model.refreshWorkspace()
+            await loadGraph()
+        }
+        .task {
+            if model.workspace == nil { await model.refreshWorkspace() }
+            if graph == nil { await loadGraph() }
+        }
+        .fullScreenCover(isPresented: $showsMap, onDismiss: { Task { await loadGraph() } }) {
+            NavigationStack { RelationshipGraphScreen(initialGraph: graph) }
         }
         .sheet(isPresented: $showingCreateMemory) {
             if let ownerContactId = model.workspace?.memory.ownerContactId {
                 NavigationStack { MemoryEditor(ownerContactId: ownerContactId, fact: nil) }
             }
         }
-        .sheet(item: $editingFact) { fact in
-            NavigationStack {
-                MemoryEditor(
-                    ownerContactId: model.workspace?.memory.ownerContactId ?? "",
-                    fact: fact
-                )
-            }
+        .sheet(item: $openFact) { fact in
+            NavigationStack { MemoryFactSheet(fact: fact) }
+                .presentationDetents([.medium, .large])
         }
-        .sheet(isPresented: $showingPersonCreator) {
-            NavigationStack { PersonEditor(person: nil) }
+        .confirmationDialog(
+            "Forget this?",
+            isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
+            titleVisibility: .visible,
+            presenting: forgetting
+        ) { fact in
+            Button("Forget", role: .destructive) { perform(fact, action: "forget") }
+        } message: { _ in
+            Text("It is removed, and the assistant won’t learn it again from the same source.")
         }
-        .sheet(item: $editingPerson) { person in
-            NavigationStack { PersonEditor(person: person) }
-        }
-        .sheet(item: $addingFactForPerson) { person in
-            NavigationStack { MemoryEditor(ownerContactId: person.id, fact: nil) }
-        }
-        .sheet(item: $managingPerson) { person in
-            NavigationStack { PersonDetailsView(personId: person.id, personName: person.name) }
-        }
-        .sheet(isPresented: $showingVoiceProfile) {
-            NavigationStack { VoiceProfileEditor() }
-        }
-    }
-
-    private var isLandscape: Bool { verticalSizeClass == .compact }
-
-    private func memoryContent(_ memory: WorkspaceMemory) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            memoryOverview(memory)
-            NavigationLink {
-                KnowledgeView()
-            } label: {
-                Label("Connections and cleanup", systemImage: "point.3.connected.trianglepath.dotted")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-            NavigationLink {
-                MemoryLibraryScreen()
-            } label: {
-                Label("Browse the whole library", systemImage: "books.vertical")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-            // Open loops sit on the web memory desk; this is the phone's way in.
-            NavigationLink {
-                CommitmentsScreen()
-            } label: {
-                Label("Open loops", systemImage: "clock.arrow.circlepath")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-            NavigationLink {
-                MemoryDataScreen()
-            } label: {
-                Label("Your data", systemImage: "arrow.down.circle")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-            metricGrid([
-                ("In use", memory.health.totalUsable, "brain.head.profile", AssistantTheme.accent(for: colorScheme)),
-                ("Review", memory.health.awaitingReview, "checklist", AssistantTheme.warning(for: colorScheme)),
-                ("Verified", memory.health.ownerConfirmed, "checkmark.seal", AssistantTheme.success(for: colorScheme)),
-            ])
-
-            if memory.health.notYetOrganized > 0 || memory.latestOrganizer != nil {
-                MemoryOrganizerPanel(
-                    pendingCount: memory.health.notYetOrganized,
-                    latest: memory.latestOrganizer,
-                    requestInFlight: profileActionInFlight != nil
-                ) {
-                    updateProfile(action: "organize")
-                }
-            }
-
-            if let card = memory.card {
-                DisclosureGroup("Used in conversations") {
-                    Text(card.content)
-                        .font(.subheadline)
-                        .padding(.top, 8)
-                    Button("Refresh summary", systemImage: "arrow.clockwise") {
-                        updateProfile(action: "recompile")
-                    }
-                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                    .padding(.top, 8)
-                }
-                .assistantPanel(in: colorScheme)
-            }
-
-            if !memory.awaitingReview.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    sectionHeading("Waiting on you", count: memory.awaitingReview.count)
-                    Text("These notes came from an unverified source. They stay out of the assistant’s working context until you approve them.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    ForEach(memory.awaitingReview) { fact in
-                        reviewCard(fact)
-                    }
-                }
-            }
-
-            HStack(alignment: .firstTextBaseline) {
-                sectionHeading(
-                    memory.ownerName.map { "About \($0)" } ?? "Memory library",
-                    count: memory.facts.count
-                )
-                Spacer()
-                if memory.ownerContactId == nil {
-                    Text("Owner profile unavailable")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if memory.facts.isEmpty {
-                AssistantEmptyState(
-                    "Nothing saved yet",
-                    systemImage: "brain",
-                    description: "Add a fact the assistant should retain for future conversations."
-                )
-            } else {
-                ForEach(memory.facts) { fact in
-                    factCard(fact)
-                }
-            }
-
-            if let people = memory.people {
-                ViewThatFits(in: .horizontal) {
-                    HStack {
-                        peopleHeading(count: people.count)
-                        Spacer()
-                        Button("Add", systemImage: "person.badge.plus") {
-                            showingPersonCreator = true
-                        }
-                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        peopleHeading(count: people.count)
-                        Button("Add", systemImage: "person.badge.plus") {
-                            showingPersonCreator = true
-                        }
-                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                    }
-                }
-                if people.isEmpty {
-                    AssistantEmptyState("No people yet", systemImage: "person.2")
-                } else {
-                    ForEach(people) { person in
-                        personCard(person)
-                    }
-                }
-            }
-
-            if let voice = memory.voiceStats {
-                VStack(alignment: .leading, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Your writing voice").font(.headline)
-                        Text("\(voice.total) samples · \(voice.auto) learned · \(voice.uploaded) uploaded")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Picker("Style", selection: $voiceRegister) {
-                        Text("Casual email").tag("email_casual")
-                        Text("Professional email").tag("email_professional")
-                        Text("Text messages").tag("sms")
-                        Text("Chat").tag("chat")
-                    }
-                    AssistantFlowLayout(spacing: 9) {
-                        Button("Upload sent messages", systemImage: "square.and.arrow.up") {
-                            showingVoiceImporter = true
-                        }
-                        .buttonStyle(AssistantActionButtonStyle(kind: .primary))
-                        Button("Edit voice", systemImage: "pencil") {
-                            showingVoiceProfile = true
-                        }
-                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                        if voice.auto + voice.uploaded > 0 {
-                            AssistantConfirmationButton("Clear") {
-                                updateProfile(action: "purge-voice")
-                            }
-                            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                        }
-                    }
-                    .disabled(profileActionInFlight != nil)
-                }
-                .assistantPanel(in: colorScheme)
-            }
-        }
-    }
-
-    private func memoryOverview(_ memory: WorkspaceMemory) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            AssistantGlyph(systemName: "brain.head.profile", tint: AssistantTheme.accent(for: colorScheme))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(memory.ownerName.map { "\($0)'s memory" } ?? "Memory library")
-                    .font(.headline)
-                Text("Only verified, relevant facts are used in future conversations.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .assistantPanel(in: colorScheme)
-    }
-
-    /// Memory keeps the person editors; browsing lives in People, so the
-    /// heading links there rather than duplicating the directory.
-    private func peopleHeading(count: Int) -> some View {
-        HStack(spacing: 7) {
-            sectionHeading("People", count: count)
-            Spacer(minLength: 8)
-            Button {
-                model.presentedRoute = .people
-            } label: {
-                Label("Open People", systemImage: "person.2")
-                    .font(.caption.weight(.semibold))
-                    .labelStyle(.titleAndIcon)
-                    // The design system puts a 44pt floor on every other
-                    // control; caption-sized content alone falls well under it.
-                    .frame(minHeight: 44)
-            }
-            .buttonStyle(.borderless)
-        }
-    }
-
-    private func personCard(_ person: WorkspacePerson) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            AssistantFlowLayout(spacing: 8) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(person.name).font(.headline)
-                    Text(person.relationship.isEmpty ? "Relationship not set" : person.relationship)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                memoryTag("\(person.factCount) facts")
-                if person.trust == "unknown" { memoryTag("Unverified") }
-            }
-            AssistantFlowLayout(spacing: 9) {
-                Button("Manage", systemImage: "person.crop.circle") { managingPerson = person }
-                    .buttonStyle(AssistantActionButtonStyle(kind: .primary))
-                Button("Add fact", systemImage: "plus") { addingFactForPerson = person }
-                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                Button("Edit", systemImage: "pencil") { editingPerson = person }
-                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                AssistantConfirmationButton("Delete", hint: "Deletes this person and their saved facts.") {
-                    profileActionInFlight = person.id
-                    _ = await model.deletePerson(id: person.id)
-                    profileActionInFlight = nil
-                }
-                .disabled(profileActionInFlight != nil)
-            }
-        }
-        .assistantCard(in: colorScheme)
-    }
-
-    private func reviewCard(_ fact: WorkspaceMemoryFact) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            factIdentity(fact, review: true)
-            AssistantFlowLayout(spacing: 9) {
-                Button {
-                    perform(fact, action: "approve")
-                } label: {
-                    actionLabel(fact, action: "approve", title: "Approve", icon: "checkmark")
-                }
-                .buttonStyle(AssistantActionButtonStyle(kind: .primary))
-                .tint(AssistantTheme.accent(for: colorScheme))
-
-                AssistantConfirmationButton("Reject", systemImage: "xmark") {
-                    perform(fact, action: "reject")
-                }
-            }
-            .disabled(isBusy(fact))
-        }
-        .assistantCard(
-            in: colorScheme,
-            surface: AssistantTheme.warningSurface(for: colorScheme),
-            strokeTint: AssistantTheme.warning(for: colorScheme)
-        )
-    }
-
-    private func factCard(_ fact: WorkspaceMemoryFact) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            factIdentity(fact, review: false)
-            AssistantFlowLayout(spacing: 9) {
-                if !fact.ownerConfirmed {
-                    Button {
-                        perform(fact, action: "confirm")
-                    } label: {
-                        actionLabel(fact, action: "confirm", title: "Confirm", icon: "checkmark.seal")
-                    }
-                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                }
-
-                Menu {
-                    Section("In conversations") {
-                        Button("Always in profile") { perform(fact, action: "prominence", prominence: "always") }
-                        Button("When relevant") { perform(fact, action: "prominence", prominence: "auto") }
-                        Button("Minor detail") { perform(fact, action: "prominence", prominence: "minor") }
-                    }
-                    Button("Correct", systemImage: "pencil") {
-                        editingFact = fact
-                    }
-                } label: {
-                    Label("Manage · \(prominenceLabel(fact))", systemImage: "ellipsis.circle")
-                }
-                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                AssistantConfirmationButton("Forget", hint: "Removes this fact and prevents relearning it from the same source text.") {
-                    perform(fact, action: "forget")
-                }
-            }
-            .font(.subheadline)
-            .disabled(isBusy(fact))
-        }
-        .assistantCard(in: colorScheme)
-    }
-
-    private func factIdentity(_ fact: WorkspaceMemoryFact, review: Bool) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: review ? "questionmark.circle.fill" : (fact.pinned ? "pin.fill" : "brain"))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(review ? AssistantTheme.warningInk(for: colorScheme) : AssistantTheme.accent(for: colorScheme))
-                .frame(width: 32, height: 32)
-                .background(
-                    (review ? AssistantTheme.warning(for: colorScheme) : AssistantTheme.accent(for: colorScheme)).opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                )
-            VStack(alignment: .leading, spacing: 5) {
-                Text(fact.content)
-                    .font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
-                AssistantFlowLayout(spacing: 6) {
-                    memoryTag(fact.domain?.sentenceCaseIdentifier ?? "General")
-                    if fact.pinned { memoryTag("In profile") }
-                    if fact.ownerConfirmed { memoryTag("Verified") }
-                    if !review && !fact.ownerConfirmed { memoryTag("Needs confirmation") }
-                }
-                Text("Saved \(relative(fact.createdAt))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func memoryTag(_ label: String) -> some View {
-        Text(label)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 6)
-            .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
     }
 
     @ViewBuilder
-    private func actionLabel(_ fact: WorkspaceMemoryFact, action: String, title: String, icon: String) -> some View {
-        if pendingFactID == "\(action):\(fact.id)" {
-            HStack(spacing: 7) {
-                ProgressView().controlSize(.small)
-                Text("Updating…")
+    private func content(_ memory: WorkspaceMemory) -> some View {
+        Section {
+            mapCard
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+        }
+
+        if !memory.awaitingReview.isEmpty {
+            Section {
+                ForEach(memory.awaitingReview) { fact in
+                    factRow(fact, review: true)
+                }
+            } header: {
+                Text("Waiting for your OK")
+            } footer: {
+                Text("From sources the assistant can’t vouch for, so they aren’t used until you approve them. Swipe right to approve.")
             }
-        } else {
-            Label(title, systemImage: icon)
+        }
+
+        Section {
+            if memory.facts.isEmpty {
+                Text("Nothing saved yet. Tap + to add something the assistant should always know.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .listRowBackground(rowBackground)
+            } else {
+                ForEach(previewFacts(memory)) { fact in
+                    factRow(fact, review: false)
+                }
+            }
+            NavigationLink {
+                MemoryLibraryScreen()
+            } label: {
+                Text(memory.health.totalUsable > 0 ? "See all \(memory.health.totalUsable)" : "Open the library")
+                    .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+            }
+            .listRowBackground(rowBackground)
+        } header: {
+            Text(memory.ownerName.map { "About \($0)" } ?? "About you")
+        } footer: {
+            if memory.health.totalUsable > 0 {
+                Text("\(memory.health.totalUsable) in use · \(memory.health.ownerConfirmed) confirmed by you")
+            }
+        }
+
+        Section {
+            destination("Open loops", systemImage: "clock.arrow.circlepath") { CommitmentsScreen() }
+            destination("Profile summary", systemImage: "person.text.rectangle") { MemoryProfileScreen() }
+            destination("Writing voice", systemImage: "text.quote") { WritingVoiceScreen() }
+            destination("Tidy up the map", systemImage: "sparkles") { KnowledgeCleanupScreen() }
+            destination("Your data", systemImage: "arrow.down.circle") { MemoryDataScreen() }
+        } header: {
+            Text("More")
         }
     }
 
-    private func prominenceLabel(_ fact: WorkspaceMemoryFact) -> String {
-        if fact.pinned { return "Always" }
-        return fact.importance <= 1 ? "Minor" : "Relevant"
+    private var rowBackground: Color { AssistantTheme.raised(for: colorScheme) }
+
+    /// Facts the owner pinned lead, then the newest — the order the assistant
+    /// itself weighs them in.
+    private func previewFacts(_ memory: WorkspaceMemory) -> [WorkspaceMemoryFact] {
+        let pinned = memory.facts.filter(\.pinned)
+        let rest = memory.facts.filter { !$0.pinned }
+        return Array((pinned + rest).prefix(factPreviewCount))
     }
 
-    /// True only while an action on THIS fact is in flight. pendingFactID
-    /// carries "action:id" so actionLabel can spin the one button that was
-    /// pressed; gating .disabled on `!= nil` froze every other fact's buttons
-    /// as well — the same defect already fixed per-row in the library screen.
-    private func isBusy(_ fact: WorkspaceMemoryFact) -> Bool {
-        pendingFactID?.hasSuffix(":\(fact.id)") ?? false
+    private func destination<Destination: View>(
+        _ title: String, systemImage: String, @ViewBuilder _ destination: @escaping () -> Destination
+    ) -> some View {
+        NavigationLink {
+            destination()
+        } label: {
+            Label(title, systemImage: systemImage)
+        }
+        .listRowBackground(rowBackground)
+    }
+
+    // MARK: - Map card
+
+    private var mapCard: some View {
+        Button { showsMap = true } label: {
+            ZStack(alignment: .bottomLeading) {
+                if let graph, !graph.nodes.isEmpty {
+                    RelationshipGraphCanvas(snapshot: graph, selectedID: nil, interactive: false,
+                                            insets: UIEdgeInsets(top: 8, left: 0, bottom: 56, right: 0))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                } else {
+                    AssistantTheme.raised(for: colorScheme)
+                    Image(systemName: "point.3.connected.trianglepath.dotted")
+                        .font(.system(size: 44, weight: .light))
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme).opacity(0.5))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .accessibilityHidden(true)
+                }
+                LinearGradient(
+                    colors: [AssistantTheme.canvas(for: colorScheme).opacity(0), AssistantTheme.canvas(for: colorScheme).opacity(0.92)],
+                    startPoint: .center, endPoint: .bottom
+                )
+                .allowsHitTesting(false)
+                HStack(alignment: .bottom) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Your map").font(.headline).foregroundStyle(.primary)
+                        Text(mapSubtitle).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                        .frame(width: 36, height: 36)
+                        .glassEffect(.regular, in: Circle())
+                        .accessibilityHidden(true)
+                }
+                .padding(16)
+            }
+            .frame(height: 220)
+            .clipShape(RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous)
+                    .stroke(Color.primary.opacity(colorScheme == .dark ? 0.16 : 0.07), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: AssistantTheme.cardCornerRadius, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Your map. \(mapSubtitle)")
+        .accessibilityHint("Opens the relationship map full screen")
+        .accessibilityIdentifier("assistant.memory.map")
+    }
+
+    private var mapSubtitle: String {
+        guard let graph else { return graphFailed ? "Tap to open" : "Loading…" }
+        guard !graph.nodes.isEmpty else { return "Fills in as the assistant learns who knows whom" }
+        let items = graph.nodes.count, links = graph.links.count
+        return "\(items)\(graph.truncated ? "+" : "") \(items == 1 ? "item" : "items") · \(links) \(links == 1 ? "connection" : "connections")"
+    }
+
+    private func loadGraph() async {
+        if let result = await model.relationshipGraph() {
+            graph = result; graphFailed = false
+        } else if graph == nil {
+            graphFailed = true
+        }
+    }
+
+    // MARK: - Facts
+
+    private func factRow(_ fact: WorkspaceMemoryFact, review: Bool) -> some View {
+        Button { openFact = fact } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                if fact.pinned && !review {
+                    Image(systemName: "pin.fill")
+                        .font(.caption)
+                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+                        .accessibilityLabel("Always used")
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(fact.content)
+                        .foregroundStyle(.primary)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                    Text(factMeta(fact, review: review))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(review ? AssistantTheme.warningSurface(for: colorScheme) : rowBackground)
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if review {
+                Button("Approve", systemImage: "checkmark") { perform(fact, action: "approve") }
+                    .tint(AssistantTheme.accent(for: colorScheme))
+            } else if !fact.ownerConfirmed {
+                Button("Confirm", systemImage: "checkmark.seal") { perform(fact, action: "confirm") }
+                    .tint(AssistantTheme.accent(for: colorScheme))
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if review {
+                Button("Reject", systemImage: "xmark", role: .destructive) { perform(fact, action: "reject") }
+            } else {
+                Button("Forget", systemImage: "trash", role: .destructive) { forgetting = fact }
+            }
+        }
+        .contextMenu {
+            if review {
+                Button("Approve", systemImage: "checkmark") { perform(fact, action: "approve") }
+                Button("Reject", systemImage: "xmark", role: .destructive) { perform(fact, action: "reject") }
+            } else {
+                if !fact.ownerConfirmed {
+                    Button("Confirm it’s right", systemImage: "checkmark.seal") { perform(fact, action: "confirm") }
+                }
+                Button(fact.pinned ? "Use only when relevant" : "Always use", systemImage: fact.pinned ? "pin.slash" : "pin") {
+                    perform(fact, action: "prominence", prominence: fact.pinned ? "auto" : "always")
+                }
+                Button("Forget", systemImage: "trash", role: .destructive) { forgetting = fact }
+            }
+        }
+    }
+
+    private func factMeta(_ fact: WorkspaceMemoryFact, review: Bool) -> String {
+        var parts = [fact.domain?.sentenceCaseIdentifier ?? "General"]
+        if !review && !fact.ownerConfirmed { parts.append("Not confirmed") }
+        parts.append(relative(fact.createdAt))
+        return parts.joined(separator: " · ")
     }
 
     private func perform(_ fact: WorkspaceMemoryFact, action: String, prominence: String? = nil) {
-        pendingFactID = "\(action):\(fact.id)"
-        Task {
-            _ = await model.updateMemory(id: fact.id, action: action, prominence: prominence)
-            pendingFactID = nil
+        Task { _ = await model.updateMemory(id: fact.id, action: action, prominence: prominence) }
+    }
+}
+
+/// One fact, read in full, with everything that can be done to it.
+struct MemoryFactSheet: View {
+    let fact: WorkspaceMemoryFact
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var working = false
+    @State private var correcting = false
+
+    /// The live copy, so a change made here shows here.
+    private var current: WorkspaceMemoryFact {
+        let memory = model.workspace?.memory
+        return (memory?.facts ?? []).first { $0.id == fact.id }
+            ?? (memory?.awaitingReview ?? []).first { $0.id == fact.id }
+            ?? fact
+    }
+
+    private var inReview: Bool {
+        (model.workspace?.memory.awaitingReview ?? []).contains { $0.id == fact.id }
+    }
+
+    private var prominence: Binding<String> {
+        Binding(
+            get: { current.pinned ? "always" : current.importance <= 1 ? "minor" : "auto" },
+            set: { value in run(action: "prominence", prominence: value, closes: false) }
+        )
+    }
+
+    var body: some View {
+        AssistantForm {
+            Section {
+                Text(current.content)
+                    .font(.body)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                LabeledContent("Topic", value: current.domain?.sentenceCaseIdentifier ?? "General")
+                LabeledContent("Saved", value: relative(current.createdAt))
+                if !inReview {
+                    LabeledContent("Confirmed by you", value: current.ownerConfirmed ? "Yes" : "Not yet")
+                }
+            }
+            if inReview {
+                Section {
+                    Button("Approve", systemImage: "checkmark") { run(action: "approve") }
+                    Button("Reject", systemImage: "xmark", role: .destructive) { run(action: "reject") }
+                } footer: {
+                    Text("This came from a source the assistant can’t vouch for. It isn’t used until you approve it.")
+                }
+            } else {
+                Section {
+                    if !current.ownerConfirmed {
+                        Button("Yes, this is right", systemImage: "checkmark.seal") { run(action: "confirm", closes: false) }
+                    }
+                    Picker("Use it", selection: prominence) {
+                        Text("Always").tag("always")
+                        Text("When relevant").tag("auto")
+                        Text("Rarely").tag("minor")
+                    }
+                    Button("Correct it", systemImage: "pencil") { correcting = true }
+                }
+                Section {
+                    AssistantConfirmationButton(
+                        "Forget this", confirmationTitle: "Forget for good",
+                        hint: "Removes it and stops the assistant learning it again from the same source.",
+                        fillsWidth: true
+                    ) {
+                        working = true
+                        if await model.updateMemory(id: fact.id, action: "forget") { dismiss() }
+                        working = false
+                    }
+                }
+            }
+        }
+        .disabled(working)
+        .navigationTitle(inReview ? "Waiting for your OK" : "Memory")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .sheet(isPresented: $correcting) {
+            NavigationStack {
+                MemoryEditor(ownerContactId: model.workspace?.memory.ownerContactId ?? "", fact: current)
+            }
         }
     }
 
-    private func updateProfile(action: String) {
-        profileActionInFlight = action
+    private func run(action: String, prominence: String? = nil, closes: Bool = true) {
+        working = true
+        Task {
+            let done = await model.updateMemory(id: fact.id, action: action, prominence: prominence)
+            working = false
+            if done && closes { dismiss() }
+        }
+    }
+}
+
+/// The short summary that rides along in every conversation, and the
+/// organizer that keeps the memory behind it tidy.
+struct MemoryProfileScreen: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var inFlight: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("The assistant reads this summary at the start of every conversation, so it knows the basics without searching.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let card = model.workspace?.memory.card {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(card.content)
+                            .font(.subheadline)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Updated \(relative(card.compiledAt))").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .assistantCard(in: colorScheme)
+                } else {
+                    AssistantEmptyState("No summary yet", systemImage: "person.text.rectangle",
+                                        description: "One is written once there are a few things to summarise.")
+                }
+                Button {
+                    run("recompile")
+                } label: {
+                    HStack(spacing: 7) {
+                        if inFlight == "recompile" { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise") }
+                        Text(inFlight == "recompile" ? "Rewriting…" : "Rewrite summary")
+                    }
+                }
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                .disabled(inFlight != nil)
+
+                if let memory = model.workspace?.memory {
+                    MemoryOrganizerPanel(
+                        pendingCount: memory.health.notYetOrganized,
+                        latest: memory.latestOrganizer,
+                        requestInFlight: inFlight == "organize"
+                    ) { run("organize") }
+                }
+            }
+            .padding(16)
+            .padding(.bottom, 28)
+        }
+        .navigationTitle("Profile summary")
+        .assistantSubmenuChrome()
+        .refreshable { await model.refreshWorkspace() }
+    }
+
+    private func run(_ action: String) {
+        inFlight = action
         Task {
             _ = await model.updateMemoryProfile(action: action)
-            profileActionInFlight = nil
+            inFlight = nil
         }
     }
+}
 
-    private func uploadVoiceSamples(from url: URL) {
-        profileActionInFlight = "voice-upload"
+/// How the assistant writes when it drafts for the owner, and the samples it
+/// learned that from.
+struct WritingVoiceScreen: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var register = "email_casual"
+    @State private var importing = false
+    @State private var editing = false
+    @State private var inFlight = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Drafts sound like you when the assistant has seen how you write. Upload messages you’ve sent, or let it learn from the ones you approve.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let voice = model.workspace?.memory.voiceStats {
+                    HStack(spacing: 10) {
+                        stat("Samples", voice.total)
+                        stat("Learned", voice.auto)
+                        stat("Uploaded", voice.uploaded)
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        Picker("These samples are", selection: $register) {
+                            Text("Casual email").tag("email_casual")
+                            Text("Professional email").tag("email_professional")
+                            Text("Text messages").tag("sms")
+                            Text("Chat").tag("chat")
+                        }
+                        Button {
+                            importing = true
+                        } label: {
+                            HStack(spacing: 7) {
+                                if inFlight { ProgressView().controlSize(.small) } else { Image(systemName: "square.and.arrow.up") }
+                                Text(inFlight ? "Uploading…" : "Upload sent messages")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(AssistantActionButtonStyle(kind: .primary, fillsWidth: true))
+                        .disabled(inFlight)
+                    }
+                    .assistantCard(in: colorScheme)
+                    Button("Edit the voice profile", systemImage: "pencil") { editing = true }
+                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                    if voice.auto + voice.uploaded > 0 {
+                        AssistantConfirmationButton("Clear all samples", confirmationTitle: "Clear for good",
+                                                    hint: "Deletes every writing sample and the learned voice.") {
+                            _ = await model.updateMemoryProfile(action: "purge-voice")
+                        }
+                    }
+                } else {
+                    AssistantEmptyState("Not available", systemImage: "text.quote",
+                                        description: "This server doesn’t report writing samples yet.")
+                }
+            }
+            .padding(16)
+            .padding(.bottom, 28)
+        }
+        .navigationTitle("Writing voice")
+        .assistantSubmenuChrome()
+        .refreshable { await model.refreshWorkspace() }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.plainText, .json, .data], allowsMultipleSelection: false) { result in
+            guard case let .success(urls) = result, let url = urls.first else {
+                if case let .failure(error) = result { model.reportError(error) }
+                return
+            }
+            upload(url)
+        }
+        .sheet(isPresented: $editing) { NavigationStack { VoiceProfileEditor() } }
+    }
+
+    private func stat(_ title: String, _ value: Int) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value, format: .number).font(.title3.monospacedDigit().weight(.semibold))
+            Text(title).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .assistantPanel(in: colorScheme)
+    }
+
+    private func upload(_ url: URL) {
+        inFlight = true
         Task {
             let accessed = url.startAccessingSecurityScopedResource()
             defer { if accessed { url.stopAccessingSecurityScopedResource() } }
@@ -483,64 +539,15 @@ struct MemoryView: View {
                 let data = try Data(contentsOf: url)
                 guard data.count <= 25 * 1024 * 1024 else {
                     model.errorMessage = "Writing sample uploads must be 25 MB or smaller."
-                    profileActionInFlight = nil
+                    inFlight = false
                     return
                 }
-                _ = await model.uploadImport(
-                    data: data,
-                    name: url.lastPathComponent,
-                    voice: true,
-                    register: voiceRegister
-                )
+                _ = await model.uploadImport(data: data, name: url.lastPathComponent, voice: true, register: register)
             } catch {
                 model.reportError(error)
             }
-            profileActionInFlight = nil
+            inFlight = false
         }
-    }
-
-    private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
-
-    private func sectionHeading(_ title: String, count: Int? = nil) -> some View {
-        HStack(spacing: 7) {
-            Text(title).font(.headline)
-            if let count {
-                // Same capsule the workspace pages use for heading counts.
-                Text("\(count)")
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 5)
-                    .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func metricGrid(_ metrics: [(String, Int, String, Color)]) -> some View {
-        LazyVGrid(
-            columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: usesAccessibilityLayout ? 1 : 3),
-            spacing: 10
-        ) {
-            ForEach(Array(metrics.enumerated()), id: \.offset) { _, metric in
-                metricCard(metric)
-            }
-        }
-    }
-
-    private func metricCard(_ metric: (String, Int, String, Color)) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Image(systemName: metric.2)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(metric.3)
-            Text("\(metric.1)")
-                .font(.title3.monospacedDigit().weight(.semibold))
-            Text(metric.0)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .assistantCard(in: colorScheme)
     }
 }
 

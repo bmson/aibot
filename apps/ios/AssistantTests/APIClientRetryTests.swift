@@ -356,22 +356,80 @@ final class APIClientRetryTests: XCTestCase {
     }
 
     @MainActor
-    func testForceGraphCanvasDragCancelAndSelectionPreserveViewport() throws {
+    func testMemoryHomeSnapshots() async throws {
+        func fact(_ id: String, _ content: String, domain: String, confirmed: Bool = true, pinned: Bool = false) -> String {
+            #"{"id":"\#(id)","content":"\#(content)","kind":"fact","domain":"\#(domain)","ownerConfirmed":\#(confirmed),"pinned":\#(pinned),"importance":3,"createdAt":"2026-09-20T10:00:00Z"}"#
+        }
+        let facts = [
+            fact("f1", "Prefers window seats on flights longer than two hours.", domain: "preferences", pinned: true),
+            fact("f2", "Works at Northstar Studio as a design lead.", domain: "work"),
+            fact("f3", "Allergic to shellfish.", domain: "health", confirmed: false),
+            fact("f4", "Lives in Oakland with Robin.", domain: "home"),
+            fact("f5", "Runs on Tuesday and Thursday mornings.", domain: "preferences"),
+            fact("f6", "Speaks Portuguese.", domain: "identity"),
+        ].joined(separator: ",")
+        let review = fact("r1", "Is planning to move to Lisbon next spring.", domain: "home", confirmed: false)
+        let workspace = """
+        {"generatedAt":"2026-09-26T10:00:00Z","chats":{"current":[],"archived":[]},
+         "memory":{"ownerName":"Alex","ownerContactId":"owner","health":{"totalUsable":42,"notYetOrganized":3,"awaitingReview":1,"ownerConfirmed":17,"lastOrganizedAt":null},
+           "facts":[\(facts)],"awaitingReview":[\(review)],"peopleCount":4,"people":[],
+           "card":{"content":"Alex is a design lead in Oakland.","compiledAt":"2026-09-25T10:00:00Z"},
+           "voiceStats":{"total":12,"auto":9,"uploaded":3},"latestOrganizer":null},
+         "skills":[],"capabilities":[],
+         "settings":{"agent":{"name":"Assistant","timezone":"UTC","locale":"en-US","signature":""},"schedules":[],"reminders":[],"policies":[],"goalAutomationCount":0},
+         "costs":{"dailySpentUsd":0,"monthlySpentUsd":0,"heldUsd":0,"dailyLimitUsd":null,"monthlyLimitUsd":null,"taskDefaultLimit":null,"parkedTasks":0,"bySource":[],"byModel":[],"held":[],"topTasks":[],"recent":[]},
+         "anomalies":[],"improvements":[],"imports":null}
+        """
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for (name, scheme, size) in [
+            ("light", ColorScheme.light, DynamicTypeSize.large),
+            ("dark", ColorScheme.dark, DynamicTypeSize.large),
+            ("accessible", ColorScheme.light, DynamicTypeSize.accessibility2),
+        ] {
+            StubURLProtocol.prime([
+                .success(status: 200, body: Data(workspace.utf8)),
+                .success(status: 200, body: try JSONEncoder().encode(RelationshipGraphFixture.snapshot())),
+            ])
+            let model = AppModel(apiClient: makeClient())
+            await model.refreshWorkspace()
+            XCTAssertEqual(model.workspace?.memory.facts.count, 6)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+            window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+            window.rootViewController = UIHostingController(rootView:
+                NavigationStack { MemoryView() }.environmentObject(model)
+                    .environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, size))
+            window.isHidden = false
+            defer { window.isHidden = true; window.rootViewController = nil }
+            try await Task.sleep(for: .milliseconds(900))
+            window.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "memory-home-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+        }
+    }
+
+    @MainActor
+    func testGraphCanvasDragsNodesPansCanvasAndCancelsCleanly() throws {
         let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
         let graph = RelationshipGraphFixture.snapshot()
-        view.configure(snapshot: graph, selectedID: nil, focusOnly: false, dark: false, reduceMotion: true, allowsNodeDragging: true)
+        view.configure(snapshot: graph, selectedID: nil, dark: false, reduceMotion: true)
         let point = view.layout.positions[0]
         let screen = view.viewport.screen(point, size: view.bounds.size)
         let viewport = view.viewport
-        view.configure(snapshot: graph, selectedID: view.layout.ids[0], focusOnly: false, dark: false, reduceMotion: true, allowsNodeDragging: true)
-        XCTAssertEqual(view.viewport, viewport)
+        view.configure(snapshot: graph, selectedID: view.layout.ids[0], dark: false, reduceMotion: true)
+        XCTAssertEqual(view.viewport, viewport, "Selecting an item already in view leaves the camera alone")
         view.beginDrag(at: screen)
+        XCTAssertEqual(view.dragID, view.layout.ids[0], "A drag that starts on a dot picks that dot up")
         view.drag(to: CGPoint(x: screen.x + 60, y: screen.y + 30))
         XCTAssertEqual(view.layout.positions[0].x, point.x + 60 / viewport.scale, accuracy: 0.001)
         XCTAssertEqual(view.viewport, viewport, "Dragging a node must not pan the canvas")
         view.endDrag(cancelled: true)
         XCTAssertEqual(view.layout.positions[0], point)
         view.beginDrag(at: CGPoint(x: -100, y: -100))
+        XCTAssertNil(view.dragID)
         view.drag(to: CGPoint(x: -50, y: -60))
         XCTAssertEqual(view.viewport.offset.x, viewport.offset.x + 50, accuracy: 0.001)
         view.endDrag(cancelled: true)
@@ -383,33 +441,55 @@ final class APIClientRetryTests: XCTestCase {
     }
 
     @MainActor
-    func testFocusedGraphPanSelectionRefreshAndResizeStayStable() throws {
-        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 393, height: 420))
-        var graph = RelationshipGraphFixture.snapshot(count: 200).focused(on: "node-4")
-        view.configure(snapshot: graph, selectedID: "node-4", focusOnly: false, dark: false, reduceMotion: false, centeredID: "node-4")
+    func testGraphCanvasSelectionRefreshAndResizeKeepTheMapStill() throws {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 393, height: 620))
+        var graph = RelationshipGraphFixture.snapshot(count: 60)
+        view.configure(snapshot: graph, selectedID: nil, dark: false, reduceMotion: true)
         view.layoutIfNeeded()
         let positions = view.layout.positions
-        let point = view.viewport.screen(positions[0], size: view.bounds.size)
-        let original = view.viewport
-        view.beginDrag(at: point)
-        view.drag(to: CGPoint(x: point.x + 45, y: point.y + 20))
+        view.beginDrag(at: CGPoint(x: 2, y: 2))
+        view.drag(to: CGPoint(x: 22, y: 14))
         view.endDrag(cancelled: false)
-        XCTAssertEqual(view.layout.positions, positions, "Default dragging over a node pans instead of rearranging nodes")
-        XCTAssertEqual(view.viewport.offset.x, original.offset.x + 45, accuracy: 0.001)
-        let panned = view.viewport
-        view.configure(snapshot: graph, selectedID: graph.nodes.last?.id, focusOnly: false, dark: false, reduceMotion: false, centeredID: "node-4")
         XCTAssertEqual(view.layout.positions, positions)
-        XCTAssertEqual(view.viewport, panned)
+        let panned = view.viewport
+        view.configure(snapshot: graph, selectedID: "node-0", dark: false, reduceMotion: true)
+        XCTAssertEqual(view.layout.positions, positions, "Selecting never rearranges the map")
         graph.edges.removeLast()
-        view.configure(snapshot: graph, selectedID: graph.nodes.last?.id, focusOnly: false, dark: true, reduceMotion: false, centeredID: "node-4")
-        XCTAssertEqual(view.layout.positions, positions, "Evidence refresh cannot rearrange existing items")
+        view.configure(snapshot: graph, selectedID: "node-0", dark: true, reduceMotion: true)
+        XCTAssertEqual(view.layout.positions, positions, "An evidence refresh with the same items keeps them where they are")
         XCTAssertEqual(view.viewport, panned)
         let screenBefore = view.viewport.screen(positions[0], size: view.bounds.size)
         view.frame.size.height -= 65
         view.layoutIfNeeded()
-        XCTAssertEqual(view.viewport.screen(positions[0], size: view.bounds.size), screenBefore, "Wrapping controls must not shift map targets")
-        view.beginDrag(at: .zero); view.drag(to: CGPoint(x: 20, y: 30)); view.endDrag(cancelled: true)
-        XCTAssertEqual(view.viewport.screen(positions[0], size: view.bounds.size), screenBefore)
+        let screenAfter = view.viewport.screen(positions[0], size: view.bounds.size)
+        XCTAssertEqual(screenAfter.x, screenBefore.x, accuracy: 0.001, "Resizing must not shift map targets")
+        XCTAssertEqual(screenAfter.y, screenBefore.y, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testGraphCanvasConnectGestureReportsBothEnds() throws {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
+        let graph = RelationshipGraphFixture.snapshot()
+        view.configure(snapshot: graph, selectedID: nil, dark: false, reduceMotion: true)
+        var connected: (String, String)?
+        view.onConnect = { connected = ($0, $1) }
+        let ids = view.layout.ids
+        let from = view.viewport.screen(view.layout.positions[0], size: view.bounds.size)
+        let to = view.viewport.screen(view.layout.positions[ids.count - 1], size: view.bounds.size)
+        view.beginConnect(from: ids[0], at: from)
+        view.moveConnect(to: CGPoint(x: -300, y: -300))
+        view.endConnect(cancelled: false)
+        XCTAssertNil(connected, "Letting go over empty canvas connects nothing")
+        view.beginConnect(from: ids[0], at: from)
+        view.moveConnect(to: from)
+        XCTAssertNil(view.connectTargetID, "An item cannot be connected to itself")
+        view.moveConnect(to: to)
+        XCTAssertEqual(view.connectTargetID, view.hitNode(at: to, slop: 26, excluding: ids[0]))
+        let target = view.connectTargetID
+        view.endConnect(cancelled: false)
+        XCTAssertEqual(connected?.0, ids[0])
+        XCTAssertEqual(connected?.1, target)
+        XCTAssertNil(view.connectSourceID)
     }
 
     @MainActor
@@ -446,6 +526,36 @@ final class APIClientRetryTests: XCTestCase {
             let attachment = XCTAttachment(image: image)
             attachment.name = "force-graph-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
             XCTAssertEqual(StubURLProtocol.attempts, ["GET"])
+        }
+    }
+
+    @MainActor
+    func testGraphScreenOpensOnAnItemWithItsCard() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        for scheme in [ColorScheme.light, .dark] {
+            let all = RelationshipGraphFixture.snapshot()
+            let local = RelationshipGraphSnapshot(nodes: all.nodes, edges: all.edges, totalEdges: all.totalEdges, truncated: false, focusId: "node-2")
+            StubURLProtocol.prime([
+                .success(status: 200, body: try JSONEncoder().encode(all)),
+                .success(status: 200, body: try JSONEncoder().encode(local)),
+            ])
+            let model = AppModel(apiClient: makeClient())
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+            window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
+            window.rootViewController = UIHostingController(rootView:
+                NavigationStack { RelationshipGraphScreen(entityID: "node-2") }.environmentObject(model)
+                    .environment(\.colorScheme, scheme))
+            window.isHidden = false
+            defer { window.isHidden = true; window.rootViewController = nil }
+            try await Task.sleep(for: .milliseconds(1200))
+            window.layoutIfNeeded()
+            XCTAssertEqual(StubURLProtocol.attempts, ["GET", "GET"], "The whole map, then the item's own neighbourhood")
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "graph-item-card-\(scheme == .light ? "light" : "dark")"; attachment.lifetime = .keepAlways; add(attachment)
         }
     }
 
@@ -581,44 +691,6 @@ final class APIClientRetryTests: XCTestCase {
             }
             let attachment = XCTAttachment(image: image)
             attachment.name = "people-map-\(name)"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-        }
-    }
-
-    @MainActor
-    func testKnowledgeMapLightDarkAndCompactSnapshots() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
-        for (name, scheme, width, count) in [
-            ("light", ColorScheme.light, CGFloat(393), 6),
-            ("dark", ColorScheme.dark, CGFloat(393), 6),
-            ("compact", ColorScheme.light, CGFloat(320), 6),
-            ("single", ColorScheme.light, CGFloat(393), 1),
-            ("empty", ColorScheme.light, CGFloat(393), 0)
-        ] {
-            let window = UIWindow(windowScene: scene)
-            window.frame = CGRect(x: 0, y: 0, width: width, height: 852)
-            window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
-            let content = NavigationStack {
-                ScrollView {
-                    KnowledgeGraphView(focus: KnowledgeGraphFixture.focus,
-                        relations: Array(KnowledgeGraphFixture.relations.prefix(count)), loading: false,
-                        open: { _ in }, inspect: { _ in })
-                        .padding(16)
-                }
-                .navigationTitle("Knowledge")
-                .assistantSubmenuChrome()
-            }.environment(\.colorScheme, scheme)
-            window.rootViewController = UIHostingController(rootView: content)
-            window.isHidden = false
-            defer { window.isHidden = true; window.rootViewController = nil }
-            try await Task.sleep(for: .milliseconds(350))
-            window.layoutIfNeeded()
-            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-            }
-            let attachment = XCTAttachment(image: image)
-            attachment.name = "knowledge-map-\(name)"
             attachment.lifetime = .keepAlways
             add(attachment)
         }
@@ -1333,26 +1405,31 @@ final class APIClientRetryTests: XCTestCase {
 
 extension APIClientRetryTests {
     @MainActor
-    func testFocusedRingPlacesEveryNeighbourApartAndNamesThemAll() throws {
-        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 393, height: 470))
-        let graph = RelationshipGraphFixture.snapshot(count: 200).focused(on: "node-4")
-        let size = RelationshipGraphSnapshot.focusPageSize
-        XCTAssertEqual(graph.nodes.count, size + 1, "A full page is the centre plus one ring")
-        view.configure(snapshot: graph, selectedID: "node-4", focusOnly: false, dark: false,
-                       reduceMotion: false, centeredID: "node-4")
+    func testSelectedItemNamesEveryNeighbourOnScreen() throws {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 393, height: 700))
+        let graph = RelationshipGraphFixture.snapshot()
+        view.configure(snapshot: graph, selectedID: "node-0", dark: false, reduceMotion: true)
         view.layoutIfNeeded()
-        let placed = Dictionary(uniqueKeysWithValues: zip(view.layout.ids, view.layout.positions))
-        XCTAssertEqual(placed["node-4"], .zero, "The item in hand holds the centre")
-        let spokes = graph.nodes.dropFirst().compactMap { placed[$0.id] }
-        XCTAssertEqual(spokes.count, size)
-        // The four fixed corner slots this replaced wrapped with `% 4`, so a
-        // fifth and sixth neighbour were drawn on top of the first and second.
-        for (index, spoke) in spokes.enumerated() {
-            for other in spokes.dropFirst(index + 1) {
-                XCTAssertGreaterThan(hypot(spoke.x - other.x, spoke.y - other.y), 80)
-            }
-            XCTAssertGreaterThan(hypot(spoke.x, spoke.y), 80, "No spoke sits on the centre")
+        _ = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
         }
+        let placed = Dictionary(uniqueKeysWithValues: zip(view.layout.ids, view.layout.positions))
+        let onScreen = graph.neighborhood(of: "node-0").filter { id in
+            placed[id].map { view.bounds.insetBy(dx: 2, dy: 2).contains(view.viewport.screen($0, size: view.bounds.size)) } ?? false
+        }
+        XCTAssertFalse(onScreen.isEmpty)
+        XCTAssertTrue(onScreen.isSubset(of: view.namedNodeIDs), "Every neighbour of the selection is named, however crowded")
+    }
+
+    func testNamesFadeInWithZoomHubsFirst() {
+        let leaf = 1, hub = 40
+        XCTAssertEqual(RelationshipGraphCanvasView.labelOpacity(scale: 0.3, degree: leaf), 0)
+        XCTAssertGreaterThan(RelationshipGraphCanvasView.labelOpacity(scale: 0.3, degree: hub), 0,
+                             "A hub is named from further out than a leaf")
+        XCTAssertEqual(RelationshipGraphCanvasView.labelOpacity(scale: 1.2, degree: leaf), 1)
+        let halfway = RelationshipGraphCanvasView.labelOpacity(scale: 0.55, degree: leaf)
+        XCTAssertGreaterThan(halfway, 0); XCTAssertLessThan(halfway, 1, "Names fade rather than pop")
+        XCTAssertGreaterThan(RelationshipGraphCanvasView.worldRadius(degree: hub), RelationshipGraphCanvasView.worldRadius(degree: leaf))
     }
 
     @MainActor
@@ -1361,9 +1438,9 @@ extension APIClientRetryTests {
         // so it arrived as two hundred anonymous dots with nowhere to start.
         let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 393, height: 470))
         let graph = RelationshipGraphFixture.snapshot(count: 200)
-        view.configure(snapshot: graph, selectedID: nil, focusOnly: false, dark: false, reduceMotion: false)
+        view.configure(snapshot: graph, selectedID: nil, dark: false, reduceMotion: true)
         view.layoutIfNeeded()
-        XCTAssertLessThan(view.viewport.scale, 0.5, "This fixture only fits well below the old gate")
+        XCTAssertLessThan(view.viewport.scale, 0.5, "This fixture only fits zoomed well out")
         _ = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
             view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
         }

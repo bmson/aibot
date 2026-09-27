@@ -97,36 +97,23 @@ extension RelationshipGraphSnapshot {
         .init(nodes: nodes.filter { ids.contains($0.id) }, edges: edges.filter { ids.contains($0.subjectId) && ids.contains($0.objectId) }, totalEdges: totalEdges, truncated: truncated, focusId: focusId)
     }
 
-    /// Stable pages keep a busy person's map readable without hiding access to other connections.
-    func directNeighbors(of id: String, peopleOnly: Bool = false) -> [RelationshipGraphNode] {
+    /// Everything one step away, alphabetical so the list does not reshuffle
+    /// as the map moves.
+    func directNeighbors(of id: String) -> [RelationshipGraphNode] {
         let ids = neighborhood(of: id).subtracting([id])
-        return nodes.filter { ids.contains($0.id) && (!peopleOnly || $0.kind == "person") }.sorted {
+        return nodes.filter { ids.contains($0.id) }.sorted {
             let order = $0.label.localizedStandardCompare($1.label)
             return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
         }
     }
 
-    /// How many neighbours one focused page draws.
-    ///
-    /// Four was not a readability limit; it was the number of fixed corner
-    /// slots the canvas had, and a fifth neighbour was drawn on top of the
-    /// first. With the spokes placed around an ellipse instead, six fit with
-    /// their names clear of each other, which halves the paging on a busy
-    /// person. The searchable list remains the way to reach the rest.
-    static let focusPageSize = 6
-
-    func focused(on id: String, page: Int = 0, pageSize: Int = focusPageSize, peopleOnly: Bool = false) -> Self {
-        guard let center = nodes.first(where: { $0.id == id }) else { return .empty }
-        let neighbors = directNeighbors(of: id, peopleOnly: peopleOnly)
-        let size = max(1, pageSize)
-        let lastPage = max(0, (neighbors.count - 1) / size)
-        let start = min(max(0, page), lastPage) * size
-        let shown = [center] + Array(neighbors.dropFirst(start).prefix(size))
-        let ids = Set(shown.map(\.id))
-        return .init(nodes: shown, edges: edges.filter {
-            $0.reviewStatus != "rejected" && ($0.subjectId == id || $0.objectId == id)
-                && ids.contains($0.subjectId) && ids.contains($0.objectId)
-        }, totalEdges: totalEdges, truncated: truncated, focusId: id)
+    /// Distinct neighbours per item — the landmark weight a node is drawn and
+    /// named by. Topology, not source rows: three notes about one link count once.
+    var degrees: [String: Int] {
+        links.reduce(into: [String: Int]()) { result, link in
+            result[link.a, default: 0] += 1
+            result[link.b, default: 0] += 1
+        }
     }
 
     /// Suggestions are navigation prompts based on topology, never asserted new facts.
@@ -182,80 +169,97 @@ struct GraphViewport: Equatable {
         scale = min(4, max(0.15, value))
         offset = CGPoint(x: anchor.x - size.width / 2 - fixed.x * scale, y: anchor.y - size.height / 2 - fixed.y * scale)
     }
-    mutating func fit(_ points: [CGPoint], size: CGSize) {
+    /// `margin` is what is kept clear around the drawing on each axis, in
+    /// screen points — room for the names that hang off the outermost dots.
+    mutating func fit(_ points: [CGPoint], size: CGSize, margin: CGSize = CGSize(width: 100, height: 120)) {
         guard let first = points.first, size.width > 0, size.height > 0 else { self = Self(); return }
         let minX = points.reduce(first.x) { min($0, $1.x) }, maxX = points.reduce(first.x) { max($0, $1.x) }
         let minY = points.reduce(first.y) { min($0, $1.y) }, maxY = points.reduce(first.y) { max($0, $1.y) }
-        scale = min(1.5, max(0.15, min(max(80, size.width - 100) / max(100, maxX - minX), max(80, size.height - 120) / max(100, maxY - minY))))
+        scale = min(1.5, max(0.15, min(max(60, size.width - margin.width) / max(100, maxX - minX), max(60, size.height - margin.height) / max(100, maxY - minY))))
         offset = CGPoint(x: -(minX + maxX) / 2 * scale, y: -(minY + maxY) / 2 * scale)
     }
 }
 
-/// A bounded deterministic spring simulation. Positions survive data expansion and selection.
+/// A live force simulation in the manner of d3-force, which is what Obsidian's
+/// graph runs on: nodes repel, links pull to a rest length, a weak gravity
+/// keeps loose islands in orbit instead of drifting off, and everything is
+/// scaled by `alpha`, which cools towards zero so the map comes to rest.
+/// Dragging a node pins it and reheats the simulation a little, so its
+/// neighbours follow it through the drag and settle once it is let go.
+///
+/// Deterministic: the same nodes and links always settle the same way, and
+/// positions survive an update, so expanding a neighbourhood grows the map
+/// around what is already there rather than reshuffling it.
 struct RelationshipGraphLayout {
     private(set) var ids: [String] = []
     private(set) var positions: [CGPoint] = []
     private var velocities: [CGPoint] = []
-    private var springs: [(Int, Int)] = []
-    private var anchors: [CGPoint] = []
-    private var groupMembers: [[Int]] = []
+    private var springs: [(a: Int, b: Int, strength: CGFloat, bias: CGFloat)] = []
+    private(set) var alpha: CGFloat = 1
+    private var alphaTarget: CGFloat = 0
+
+    static let linkDistance: CGFloat = 70
+    static let alphaMin: CGFloat = 0.004
+    /// Chosen so a cold start settles in roughly 250 frames — about four
+    /// seconds of visible motion, which reads as the map finding its shape
+    /// rather than as a loading delay.
+    static let alphaDecay: CGFloat = 0.022
+    static let velocityDecay: CGFloat = 0.42
+    static let charge: CGFloat = -420
+    static let gravity: CGFloat = 0.035
+    static let collisionRadius: CGFloat = 16
+
+    var isSettled: Bool { positions.isEmpty || (alpha < Self.alphaMin && alphaTarget == 0) }
 
     mutating func update(nodes: [RelationshipGraphNode], links: [GraphLink]) {
         let old = Dictionary(uniqueKeysWithValues: zip(ids, positions))
+        let firstLayout = ids.isEmpty
         ids = nodes.map(\.id).sorted()
         let index = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset) })
+        var placedNew = 0
         positions = ids.enumerated().map { i, id in
             if let previous = old[id] { return previous }
+            placedNew += 1
+            // A newcomer starts beside a neighbour that is already on the map,
+            // so an expansion blooms out of the item that was opened. With no
+            // placed neighbour it takes a phyllotaxis slot, which spreads a
+            // cold start evenly instead of stacking everything at the origin.
             let angle = Double(i) * 2.399963229728653
-            let radius = 45 * sqrt(Double(i) + 1)
-            let neighbors = links.compactMap { link -> CGPoint? in
-                if link.a == id { return old[link.b] }; if link.b == id { return old[link.a] }; return nil
+            let placedNeighbor = links.lazy.compactMap { link -> CGPoint? in
+                if link.a == id { return old[link.b] }
+                if link.b == id { return old[link.a] }
+                return nil
+            }.first
+            if let anchor = placedNeighbor {
+                return CGPoint(x: anchor.x + cos(angle) * 30, y: anchor.y + sin(angle) * 30)
             }
-            let anchor = neighbors.first ?? .zero
-            return CGPoint(x: anchor.x + cos(angle) * (neighbors.isEmpty ? radius : 65), y: anchor.y + sin(angle) * (neighbors.isEmpty ? radius : 65))
+            let radius = 18 * sqrt(Double(i) + 0.5)
+            return CGPoint(x: cos(angle) * radius, y: sin(angle) * radius)
         }
-        velocities = Array(repeating: .zero, count: ids.count)
-        springs = links.compactMap { link in guard let a = index[link.a], let b = index[link.b] else { return nil }; return (a, b) }
-        // Build components from layout springs without source or presentation dependencies.
-        var visited = Set<Int>(); groupMembers = []
-        for i in ids.indices where visited.insert(i).inserted {
-            var group = [i], queue = [i]
-            while let current = queue.popLast() {
-                for (a, b) in springs where a == current || b == current {
-                    let other = a == current ? b : a
-                    if visited.insert(other).inserted { group.append(other); queue.append(other) }
-                }
-            }
-            groupMembers.append(group)
+        velocities = ids.map { _ in .zero }
+        var degree = Array(repeating: 0, count: ids.count)
+        let pairs = links.compactMap { link -> (Int, Int)? in
+            guard let a = index[link.a], let b = index[link.b], a != b else { return nil }
+            degree[a] += 1; degree[b] += 1
+            return (a, b)
         }
-        updateAnchors()
+        // d3's defaults: a link is only as stiff as its less connected end
+        // allows, so hubs are not yanked about by every leaf, and the leaf does
+        // most of the moving.
+        springs = pairs.map { a, b in
+            let da = CGFloat(degree[a]), db = CGFloat(degree[b])
+            return (a, b, 1 / max(1, min(da, db)), da / max(1, da + db))
+        }
+        if firstLayout { alpha = 1 } else if placedNew > 0 || old.count != ids.count { reheat(0.6) }
     }
 
-    private mutating func updateAnchors() {
-        anchors = Array(repeating: .zero, count: ids.count)
-        for group in groupMembers {
-            let center = CGPoint(x: group.reduce(0) { $0 + positions[$1].x } / CGFloat(group.count), y: group.reduce(0) { $0 + positions[$1].y } / CGFloat(group.count))
-            for i in group { anchors[i] = center }
-        }
-    }
+    /// Wakes the simulation without restarting it from scratch.
+    mutating func reheat(_ value: CGFloat = 0.3) { alpha = max(alpha, value) }
 
-    /// Pack disconnected components into distinct, non-overlapping areas instead of one cloud.
-    mutating func arrangeGroups() {
-        let groups = groupMembers.sorted { $0.count == $1.count ? $0[0] < $1[0] : $0.count > $1.count }
-        let boxes = groups.map { group -> CGRect in
-            let xs = group.map { positions[$0].x }, ys = group.map { positions[$0].y }
-            return CGRect(x: xs.min() ?? 0, y: ys.min() ?? 0, width: (xs.max() ?? 0) - (xs.min() ?? 0), height: (ys.max() ?? 0) - (ys.min() ?? 0))
-        }
-        let area = boxes.reduce(CGFloat(0)) { $0 + max(150, $1.width + 110) * max(130, $1.height + 110) }
-        let rowWidth = max(boxes.map { $0.width + 110 }.max() ?? 150, sqrt(area) * 0.85)
-        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
-        for (group, box) in zip(groups, boxes) {
-            let width = max(150, box.width + 110), height = max(130, box.height + 110)
-            if x > 0, x + width > rowWidth { x = 0; y += rowHeight; rowHeight = 0 }
-            for i in group { positions[i].x += x + width / 2 - box.midX; positions[i].y += y + height / 2 - box.midY; velocities[i] = .zero }
-            x += width; rowHeight = max(rowHeight, height)
-        }
-        updateAnchors()
+    /// Holds the simulation warm while something is being dragged; 0 lets it cool.
+    mutating func hold(_ target: CGFloat) {
+        alphaTarget = target
+        if target > 0 { alpha = max(alpha, target) }
     }
 
     mutating func move(id: String, to point: CGPoint) {
@@ -263,35 +267,66 @@ struct RelationshipGraphLayout {
         positions[i] = point; velocities[i] = .zero
     }
 
+    /// Runs the simulation straight to rest — for Reduce Motion, and for
+    /// anywhere a settled picture is wanted without watching it form.
+    mutating func settle(maxSteps: Int = 400) {
+        var steps = 0
+        while !isSettled && steps < maxSteps { step(); steps += 1 }
+    }
+
+    /// One tick. `pinned` stays exactly where it is put, like d3's fx/fy.
     @discardableResult mutating func step(pinned: String? = nil) -> CGFloat {
         let n = positions.count
-        guard n > 1 else { return 0 }
+        guard n > 0 else { return 0 }
+        alpha += (alphaTarget - alpha) * Self.alphaDecay
+        let pinnedIndex = pinned.flatMap { ids.firstIndex(of: $0) }
         var force = Array(repeating: CGPoint.zero, count: n)
+        // Many-body repulsion, plus a hard collision floor so two dots never
+        // sit on top of each other however crowded a cluster gets. At the 200
+        // node cap this is 20,000 pairs a tick, well inside a frame.
         for i in 0..<n {
             for j in (i + 1)..<n {
-                let dx = positions[i].x - positions[j].x, dy = positions[i].y - positions[j].y
-                let d2 = max(64, dx * dx + dy * dy)
-                let length = sqrt(d2)
-                let strength = min(5, 1800 / d2)
-                let x = dx / length * strength, y = dy / length * strength
-                force[i].x += x; force[i].y += y; force[j].x -= x; force[j].y -= y
+                var dx = positions[j].x - positions[i].x
+                var dy = positions[j].y - positions[i].y
+                if dx == 0 && dy == 0 {
+                    // Coincident points get a deterministic nudge apart.
+                    dx = CGFloat((i * 7 + j * 13) % 11 - 5) * 0.1 + 0.05
+                    dy = CGFloat((i * 5 + j * 3) % 11 - 5) * 0.1 + 0.05
+                }
+                let d2 = max(1, dx * dx + dy * dy)
+                let d = sqrt(d2)
+                // Negative charge: each moves away from the other, by
+                // charge·alpha/d — strong up close, a whisper across the map.
+                var w = Self.charge * alpha / d2
+                let minimum = Self.collisionRadius * 2
+                if d < minimum { w -= (minimum - d) / d * 0.5 }
+                force[i].x += dx * w; force[i].y += dy * w
+                force[j].x -= dx * w; force[j].y -= dy * w
             }
         }
-        for (a, b) in springs {
-            let dx = positions[b].x - positions[a].x, dy = positions[b].y - positions[a].y
-            let length = max(1, sqrt(dx * dx + dy * dy))
-            let strength = (length - 105) * 0.018
-            let x = dx / length * strength, y = dy / length * strength
-            force[a].x += x; force[a].y += y; force[b].x -= x; force[b].y -= y
+        for spring in springs {
+            let a = spring.a, b = spring.b
+            let dx = positions[b].x + velocities[b].x - positions[a].x - velocities[a].x
+            let dy = positions[b].y + velocities[b].y - positions[a].y - velocities[a].y
+            let length = max(0.01, sqrt(dx * dx + dy * dy))
+            let pull = (length - Self.linkDistance) / length * alpha * spring.strength
+            let x = dx * pull, y = dy * pull
+            force[b].x -= x * spring.bias; force[b].y -= y * spring.bias
+            force[a].x += x * (1 - spring.bias); force[a].y += y * (1 - spring.bias)
         }
         var energy: CGFloat = 0
-        for i in 0..<n where ids[i] != pinned {
-            velocities[i].x = (velocities[i].x + force[i].x - (positions[i].x - anchors[i].x) * 0.002) * 0.78
-            velocities[i].y = (velocities[i].y + force[i].y - (positions[i].y - anchors[i].y) * 0.002) * 0.78
-            positions[i].x += max(-8, min(8, velocities[i].x))
-            positions[i].y += max(-8, min(8, velocities[i].y))
+        for i in 0..<n where i != pinnedIndex {
+            force[i].x -= positions[i].x * Self.gravity * alpha
+            force[i].y -= positions[i].y * Self.gravity * alpha
+            velocities[i].x = (velocities[i].x + force[i].x) * (1 - Self.velocityDecay)
+            velocities[i].y = (velocities[i].y + force[i].y) * (1 - Self.velocityDecay)
+            // Clamped so one tick can never fling a node across the canvas,
+            // whatever a collision or a fresh insertion asks for.
+            positions[i].x += max(-40, min(40, velocities[i].x))
+            positions[i].y += max(-40, min(40, velocities[i].y))
             energy += abs(velocities[i].x) + abs(velocities[i].y)
         }
+        if let pinnedIndex { velocities[pinnedIndex] = .zero }
         return energy / CGFloat(n)
     }
 }

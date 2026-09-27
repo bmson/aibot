@@ -1,504 +1,102 @@
 import SwiftUI
 
-/// Native companion to the web knowledge manager. The phone keeps the same
-/// browse, cleanup, and evidence-backed editing model, with a focused native
-/// map that reveals one neighborhood at a time.
-struct KnowledgeView: View {
+/// Housekeeping for the knowledge map: derived items that lost their source,
+/// connections nobody has confirmed, facts that expired or were superseded.
+/// Browsing and editing connections happens on the map itself; this is the
+/// short list of things that need a decision.
+struct KnowledgeCleanupScreen: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var overview: KnowledgeOverview?
     @State private var cleanup: KnowledgeCleanupResponse?
-    @State private var search = ""
-    @State private var showingCleanup = false
-    @State private var showingConnectionEditor = false
-    @State private var correcting: KnowledgeRelation?
-    @State private var editingItem = false
-    @State private var pendingRelationID: String?
-    @State private var selectionHistory: [KnowledgeEntity] = []
-    @State private var selectedID: String?
-    @State private var loadID = UUID()
-    @State private var loading = false
-    @State private var showingMap = true
-    @State private var showsVisualGraph = false
-    @State private var inspectedNeighborID: String?
-    @State private var evidenceRequest = 0
+    @State private var pendingID: String?
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Color.clear.frame(height: 0).id("knowledge-top")
-                    Picker("Knowledge view", selection: $showingCleanup) {
-                        Text("Connections").tag(false)
-                        Text("Cleanup").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: showingCleanup) { _, _ in Task { await refresh() } }
-
-                    if showingCleanup {
-                        cleanupContent
-                    } else {
-                        relationshipsContent
-                    }
-                }
-                .padding(16)
-                .padding(.bottom, 28)
-                .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
-            }
-            .onChange(of: selectedID) { _, _ in
-                proxy.scrollTo("knowledge-top", anchor: .top)
-            }
-            .onChange(of: evidenceRequest) { _, _ in
-                if inspectedNeighborID != nil {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                        proxy.scrollTo("knowledge-evidence", anchor: .top)
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Nothing here is removed until you say so.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if let cleanup, cleanup.findings.isEmpty {
+                    AssistantEmptyState("All tidy", systemImage: "checkmark.seal",
+                                        description: "Nothing on your map needs a decision right now.")
+                } else if let cleanup {
+                    ForEach(cleanup.findings) { finding in cleanupCard(finding) }
+                } else {
+                    AssistantLoadingState(title: "Checking your map")
                 }
             }
+            .padding(16)
+            .padding(.bottom, 28)
         }
-        .navigationTitle("Knowledge")
+        .navigationTitle("Tidy up")
         .assistantSubmenuChrome()
-        // Toolbar placement participates in the navigation/search layout; the
-        // default overlay placement could cover the lower cleanup cards while
-        // the user scrolled.
-        .searchable(
-            text: $search,
-            placement: .toolbar,
-            prompt: "Find a person, place, project…"
-        )
-        .contentMargins(.bottom, 72, for: .scrollContent)
-        .onSubmit(of: .search) { Task { await loadSearch() } }
-        .fullScreenCover(isPresented: $showsVisualGraph) {
-            NavigationStack { RelationshipGraphScreen(entityID: selectedID) }
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Open visual graph", systemImage: "circle.hexagongrid") { showsVisualGraph = true }
-            }
-            if !showingCleanup, selectedEntity != nil {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button("Add connection", systemImage: "plus") {
-                            showingConnectionEditor = true
-                        }
-                        Button("Edit item", systemImage: "pencil") { editingItem = true }
-                    } label: {
-                        Label("Knowledge actions", systemImage: "ellipsis.circle")
-                    }
-                }
-            }
-        }
         .task { await refresh() }
         .refreshable { await refresh() }
-        .sheet(isPresented: $showingConnectionEditor) {
-            if let selected = selectedEntity {
-                NavigationStack {
-                    KnowledgeConnectionEditor(
-                        selected: selected, candidates: overview?.entities ?? []
-                    ) {
-                        await refresh()
-                    }
-                }
-            }
-        }
-        .sheet(item: $correcting) { relation in
-            NavigationStack {
-                KnowledgeConnectionEditor(
-                    selected: relation.subject,
-                    relationToCorrect: relation,
-                    candidates: overview?.entities ?? []
-                ) { await refresh() }
-            }
-        }
-        .sheet(isPresented: $editingItem) {
-            if let selected = selectedEntity {
-                NavigationStack {
-                    KnowledgeItemEditor(item: selected, duplicates: overview?.duplicates ?? []) {
-                        survivingID in
-                        selectedID = survivingID
-                        selectionHistory.removeAll { $0.id == selected.id }
-                        await refresh()
-                    }
-                }
-            }
-        }
-    }
-
-    private var isLandscape: Bool { verticalSizeClass == .compact }
-
-    private var selectedEntity: KnowledgeEntity? {
-        overview?.entitySelected(by: selectedID)
-    }
-
-    @ViewBuilder
-    private var relationshipsContent: some View {
-        if let overview {
-            if let selected = selectedEntity {
-                Button(
-                    selectionHistory.last.map { "Back to \($0.displayLabel)" }
-                        ?? "Back to knowledge",
-                    systemImage: "chevron.left"
-                ) {
-                    Task {
-                        if let previous = selectionHistory.last {
-                            await open(previous, goingBack: true)
-                        } else {
-                            await loadSearch()
-                        }
-                    }
-                }
-                .disabled(loading)
-                .frame(minHeight: 44)
-                selectedItem(selected, overview: overview)
-            } else {
-                knowledgeSummary(overview)
-            }
-            itemBrowser(overview)
-        } else {
-            if loading {
-                AssistantLoadingState(title: "Loading knowledge")
-            } else {
-                AssistantEmptyState(
-                    "Knowledge is unavailable", systemImage: "arrow.clockwise",
-                    description: "Pull down to try loading your connections again.")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var cleanupContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Knowledge cleanup").font(.title3.weight(.semibold))
-            Text(
-                "Suggestions never remove saved knowledge until you confirm. Disconnected graph items are derived and safe to clear."
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            if let cleanup, cleanup.findings.isEmpty {
-                AssistantEmptyState("Nothing needs cleanup", systemImage: "checkmark.seal")
-            } else if let cleanup {
-                ForEach(cleanup.findings) { finding in cleanupCard(finding) }
-            } else {
-                AssistantLoadingState(title: "Loading connections")
-            }
-        }
     }
 
     private func cleanupCard(_ finding: KnowledgeCleanupFinding) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(finding.kind.replacingOccurrences(of: "_", with: " ").sentenceCaseIdentifier)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
             Text(finding.title).font(.subheadline.weight(.semibold))
-            Text(finding.detail).font(.footnote).foregroundStyle(.secondary)
-            AssistantFlowLayout(spacing: 8) {
-                if finding.kind == "projection_orphan" {
-                    AssistantConfirmationButton("Remove derived items") {
-                        resolveCleanup(action: "remove-orphans", finding: finding)
-                    }.buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                } else if finding.kind == "projection_failed" {
-                    Button("Retry", systemImage: "arrow.clockwise") {
-                        resolveCleanup(action: "retry", finding: finding)
-                    }.buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                } else if finding.kind == "unreviewed_connection",
-                    let relationId = finding.relationId
-                {
-                    Button("Confirm connection", systemImage: "checkmark") {
-                        pendingRelationID = relationId
-                        Task {
-                            _ = await model.reviewKnowledgeRelation(id: relationId, approve: true)
-                            pendingRelationID = nil
-                            await refresh()
-                        }
-                    }.buttonStyle(AssistantActionButtonStyle(kind: .primary))
-                } else if finding.kind == "quarantined" {
-                    Button("Approve", systemImage: "checkmark") {
-                        resolveCleanup(action: "approve", finding: finding)
-                    }.buttonStyle(AssistantActionButtonStyle(kind: .primary))
-                } else if ["expired", "superseded"].contains(finding.kind), finding.memoryId != nil
-                {
-                    Button("Keep as current", systemImage: "checkmark.shield") {
-                        resolveCleanup(action: "keep", finding: finding)
-                    }.buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                }
-            }
-            if let memoryId = finding.memoryId {
-                KnowledgeForgetButton(memoryId: memoryId) { await refresh() }
-                    .id(memoryId)
-            }
-        }
-        .assistantCard(in: colorScheme)
-    }
-
-    private func knowledgeSummary(_ overview: KnowledgeOverview) -> some View {
-        HStack(spacing: 12) {
-            summaryCount("Items", value: overview.totalEntities, icon: "circle.hexagongrid")
-            summaryCount(
-                "Connections", value: overview.totalRelations,
-                icon: "point.3.connected.trianglepath.dotted")
-            summaryCount("Review", value: overview.unreviewedRelations, icon: "checklist")
-        }
-    }
-
-    private func summaryCount(_ title: String, value: Int, icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Image(systemName: icon).foregroundStyle(AssistantTheme.accent(for: colorScheme))
-            Text(value, format: .number).font(.headline)
-            Text(title).font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .assistantPanel(in: colorScheme)
-    }
-
-    private func selectedItem(_ item: KnowledgeEntity, overview: KnowledgeOverview) -> some View {
-        let connections = KnowledgeConnection.group(overview.relations)
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.kind.sentenceCaseIdentifier).font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(showingMap && !dynamicTypeSize.isAccessibilitySize ? "Connection map" : item.displayLabel)
-                        .font(.title3.weight(.semibold))
-                    Text(
-                        "\(connections.count) \(connections.count == 1 ? "connection" : "connections") shown"
-                    )
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Add", systemImage: "plus") { showingConnectionEditor = true }
-                    .buttonStyle(AssistantActionButtonStyle(kind: .primary))
-            }
-            Picker("Connection presentation", selection: $showingMap) {
-                Label("Map", systemImage: "point.3.connected.trianglepath.dotted").tag(true)
-                Label("Details", systemImage: "list.bullet").tag(false)
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("assistant.knowledge.presentation")
-            if overview.relations.isEmpty {
-                AssistantEmptyState(
-                    "No active connections", systemImage: "point.3.connected.trianglepath.dotted",
-                    description: "Add a connection with a short source note.")
-            } else {
-                if showingMap && !dynamicTypeSize.isAccessibilitySize {
-                    KnowledgeGraphView(focus: item, relations: overview.relations, loading: loading) { neighbor in
-                        Task { await open(neighbor) }
-                    } inspect: { neighbor in
-                        inspectedNeighborID = neighbor.id
-                        evidenceRequest += 1
-                    }
-                    if let neighbor = KnowledgeGraphNeighbor.neighbors(of: item, relations: overview.relations)
-                        .first(where: { $0.id == inspectedNeighborID }) {
-                        HStack {
-                            Text("Linked to \(neighbor.entity.displayLabel)").font(.headline)
-                            Spacer()
-                            Button("Close evidence", systemImage: "xmark") { inspectedNeighborID = nil }
-                                .labelStyle(.iconOnly)
-                                .frame(width: 44, height: 44)
-                        }
-                        .id("knowledge-evidence")
-                        ForEach(neighbor.connections) { connection in
-                            connectionCard(connection)
-                        }
-                    }
-                } else {
-                    if showingMap {
-                        Text("Connections are shown as a readable list at this text size.")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }
-                    ForEach(connections) { connection in
-                        connectionCard(connection)
-                    }
-                }
-                if overview.selectedActiveRelationTotal
-                    > overview.relations.filter({
-                        $0.inRecall != false && $0.reviewStatus != "rejected"
-                    }).count
-                {
-                    Text(
-                        "This is a partial view of \(overview.selectedActiveRelationTotal) active source connections. Explore a linked item or use the web knowledge workspace for the full set."
-                    )
-                    .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func itemBrowser(_ overview: KnowledgeOverview) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text("Browse knowledge").font(.headline)
-            if selectedEntity == nil {
-                Text("Choose a person, place, or project to open its connection map. Tap linked nodes to keep exploring.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Text("\(overview.matchingEntities) matching items")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            ForEach(overview.entities) { item in
-                Button {
-                    Task { await open(item) }
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.displayLabel).foregroundStyle(.primary)
-                            Text(item.kind.sentenceCaseIdentifier).font(.caption).foregroundStyle(
-                                .secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(
-                            .secondary)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(loading)
-                .frame(minHeight: 44)
-                .padding(.vertical, 6)
-                Divider()
-            }
-        }
-        .assistantPanel(in: colorScheme)
-    }
-
-    private func connectionCard(_ connection: KnowledgeConnection) -> some View {
-        let relation = connection.relation
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(relation.presentation.label.sentenceCaseIdentifier)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(relation.presentation.sentence)
-                .font(.subheadline.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
-                if !connection.confirmed {
-                    Label("Needs your review", systemImage: "questionmark.circle")
-                        .foregroundStyle(AssistantTheme.warningInk(for: colorScheme))
-                } else {
-                    Label("Confirmed connection", systemImage: "checkmark.seal")
-                        .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                }
-                if connection.sources.allSatisfy({ $0.inRecall == false }) {
-                    Text("Not in recall").foregroundStyle(.secondary)
+            Text(finding.detail).font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 8) {
+                primaryAction(finding)
+                if let memoryId = finding.memoryId {
+                    KnowledgeForgetButton(memoryId: memoryId) { await refresh() }
+                        .id(memoryId)
                 }
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            if let selected = overview?.selected,
-                let other = relation.connectedEntity(to: selected.id)
-            {
-                Button(
-                    "Explore \(other.displayLabel)",
-                    systemImage: "point.3.connected.trianglepath.dotted"
-                ) {
-                    Task { await open(other) }
-                }
-                .font(.subheadline)
-                .frame(minHeight: 44)
-                .disabled(loading)
+            .disabled(pendingID == finding.id)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .assistantCard(in: colorScheme)
+    }
+
+    @ViewBuilder
+    private func primaryAction(_ finding: KnowledgeCleanupFinding) -> some View {
+        switch finding.kind {
+        case "projection_orphan":
+            AssistantConfirmationButton("Clear", systemImage: "trash", compact: true) {
+                await resolve(action: "remove-orphans", finding: finding)
             }
-            Divider()
-            DisclosureGroup("Supporting evidence (\(connection.sources.count))") {
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(connection.sources) { source in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(
-                                source.needsReview
-                                    ? "Source connection not yet reviewed"
-                                    : "Reviewed source connection"
-                            )
-                            .font(.caption).foregroundStyle(.secondary)
-                            Text(source.source.content).font(.footnote)
-                            AssistantFlowLayout(spacing: 8) {
-                                if source.needsReview {
-                                    Button("Confirm", systemImage: "checkmark") {
-                                        review(source, approve: true)
-                                    }
-                                    .buttonStyle(AssistantActionButtonStyle(kind: .primary))
-                                }
-                                Menu {
-                                    Button("Correct", systemImage: "pencil") { correcting = source }
-                                } label: {
-                                    Label("Edit evidence", systemImage: "ellipsis")
-                                }.buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                                AssistantConfirmationButton("Mark inaccurate", systemImage: "xmark") {
-                                    review(source, approve: false)
-                                }
-                            }
-                            .disabled(pendingRelationID != nil)
-                        }
+        case "projection_failed":
+            Button("Retry", systemImage: "arrow.clockwise") { Task { await resolve(action: "retry", finding: finding) } }
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
+        case "unreviewed_connection":
+            if let relationId = finding.relationId {
+                Button("Confirm", systemImage: "checkmark") {
+                    pendingID = finding.id
+                    Task {
+                        _ = await model.reviewKnowledgeRelation(id: relationId, approve: true)
+                        pendingID = nil
+                        await refresh()
                     }
                 }
-                .padding(.top, 8)
+                .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
             }
-            .font(.subheadline)
+        case "quarantined":
+            Button("Approve", systemImage: "checkmark") { Task { await resolve(action: "approve", finding: finding) } }
+                .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
+        case "expired", "superseded":
+            if finding.memoryId != nil {
+                Button("Keep", systemImage: "checkmark.shield") { Task { await resolve(action: "keep", finding: finding) } }
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
+            }
+        default:
+            EmptyView()
         }
-        .assistantCard(in: colorScheme)
     }
 
     private func refresh() async {
-        let request = UUID()
-        loadID = request
-        loading = true
-        defer { if loadID == request { loading = false } }
-        if showingCleanup {
-            let result = await model.knowledgeCleanup()
-            if loadID == request { cleanup = result }
-        } else {
-            let result: KnowledgeOverview?
-            if let selectedID {
-                result = await model.knowledgeItem(id: selectedID)
-            } else {
-                result = await model.knowledge(query: search)
-            }
-            if loadID == request, let result { overview = result }
-        }
+        if let result = await model.knowledgeCleanup() { cleanup = result }
     }
 
-    private func loadSearch() async {
-        showingCleanup = false
-        selectedID = nil
-        inspectedNeighborID = nil
-        selectionHistory = []
+    private func resolve(action: String, finding: KnowledgeCleanupFinding) async {
+        pendingID = finding.id
+        _ = await model.resolveKnowledgeCleanup(action: action, memoryId: finding.memoryId)
+        pendingID = nil
         await refresh()
-    }
-
-    private func open(_ item: KnowledgeEntity, goingBack: Bool = false) async {
-        let request = UUID()
-        loadID = request
-        loading = true
-        defer { if loadID == request { loading = false } }
-        guard let result = await model.knowledgeItem(id: item.id), loadID == request,
-            result.selected?.id == item.id
-        else { return }
-        if goingBack {
-            _ = selectionHistory.popLast()
-        } else if let previous = selectedEntity, previous.id != item.id {
-            selectionHistory.append(previous)
-        }
-        selectedID = item.id
-        inspectedNeighborID = nil
-        overview = result
-    }
-
-    private func review(_ relation: KnowledgeRelation, approve: Bool) {
-        pendingRelationID = relation.id
-        Task {
-            _ = await model.reviewKnowledgeRelation(id: relation.id, approve: approve)
-            pendingRelationID = nil
-            await refresh()
-        }
-    }
-
-    private func resolveCleanup(action: String, finding: KnowledgeCleanupFinding) {
-        Task {
-            _ = await model.resolveKnowledgeCleanup(action: action, memoryId: finding.memoryId)
-            await refresh()
-        }
     }
 }
 
@@ -688,7 +286,7 @@ struct KnowledgeConnectionEditor: View {
         Self.relationshipOptions(subjectKind: subject.kind, objectKind: objectKind)
     }
 
-    private static func relationshipOptions(subjectKind: String, objectKind: String) -> [(
+    static func relationshipOptions(subjectKind: String, objectKind: String) -> [(
         id: String, label: String
     )] {
         switch (subjectKind, objectKind) {
@@ -758,7 +356,7 @@ struct KnowledgeConnectionEditor: View {
     }
 }
 
-private struct KnowledgeItemEditor: View {
+struct KnowledgeItemEditor: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     let item: KnowledgeEntity
@@ -935,7 +533,7 @@ private struct KnowledgeForgetButton: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            AssistantConfirmationButton("Forget", prepare: {
+            AssistantConfirmationButton("Forget", compact: true, prepare: {
                 failure = nil
                 impact = await model.knowledgeSourceImpact(id: memoryId)
                 if impact == nil { failure = "Couldn’t check the affected knowledge. Try again." }

@@ -150,3 +150,53 @@ nothing was verified against the live account.
 The dev server's client bundle does not boot when addressed as `127.0.0.1` — the RSC payload
 never runs, so nothing hydrates — which is why the QA script now uses `localhost`, as
 `launch.json` already did. That is a pre-existing dev-server issue, not part of this change.
+
+### iPhone memory and map, rebuilt for touch — September 26, 2026
+
+The owner found the phone's memory pages too busy to use — a wall of bordered buttons, a
+second graph inside Knowledge, and a map that was hard to move around — and asked for the
+map to behave like Obsidian's graph. This reverses the September 13 decision to open the
+iPhone map on a list of names: the whole map is now the front door, and the failure mode
+that decision guarded against (two hundred overlapping names) is handled by fading names
+in with zoom instead.
+
+- **The map is alive.** A d3-style force simulation (repulsion, links pulling to a rest
+  length, weak gravity, cooling `alpha`) runs on a display link while it settles and stops
+  when it is at rest. A cold start is run most of the way before the first frame so the map
+  opens recognisable. Reduce Motion settles it synchronously.
+- **Touch like Obsidian.** Drag a dot and its neighbours follow, then the map settles; drag
+  the background to pan, with momentum; pinch to zoom, two-finger pan while pinching;
+  double-tap to zoom in, or to fly to a dot. This replaces the explicit "Reposition nodes"
+  toggle and the drag-always-pans rule from September 7.
+- **Zoom in to learn more.** Names fade in by zoom × importance, so hubs are named from
+  further out than leaves; a collision pass and an 18-name ration at low zoom still apply,
+  and names already showing are preferred so they do not flicker. Closer in, each name gains
+  "Kind · N links", arrowheads appear on every line in the recorded direction, and past
+  1.9× every line carries its phrase. A selection dims everything outside its neighbourhood.
+- **Connect by drawing.** Hold a dot, drag onto another, let go: a short sheet asks only how
+  they relate (suggested phrases by kind, or free words, with swap direction) and an
+  optional note. With no note the source reads "Connected by the owner on the relationship
+  map." — the claim still carries a truthful source, as the server requires.
+- **Full screen, few controls.** Close, a count pill that fits the map, Find, and one
+  options menu float over the canvas. Selecting a dot brings up an opaque card: name, kind,
+  counts, the neighbours as tappable chips (the way to walk the graph), and three actions —
+  Connections, Connect, and a menu with Open profile and Rename or merge. The focused
+  six-spoke ring, paging, Tidy and Reposition were removed. Connections are a list of
+  sentences with swipe-to-confirm; each opens its source, Confirm, Show on the map, Correct
+  and Remove.
+- **Memory home is one list.** A live preview of the map (tap for full screen), anything
+  waiting for approval, five facts with the rest one tap away, and a More section (Open
+  loops, Profile summary, Writing voice, Tidy up the map, Your data). A fact is a row: tap
+  for a sheet with everything that can be done to it; swipe to confirm/approve or
+  forget/reject; long-press for the same. The metric tiles, the people cards (People owns
+  those), the voice panel and the organizer moved off the home page.
+- **Knowledge became "Tidy up the map".** Its browsing half duplicated the map and was
+  removed, along with `KnowledgeGraphView`; the cleanup findings remain.
+
+No API, schema, or stored-data change; it needs a new iOS build. Accessibility text sizes
+and the "Show as a list" option still get the whole map as a list; VoiceOver elements still
+describe each dot's connections. Validation: the full native suite passes on the iOS 27
+simulator, with new coverage for settling, collision spacing, drag-follows-neighbour,
+node-drag vs pan, the connect gesture (self and empty drops ignored), label fading, and
+snapshots of the memory home and the map opened on an item in light and dark. Touch feel
+and frame rate have not been checked on a physical iPhone.
