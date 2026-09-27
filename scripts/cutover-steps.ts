@@ -1348,9 +1348,12 @@ function stepsDefinition(): StepDefinition[] {
               region,
             ]),
           );
+          // The image carries BUILD_SHA; a service-level value would pin the
+          // reported release and fail every later release's SHA check.
           const removeEnv = current.envNames.filter(
             (name) =>
-              isDatabaseEnvName(name) && !current.secretRefs.some((ref) => ref.env === name),
+              name === 'BUILD_SHA' ||
+              (isDatabaseEnvName(name) && !current.secretRefs.some((ref) => ref.env === name)),
           );
           const removeSecrets = current.secretRefs
             .filter((ref) => isDatabaseEnvName(ref.env) || isDatabaseSecretName(ref.secret))
@@ -1364,7 +1367,7 @@ function stepsDefinition(): StepDefinition[] {
             region,
             '--image',
             service.image,
-            `--update-env-vars=^@^${Object.entries({ ...service.env, BUILD_SHA: config.releaseSha })
+            `--update-env-vars=^@^${Object.entries(service.env)
               .map(([key, value]) => `${key}=${value}`)
               .join('@')}`,
             '--quiet',
