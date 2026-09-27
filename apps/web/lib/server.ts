@@ -80,6 +80,7 @@ import {
   waitForChatUpdates,
 } from '@assistant/application';
 import type { CallsPorts } from '@assistant/application/calls';
+import { followFlight, unfollowFlight } from '@assistant/application/flight-follow';
 import type { GoalInput } from '@assistant/application/goals';
 import type { ModelProviderPorts } from '@assistant/application/model-providers';
 import {
@@ -114,6 +115,7 @@ import {
   createPostgresGeneratedCardRepository,
   createPostgresModelCatalogRepository,
   createPostgresModelConnectionRepository,
+  createPostgresWatchRepository,
   type Db,
 } from '@assistant/db';
 import {
@@ -136,6 +138,7 @@ import {
   FirestoreRecallFeedbackRepository,
   FirestoreShellStatusRepository,
   FirestoreSkillMutationRepository,
+  FirestoreWatchRepository,
   FirestoreWorkspaceFileLookup,
 } from '@assistant/firestore';
 import { embeddingModelId, validateEmbedding } from '@assistant/persistence';
@@ -491,6 +494,24 @@ function createApplication(options: { profileMemory?: ProfileMemoryCommandPersis
     getPrimaryConversationId: () => getPrimaryConversationId(db),
     recordOwnerLocationPing: (body: unknown) => recordOwnerLocationPing(db, body),
     registerDeviceToken: (body: unknown) => registerDeviceToken(db, body),
+    followFlight: async (body: unknown) =>
+      followFlight(
+        {
+          watches: createPostgresWatchRepository(db),
+          agentId: (await getAgent(db)).id,
+          conversationId: await getPrimaryConversationId(db),
+        },
+        body,
+      ),
+    unfollowFlight: async (body: unknown) =>
+      unfollowFlight(
+        {
+          watches: createPostgresWatchRepository(db),
+          agentId: (await getAgent(db)).id,
+          conversationId: null,
+        },
+        body,
+      ),
     recordOwnerForeground: () => recordOwnerForeground(db),
     recordRecallFeedback: (messageId: string, verdict: 'helpful' | 'not_helpful') =>
       recordRecallFeedback(db, messageId, verdict),
@@ -659,6 +680,24 @@ function createFirestoreChatApplication() {
       ),
     registerDeviceToken: (body: unknown) =>
       registerDeviceTokenWithRepository(deviceTokens, config.FIRESTORE_AGENT_ID, body),
+    followFlight: async (body: unknown) =>
+      followFlight(
+        {
+          watches: new FirestoreWatchRepository(store),
+          agentId: config.FIRESTORE_AGENT_ID,
+          conversationId: await getPrimaryConversationId(chat),
+        },
+        body,
+      ),
+    unfollowFlight: async (body: unknown) =>
+      unfollowFlight(
+        {
+          watches: new FirestoreWatchRepository(store),
+          agentId: config.FIRESTORE_AGENT_ID,
+          conversationId: null,
+        },
+        body,
+      ),
     checkReadiness: () =>
       checkReadinessWithProbe(async () => {
         const agents = await store.collection('agents').limit(2).get();
@@ -857,6 +896,15 @@ export function organizeOwnerMemoryNow() {
 /** Register the owner's APNs token with the configured driver. */
 export function registerOwnerDeviceToken(body: unknown) {
   return getChatApplication().registerDeviceToken(body);
+}
+
+/** A flight followed on the phone's Lock Screen, for closed-app pushes. */
+export function followOwnerFlight(body: unknown) {
+  return getChatApplication().followFlight(body);
+}
+
+export function unfollowOwnerFlight(body: unknown) {
+  return getChatApplication().unfollowFlight(body);
 }
 
 /** Readiness for the configured driver; Firestore never opens a SQL connection. */

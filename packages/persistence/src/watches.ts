@@ -9,7 +9,7 @@ export type WatchSuggestionContext = {
 export interface WatchCreateInput {
   agentId: string;
   conversationId?: string | null;
-  kind: 'email' | 'web';
+  kind: 'email' | 'web' | 'flight';
   tier: 'notify' | 'suggest';
   name: string;
   match: unknown;
@@ -31,13 +31,24 @@ export interface WatchRepository {
   ): Promise<{ status: string; cancelled: boolean } | null>;
   expire(agentId: string | null, now: Date): Promise<number>;
   emailCandidates(agentId: string, now: Date): Promise<WatchRecord[]>;
-  claimDueWeb(now: Date, batch: number, defaultIntervalSeconds: number): Promise<WatchRecord[]>;
+  /**
+   * Claim the polled watches that are due. Web watches by default; a followed
+   * flight (`kind: 'flight'`) is polled the same way on its own pace.
+   */
+  claimDueWeb(
+    now: Date,
+    batch: number,
+    defaultIntervalSeconds: number,
+    kind?: 'web' | 'flight',
+  ): Promise<WatchRecord[]>;
   updateWeb(input: {
     watchId: string;
     state: unknown;
     now: Date;
     expire?: boolean;
     expectedNextPollAt: Date;
+    /** Re-pace the watch: a flight polls faster near departure and landing. */
+    nextPollAt?: Date;
   }): Promise<boolean>;
   recordFire(input: {
     watchId: string;

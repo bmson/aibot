@@ -23,6 +23,24 @@ export interface ApnsAlert {
   data?: Record<string, string>;
 }
 
+/**
+ * An update to a Live Activity through its own push token. `contentState`
+ * must match the activity's Swift `ContentState` key for key; an `end` event
+ * also dismisses it at `dismissalDate` (seconds since 1970).
+ */
+export interface ApnsLiveActivityPush {
+  token: string;
+  environment: 'sandbox' | 'production';
+  event: 'update' | 'end';
+  contentState: Record<string, unknown>;
+  /** Seconds since 1970; ActivityKit drops a push older than its last one. */
+  timestamp: number;
+  staleDate?: number;
+  dismissalDate?: number;
+  /** Lights the screen and plays a sound; for changes the owner must see. */
+  alert?: { title: string; body: string };
+}
+
 export type ApnsResult =
   | { ok: true; apnsId: string }
   | { ok: false; unregistered: boolean; status: number; reason: string };
@@ -80,7 +98,6 @@ export class ApnsClient {
   }
 
   async send(alert: ApnsAlert): Promise<ApnsResult> {
-    const session = this.session(APNS_HOSTS[alert.environment]);
     const payload = JSON.stringify({
       aps: {
         alert: { title: alert.title, body: alert.body },
@@ -90,17 +107,50 @@ export class ApnsClient {
       },
       ...(alert.data ?? {}),
     });
+    return this.deliver(alert.environment, alert.token, payload, {
+      topic: this.bundleId,
+      pushType: 'alert',
+    });
+  }
+
+  /**
+   * Update or end a Live Activity. Its topic is the bundle id with
+   * `.push-type.liveactivity`, and the token is the activity's own, not the
+   * device's.
+   */
+  async sendLiveActivity(push: ApnsLiveActivityPush): Promise<ApnsResult> {
+    const payload = JSON.stringify({
+      aps: {
+        timestamp: push.timestamp,
+        event: push.event,
+        'content-state': push.contentState,
+        ...(push.staleDate !== undefined ? { 'stale-date': push.staleDate } : {}),
+        ...(push.dismissalDate !== undefined ? { 'dismissal-date': push.dismissalDate } : {}),
+        ...(push.alert
+          ? { alert: { title: push.alert.title, body: push.alert.body }, sound: 'default' }
+          : {}),
+      },
+    });
+    return this.deliver(push.environment, push.token, payload, {
+      topic: `${this.bundleId}.push-type.liveactivity`,
+      pushType: 'liveactivity',
+    });
+  }
+
+  private async deliver(
+    environment: ApnsAlert['environment'],
+    token: string,
+    payload: string,
+    headers: { topic: string; pushType: 'alert' | 'liveactivity' },
+  ): Promise<ApnsResult> {
+    const host = APNS_HOSTS[environment];
     try {
-      return await this.request(session, alert.token, payload);
+      return await this.request(this.session(host), token, payload, headers);
     } catch (err) {
       // A dead session (GOAWAY, socket close) gets one fresh attempt.
-      this.sessions.delete(APNS_HOSTS[alert.environment]);
+      this.sessions.delete(host);
       try {
-        return await this.request(
-          this.session(APNS_HOSTS[alert.environment]),
-          alert.token,
-          payload,
-        );
+        return await this.request(this.session(host), token, payload, headers);
       } catch {
         throw err;
       }
@@ -111,14 +161,15 @@ export class ApnsClient {
     session: ClientHttp2Session,
     token: string,
     payload: string,
+    headers: { topic: string; pushType: 'alert' | 'liveactivity' },
   ): Promise<ApnsResult> {
     return new Promise((resolve, reject) => {
       const stream = session.request({
         ':method': 'POST',
         ':path': `/3/device/${encodeURIComponent(token)}`,
         authorization: `bearer ${this.providerToken()}`,
-        'apns-topic': this.bundleId,
-        'apns-push-type': 'alert',
+        'apns-topic': headers.topic,
+        'apns-push-type': headers.pushType,
         'apns-priority': '10',
         'apns-id': randomUUID(),
         'content-type': 'application/json',

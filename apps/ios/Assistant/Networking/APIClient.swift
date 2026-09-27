@@ -1054,6 +1054,24 @@ struct APIClient: Sendable {
         _ = try await perform(request, as: OkPayload.self)
     }
 
+    /// A flight followed on the Lock Screen, with its Live Activity's own push
+    /// token, so the server can keep it current while the app is closed.
+    func followFlight(_ body: FlightFollowBody) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/live/flight/follow"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(body)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func unfollowFlight(id: String) async throws {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/live/flight/follow"))
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["flightId": id])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     /// Fire-and-forget APNs token registration; the next app launch retries,
     /// so a failed post only delays proactive pushes until then.
     func postDeviceToken(_ body: DeviceTokenBody) async throws {
@@ -1318,6 +1336,16 @@ struct DeviceTokenBody: Encodable {
         return "production"
         #endif
     }()
+}
+
+/// Matches application/flight-follow.ts. The token is the Live Activity's, not
+/// the device's, and is minted in the same APNs environment as the build.
+struct FlightFollowBody: Encodable, Sendable {
+    let flightId: String
+    let ident: String
+    let pushToken: String
+    let until: String?
+    let environment: String = DeviceTokenBody(token: "").environment
 }
 
 struct GoalMutation: Encodable, Sendable {

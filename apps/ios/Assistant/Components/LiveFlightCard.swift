@@ -85,6 +85,8 @@ struct LiveGeneratedCardHost<Content: View>: View {
 /// Activity and the Dynamic Island. Tapping again stops following.
 struct FollowFlightControl: View {
     let flight: FlightSnapshot
+    /// When the card stops being live; the server stops pushing then too.
+    var until: Date? = nil
     @State private var following = false
     @State private var working = false
     @State private var unavailable = false
@@ -100,7 +102,7 @@ struct FollowFlightControl: View {
                         await FlightActivityManager.shared.stopFollowing(flight.id)
                         following = false
                     } else {
-                        following = await FlightActivityManager.shared.follow(flight)
+                        following = await FlightActivityManager.shared.follow(flight, until: until)
                         unavailable = !following
                     }
                     working = false

@@ -95,6 +95,41 @@ describe('ApnsClient', () => {
     });
   });
 
+  it('updates a Live Activity on its own topic, token and push type', async () => {
+    const { client, fake } = makeClient({ status: 200 });
+    const result = await client.sendLiveActivity({
+      token: 'ab12',
+      environment: 'production',
+      event: 'update',
+      contentState: { phase: 'en_route', gate: 'D4', updatedEpoch: 1790000000 },
+      timestamp: 1790000000,
+      staleDate: 1790001800,
+      alert: { title: 'FI614 gate change', body: 'Now departing from gate D6.' },
+    });
+    expect(result.ok).toBe(true);
+    const [request] = fake.requests;
+    expect(request?.headers[':path']).toBe('/3/device/ab12');
+    expect(request?.headers['apns-topic']).toBe('com.example.assistant.push-type.liveactivity');
+    expect(request?.headers['apns-push-type']).toBe('liveactivity');
+    expect(JSON.parse(request?.payload ?? '{}')).toEqual({
+      aps: {
+        timestamp: 1790000000,
+        event: 'update',
+        'content-state': { phase: 'en_route', gate: 'D4', updatedEpoch: 1790000000 },
+        'stale-date': 1790001800,
+        alert: { title: 'FI614 gate change', body: 'Now departing from gate D6.' },
+        sound: 'default',
+      },
+    });
+  });
+
+  it('keeps ordinary alerts on the bundle topic', async () => {
+    const { client, fake } = makeClient({ status: 200 });
+    await client.send({ token: 'ab12', environment: 'sandbox', title: 't', body: 'b' });
+    expect(fake.requests[0]?.headers['apns-topic']).toBe('com.example.assistant');
+    expect(fake.requests[0]?.headers['apns-push-type']).toBe('alert');
+  });
+
   it('flags dead tokens as unregistered so the caller invalidates them', async () => {
     const gone = makeClient({ status: 410, reason: 'Unregistered' });
     const result = await gone.client.send({

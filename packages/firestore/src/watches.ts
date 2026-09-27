@@ -152,7 +152,12 @@ export class FirestoreWatchRepository implements WatchRepository {
     }
   }
 
-  async claimDueWeb(now: Date, batch: number, defaultIntervalSeconds: number) {
+  async claimDueWeb(
+    now: Date,
+    batch: number,
+    defaultIntervalSeconds: number,
+    kind: 'web' | 'flight' = 'web',
+  ) {
     if (!Number.isFinite(defaultIntervalSeconds) || defaultIntervalSeconds <= 0)
       throw new Error('default web watch poll interval must be positive');
     return this.store.db.runTransaction(async (tx) => {
@@ -160,7 +165,7 @@ export class FirestoreWatchRepository implements WatchRepository {
         this.store
           .collection('watches')
           .where('status', '==', 'active')
-          .where('kind', '==', 'web')
+          .where('kind', '==', kind)
           .where('nextPollAt', '<=', now)
           .orderBy('nextPollAt')
           .limit(batch),
@@ -202,6 +207,7 @@ export class FirestoreWatchRepository implements WatchRepository {
           state: input.state,
           status: input.expire ? 'expired' : 'active',
           updatedAt: input.now,
+          ...(input.nextPollAt ? { nextPollAt: input.nextPollAt } : {}),
         }),
       );
       return true;

@@ -165,6 +165,12 @@ struct RootView: View {
             value: model.errorMessage
         )
         .task {
+            // Followed flights hand their Live Activity push tokens to the
+            // server through the model, so it can update them while closed.
+            FlightActivityManager.shared.registrar = FlightFollowRegistrar(
+                follow: { [model] body in await model.followFlight(body) },
+                unfollow: { [model] id in await model.unfollowFlight(id: id) }
+            )
             model.scenePhaseDidChange(scenePhase)
             if model.hasSavedConnection && model.bootstrap == nil { await model.connect() }
         }

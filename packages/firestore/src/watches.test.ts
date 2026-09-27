@@ -197,6 +197,58 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore watches', () =>
     }
   });
 
+  it('claims followed flights apart from web watches and re-paces them', async () => {
+    const store = emulatorStore();
+    try {
+      const repository = new FirestoreWatchRepository(store);
+      const now = new Date('2026-10-02T12:00:00Z');
+      const common = {
+        agentId: 'agent-a',
+        tier: 'notify' as const,
+        maxFires: null,
+        expiresAt: new Date('2026-10-03T12:00:00Z'),
+        nextPollAt: now,
+        pollIntervalSeconds: 120,
+      };
+      const web = await repository.create({
+        ...common,
+        kind: 'web',
+        name: 'Page',
+        match: { url: 'https://example.com', mode: 'change' },
+      });
+      const flight = await repository.create({
+        ...common,
+        kind: 'flight',
+        name: 'FI614 on the Lock Screen',
+        match: { flightId: 'ICE614-1759300000-schedule-0001', ident: 'FI614' },
+        state: { pushToken: 'ab'.repeat(32), environment: 'production' },
+      });
+      const flights = await repository.claimDueWeb(now, 10, 300, 'flight');
+      expect(flights.map((watch) => watch.id)).toEqual([flight.id]);
+      const webs = await repository.claimDueWeb(now, 10, 300);
+      expect(webs.map((watch) => watch.id)).toEqual([web.id]);
+
+      const [claimed] = flights;
+      const later = new Date('2026-10-02T12:10:00Z');
+      expect(
+        await repository.updateWeb({
+          watchId: flight.id,
+          state: { ...(claimed?.state as object), fingerprint: 'f' },
+          now,
+          expectedNextPollAt: claimed?.nextPollAt as Date,
+          nextPollAt: later,
+        }),
+      ).toBe(true);
+      expect(
+        await repository.claimDueWeb(new Date('2026-10-02T12:05:00Z'), 10, 300, 'flight'),
+      ).toEqual([]);
+      const [again] = await repository.claimDueWeb(later, 10, 300, 'flight');
+      expect(again?.state).toMatchObject({ fingerprint: 'f' });
+    } finally {
+      await disposeStore(store);
+    }
+  });
+
   it('serializes suggestion commits and rejects a foreign conversation reference', async () => {
     const store = emulatorStore();
     try {

@@ -1,15 +1,29 @@
 import ActivityKit
 import Foundation
 
+/// Where a followed flight's push token goes, and where an unfollow is sent.
+/// Set once at the root; nil in previews and tests, where nothing is sent.
+struct FlightFollowRegistrar {
+    let follow: @MainActor (FlightFollowBody) async -> Void
+    let unfollow: @MainActor (String) async -> Void
+}
+
 /// Flights followed on the Lock Screen: one activity per flight, started from
-/// its card and kept current with every read of that flight — the card's live
-/// polling while it is on screen, and a sweep each time the app comes forward.
+/// its card. The activity is requested with a push token, which goes to the
+/// server so it can keep the flight current while the app is closed
+/// (modules/flights/follow.ts). While the app runs, every read of the flight —
+/// the card's own polling, and a sweep whenever the app comes forward — also
+/// updates it directly.
 ///
 /// Separate from `LiveActivityManager`, whose single activity is the approval
-/// prompt. A flight the owner asked to follow is theirs to dismiss.
+/// prompt. A flight the owner asked to follow is theirs to dismiss, and
+/// dismissing it stops the server's pushes too.
 @MainActor
 final class FlightActivityManager {
     static let shared = FlightActivityManager()
+
+    var registrar: FlightFollowRegistrar?
+    private var observers: [String: Task<Void, Never>] = [:]
 
     private init() {}
 
@@ -21,7 +35,7 @@ final class FlightActivityManager {
 
     /// Starts following, or brings an existing activity up to date.
     @discardableResult
-    func follow(_ flight: FlightSnapshot) async -> Bool {
+    func follow(_ flight: FlightSnapshot, until: Date? = nil) async -> Bool {
         guard available else { return false }
         if activity(for: flight.id) != nil {
             await update(flight)
@@ -30,11 +44,12 @@ final class FlightActivityManager {
         let state = flight.activityState()
         guard !state.isOver else { return false }
         do {
-            _ = try Activity<FlightActivityAttributes>.request(
+            let activity = try Activity<FlightActivityAttributes>.request(
                 attributes: flight.activityAttributes,
                 content: content(state),
-                pushType: nil
+                pushType: .token
             )
+            observe(activity, until: until)
             return true
         } catch {
             return false
@@ -44,6 +59,7 @@ final class FlightActivityManager {
     func stopFollowing(_ flightId: String) async {
         guard let activity = activity(for: flightId) else { return }
         await activity.end(activity.content, dismissalPolicy: .immediate)
+        await registrar?.unfollow(flightId)
     }
 
     /// A fresh read of a followed flight. Unfollowed flights are ignored; a
@@ -59,13 +75,51 @@ final class FlightActivityManager {
         }
     }
 
-    /// Read every followed flight once, when the app comes forward.
+    /// Read every followed flight once, when the app comes forward, and pick
+    /// the push tokens back up for activities started before this launch.
     func refreshAll(using fetch: @MainActor (String) async -> LiveFlightPayload?) async {
         for activity in Activity<FlightActivityAttributes>.activities
         where activity.activityState == .active {
+            observe(activity, until: nil)
             guard let flight = await fetch(activity.attributes.flightId)?.snapshot else { continue }
             await update(flight)
         }
+    }
+
+    /// Hands each push token ActivityKit issues (and re-issues) to the server,
+    /// and tells it to stop once the owner ends the activity.
+    private func observe(_ activity: Activity<FlightActivityAttributes>, until: Date?) {
+        guard observers[activity.id] == nil else { return }
+        let attributes = activity.attributes
+        let untilText = until.map { $0.formatted(.iso8601) }
+        observers[activity.id] = Task { [weak self] in
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { @MainActor in
+                    for await token in activity.pushTokenUpdates {
+                        guard !Task.isCancelled else { return }
+                        await self?.registrar?.follow(FlightFollowBody(
+                            flightId: attributes.flightId,
+                            ident: attributes.ident,
+                            pushToken: Self.hex(token),
+                            until: untilText
+                        ))
+                    }
+                }
+                group.addTask { @MainActor in
+                    for await state in activity.activityStateUpdates {
+                        guard state == .dismissed || state == .ended else { continue }
+                        await self?.registrar?.unfollow(attributes.flightId)
+                        self?.observers[activity.id]?.cancel()
+                        self?.observers[activity.id] = nil
+                        return
+                    }
+                }
+            }
+        }
+    }
+
+    nonisolated static func hex(_ token: Data) -> String {
+        token.map { String(format: "%02x", $0) }.joined()
     }
 
     private func activity(for flightId: String) -> Activity<FlightActivityAttributes>? {
@@ -77,8 +131,8 @@ final class FlightActivityManager {
     private func content(
         _ state: FlightActivityAttributes.ContentState
     ) -> ActivityContent<FlightActivityAttributes.ContentState> {
-        // Stale a while after the moment it counts toward, so an activity the
-        // app could not refresh says so instead of looking current.
+        // Stale a while after the moment it counts toward, so an activity
+        // nothing could refresh says so instead of looking current.
         let stale = (state.nextMoment ?? .now).addingTimeInterval(30 * 60)
         return ActivityContent(
             state: state,

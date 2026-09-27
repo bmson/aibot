@@ -254,11 +254,16 @@ export function registerWatchTools(
           watches: rows.map((row) => {
             const email = row.kind === 'email' ? emailWatchMatchSchema.safeParse(row.match) : null;
             const web = row.kind === 'web' ? parseWebWatchMatch(row.match) : null;
+            // A flight followed on the phone's Lock Screen, pushed by the flights module.
+            const flight =
+              row.kind === 'flight' ? (row.match as { ident?: unknown } | null)?.ident : undefined;
             const matching = email?.success
               ? matchSummary(email.data)
               : web
                 ? describeWebWatch(web)
-                : '(unreadable match)';
+                : typeof flight === 'string'
+                  ? `Keeping flight ${flight} current on the Lock Screen`
+                  : '(unreadable match)';
             return {
               watchId: row.id,
               name: row.name,

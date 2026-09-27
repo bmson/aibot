@@ -312,6 +312,18 @@ final class AppModel: ObservableObject {
         return try? await client.liveScoreboard(leagues: leagues)
     }
 
+    /// Quiet on failure: the phone keeps the activity current while it runs,
+    /// and the next token or foreground retries the registration.
+    func followFlight(_ body: FlightFollowBody) async {
+        guard let client else { return }
+        try? await client.followFlight(body)
+    }
+
+    func unfollowFlight(id: String) async {
+        guard let client else { return }
+        try? await client.unfollowFlight(id: id)
+    }
+
     /// Quiet on failure, like the scoreboard: a flight card keeps its last
     /// reading rather than raising a banner while the provider is unreachable.
     func liveFlight(id: String) async -> LiveFlightPayload? {

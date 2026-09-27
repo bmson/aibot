@@ -1152,6 +1152,35 @@ final class APIModelsTests: XCTestCase {
         XCTAssertNil(plain.live)
     }
 
+    func testServerPushedFlightStateDecodesAsTheActivityState() throws {
+        // The exact JSON core/flights/activity.ts puts in a push's content-state.
+        let pushed = """
+        {"phase":"en_route","statusText":"In the air, 10 min late","departEpoch":1790959320,
+         "departOffset":0,"arriveEpoch":1790980500,"arriveOffset":-14400,"gate":"D4","terminal":"1",
+         "arrivalGate":"B22","baggage":"4","progress":0.45,"updatedEpoch":1790965200}
+        """
+        let state = try JSONDecoder().decode(FlightActivityAttributes.ContentState.self, from: Data(pushed.utf8))
+        XCTAssertTrue(state.isAirborne)
+        XCTAssertEqual(state.arrivalClock, FlightActivityAttributes.ContentState.clock(
+            Date(timeIntervalSince1970: 1790980500), offset: -14400))
+        XCTAssertEqual(state.nextMoment, Date(timeIntervalSince1970: 1790980500))
+
+        // Keys the server leaves out when it has no reading decode as nil.
+        let sparse = """
+        {"phase":"scheduled","statusText":"On time","gate":"","terminal":"","arrivalGate":"",
+         "baggage":"","updatedEpoch":1790965200}
+        """
+        let bare = try JSONDecoder().decode(FlightActivityAttributes.ContentState.self, from: Data(sparse.utf8))
+        XCTAssertNil(bare.departure)
+        XCTAssertNil(bare.progress)
+        XCTAssertEqual(bare.departureClock, "—")
+    }
+
+    func testActivityPushTokensAreSentAsLowercaseHex() {
+        XCTAssertEqual(FlightActivityManager.hex(Data([0x0a, 0xff, 0x10])), "0aff10")
+        XCTAssertEqual(FlightFollowBody(flightId: "x", ident: "FI614", pushToken: "ab", until: nil).environment, "sandbox")
+    }
+
     func testLiveFlightReadReplacesTheCardInPlace() {
         guard case var .generated(card)? = MessageResponseCard(part: flightCardPart()) else {
             return XCTFail("Expected a generated card")

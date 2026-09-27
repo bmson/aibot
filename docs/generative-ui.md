@@ -70,12 +70,16 @@ the spec in place; "Follow on Lock Screen" starts a Live Activity
 (`FlightActivityAttributes`) that every read updates, and that the app
 refreshes each time it comes forward.
 
-**Next: push.** A followed flight only moves while the app runs. The APNs
-client (`tools/push/apns.ts`) and device registration already exist; the
-missing half is requesting the activity with `pushType: .token`, storing the
-token beside the flight, and a sweep that re-reads followed flights on the
-same pace and sends `liveactivity` pushes. `ContentState` is already plain
-numbers so the server can encode it.
+**Push (closed-app updates).** Following a flight requests the activity with
+a push token and files a `flight` watch holding it
+(`POST /api/mobile/v1/live/flight/follow`). The flights module's sweep step,
+on the every-minute sweep, claims due flight watches, reads each flight
+again, and pushes a `liveactivity` update only when something visible
+changed — with an alert for a gate change, a cancellation or diversion, or a
+delay that grew by 15 minutes. It re-paces the watch by the card's policy,
+sends a final `end` (dismissed an hour later) once the flight is at the
+gate, and stops when APNs says the owner dismissed the activity. It needs
+the `APNS_*` key the push module already uses.
 
 ### Layer 3 — inputs
 

@@ -91,7 +91,7 @@ export function createPostgresWatchRepository(db: Db): WatchRepository {
             gt(watches.expiresAt, now),
           ),
         ),
-    async claimDueWeb(now, batch, defaultIntervalSeconds) {
+    async claimDueWeb(now, batch, defaultIntervalSeconds, kind = 'web') {
       return db.transaction(async (tx) => {
         const due = await tx
           .select({ id: watches.id })
@@ -99,7 +99,7 @@ export function createPostgresWatchRepository(db: Db): WatchRepository {
           .where(
             and(
               eq(watches.status, 'active'),
-              eq(watches.kind, 'web'),
+              eq(watches.kind, kind),
               gt(watches.expiresAt, now),
               lte(watches.nextPollAt, now),
             ),
@@ -130,6 +130,7 @@ export function createPostgresWatchRepository(db: Db): WatchRepository {
           state: input.state,
           status: input.expire ? 'expired' : undefined,
           updatedAt: input.now,
+          ...(input.nextPollAt ? { nextPollAt: input.nextPollAt } : {}),
         })
         .where(
           and(

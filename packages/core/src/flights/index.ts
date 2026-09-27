@@ -1,4 +1,12 @@
 export {
+  type FlightActivityState,
+  type FlightAlertBasis,
+  flightActivityState,
+  flightAlert,
+  flightAlertBasis,
+  flightStateFingerprint,
+} from './activity.js';
+export {
   AEROAPI_BASE,
   clearFlightsCache,
   type FlightAirport,

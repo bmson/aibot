@@ -3589,7 +3589,7 @@ struct RichResponseCards: View {
             }
 
             if let live = card.live {
-                FollowFlightControl(flight: live.flight)
+                FollowFlightControl(flight: live.flight, until: live.until)
                 LiveCardStamp(updatedAt: card.updatedAt, live: live.isCurrent)
             } else {
                 GeneratedCardFreshness(card: card, refresh: onRefresh)
