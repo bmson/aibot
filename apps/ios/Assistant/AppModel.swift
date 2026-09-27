@@ -317,6 +317,15 @@ final class AppModel: ObservableObject {
         catch { reportError(error); return nil }
     }
 
+    /// Type-ahead search. Returns nil on failure without raising the error
+    /// banner: a search box reports its own trouble, and a keystroke that
+    /// superseded the last one is not an error at all.
+    func searchKnowledge(query: String) async -> [KnowledgeEntity]? {
+        guard let client else { return nil }
+        do { return try await client.searchKnowledge(query: query) }
+        catch { return nil }
+    }
+
     func relationshipGraph(personID: String? = nil, entityID: String? = nil, query: String = "") async -> RelationshipGraphSnapshot? {
         guard let client else { return nil }
         do { return try await client.relationshipGraph(personID: personID, entityID: entityID, query: query) }

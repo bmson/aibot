@@ -174,6 +174,22 @@ final class APIClientRetryTests: XCTestCase {
         XCTAssertFalse(model.messages[0].hasRefreshingCard)
     }
 
+    func testGraphSearchAsksForNamesOnlyAndReadsEitherServerShape() async throws {
+        // The new lean search, and an older server that ignores `mode` and
+        // answers with the browse overview — both carry `entities`.
+        let lean = #"{"entities":[{"id":"e1","label":"Baldvin","kind":"person","canonicalKey":"person:baldvin"}]}"#
+        let overview = #"{"totalEntities":1,"entities":[{"id":"e1","label":"Baldvin","kind":"person","canonicalKey":"person:baldvin"}],"relations":[]}"#
+        for body in [lean, overview] {
+            StubURLProtocol.prime([.success(status: 200, body: Data(body.utf8))])
+            let found = try await makeClient().searchKnowledge(query: "Bald")
+            XCTAssertEqual(found.map(\.id), ["e1"])
+            let url = try XCTUnwrap(StubURLProtocol.urls.first)
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertEqual(items.first { $0.name == "mode" }?.value, "search")
+            XCTAssertEqual(items.first { $0.name == "q" }?.value, "Bald")
+        }
+    }
+
     func testRelationshipGraphOmitsAbsentQueryIdentifiers() async throws {
         let body = try JSONEncoder().encode(RelationshipGraphSnapshot.empty)
         for (person, entity, expected) in [(nil, nil, Set<String>()), ("person-id", nil, ["person"]), (nil, "entity-id", ["entity"])] as [(String?, String?, Set<String>)] {

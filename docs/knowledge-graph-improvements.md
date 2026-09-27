@@ -225,3 +225,21 @@ and frame rate have not been checked on a physical iPhone.
   yourself from Find or a neighbour chip. Your connections still appear on other people's cards.
 
 Server change (core owner-fact creation, both persistences) plus a new iOS build.
+
+### Graph search stopped crashing the server — September 27, 2026
+
+Find on the iPhone map never returned: every keystroke called the browse overview
+(`GET /api/mobile/v1/knowledge?q=`), which on Firestore loads every entity, relation and full
+memory document to answer one page. Production logs showed those requests taking 18–54s and the
+container dying with "JavaScript heap out of memory" at ~510 MB, so they came back as 503s and
+the phone waited on them.
+
+- `GET /api/mobile/v1/knowledge?mode=search&q=` now answers type-ahead from the existing
+  projected entity search (names and kinds only, owner-scoped, up to 30 results; names that
+  start with the query, then names with a word that does, lead). Postgres uses the same
+  `searchKnowledgeGraphEntities` the web merge picker does.
+- The iPhone's Find, the Connect sheet's search and the merge picker use it, with a 300ms
+  debounce, and show "couldn't search" instead of a spinner when a request fails. An older
+  server that ignores `mode` still answers with `entities`, so the app degrades gracefully.
+- The browse overview itself is still heavy on Firestore; nothing on the iPhone calls it for
+  search any more, but it remains a follow-up.

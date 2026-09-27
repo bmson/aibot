@@ -213,6 +213,23 @@ describe.skipIf(!localEmulator)('Firestore mobile Knowledge graph with PostgreSQ
     expect(JSON.stringify(graph)).not.toContain(crossOwnerRelationId);
   });
 
+  it('finds items by name without loading the whole graph, owner-only', async () => {
+    const search = async (q: string) => {
+      const response = await list(
+        new Request(
+          `http://localhost/api/mobile/v1/knowledge?mode=search&q=${encodeURIComponent(q)}`,
+        ),
+      );
+      expect(response.status).toBe(200);
+      return ((await response.json()) as { entities: Array<{ id: string; label: string }> })
+        .entities;
+    };
+    expect((await search('bald')).map((row) => row.id)).toEqual([objectId]);
+    expect((await search('a')).map((row) => row.label)).toEqual(['Anna', 'Baldvin']);
+    expect((await search('foreign')).map((row) => row.id)).toEqual([]);
+    expect(await search('   ')).toEqual([]);
+  });
+
   it('returns the review queue with active and stale owner evidence only', async () => {
     const response = await list(
       new Request('http://localhost/api/mobile/v1/knowledge?mode=review'),
