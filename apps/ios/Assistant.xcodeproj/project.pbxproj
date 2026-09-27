@@ -47,7 +47,6 @@
 		B00000000000000000000059 /* Views/PeopleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000059 /* Views/PeopleView.swift */; };
 		B00000000000000000000060 /* APIClientRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000060 /* APIClientRetryTests.swift */; };
 		B00000000000000000000070 /* Views/SituationPacksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000070 /* Views/SituationPacksView.swift */; };
-		B00000000000000000000071 /* Views/KnowledgeGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000071 /* Views/KnowledgeGraphView.swift */; };
 		B00000000000000000000072 /* Views/PeopleConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000072 /* Views/PeopleConnectionsView.swift */; };
 		B00000000000000000000073 /* Models/RelationshipGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000073 /* Models/RelationshipGraph.swift */; };
 		B00000000000000000000074 /* Views/RelationshipGraphCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000074 /* Views/RelationshipGraphCanvas.swift */; };
@@ -142,7 +141,6 @@
 		C00000000000000000000059 /* Views/PeopleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PeopleView.swift; sourceTree = "<group>"; };
 		C00000000000000000000060 /* APIClientRetryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClientRetryTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000070 /* Views/SituationPacksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SituationPacksView.swift; sourceTree = "<group>"; };
-		C00000000000000000000071 /* Views/KnowledgeGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/KnowledgeGraphView.swift; sourceTree = "<group>"; };
 		C00000000000000000000072 /* Views/PeopleConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PeopleConnectionsView.swift; sourceTree = "<group>"; };
 		C00000000000000000000073 /* Models/RelationshipGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/RelationshipGraph.swift; sourceTree = "<group>"; };
 		C00000000000000000000074 /* Views/RelationshipGraphCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RelationshipGraphCanvas.swift; sourceTree = "<group>"; };
@@ -240,7 +238,6 @@
 				C00000000000000000000078 /* Views/CommitmentsView.swift */,
 				C00000000000000000000077 /* Views/MemoryLibraryView.swift */,
 				C00000000000000000000054 /* Views/KnowledgeView.swift */,
-				C00000000000000000000071 /* Views/KnowledgeGraphView.swift */,
 				C00000000000000000000072 /* Views/PeopleConnectionsView.swift */,
 				C00000000000000000000075 /* Views/RelationshipGraphScreen.swift */,
 				C00000000000000000000074 /* Views/RelationshipGraphCanvas.swift */,
@@ -447,7 +444,6 @@
 				B00000000000000000000078 /* Views/CommitmentsView.swift in Sources */,
 				B00000000000000000000077 /* Views/MemoryLibraryView.swift in Sources */,
 				B00000000000000000000054 /* Views/KnowledgeView.swift in Sources */,
-				B00000000000000000000071 /* Views/KnowledgeGraphView.swift in Sources */,
 				B00000000000000000000072 /* Views/PeopleConnectionsView.swift in Sources */,
 				B00000000000000000000075 /* Views/RelationshipGraphScreen.swift in Sources */,
 				B00000000000000000000074 /* Views/RelationshipGraphCanvas.swift in Sources */,

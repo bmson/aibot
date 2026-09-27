@@ -32,32 +32,6 @@ enum RichMessageFixture {
     }
 }
 
-enum KnowledgeGraphFixture {
-    static let focus = KnowledgeEntity(id: "alex", label: "Alex Morgan", kind: "person", canonicalKey: "alex")
-    static func relation(id: String, other: KnowledgeEntity, predicate: String = "knows",
-                         inbound: Bool = false, review: String = "confirmed", inRecall: Bool = true) -> KnowledgeRelation {
-        let subject = inbound ? other : focus
-        let object = inbound ? focus : other
-        let sentence = "\(subject.label) \(predicate.replacingOccurrences(of: "_", with: " ")) \(object.label)."
-        return KnowledgeRelation(id: id, subject: subject, predicate: predicate, object: object,
-            confidence: 1, reviewStatus: review, validFrom: nil, validUntil: nil, inRecall: inRecall,
-            source: KnowledgeSource(memoryId: id, content: sentence, createdAt: "2026-09-06",
-                ownerConfirmed: review == "confirmed", originTrust: "owner"),
-            presentation: KnowledgePresentation(sentence: sentence, label: predicate, accessibleLabel: sentence))
-    }
-    static var relations: [KnowledgeRelation] {
-        let robin = KnowledgeEntity(id: "robin", label: "Robin Morgan", kind: "person", canonicalKey: "robin")
-        return [
-            relation(id: "studio", other: .init(id: "studio", label: "Northstar Studio", kind: "organization", canonicalKey: "studio"), predicate: "works_at"),
-            relation(id: "sf", other: .init(id: "sf", label: "San Francisco", kind: "place", canonicalKey: "sf"), predicate: "lives_in"),
-            relation(id: "robin1", other: robin, predicate: "parent_of", inbound: true, review: "unreviewed"),
-            relation(id: "robin2", other: robin, predicate: "parent_of", inbound: true, review: "unreviewed"),
-            relation(id: "trip", other: .init(id: "trip", label: "Summer road trip", kind: "project", canonicalKey: "trip"), predicate: "planning"),
-            relation(id: "event", other: .init(id: "event", label: "Design meetup", kind: "event", canonicalKey: "event"), predicate: "attends", review: "unreviewed")
-        ]
-    }
-}
-
 enum PeopleMapFixture {
     static func relation(_ id: String, name: String, sentence: String, contact: String? = nil,
                          unreviewed: Bool = false) -> PersonRelationSummary {
@@ -190,31 +164,6 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(PeopleConnectionBranch.exploring("robin", from: ["robin", "alex"]), ["robin"])
         XCTAssertEqual(PeopleConnectionBranch.exploring("alex", from: ["robin", "alex"]), ["robin", "alex"])
     }
-    func testKnowledgeMapKeepsRealDirectionsAndGroupsEvidenceWithoutInventingLinks() throws {
-        let focus = KnowledgeGraphFixture.focus
-        let relations = KnowledgeGraphFixture.relations
-        let neighbors = KnowledgeGraphNeighbor.neighbors(of: focus, relations: relations)
-        XCTAssertEqual(neighbors.count, 5)
-        XCTAssertEqual(Set(neighbors.map(\.id)).count, neighbors.count)
-        let family = try XCTUnwrap(neighbors.first { $0.id == "robin" })
-        XCTAssertTrue(family.hasIncoming(to: focus.id))
-        XCTAssertFalse(family.hasOutgoing(from: focus.id))
-        XCTAssertEqual(family.connections.count, 1, "Duplicate source evidence shares a single link")
-        XCTAssertEqual(family.connections[0].sources.count, 2)
-        XCTAssertEqual(family.linkLabel, "Parent of")
-        XCTAssertFalse(family.confirmed)
-        XCTAssertTrue(neighbors.first?.confirmed == true, "Reviewed links lead the map")
-        XCTAssertEqual(neighbors.map(\.id), KnowledgeGraphNeighbor.neighbors(of: focus, relations: relations.reversed()).map(\.id))
-
-        let other = KnowledgeEntity(id: "other", label: "Other", kind: "person", canonicalKey: "other")
-        XCTAssertTrue(KnowledgeGraphNeighbor.neighbors(of: other, relations: relations).isEmpty)
-        XCTAssertTrue(KnowledgeGraphNeighbor.neighbors(of: focus, relations: []).isEmpty)
-        let inactive = KnowledgeGraphFixture.relation(id: "old", other: other, inRecall: false)
-        let rejected = KnowledgeGraphFixture.relation(id: "rejected", other: other, review: "rejected")
-        let loop = KnowledgeGraphFixture.relation(id: "self", other: focus)
-        XCTAssertTrue(KnowledgeGraphNeighbor.neighbors(of: focus, relations: [inactive, rejected, loop]).isEmpty)
-    }
-
     func testLocationFixRejectsCachedInaccurateAndUnconfirmedSamples() {
         let now = Date()
         func fix(age: TimeInterval = 0, accuracy: Double = 30, latitude: Double = 37.77) -> CLLocation {
@@ -2589,27 +2538,51 @@ extension APIModelsTests {
         XCTAssertEqual(graph.showing(["n0", "n2"]).links.count, 1)
     }
 
-    func testGraphPackingSeparatesGroupsAndRemainsStable() {
+    func testForceLayoutSettlesWithDotsApartAndIslandsInOrbit() {
         let nodes = (0..<12).map { RelationshipGraphNode(id: "n\($0)", label: "Item \($0)", kind: "person") }
         let edges = [RelationshipGraphFixture.edge("a", from: "n0", to: "n1"), RelationshipGraphFixture.edge("b", from: "n2", to: "n3")]
         let graph = RelationshipGraphSnapshot(nodes: nodes, edges: edges, totalEdges: 2, truncated: false, focusId: nil)
         var layout = RelationshipGraphLayout(); layout.update(nodes: nodes, links: graph.links)
-        for _ in 0..<120 { layout.step() }
-        layout.arrangeGroups()
-        func boxes() -> [CGRect] {
-            let positions = Dictionary(uniqueKeysWithValues: zip(layout.ids, layout.positions))
-            return graph.groups.map { group in
-                let points = group.nodes.compactMap { positions[$0.id] }
-                let xs = points.map(\.x), ys = points.map(\.y)
-                return CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!).insetBy(dx: -20, dy: -20)
+        XCTAssertFalse(layout.isSettled)
+        layout.settle()
+        XCTAssertTrue(layout.isSettled, "The map comes to rest rather than drifting forever")
+        let points = layout.positions
+        XCTAssertTrue(points.allSatisfy { $0.x.isFinite && $0.y.isFinite })
+        for i in points.indices {
+            for j in points.indices where j > i {
+                XCTAssertGreaterThan(hypot(points[i].x - points[j].x, points[i].y - points[j].y), RelationshipGraphLayout.collisionRadius,
+                                     "No two dots sit on top of each other")
             }
+            // Gravity keeps loose items near the map instead of flung off it.
+            XCTAssertLessThan(hypot(points[i].x, points[i].y), 600)
         }
-        let initial = boxes()
-        for i in initial.indices { for j in initial.indices where j > i { XCTAssertFalse(initial[i].intersects(initial[j])) } }
-        for _ in 0..<100 { layout.step() }
-        let settled = boxes()
-        for i in settled.indices { for j in settled.indices where j > i { XCTAssertFalse(settled[i].intersects(settled[j])) } }
-        XCTAssertTrue(layout.positions.allSatisfy { $0.x.isFinite && $0.y.isFinite })
+        let placed = Dictionary(uniqueKeysWithValues: zip(layout.ids, points))
+        let linked = hypot(placed["n0"]!.x - placed["n1"]!.x, placed["n0"]!.y - placed["n1"]!.y)
+        let loose = hypot(placed["n0"]!.x - placed["n7"]!.x, placed["n0"]!.y - placed["n7"]!.y)
+        XCTAssertLessThan(linked, loose, "A link holds its ends closer than strangers")
+        let settled = layout.positions
+        layout.update(nodes: nodes, links: graph.links)
+        XCTAssertEqual(layout.positions, settled)
+        XCTAssertTrue(layout.isSettled, "Reloading the same items does not wake the map")
+    }
+
+    func testDraggedNodePullsItsNeighbourAlong() {
+        let nodes = (0..<3).map { RelationshipGraphNode(id: "n\($0)", label: "Item \($0)", kind: "person") }
+        let graph = RelationshipGraphSnapshot(nodes: nodes, edges: [RelationshipGraphFixture.edge("a", from: "n0", to: "n1")],
+                                              totalEdges: 1, truncated: false, focusId: nil)
+        var layout = RelationshipGraphLayout(); layout.update(nodes: nodes, links: graph.links)
+        layout.settle()
+        func at(_ id: String) -> CGPoint { layout.positions[layout.ids.firstIndex(of: id)!] }
+        let neighbour = at("n1"), stranger = at("n2")
+        let destination = CGPoint(x: at("n0").x + 400, y: at("n0").y)
+        layout.hold(0.28)
+        for _ in 0..<90 { layout.move(id: "n0", to: destination); layout.step(pinned: "n0") }
+        XCTAssertEqual(at("n0"), destination)
+        XCTAssertGreaterThan(at("n1").x - neighbour.x, 150, "The linked item follows the drag")
+        XCTAssertLessThan(abs(at("n2").x - stranger.x), at("n1").x - neighbour.x, "An unlinked item mostly stays put")
+        layout.hold(0)
+        layout.settle(maxSteps: 2000)
+        XCTAssertTrue(layout.isSettled, "Letting go lets the map cool and stop")
     }
 
     func testGraphViewportZoomKeepsPinchAnchorAndClampsScale() {
@@ -2663,34 +2636,16 @@ final class AssistantConfirmationStateTests: XCTestCase {
 
 
 extension APIModelsTests {
-    func testFocusedGraphPagesAreBoundedStableAndKeepDirectedEvidence() {
+    func testNeighboursAndDegreesUseDistinctTopologyInStableOrder() {
         var graph = RelationshipGraphFixture.snapshot(count: 200)
         let neighbors = graph.directNeighbors(of: "node-4")
         XCTAssertGreaterThan(neighbors.count, 180)
-        var seen = Set<String>()
-        // Read the page size rather than restating it: the canvas decides how
-        // many spokes it can draw, and a test that hardcodes the number stops
-        // proving the pages tile the neighbours the moment that changes.
-        let size = RelationshipGraphSnapshot.focusPageSize
-        for page in 0..<((neighbors.count + size - 1) / size) {
-            let focused = graph.focused(on: "node-4", page: page)
-            XCTAssertLessThanOrEqual(focused.nodes.count, size + 1)
-            XCTAssertEqual(focused.nodes.first?.id, "node-4")
-            for node in focused.nodes.dropFirst() { XCTAssertTrue(seen.insert(node.id).inserted) }
-            for edge in focused.edges {
-                XCTAssertTrue(edge.subjectId == "node-4" || edge.objectId == "node-4")
-                XCTAssertEqual(edge, graph.edges.first { $0.id == edge.id })
-            }
-        }
-        XCTAssertEqual(seen, Set(neighbors.map(\.id)))
-        let firstPage = graph.focused(on: "node-4").nodes.map(\.id)
+        XCTAssertFalse(neighbors.contains { $0.id == "node-4" })
+        XCTAssertEqual(graph.degrees["node-4"], neighbors.count)
+        let order = neighbors.map(\.id)
         graph.nodes.reverse(); graph.edges.reverse()
-        XCTAssertEqual(graph.focused(on: "node-4").nodes.map(\.id), firstPage)
-        XCTAssertLessThanOrEqual(graph.focused(on: "node-4", page: 999).nodes.count, size + 1)
-        XCTAssertTrue(graph.focused(on: "missing").nodes.isEmpty)
-        XCTAssertTrue(graph.focused(on: "node-4", peopleOnly: true).nodes.allSatisfy { $0.kind == "person" })
-        let isolated = RelationshipGraphSnapshot(nodes: [graph.nodes[0]], edges: [], totalEdges: 0, truncated: true, focusId: nil)
-        XCTAssertEqual(isolated.focused(on: graph.nodes[0].id).nodes.count, 1)
-        XCTAssertTrue(isolated.focused(on: graph.nodes[0].id).truncated)
+        XCTAssertEqual(graph.directNeighbors(of: "node-4").map(\.id), order, "The list does not reshuffle")
+        graph.edges.append(graph.edges[0])
+        XCTAssertEqual(graph.degrees["node-4"], neighbors.count, "A second source for one link is not a second neighbour")
     }
 }
