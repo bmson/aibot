@@ -93,6 +93,18 @@ two days before, telling the owner once. The watch is also the record that
 the flight is known, so the check-in reminder adds nothing. The card and the
 notice come from FlightAware, never from the email.
 
+**Every kind of booking, from mail.** Beyond flights, the google module
+observes inbound mail for the things worth going back to — reservations,
+tickets, appointments, orders and deliveries. A prefilter (a booking word in
+the subject, or printed as labelled fields; two kinds of detail such as a
+date and a time; no sale language; not a flight) gates the ordinary card
+composer, whose verbatim check grounds every value in the email. Cards from
+mail carry no links or images, since the sender is untrusted, and land on the
+Cards page with one ambient notice; the same booking mailed again revises its
+card quietly. In chat, a card whose every value is in the owner's own message
+(a pasted confirmation) is grounded `message`: filed to the Cards page, with
+the reply still above it.
+
 ### Design
 
 Generated cards share one grid and type scale (`CardStyle`): blocks 20pt

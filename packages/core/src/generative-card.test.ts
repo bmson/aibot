@@ -570,6 +570,45 @@ describe('an answer with no tool behind it', () => {
     expect(stub.calls[0]).not.toContain('ANSWER');
   });
 
+  it('files a booking the owner pasted in, as theirs', async () => {
+    const pasted =
+      'Here is my dinner booking. Restaurant: Dill. Date: Friday, October 9. Time: 7:30 PM. Party size: 4. Reference: DL-4471.';
+    const router = {
+      object: async () => ({
+        ok: true as const,
+        object: {
+          cardable: true,
+          card: {
+            version: 1,
+            title: 'Dinner at Dill',
+            icon: 'food',
+            accessibilityLabel: 'Dinner at Dill, Friday at 7:30 PM for 4',
+            sourceLabel: 'SOURCE_MESSAGE',
+            facts: [
+              { id: 'place', label: 'Restaurant', value: 'Dill', source: 'SOURCE_MESSAGE' },
+              { id: 'day', label: 'Date', value: 'Friday, October 9', source: 'SOURCE_MESSAGE' },
+              { id: 'time', label: 'Time', value: '7:30 PM', source: 'SOURCE_MESSAGE' },
+              { id: 'ref', label: 'Reference', value: 'DL-4471', source: 'SOURCE_MESSAGE' },
+            ],
+            blocks: [
+              { type: 'metrics', factIds: ['day', 'time'] },
+              { type: 'facts', factIds: ['place', 'ref'] },
+            ],
+          },
+        },
+      }),
+    } as unknown as ModelRouter;
+    const card = await generateEvidenceCard({
+      router,
+      sourceText: pasted,
+      evidence: [],
+      answerText:
+        'Got it — dinner at Dill on Friday, October 9 at 7:30 PM for 4, reference DL-4471. I will remind you that afternoon.',
+    });
+    expect(card?.grounding).toBe('message');
+    expect(card?.spec.sourceLabel).toBe('Your message');
+  });
+
   it('stamps the card as a view of the answer rather than a lookup', async () => {
     const router = {
       object: async () => ({

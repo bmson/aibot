@@ -174,7 +174,7 @@ export interface GeneratedCardPayload extends Record<string, unknown> {
    * runtime's finding about the card, never the composer's claim — and the
    * client needs it to know whether the card is the answer or a view of it.
    */
-  grounding: 'evidence' | 'answer';
+  grounding: 'evidence' | 'answer' | 'message';
   updatedAt?: string;
   stale?: boolean;
   refreshState?: 'idle' | 'refreshing' | 'failed';
@@ -307,6 +307,8 @@ If the evidence does not describe a coherent object that benefits from a card, s
 
 /** Provenance for a card lifted from the reply rather than from a lookup. */
 export const ANSWER_SOURCE_LABEL = 'This answer';
+/** Provenance for a card whose every value is in the owner's own message. */
+export const MESSAGE_SOURCE_LABEL = 'Your message';
 
 const CandidateSchema = z.object({
   cardable: z.boolean(),
@@ -653,13 +655,18 @@ const ANSWER_SHAPE_SIGNALS: RegExp[] = [
   /(?:(?:^|\n)\s*(?:[-*•]|\d+[.)])\s+\S[^\n]*){3}/,
 ];
 
+/** How many kinds of structured detail a text carries: a time, a date, a quantity, money, fields, a list. */
+export function cardShapeSignals(text: string): number {
+  return ANSWER_SHAPE_SIGNALS.filter((signal) => signal.test(text)).length;
+}
+
 /** A reply with enough structured detail that a card could redraw it. */
 export function answerLooksCardShaped(answerText: string): boolean {
   const answer = answerText.trim();
   // Short replies are the acknowledgements and one-liners; there is nothing to
   // lay out, and a card would be a frame around a sentence.
   if (answer.length < 140) return false;
-  return ANSWER_SHAPE_SIGNALS.filter((signal) => signal.test(answer)).length >= 2;
+  return cardShapeSignals(answer) >= 2;
 }
 
 function worthTrying(
@@ -688,7 +695,8 @@ function worthTrying(
 
 export async function generateEvidenceCard(input: {
   router: ModelRouter;
-  taskId: string;
+  /** The task paying for the call; absent for work no task owns (mail). */
+  taskId?: string;
   sourceText: string;
   evidence: ActionEvidence[];
   sourceKey?: string;
@@ -773,7 +781,7 @@ export async function generateEvidenceCard(input: {
   const corpus = evidenceText(input.evidence, input.sourceText, explicitRequest, input.answerText);
   try {
     const result = await input.router.object('rewrite', {
-      taskId: input.taskId,
+      ...(input.taskId ? { taskId: input.taskId } : {}),
       schema: CandidateSchema,
       system: SYSTEM,
       prompt: `EVIDENCE\n${corpus}`,
@@ -794,12 +802,20 @@ export async function generateEvidenceCard(input: {
     // model's own labels would name the section it copied from ("ANSWER"), so
     // provenance is stamped here instead: this card is a view of the answer
     // above it, it has no source to go back to, and nothing to refresh from.
+    // A booking the owner pasted in is theirs, not a view of the reply: when
+    // every value on the card is in their own words, it stands on those and
+    // is filed like a lookup card — while the reply still sits above it.
+    const ownWords = normalized(input.sourceText);
+    const fromMessage =
+      groundedOnAnswer &&
+      validated.facts.every((fact) => ownWords.includes(normalized(fact.value)));
+    const label = fromMessage ? MESSAGE_SOURCE_LABEL : ANSWER_SOURCE_LABEL;
     const spec = groundedOnAnswer
       ? {
           ...validated,
-          sourceLabel: ANSWER_SOURCE_LABEL,
+          sourceLabel: label,
           refreshable: false,
-          facts: validated.facts.map((fact) => ({ ...fact, source: ANSWER_SOURCE_LABEL })),
+          facts: validated.facts.map((fact) => ({ ...fact, source: label })),
           actions: validated.actions.filter((action) => action.type !== 'refresh'),
         }
       : validated;
@@ -819,7 +835,7 @@ export async function generateEvidenceCard(input: {
       revisionId: randomUUID(),
       spec,
       sourceFingerprint: createHash('sha256').update(stableSource).digest('hex'),
-      grounding: groundedOnAnswer ? 'answer' : 'evidence',
+      grounding: fromMessage ? 'message' : groundedOnAnswer ? 'answer' : 'evidence',
     };
   } catch (error) {
     console.error('generative card compilation failed', error);

@@ -1658,7 +1658,8 @@ enum MessageResponseCard: Identifiable {
                 // model-authored spec: which corpus a card stands on is the
                 // runtime's finding, never the composer's claim. An older
                 // build sends none, and a lookup card is the safe default.
-                groundedOnAnswer: data["grounding"]?.string == "answer",
+                // A card from the owner's own message heads the reply the same way.
+                groundedOnAnswer: ["answer", "message"].contains(data["grounding"]?.string ?? ""),
                 title: title,
                 subtitle: spec["subtitle"]?.string ?? "",
                 sourceLabel: spec["sourceLabel"]?.string ?? "Assistant card",
