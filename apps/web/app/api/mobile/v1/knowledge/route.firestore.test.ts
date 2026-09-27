@@ -22,7 +22,7 @@ vi.mock('@assistant/core/model-router', () => ({
       return routerFixture.embed(...args);
     }
   },
-  createConfiguredModelProvider: vi.fn(),
+  createConnectedModelProviders: vi.fn(),
 }));
 
 import { proxy } from '@/proxy';

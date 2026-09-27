@@ -14,9 +14,10 @@
     "@assistant/core": "workspace:*",
     "@assistant/db": "workspace:*",
     "@assistant/firestore": "workspace:*",
-    "@google-cloud/firestore": "^9.2.0",
     "@assistant/modules": "workspace:*",
+    "@assistant/persistence": "workspace:*",
     "@assistant/tools": "workspace:*",
+    "@google-cloud/firestore": "^9.2.0",
     "@hono/node-server": "^2.1.1",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
@@ -27,10 +28,11 @@
     "drizzle-orm": "^0.45.2",
     "hono": "^4.13.8",
     "jose": "^6.2.11",
-    "zod": "^4.6.5",
-    "@assistant/persistence": "workspace:*"
+    "ws": "8.22.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.28.2",
     "tsx": "^4.23.13"
   }

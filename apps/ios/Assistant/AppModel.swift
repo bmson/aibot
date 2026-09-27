@@ -117,6 +117,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var workspace: WorkspaceResponse?
     @Published private(set) var memoryReviewCount = 0
     @Published private(set) var mcpConnections: [McpConnection] = []
+    @Published private(set) var modelProviders: ModelProviderSettings?
     @Published private(set) var savedCards: [SavedCardRecord] = []
     @Published private(set) var activeConversation: ConversationView?
     @Published private(set) var personProfiles: [String: PersonProfileResponse] = [:]
@@ -1332,6 +1333,135 @@ final class AppModel: ObservableObject {
         do {
             try await client.deleteMcpConnection(id: id)
             await refreshMcpConnections()
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
+    func refreshModelProviders() async {
+        guard let client else { return }
+        do {
+            modelProviders = try await client.modelProviders()
+        } catch {
+            reportError(error)
+        }
+    }
+
+    /// Saves the connection, then returns the models it offers (or why the test failed).
+    func connectModelProvider(_ input: ModelConnectionInput) async -> ProviderConnectResult? {
+        guard let client else { return nil }
+        errorMessage = nil
+        do {
+            let result = try await client.connectModelProvider(input)
+            await refreshModelProviders()
+            return result
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
+    func testModelProvider(id: String) async -> [ProviderModelListing]? {
+        guard let client else { return nil }
+        errorMessage = nil
+        do {
+            let result = try await client.testModelProvider(id: id)
+            await refreshModelProviders()
+            return result.models
+        } catch {
+            await refreshModelProviders()
+            reportError(error)
+            return nil
+        }
+    }
+
+    func setModelProviderEnabled(id: String, enabled: Bool) async -> Bool {
+        await modelProviderMutation { try await $0.setModelProviderEnabled(id: id, enabled: enabled) }
+    }
+
+    func removeModelProvider(id: String) async -> Bool {
+        await modelProviderMutation { try await $0.removeModelProvider(id: id) }
+    }
+
+    func addProviderModel(
+        connectionId: String,
+        model: String,
+        label: String?,
+        inputPrice: String,
+        outputPrice: String,
+        thinking: Bool?
+    ) async -> Bool {
+        await modelProviderMutation {
+            try await $0.addProviderModel(
+                connectionId: connectionId,
+                model: model,
+                label: label,
+                inputPrice: inputPrice,
+                outputPrice: outputPrice,
+                thinking: thinking
+            )
+        }
+    }
+
+    func chooseTextModels(main: String, fast: String) async -> Bool {
+        await modelProviderMutation { try await $0.chooseTextModels(main: main, fast: fast) }
+    }
+
+    func chooseVoiceModel(_ modelId: String) async -> Bool {
+        await modelProviderMutation { try await $0.chooseVoiceModel(modelId) }
+    }
+
+    func addVoicePreset(connectionId: String, model: String) async -> Bool {
+        await modelProviderMutation { try await $0.addVoicePreset(connectionId: connectionId, model: model) }
+    }
+
+    func loadPhoneCalls() async -> [PhoneCall]? {
+        guard let client else { return nil }
+        do {
+            return try await client.phoneCalls().calls
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
+    func loadPhoneCall(id: String) async -> PhoneCall? {
+        guard let client else { return nil }
+        return try? await client.phoneCall(id: id).call
+    }
+
+    func answerCallCheckin(callId: String, checkinId: String, answer: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.answerCallCheckin(callId: callId, checkinId: checkinId, answer: answer)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
+    func hangUpCall(callId: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.hangUpCall(callId: callId)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
+    private func modelProviderMutation(_ work: (APIClient) async throws -> Void) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await work(client)
+            await refreshModelProviders()
             return true
         } catch {
             reportError(error)

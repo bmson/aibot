@@ -6,6 +6,7 @@ import { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 import { FirestoreApprovalRepository } from './approvals.js';
 import { FirestoreAssistantHealthRepository } from './assistant-health.js';
 import { FirestoreBriefingRepository } from './briefing.js';
+import { FirestoreCallSessionRepository } from './call-sessions.js';
 import { createFirestoreCardRefreshRepository } from './card-refresh.js';
 import { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import { FirestoreConversationSegmentationRepository } from './conversation-segmentation.js';
@@ -34,6 +35,10 @@ import { FirestoreMemorySupersedeRepository } from './memory-supersede.js';
 import { FirestoreMemoryToolRepository } from './memory-tools.js';
 import { FirestoreMessageRepository } from './messages.js';
 import { FirestoreMissionRepository } from './missions.js';
+import {
+  FirestoreModelCatalogRepository,
+  FirestoreModelConnectionRepository,
+} from './model-connections.js';
 import { FirestoreModelRoutingRepository } from './model-routing.js';
 import { FirestoreNudgePolicyRepository } from './nudge-policy.js';
 import { FirestoreOwnerCardCompilationRepository } from './owner-card-compilation.js';
@@ -102,6 +107,9 @@ export function createFirestoreExecutionPersistence(
     nudgePolicy: new FirestoreNudgePolicyRepository(store, agentId),
     voiceContext: new FirestoreVoiceContextRepository(store, agentId, skillEmbeddingSpace),
     smsChannel: new FirestoreSmsChannelRepository(store, agentId),
+    callSessions: new FirestoreCallSessionRepository(store, agentId),
+    modelConnections: new FirestoreModelConnectionRepository(store),
+    modelCatalog: new FirestoreModelCatalogRepository(store),
     applications: new FirestoreApplicationConfirmationRepository(store, agentId),
     emailSync: new FirestoreEmailSyncRepository(store, agentId),
     documentCatalog: new FirestoreDocumentCatalogRepository(store, agentId),

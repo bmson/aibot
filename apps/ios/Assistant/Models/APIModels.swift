@@ -1863,6 +1863,180 @@ struct McpConnection: Codable, Identifiable, Sendable {
     }
 }
 
+/// Settings → AI providers. Keys never travel to the phone; `hasApiKey` only
+/// says one is saved on the server.
+struct ModelProviderSettings: Codable, Sendable {
+    let connections: [ModelConnection]
+    let models: [CatalogModel]
+    let mainModel: String?
+    let fastModel: String?
+    let voiceModel: String?
+    let voicePresets: [VoiceModelPreset]?
+
+    /// Chat models the assistant could route to right now, by connection.
+    var choosableGroups: [(connection: ModelConnection, models: [CatalogModel])] {
+        groups { $0.routable && !$0.embedding && $0.realtime != true }
+    }
+
+    /// Live voice models phone calls could use right now, by connection.
+    var voiceGroups: [(connection: ModelConnection, models: [CatalogModel])] {
+        groups { $0.routable && $0.realtime == true }
+    }
+
+    private func groups(
+        _ include: (CatalogModel) -> Bool
+    ) -> [(connection: ModelConnection, models: [CatalogModel])] {
+        connections.filter(\.enabled).compactMap { connection in
+            let models = self.models.filter { $0.connectionId == connection.id && include($0) }
+            return models.isEmpty ? nil : (connection, models)
+        }
+    }
+}
+
+struct ModelConnection: Codable, Identifiable, Sendable, Hashable {
+    let id: String
+    let kind: String
+    let label: String
+    let baseUrl: String?
+    let vertexProject: String?
+    let vertexLocation: String?
+    let hasApiKey: Bool
+    let enabled: Bool
+    let source: String
+    let lastTestedAt: String?
+    let lastError: String?
+
+    var kindLabel: String { ModelConnection.kindLabel(kind) }
+
+    static let kinds = ["openai", "openrouter", "vertex", "openai_compatible"]
+
+    static func kindLabel(_ kind: String) -> String {
+        switch kind {
+        case "openrouter": "OpenRouter"
+        case "openai": "OpenAI"
+        case "vertex": "Google Vertex AI"
+        default: "OpenAI-compatible"
+        }
+    }
+}
+
+struct CatalogModel: Codable, Identifiable, Sendable, Hashable {
+    let id: String
+    let label: String
+    let connectionId: String
+    let enabled: Bool
+    let routable: Bool
+    let embedding: Bool
+    let realtime: Bool?
+    let promptCostPerMTok: String?
+    let completionCostPerMTok: String?
+    let audioInputPerMTok: Double?
+    let audioOutputPerMTok: Double?
+
+    var priceLabel: String {
+        if realtime == true, let audioIn = audioInputPerMTok, let audioOut = audioOutputPerMTok {
+            return String(format: "audio $%.2f / $%.2f per M tokens", audioIn, audioOut)
+        }
+        let input = Double(promptCostPerMTok ?? "") ?? 0
+        let output = Double(completionCostPerMTok ?? "") ?? 0
+        return String(format: "$%.2f / $%.2f per M tokens", input, output)
+    }
+}
+
+struct VoiceModelPreset: Codable, Identifiable, Sendable, Hashable {
+    var id: String { "\(connectionId):\(model)" }
+    let connectionId: String
+    let model: String
+    let label: String
+    let note: String
+}
+
+/// A phone call the assistant placed. Tokens never reach the phone.
+struct PhoneCall: Codable, Identifiable, Sendable {
+    let id: String
+    let to: String
+    let contactName: String?
+    let status: String
+    let active: Bool
+    let outcome: String?
+    let summary: String?
+    let brief: PhoneCallBrief
+    let maxMinutes: Int
+    let createdAt: String
+    let durationSeconds: Int?
+    let costUsd: String?
+    let transcript: [PhoneCallLine]
+    let notes: [String]
+    let checkins: [PhoneCallCheckin]
+    let openCheckin: PhoneCallCheckin?
+
+    var title: String { contactName ?? to }
+
+    var statusLabel: String {
+        switch status {
+        case "dialing": "Dialing"
+        case "ringing": "Ringing"
+        case "in_progress": "On the call"
+        case "no_answer": "No answer"
+        case "busy": "Busy"
+        case "failed": "Failed"
+        case "canceled": "Canceled"
+        default: "Ended"
+        }
+    }
+}
+
+struct PhoneCallBrief: Codable, Sendable {
+    let goal: String
+    let context: String
+    let mayAgreeTo: String
+    let mustNot: String
+}
+
+struct PhoneCallLine: Codable, Sendable, Hashable {
+    let role: String
+    let text: String
+    let at: String
+}
+
+struct PhoneCallCheckin: Codable, Identifiable, Sendable, Hashable {
+    let id: String
+    let question: String
+    let answer: String?
+}
+
+struct PhoneCallsResponse: Codable, Sendable { let calls: [PhoneCall] }
+struct PhoneCallResponse: Codable, Sendable { let call: PhoneCall }
+
+struct ProviderModelListing: Codable, Identifiable, Sendable, Hashable {
+    var id: String { model }
+    let model: String
+    let label: String
+    let promptCostPerMTok: String?
+    let completionCostPerMTok: String?
+    let thinking: Bool?
+}
+
+struct ProviderConnectResult: Codable, Sendable {
+    let id: String
+    let models: [ProviderModelListing]?
+    let testError: String?
+}
+
+struct ProviderTestResult: Codable, Sendable {
+    let models: [ProviderModelListing]
+}
+
+struct ModelConnectionInput: Encodable, Sendable {
+    var kind: String
+    var id: String?
+    var label: String?
+    var apiKey: String?
+    var baseUrl: String?
+    var vertexProject: String?
+    var vertexLocation: String?
+}
+
 struct McpConnectionTool: Codable, Identifiable, Sendable {
     var id: String { name }
     let name: String

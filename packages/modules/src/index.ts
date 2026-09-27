@@ -13,6 +13,7 @@
  * the sibling-import bypass path that `scripts/check-boundaries.ts` guards.
  */
 export { browserModule } from './browser/module.js';
+export { type CallBridge, callsModule } from './calls/module.js';
 export { codeModule } from './code/module.js';
 export * from './compose.js';
 export { documentsModule } from './documents/module.js';

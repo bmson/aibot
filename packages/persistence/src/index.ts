@@ -8,6 +8,7 @@ export * from './assistant-health.js';
 export * from './briefing.js';
 export * from './budget-caps.js';
 export * from './builtin-tools.js';
+export * from './call-sessions.js';
 export * from './card-refresh.js';
 export * from './code-jobs.js';
 export * from './commitment-maintenance.js';

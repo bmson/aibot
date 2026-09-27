@@ -8,6 +8,7 @@ export { FirestoreApprovalRepository } from './approvals.js';
 export { FirestoreAssistantHealthRepository } from './assistant-health.js';
 export { FirestoreBriefingRepository } from './briefing.js';
 export { FirestoreBudgetCapsRepository } from './budget-caps.js';
+export { FirestoreCallSessionRepository } from './call-sessions.js';
 export { createFirestoreCardRefreshRepository } from './card-refresh.js';
 export { FirestoreCommitmentMaintenanceRepository } from './commitment-maintenance.js';
 export { FirestoreCommitmentMutationRepository } from './commitment-mutations.js';
@@ -65,6 +66,10 @@ export { FirestoreMemoryToolRepository } from './memory-tools.js';
 export { FirestoreMessageRepository } from './messages.js';
 export { FirestoreMissionRepository } from './missions.js';
 export { getFirestoreMobileCosts } from './mobile-costs.js';
+export {
+  FirestoreModelCatalogRepository,
+  FirestoreModelConnectionRepository,
+} from './model-connections.js';
 export { FirestoreModelRoutingRepository } from './model-routing.js';
 export { FirestoreOccasionToolRepository } from './occasion-tools.js';
 export {

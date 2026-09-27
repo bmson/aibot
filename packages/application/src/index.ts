@@ -17,6 +17,7 @@ export * from './knowledge-workspace.js';
 export * from './knowledge-workspace-queries.js';
 export * from './location.js';
 export * from './mcp.js';
+export * from './model-providers.js';
 export * from './operations.js';
 export * from './proactive-health.js';
 export * from './profile.js';

@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./approvals": "./src/approvals.ts",
+    "./calls": "./src/calls.ts",
     "./chat": "./src/chat.ts",
     "./cards": "./src/cards.ts",
     "./situations": "./src/situations.ts",
@@ -19,6 +20,7 @@
     "./knowledge-graph": "./src/knowledge-graph.ts",
     "./live-scores": "./src/live-scores.ts",
     "./maps": "./src/maps.ts",
+    "./model-providers": "./src/model-providers.ts",
     "./operations": "./src/operations.ts",
     "./people": "./src/people.ts",
     "./people-graph-projection": "./src/people-graph-projection.ts",

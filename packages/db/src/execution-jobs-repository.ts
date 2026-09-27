@@ -11,7 +11,12 @@ import type { Db } from './client.js';
 import { approvals, files, tasks, toolCalls } from './schema.js';
 import { activeLease } from './task-lease-repository.js';
 
-const PENDING_KINDS = new Set(['browser_job_pending', 'code_job_pending', 'document_job_pending']);
+const PENDING_KINDS = new Set([
+  'browser_job_pending',
+  'code_job_pending',
+  'document_job_pending',
+  'call_pending',
+]);
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 function isPendingSentinel(result: unknown): boolean {

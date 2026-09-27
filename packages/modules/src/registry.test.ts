@@ -113,6 +113,10 @@ describe('module metadata', () => {
       '/documents',
     );
     resetConfigForTest();
-    expect(hiddenModuleNavHrefs(loadConfig({ ASSISTANT_MODULES: 'documents' })).size).toBe(0);
+    const hidden = hiddenModuleNavHrefs(loadConfig({ ASSISTANT_MODULES: 'documents' }));
+    expect(hidden.has('/documents')).toBe(false);
+    expect(hidden.has('/calls')).toBe(true);
+    resetConfigForTest();
+    expect(hiddenModuleNavHrefs(loadConfig({ ASSISTANT_MODULES: 'documents,calls' })).size).toBe(0);
   });
 });

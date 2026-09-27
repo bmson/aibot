@@ -4,6 +4,7 @@ import type { ApprovalPolicyRepository } from './approval-policies.js';
 import type { ApprovalRepository } from './approvals.js';
 import type { AssistantHealthRepository } from './assistant-health.js';
 import type { BriefingRepository } from './briefing.js';
+import type { CallSessionRepository } from './call-sessions.js';
 import type { CardRefreshRepository } from './card-refresh.js';
 import type { CommitmentMaintenanceRepository } from './commitment-maintenance.js';
 import type { CostRepository, MessageRepository } from './contracts.js';
@@ -34,7 +35,11 @@ import type { MemoryExtractionRepository } from './memory-extraction.js';
 import type { MemorySupersedeRepository } from './memory-supersede.js';
 import type { MemoryToolRepository } from './memory-tools.js';
 import type { MissionRepository } from './missions.js';
-import type { ModelRoutingRepository } from './model-routing.js';
+import type {
+  ModelCatalogRepository,
+  ModelConnectionRepository,
+  ModelRoutingRepository,
+} from './model-routing.js';
 import type {
   NotificationsConversationRepository,
   OwnerNoticeRepository,
@@ -111,6 +116,12 @@ export interface ExecutionPersistence {
   readonly voiceContext?: VoiceContextRepository;
   /** Present where the SMS channel keeps its state portably. */
   readonly smsChannel?: SmsChannelRepository;
+  /** Phone calls placed by the calls module. */
+  readonly callSessions?: CallSessionRepository;
+  /** Owner-connected model providers (keys sealed). */
+  readonly modelConnections?: ModelConnectionRepository;
+  /** The model catalog and role routing. */
+  readonly modelCatalog?: ModelCatalogRepository;
   /** Present where application confirmation watches are kept portably. */
   readonly applications?: ApplicationConfirmationRepository;
   /** Present where Gmail sync keeps its state portably. */

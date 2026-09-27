@@ -38,6 +38,7 @@
     "dev": "turbo dev",
     "up": "docker compose up --build",
     "build": "turbo build",
+    "setup:phone": "tsx scripts/setup-phone.ts",
     "test": "tsx scripts/test.ts",
     "lint": "biome check . && pnpm check:boundaries",
     "format": "biome format --write .",

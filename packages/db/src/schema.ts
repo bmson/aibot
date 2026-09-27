@@ -567,6 +567,54 @@ export const toolCalls = pgTable(
   ],
 );
 
+/** One outbound phone call the assistant placed for the owner (calls module). */
+export const callSessions = pgTable(
+  'call_sessions',
+  {
+    id: uuid('id').primaryKey(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    toolCallId: uuid('tool_call_id')
+      .notNull()
+      .references(() => toolCalls.id, { onDelete: 'cascade' }),
+    status: text('status').notNull(),
+    to: text('to').notNull(),
+    contactName: text('contact_name'),
+    brief: jsonb('brief').notNull(),
+    voiceModel: text('voice_model').notNull(),
+    maxMinutes: integer('max_minutes').notNull(),
+    twilioCallSid: text('twilio_call_sid'),
+    streamTokenHash: text('stream_token_hash'),
+    callbackToken: text('callback_token').notNull(),
+    reservationId: text('reservation_id'),
+    answeredBy: text('answered_by'),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    durationSeconds: integer('duration_seconds'),
+    transcript: jsonb('transcript').notNull().default([]),
+    notes: jsonb('notes').notNull().default([]),
+    checkins: jsonb('checkins').notNull().default([]),
+    hangupRequested: boolean('hangup_requested').notNull().default(false),
+    outcome: text('outcome'),
+    summary: text('summary'),
+    costUsd: numeric('cost_usd', { precision: 12, scale: 6 }),
+    error: text('error'),
+    ...timestamps,
+  },
+  (t) => [
+    index('call_sessions_agent_created_idx').on(t.agentId, t.createdAt),
+    uniqueIndex('call_sessions_twilio_sid_idx').on(t.twilioCallSid),
+    check(
+      'call_sessions_status_check',
+      sql`${t.status} IN ('dialing','ringing','in_progress','completed','no_answer','busy','failed','canceled')`,
+    ),
+  ],
+);
+
 export const approvals = pgTable(
   'approvals',
   {
@@ -1193,6 +1241,38 @@ export const importSources = pgTable(
 
 // ── Models, routing, budgets ─────────────────────────────────────────────────
 
+/**
+ * Model providers the owner connected in Settings → AI providers. A model id's
+ * namespace names its connection (see connectionIdForModel in
+ * @assistant/core/model-router): built-in kinds use their kind as the id,
+ * OpenAI-compatible gateways an owner-chosen slug.
+ */
+export const modelConnections = pgTable(
+  'model_connections',
+  {
+    id: text('id').primaryKey(),
+    /** openrouter | openai | vertex | openai_compatible */
+    kind: text('kind').notNull(),
+    label: text('label').notNull(),
+    /** OpenAI-compatible gateways only. */
+    baseUrl: text('base_url'),
+    /** AES-GCM payload sealed with MCP_ENC_KEY; never expose this field. */
+    apiKeyEncrypted: text('api_key_encrypted'),
+    vertexProject: text('vertex_project'),
+    vertexLocation: text('vertex_location'),
+    enabled: boolean('enabled').notNull().default(true),
+    lastTestedAt: timestamp('last_tested_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      'model_connections_kind_check',
+      sql`${t.kind} IN ('openrouter','openai','vertex','openai_compatible')`,
+    ),
+  ],
+);
+
 /** Capability matrix — what the router may pick. Swapping models = editing rows. */
 export const models = pgTable(
   'models',
@@ -1228,7 +1308,7 @@ export const modelRoles = pgTable(
   (t) => [
     check(
       'model_roles_role_check',
-      sql`${t.role} IN ('plan','classify','extract','draft','reason','rewrite','embed','batch')`,
+      sql`${t.role} IN ('plan','classify','extract','draft','reason','rewrite','embed','batch','voice')`,
     ),
   ],
 );
@@ -2130,6 +2210,8 @@ export const selfMaintenance = pgTable(
 
 export type AgentRow = typeof agents.$inferSelect;
 export type McpConnectionRow = typeof mcpConnections.$inferSelect;
+export type ModelConnectionRow = typeof modelConnections.$inferSelect;
+export type CallSessionRow = typeof callSessions.$inferSelect;
 export type GoalRow = typeof goals.$inferSelect;
 export type ConversationRow = typeof conversations.$inferSelect;
 export type MessageRow = typeof messages.$inferSelect;

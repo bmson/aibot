@@ -94,6 +94,15 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/imports' && request.method === 'POST') ||
     (path === '/skills' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/approvals' && ['GET', 'POST'].includes(request.method)) ||
+    // Calls pages and their Server Actions recheck owner auth before touching a call.
+    (path === '/calls' && ['GET', 'POST'].includes(request.method)) ||
+    (/^\/calls\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path) &&
+      ['GET', 'POST'].includes(request.method)) ||
+    (path === '/api/mobile/v1/calls' && request.method === 'GET') ||
+    (/^\/api\/mobile\/v1\/calls\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      path,
+    ) &&
+      ['GET', 'POST'].includes(request.method)) ||
     // Activity pages and their Server Actions enforce owner authentication
     // before reading or changing task records.
     (path === '/tasks' && ['GET', 'POST'].includes(request.method)) ||
@@ -113,6 +122,10 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/location' && request.method === 'POST') ||
     (path === '/api/mobile/v1/goals' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/mobile/v1/mcp' && ['GET', 'POST'].includes(request.method)) ||
+    (path === '/api/mobile/v1/providers' && ['GET', 'POST'].includes(request.method)) ||
+    (path === '/api/mobile/v1/providers/choice' && request.method === 'PUT') ||
+    (/^\/api\/mobile\/v1\/providers\/[a-z0-9][a-z0-9_-]{0,39}$/.test(path) &&
+      request.method === 'POST') ||
     (/^\/api\/mobile\/v1\/mcp\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
       path,
     ) &&

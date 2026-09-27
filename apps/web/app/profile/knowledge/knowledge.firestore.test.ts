@@ -23,7 +23,7 @@ vi.mock('@assistant/core/model-router', () => ({
       return router.embed(...args);
     }
   },
-  createConfiguredModelProvider: vi.fn(),
+  createConnectedModelProviders: vi.fn(),
 }));
 
 import { PATCH as patchEntity } from '@/app/api/mobile/v1/knowledge/[id]/route';

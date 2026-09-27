@@ -3,6 +3,7 @@ export { createPostgresApplicationChatPersistence } from './application-chat-rep
 export { createPostgresApplicationConfirmationRepository } from './application-confirmation-repository.js';
 export { createPostgresApprovalPolicyRepository } from './approval-policy-repository.js';
 export { createPostgresApprovalRepository } from './approval-repository.js';
+export { createPostgresCallSessionRepository } from './call-session-repository.js';
 export { createPostgresCardRefreshRepository } from './card-refresh-repository.js';
 export * from './client.js';
 export { createPostgresCostRepository } from './cost-repository.js';
@@ -28,7 +29,9 @@ export { createPostgresMemorySupersedeRepository } from './memory-supersede-repo
 export { createPostgresMemoryToolRepository } from './memory-tool-repository.js';
 export { createPostgresMessageRepository } from './message-repository.js';
 export { createPostgresMissionRepository } from './mission-repository.js';
+export { createPostgresModelCatalogRepository } from './model-catalog-repository.js';
 export * from './model-config.js';
+export { createPostgresModelConnectionRepository } from './model-connection-repository.js';
 export { createPostgresModelRoutingRepository } from './model-routing-repository.js';
 export { createPostgresNotificationsConversationRepository } from './notifications-conversation-repository.js';
 export { createPostgresNudgePolicyRepository } from './nudge-policy-repository.js';

@@ -23,8 +23,14 @@ import { withSpan } from '../otel.js';
 import { type AuditCaptureMode, captureField, captureInput } from './audit-capture.js';
 import { type BudgetDecision, evaluateBudget } from './budget.js';
 import {
+  isModelProviderSet,
+  type ModelProviderSet,
+  singleModelProviderSet,
+} from './connections.js';
+import {
   createOpenRouterModelProvider,
   type ModelProvider,
+  normalizeVertexUsage,
   type ProviderOptions,
   type ProviderUsage,
   type ReasoningMode,
@@ -538,7 +544,7 @@ export function isProviderCapabilityError(err: unknown): boolean {
 }
 
 export class ModelRouter {
-  private provider: ModelProvider;
+  private readonly providers: ModelProviderSet;
   private readonly persistence: ModelRoutingRepository;
 
   constructor(
@@ -551,9 +557,13 @@ export class ModelRouter {
      * exercise both modes against a memoized config.
      */
     private auditCapture: AuditCaptureMode = loadConfig().LLM_AUDIT_CAPTURE,
-    provider: ModelProvider = createOpenRouterModelProvider(apiKey),
+    /**
+     * One pinned provider, or the owner's connected providers — each model
+     * identity then resolves to the connection that serves it.
+     */
+    provider: ModelProvider | ModelProviderSet = createOpenRouterModelProvider(apiKey),
   ) {
-    this.provider = provider;
+    this.providers = isModelProviderSet(provider) ? provider : singleModelProviderSet(provider);
     this.persistence =
       'kind' in store && store.kind === 'model-routing-repository'
         ? (store as ModelRoutingRepository)
@@ -591,8 +601,14 @@ export class ModelRouter {
     };
   }
 
+  /** The adapter for one model identity; rejects models no connection serves. */
+  private providerFor(modelId: string): ModelProvider {
+    return this.providers.resolve(modelId);
+  }
+
   /** Resolve role → model through the capability matrix and the budget guard. */
   async route(role: ModelRole, opts: RouteOptions = {}): Promise<Route> {
+    await this.providers.refresh();
     const decision = evaluateBudget(await this.budgetSnapshot(opts.taskId), {
       critical: opts.critical,
     });
@@ -638,7 +654,7 @@ export class ModelRouter {
     ) {
       throw new Error(`model ${modelId} is missing cost rates; refusing an unbudgeted call`);
     }
-    this.provider.assertModelId(modelId);
+    const provider = this.providerFor(modelId);
     const capabilities = (modelRow.capabilities ?? {}) as { thinking?: boolean };
 
     return {
@@ -649,7 +665,7 @@ export class ModelRouter {
       // deepseek-chat is also served by providers with no structured-output
       // support, which hard-fail the request. Per-request semantics: plain
       // text calls still use the full provider pool.
-      model: this.provider.chat(modelId, { interactive: isInteractiveRole(role) }),
+      model: provider.chat(modelId, { interactive: isInteractiveRole(role) }),
       modelId,
       degraded,
       thinking: capabilities.thinking === true,
@@ -686,7 +702,7 @@ export class ModelRouter {
     toolCall: boolean,
   ): ReasoningMode {
     if (!route.thinking) return 'unsupported';
-    if (!this.provider.canDisableReasoning?.(route.modelId)) return 'enabled';
+    if (!this.providerFor(route.modelId).canDisableReasoning?.(route.modelId)) return 'enabled';
     return toolCall || REASONING_ROLES.has(role) ? 'enabled' : 'disabled';
   }
 
@@ -715,7 +731,10 @@ export class ModelRouter {
     return {
       maxOutputTokens:
         reasoning === 'enabled' ? visibleLimit + REASONING_HEADROOM_TOKENS : visibleLimit,
-      providerOptions: this.provider.optionsFor({ reasoning, modelId: route.modelId }),
+      providerOptions: this.providerFor(route.modelId).optionsFor({
+        reasoning,
+        modelId: route.modelId,
+      }),
     };
   }
 
@@ -819,7 +838,18 @@ export class ModelRouter {
   }
 
   private async meter(input: MeterInput): Promise<void> {
-    const normalized = input.usageOverride ?? this.provider.normalizeUsage(input.event);
+    // The provider call already happened and must be accounted for, even if the
+    // owner turned its connection off mid-call: metering never throws on that.
+    let provider: ModelProvider | undefined;
+    try {
+      provider = this.providerFor(input.modelId);
+    } catch {
+      provider = undefined;
+    }
+    const normalized =
+      input.usageOverride ??
+      provider?.normalizeUsage(input.event) ??
+      normalizeVertexUsage(input.event);
     const usage = {
       ...normalized,
       inputTokens: validTokenCount(normalized.inputTokens) ? normalized.inputTokens : undefined,
@@ -878,9 +908,7 @@ export class ModelRouter {
       latencyMs: input.latencyMs,
       finishReason: input.event.finishReason,
       openrouterGenerationId:
-        this.provider.kind === 'openrouter'
-          ? (usage.generationId ?? input.event.response?.id)
-          : null,
+        provider?.kind === 'openrouter' ? (usage.generationId ?? input.event.response?.id) : null,
     });
 
     await this.recordForAudit(input, { callId, inputTokens, outputTokens });
@@ -962,7 +990,7 @@ export class ModelRouter {
         const result = await generateText({
           model: route.model,
           ...(opts.messages
-            ? this.cacheHintedArgs(opts.system, opts.messages)
+            ? this.cacheHintedArgs(route.modelId, opts.system, opts.messages)
             : { system: opts.system, ...promptArgs(opts) }),
           temperature: opts.temperature ?? (route.params.temperature as number | undefined),
           maxOutputTokens,
@@ -1030,7 +1058,7 @@ export class ModelRouter {
         // turn is the highest-frequency call in the system, and re-billed the
         // whole system prompt every turn without this). Mirrors stepOnce.
         ...(opts.messages
-          ? this.cacheHintedArgs(opts.system, opts.messages)
+          ? this.cacheHintedArgs(route.modelId, opts.system, opts.messages)
           : { system: opts.system, ...promptArgs(opts) }),
         temperature: opts.temperature ?? (route.params.temperature as number | undefined),
         maxOutputTokens,
@@ -1149,10 +1177,11 @@ export class ModelRouter {
    * site to take the hinted messages and forget the opt-in.
    */
   private cacheHintedArgs(
+    modelId: string,
     system: string | undefined,
     messages: ModelMessage[],
   ): { messages: ModelMessage[]; allowSystemInMessages?: true; system?: string } {
-    const hint = this.provider.cacheHint();
+    const hint = this.providerFor(modelId).cacheHint();
     if (!hint) return { ...(system ? { system } : {}), messages };
     const hinted = [...messages];
     const last = hinted[hinted.length - 1];
@@ -1205,7 +1234,11 @@ export class ModelRouter {
         const result = await generateText({
           model: route.model,
           ...(opts.messages
-            ? this.cacheHintedArgs(opts.system, encodeMessageToolNames(opts.messages))
+            ? this.cacheHintedArgs(
+                route.modelId,
+                opts.system,
+                encodeMessageToolNames(opts.messages),
+              )
             : { system: opts.system, ...promptArgs(opts) }),
           tools: encoded,
           toolChoice: toolChoice as never,
@@ -1279,7 +1312,7 @@ export class ModelRouter {
           const result = await generateObject({
             model: route.model,
             ...(opts.messages
-              ? this.cacheHintedArgs(opts.system, opts.messages)
+              ? this.cacheHintedArgs(route.modelId, opts.system, opts.messages)
               : { system: opts.system, ...promptArgs(opts) }),
             schema: opts.schema,
             temperature: opts.temperature ?? (route.params.temperature as number | undefined),
@@ -1406,7 +1439,8 @@ export class ModelRouter {
     if (!modelRow || modelRow.promptCostPerMTok === null || !Number.isFinite(promptCostPerMTok)) {
       throw new Error(`embedding model ${roleRow.primaryModel} is missing a cost rate`);
     }
-    this.provider.assertModelId(roleRow.primaryModel);
+    await this.providers.refresh();
+    const embeddingProvider = this.providerFor(roleRow.primaryModel);
     const inputTokens = Math.max(
       1,
       Math.ceil(values.reduce((n, value) => n + value.length, 0) / 2),
@@ -1430,14 +1464,14 @@ export class ModelRouter {
     let observation: ReturnType<typeof observeEmbeddingModel> | undefined;
     try {
       observation = observeEmbeddingModel(
-        this.provider.textEmbeddingModel(roleRow.primaryModel),
+        embeddingProvider.textEmbeddingModel(roleRow.primaryModel),
         providerEvidence,
       );
       const { embeddings, usage, providerMetadata, responses } = await embedMany({
         model: observation.model,
         values,
         maxParallelCalls: 4,
-        providerOptions: this.provider.embeddingOptions(),
+        providerOptions: embeddingProvider.embeddingOptions(),
         abortSignal: modelCallSignal(opts.abortSignal),
       });
       providerSucceeded = true;
@@ -1446,7 +1480,7 @@ export class ModelRouter {
         providerMetadata,
         responses,
       };
-      const usageOverride = aggregateEmbeddingUsage(this.provider, providerEvidence);
+      const usageOverride = aggregateEmbeddingUsage(embeddingProvider, providerEvidence);
       await this.meterWithoutRepeatingProviderWork({
         taskId: opts.taskId,
         role: 'embed',
@@ -1498,7 +1532,7 @@ export class ModelRouter {
           event: { responses: providerEvidence },
           reservationId: reservation.reservationId,
           estimatedUsd,
-          usageOverride: aggregateEmbeddingUsage(this.provider, providerEvidence),
+          usageOverride: aggregateEmbeddingUsage(embeddingProvider, providerEvidence),
           promptCostPerMTok,
           completionCostPerMTok: 0,
         });

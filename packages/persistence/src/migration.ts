@@ -28,6 +28,7 @@ export const MIGRATION_TABLES = [
     id: 'id',
     scope: 'agent',
   },
+  { table: 'call_sessions', collection: 'callSessions', id: 'id', scope: 'agent' },
   { table: 'canary_runs', collection: 'canaryRuns', id: 'id', scope: 'installation' },
   { table: 'contacts', collection: 'contacts', id: 'id', scope: 'agent' },
   { table: 'conversations', collection: 'conversations', id: 'id', scope: 'agent' },
@@ -100,6 +101,12 @@ export const MIGRATION_TABLES = [
   { table: 'mcp_connections', collection: 'mcpConnections', id: 'id', scope: 'agent' },
   { table: 'model_call_audit', collection: 'modelCallAudit', id: 'id', scope: 'installation' },
   { table: 'model_calls', collection: 'modelCalls', id: 'id', scope: 'installation' },
+  {
+    table: 'model_connections',
+    collection: 'modelConnections',
+    id: 'id',
+    scope: 'installation',
+  },
   { table: 'model_roles', collection: 'modelRoles', id: 'role', scope: 'installation' },
   { table: 'models', collection: 'models', id: 'id', scope: 'installation' },
   { table: 'notification_prefs', collection: 'notificationPrefs', id: 'agent_id', scope: 'agent' },
@@ -547,6 +554,7 @@ export function validateMigrationReferences(
     'approval_policies',
     'assistant_health_alerts',
     'calendar_event_snapshots',
+    'call_sessions',
     'commitments',
     'conversation_segments',
     'conversations',
@@ -621,6 +629,10 @@ export function validateMigrationReferences(
       requireReference(record, 'parentTaskId', 'tasks');
       requireReference(record, 'scheduleId', 'schedules');
       requireReference(record, 'goalId', 'goals');
+    }
+    if (record.table === 'call_sessions') {
+      requireReference(record, 'taskId', 'tasks', true);
+      requireReference(record, 'toolCallId', 'tool_calls', true);
     }
     if (record.table === 'tool_calls') {
       requireReference(record, 'taskId', 'tasks', true);

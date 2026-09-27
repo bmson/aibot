@@ -79,7 +79,9 @@ import {
   uploadImport,
   waitForChatUpdates,
 } from '@assistant/application';
+import type { CallsPorts } from '@assistant/application/calls';
 import type { GoalInput } from '@assistant/application/goals';
+import type { ModelProviderPorts } from '@assistant/application/model-providers';
 import {
   createProfileMemoryCommands,
   organizeMemoryNow,
@@ -93,9 +95,13 @@ import {
   repoRoot,
   validateAgentPersistenceConfig,
 } from '@assistant/config';
-import { encodeMessageCursor } from '@assistant/core/chat';
-import { encryptMcpBearerToken } from '@assistant/core/mcp-secrets';
-import { createConfiguredModelProvider, ModelRouter } from '@assistant/core/model-router';
+import { encodeMessageCursor, getAgent } from '@assistant/core/chat';
+import {
+  decryptStoredCredential,
+  encryptMcpBearerToken,
+  encryptStoredCredential,
+} from '@assistant/core/mcp-secrets';
+import { createConnectedModelProviders, ModelRouter } from '@assistant/core/model-router';
 import {
   goalAutomationCadence,
   goalAutomationInstruction,
@@ -103,8 +109,11 @@ import {
 } from '@assistant/core/workflow/schedules';
 import {
   createDb,
+  createPostgresCallSessionRepository,
   createPostgresCardRefreshRepository,
   createPostgresGeneratedCardRepository,
+  createPostgresModelCatalogRepository,
+  createPostgresModelConnectionRepository,
   type Db,
 } from '@assistant/db';
 import {
@@ -114,12 +123,15 @@ import {
   createInstallationStore,
   FirestoreActiveJobLookup,
   FirestoreApplicationChatPersistence,
+  FirestoreCallSessionRepository,
   FirestoreCommitmentMutationRepository,
   FirestoreDeviceTokenRepository,
   FirestoreGoalMutationRepository,
   FirestoreImportCommandRepository,
   FirestoreLocationPingRepository,
   FirestoreMcpConnectionMutationRepository,
+  FirestoreModelCatalogRepository,
+  FirestoreModelConnectionRepository,
   FirestoreOwnerKnowledgeGraphFactRepository,
   FirestoreRecallFeedbackRepository,
   FirestoreShellStatusRepository,
@@ -147,6 +159,43 @@ const globalCache = globalThis as unknown as {
 /** Keep credential encryption behind the server-only application boundary. */
 export function encryptMcpConnectionBearerToken(token: string): string {
   return encryptMcpBearerToken(token);
+}
+
+/**
+ * Settings → AI providers, bound to whichever driver this installation runs.
+ * Keys are sealed and opened here, inside the server-only boundary.
+ */
+export function getModelProviderPorts(): ModelProviderPorts {
+  const config = loadConfig();
+  const firestore = config.PERSISTENCE_DRIVER === 'firestore';
+  return {
+    connections: firestore
+      ? new FirestoreModelConnectionRepository(getFirestoreInstallationStore())
+      : createPostgresModelConnectionRepository(getDb()),
+    catalog: firestore
+      ? new FirestoreModelCatalogRepository(getFirestoreInstallationStore())
+      : createPostgresModelCatalogRepository(getDb()),
+    config,
+    seal: encryptStoredCredential,
+    open: decryptStoredCredential,
+  };
+}
+
+/** Phone calls for the owner, on whichever driver this installation runs. */
+export async function getCallsPorts(): Promise<CallsPorts> {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore')
+    return {
+      calls: new FirestoreCallSessionRepository(
+        getFirestoreInstallationStore(),
+        config.FIRESTORE_AGENT_ID,
+      ),
+      agentId: config.FIRESTORE_AGENT_ID,
+    };
+  return {
+    calls: createPostgresCallSessionRepository(getDb()),
+    agentId: (await getAgent(getDb())).id,
+  };
 }
 
 /** Reuse one Firestore client across requests in a web process. */
@@ -294,12 +343,15 @@ export function getCardRefresh() {
 
 export function getRouter(): ModelRouter {
   const config = loadConfig();
-  globalCache.__assistantRouter ??= new ModelRouter(
-    getDb(),
-    config.OPENROUTER_API_KEY,
-    config.LLM_AUDIT_CAPTURE,
-    createConfiguredModelProvider(config),
-  );
+  if (!globalCache.__assistantRouter) {
+    const connections = createPostgresModelConnectionRepository(getDb());
+    globalCache.__assistantRouter = new ModelRouter(
+      getDb(),
+      config.OPENROUTER_API_KEY,
+      config.LLM_AUDIT_CAPTURE,
+      createConnectedModelProviders(config, () => connections.list()),
+    );
+  }
   return globalCache.__assistantRouter;
 }
 
@@ -519,11 +571,12 @@ function createFirestoreChatApplication() {
   const chat = new FirestoreApplicationChatPersistence(store, config.FIRESTORE_AGENT_ID);
   const recallFeedback = new FirestoreRecallFeedbackRepository(store);
   const shellStatus = new FirestoreShellStatusRepository(store, config.FIRESTORE_AGENT_ID);
+  const modelConnections = new FirestoreModelConnectionRepository(store);
   const router = new ModelRouter(
     persistence.modelRouting,
     config.OPENROUTER_API_KEY,
     config.LLM_AUDIT_CAPTURE,
-    createConfiguredModelProvider(config),
+    createConnectedModelProviders(config, () => modelConnections.list()),
   );
   const ownerGraphFacts = new FirestoreOwnerKnowledgeGraphFactRepository(
     store,

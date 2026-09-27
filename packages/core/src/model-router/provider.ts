@@ -1,11 +1,13 @@
 import { createVertex } from '@ai-sdk/google-vertex';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { type Config, parseFirestoreEmbeddingSpace } from '@assistant/config';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import type { EmbeddingModel, JSONValue, LanguageModel } from 'ai';
 
 export type ProviderOptions = Record<string, Record<string, JSONValue>>;
 
-export type ModelProviderKind = 'openrouter' | 'vertex';
+export type ModelProviderKind = 'openrouter' | 'vertex' | 'openai' | 'openai_compatible';
 
 /**
  * What this particular call wants from a model's hidden reasoning.
@@ -126,11 +128,12 @@ export function normalizeVertexUsage(event: unknown): ProviderUsage {
 }
 
 function assertOpenRouterModelId(modelId: string): void {
-  // OpenRouter legitimately uses IDs such as google/gemini-*. Reserve the
-  // explicit vertex: / vertex/ namespace for a future Vertex adapter.
+  // OpenRouter legitimately uses IDs such as google/gemini-* and openai/gpt-*.
+  // The colon namespaces (vertex:, openai:, gw:) belong to the direct
+  // adapters, so a model meant for one of them can never be sent here.
   if (
     !modelId ||
-    /^(?:vertex(?:[/:]|$)|google:|projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/models\/)/i.test(
+    /^(?:vertex(?:[/:]|$)|google:|openai:|gw:|projects\/[^/]+\/locations\/[^/]+\/publishers\/[^/]+\/models\/)/i.test(
       modelId,
     )
   ) {
@@ -292,6 +295,101 @@ export function createVertexModelProvider(options: VertexModelProviderOptions): 
     }),
     cacheHint: () => undefined,
     normalizeUsage: normalizeVertexUsage,
+  };
+}
+
+/** The bare model slug after an `openai:` namespace, e.g. `openai:gpt-5.1` → `gpt-5.1`. */
+function openAIModelId(modelId: string): string {
+  const match = /^openai:([A-Za-z0-9][A-Za-z0-9._:-]*)$/.exec(modelId);
+  if (!match?.[1]) {
+    throw new Error(
+      `OpenAI provider requires an openai:-qualified model identity: ${modelId || '<empty>'}`,
+    );
+  }
+  return match[1];
+}
+
+/** Normalize the common AI SDK usage shape; OpenAI reports tokens, not cost. */
+function normalizeCommonUsage(event: unknown): ProviderUsage {
+  const root = record(event);
+  const usage = record(root?.usage);
+  const response = record(root?.response);
+  return {
+    inputTokens: finiteNonnegativeInteger(usage?.inputTokens),
+    outputTokens: finiteNonnegativeInteger(usage?.outputTokens),
+    generationId: nonemptyString(response?.id),
+  };
+}
+
+/**
+ * Direct OpenAI API (platform.openai.com key). Reasoning is left at the
+ * model's own default: which OpenAI models accept an off switch varies by
+ * family, and sending an unsupported effort level is a hard 400. Cost comes
+ * from the configured per-model rates, since OpenAI reports tokens only.
+ */
+export function createOpenAIModelProvider(apiKey: string): ModelProvider {
+  if (!apiKey) throw new Error('OpenAI provider requires an API key');
+  const provider = createOpenAI({ apiKey });
+  return {
+    kind: 'openai',
+    assertModelId: (modelId) => void openAIModelId(modelId),
+    chat: (modelId) => provider.chat(openAIModelId(modelId)),
+    textEmbeddingModel: (modelId) => provider.embeddingModel(openAIModelId(modelId)),
+    optionsFor: () => undefined,
+    embeddingOptions: () => ({ openai: { dimensions: 1_536 } }),
+    // OpenAI caches long prompt prefixes automatically.
+    cacheHint: () => undefined,
+    normalizeUsage: normalizeCommonUsage,
+  };
+}
+
+export interface OpenAICompatibleModelProviderOptions {
+  /** The owner's connection id; model identities are `gw:<connectionId>:<model>`. */
+  connectionId: string;
+  baseUrl: string;
+  apiKey?: string;
+}
+
+/** The upstream model name after a `gw:<connectionId>:` namespace. */
+export function gatewayModelId(connectionId: string, modelId: string): string {
+  const prefix = `gw:${connectionId}:`;
+  const id = modelId.startsWith(prefix) ? modelId.slice(prefix.length) : '';
+  // Gateways use their own naming (`meta-llama/Llama-4`, `llama3.2:3b`), so
+  // only reject what can never be a model name: empty or whitespace.
+  if (!id || /\s/.test(id)) {
+    throw new Error(`Gateway ${connectionId} cannot serve model identity: ${modelId || '<empty>'}`);
+  }
+  return id;
+}
+
+/**
+ * Any OpenAI-compatible endpoint the owner connects: Groq, Together, a
+ * LiteLLM proxy, a local Ollama. Structured outputs are not assumed; the SDK
+ * falls back to JSON mode, which every compatible server accepts.
+ */
+export function createOpenAICompatibleModelProvider(
+  options: OpenAICompatibleModelProviderOptions,
+): ModelProvider {
+  const url = new URL(options.baseUrl);
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) {
+    throw new Error('Gateway base URL must be HTTP(S) without embedded credentials');
+  }
+  const provider = createOpenAICompatible({
+    name: options.connectionId,
+    baseURL: options.baseUrl.replace(/\/+$/, ''),
+    ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+    includeUsage: true,
+  });
+  return {
+    kind: 'openai_compatible',
+    assertModelId: (modelId) => void gatewayModelId(options.connectionId, modelId),
+    chat: (modelId) => provider.chatModel(gatewayModelId(options.connectionId, modelId)),
+    textEmbeddingModel: (modelId) =>
+      provider.embeddingModel(gatewayModelId(options.connectionId, modelId)),
+    optionsFor: () => undefined,
+    embeddingOptions: () => undefined,
+    cacheHint: () => undefined,
+    normalizeUsage: normalizeCommonUsage,
   };
 }
 
