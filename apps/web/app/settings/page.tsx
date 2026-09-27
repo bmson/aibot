@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { getModelProviderSettings } from '@assistant/application/model-providers';
 import { proactiveHealthView } from '@assistant/application/proactive-health';
 import { getSettingsOverview } from '@assistant/application/settings';
 import { envFile, loadConfig } from '@assistant/config';
@@ -16,13 +17,14 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { deletePolicy, setPolicyEnabled, setScheduleEnabled } from '@/app/settings/actions';
 import { AgentForm } from '@/app/settings/agent-form';
+import { AiProvidersPanel } from '@/app/settings/ai-providers';
 import { policyLabels, policyScope, scheduleLabels } from '@/app/settings/labels';
 import { McpConnectionsPanel } from '@/app/settings/mcp-connections';
 import { MobileTokenPanel } from '@/app/settings/mobile-token';
 import { NotificationForm } from '@/app/settings/notification-form';
 import { requireOwner } from '@/auth';
 import { formatDateTime, relativeTime } from '@/lib/format';
-import { getApplication, getFirestoreInstallationStore } from '@/lib/server';
+import { getApplication, getFirestoreInstallationStore, getModelProviderPorts } from '@/lib/server';
 import {
   Badge,
   Card,
@@ -133,6 +135,8 @@ export default async function SettingsPage() {
         getApplication().listMcpConnections(),
         getApplication().getProactiveHealth(),
       ]);
+
+  const providerSettings = await getModelProviderSettings(getModelProviderPorts());
 
   // Pairing values for the iOS app. The URL mirrors what the owner is
   // browsing right now — if they reached settings over a LAN IP or the
@@ -267,6 +271,18 @@ export default async function SettingsPage() {
               ambientDailyCap: notificationPrefs.ambientDailyCap,
             }}
           />
+        </Card>
+      </section>
+
+      {/* Model providers */}
+      <section id="ai-providers">
+        <SectionHeading
+          title="AI providers"
+          count={providerSettings.connections.length}
+          hint="which services and models power the assistant"
+        />
+        <Card className="mt-3">
+          <AiProvidersPanel settings={providerSettings} />
         </Card>
       </section>
 

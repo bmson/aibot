@@ -80,6 +80,7 @@ import {
   waitForChatUpdates,
 } from '@assistant/application';
 import type { GoalInput } from '@assistant/application/goals';
+import type { ModelProviderPorts } from '@assistant/application/model-providers';
 import {
   createProfileMemoryCommands,
   organizeMemoryNow,
@@ -94,7 +95,11 @@ import {
   validateAgentPersistenceConfig,
 } from '@assistant/config';
 import { encodeMessageCursor } from '@assistant/core/chat';
-import { encryptMcpBearerToken } from '@assistant/core/mcp-secrets';
+import {
+  decryptStoredCredential,
+  encryptMcpBearerToken,
+  encryptStoredCredential,
+} from '@assistant/core/mcp-secrets';
 import { createConnectedModelProviders, ModelRouter } from '@assistant/core/model-router';
 import {
   goalAutomationCadence,
@@ -105,6 +110,7 @@ import {
   createDb,
   createPostgresCardRefreshRepository,
   createPostgresGeneratedCardRepository,
+  createPostgresModelCatalogRepository,
   createPostgresModelConnectionRepository,
   type Db,
 } from '@assistant/db';
@@ -121,6 +127,7 @@ import {
   FirestoreImportCommandRepository,
   FirestoreLocationPingRepository,
   FirestoreMcpConnectionMutationRepository,
+  FirestoreModelCatalogRepository,
   FirestoreModelConnectionRepository,
   FirestoreOwnerKnowledgeGraphFactRepository,
   FirestoreRecallFeedbackRepository,
@@ -149,6 +156,26 @@ const globalCache = globalThis as unknown as {
 /** Keep credential encryption behind the server-only application boundary. */
 export function encryptMcpConnectionBearerToken(token: string): string {
   return encryptMcpBearerToken(token);
+}
+
+/**
+ * Settings → AI providers, bound to whichever driver this installation runs.
+ * Keys are sealed and opened here, inside the server-only boundary.
+ */
+export function getModelProviderPorts(): ModelProviderPorts {
+  const config = loadConfig();
+  const firestore = config.PERSISTENCE_DRIVER === 'firestore';
+  return {
+    connections: firestore
+      ? new FirestoreModelConnectionRepository(getFirestoreInstallationStore())
+      : createPostgresModelConnectionRepository(getDb()),
+    catalog: firestore
+      ? new FirestoreModelCatalogRepository(getFirestoreInstallationStore())
+      : createPostgresModelCatalogRepository(getDb()),
+    config,
+    seal: encryptStoredCredential,
+    open: decryptStoredCredential,
+  };
 }
 
 /** Reuse one Firestore client across requests in a web process. */

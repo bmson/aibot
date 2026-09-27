@@ -61,6 +61,7 @@
 		B00000000000000000000085 /* SpeechVoiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000085 /* SpeechVoiceTests.swift */; };
 		B00000000000000000000083 /* System/SpeechListener.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000083 /* System/SpeechListener.swift */; };
 		B00000000000000000000084 /* Views/TalkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000084 /* Views/TalkView.swift */; };
+		B0000000000000000000008C /* Views/AIProvidersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0000000000000000000008C /* Views/AIProvidersView.swift */; };
 		B00000000000000000000086 /* System/RenderMemo.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000086 /* System/RenderMemo.swift */; };
 		B00000000000000000000087 /* RenderCostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000087 /* RenderCostTests.swift */; };
 /* End PBXBuildFile section */
@@ -155,6 +156,7 @@
 		C00000000000000000000085 /* SpeechVoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechVoiceTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000083 /* System/SpeechListener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/SpeechListener.swift; sourceTree = "<group>"; };
 		C00000000000000000000084 /* Views/TalkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/TalkView.swift; sourceTree = "<group>"; };
+		C0000000000000000000008C /* Views/AIProvidersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AIProvidersView.swift; sourceTree = "<group>"; };
 		C00000000000000000000086 /* System/RenderMemo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/RenderMemo.swift; sourceTree = "<group>"; };
 		C00000000000000000000087 /* RenderCostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderCostTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -251,6 +253,7 @@
 				C00000000000000000000081 /* System/SpeechPlayer.swift */,
 				C00000000000000000000083 /* System/SpeechListener.swift */,
 				C00000000000000000000084 /* Views/TalkView.swift */,
+				C0000000000000000000008C /* Views/AIProvidersView.swift */,
 				C00000000000000000000011 /* Assets.xcassets */,
 				C00000000000000000000057 /* Resources/mermaid.min.js */,
 				C00000000000000000000058 /* Resources/mermaid-LICENSE.txt */,
@@ -450,6 +453,7 @@
 				B00000000000000000000073 /* Models/RelationshipGraph.swift in Sources */,
 				B00000000000000000000059 /* Views/PeopleView.swift in Sources */,
 				B00000000000000000000084 /* Views/TalkView.swift in Sources */,
+				B0000000000000000000008C /* Views/AIProvidersView.swift in Sources */,
 				B00000000000000000000083 /* System/SpeechListener.swift in Sources */,
 				B00000000000000000000081 /* System/SpeechPlayer.swift in Sources */,
 				B00000000000000000000080 /* Components/SpeakableText.swift in Sources */,

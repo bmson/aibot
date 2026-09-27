@@ -183,6 +183,36 @@ final class APIModelsTests: XCTestCase {
         XCTAssertFalse(LocationFixPolicy.confirms(fix(age: 3), with: fix(accuracy: 3000), now: now))
     }
 
+    func testModelProviderSettingsGroupOnlyUsableChatModels() throws {
+        let json = """
+        {"connections":[
+          {"id":"openai","kind":"openai","label":"OpenAI","baseUrl":null,"vertexProject":null,"vertexLocation":null,
+           "hasApiKey":true,"enabled":true,"source":"saved","lastTestedAt":null,"lastError":null},
+          {"id":"groq","kind":"openai_compatible","label":"Groq","baseUrl":"https://api.groq.com/openai/v1",
+           "vertexProject":null,"vertexLocation":null,"hasApiKey":true,"enabled":false,"source":"saved",
+           "lastTestedAt":"2026-09-27T07:18:44.650Z","lastError":"The provider rejected the API key."}],
+         "models":[
+          {"id":"openai:gpt-5.1","label":"GPT-5.1","connectionId":"openai","enabled":true,"routable":true,
+           "embedding":false,"promptCostPerMTok":"1.2500","completionCostPerMTok":"10.0000"},
+          {"id":"openai:text-embedding-3-small","label":"Embeddings","connectionId":"openai","enabled":true,
+           "routable":true,"embedding":true,"promptCostPerMTok":"0.0200","completionCostPerMTok":"0.0000"},
+          {"id":"openai:unpriced","label":"Unpriced","connectionId":"openai","enabled":true,"routable":false,
+           "embedding":false,"promptCostPerMTok":null,"completionCostPerMTok":null},
+          {"id":"gw:groq:llama","label":"Llama","connectionId":"groq","enabled":true,"routable":true,
+           "embedding":false,"promptCostPerMTok":"0.5900","completionCostPerMTok":"0.7900"}],
+         "roles":[{"role":"reason","primaryModel":"openai:gpt-5.1","fallbackModel":"openai:gpt-5.1"}],
+         "mainModel":"openai:gpt-5.1","fastModel":null}
+        """
+        let settings = try JSONDecoder().decode(ModelProviderSettings.self, from: Data(json.utf8))
+        XCTAssertEqual(settings.mainModel, "openai:gpt-5.1")
+        XCTAssertNil(settings.fastModel)
+        // Embeddings, unpriced models, and models behind a turned-off connection are not choosable.
+        XCTAssertEqual(settings.choosableGroups.map(\.connection.id), ["openai"])
+        XCTAssertEqual(settings.choosableGroups.first?.models.map(\.id), ["openai:gpt-5.1"])
+        XCTAssertEqual(settings.models.first?.priceLabel, "$1.25 / $10.00 per M tokens")
+        XCTAssertEqual(settings.connections.last?.kindLabel, "OpenAI-compatible")
+    }
+
     func testSituationPackMissingRouteHasActionableCopy() {
         XCTAssertEqual(
             SituationPackLoadFailure.message(for: APIError.server(status: 404, message: "not found")),

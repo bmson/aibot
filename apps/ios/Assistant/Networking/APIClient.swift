@@ -653,6 +653,80 @@ struct APIClient: Sendable {
         _ = try await perform(request, as: OkPayload.self)
     }
 
+    func modelProviders() async throws -> ModelProviderSettings {
+        try await get("api/mobile/v1/providers")
+    }
+
+    func connectModelProvider(_ input: ModelConnectionInput) async throws -> ProviderConnectResult {
+        var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/providers"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(input)
+        return try await perform(request, as: ProviderConnectResult.self)
+    }
+
+    func testModelProvider(id: String) async throws -> ProviderTestResult {
+        try await providerAction(id: id, body: ProviderActionBody(action: "test"), as: ProviderTestResult.self)
+    }
+
+    func setModelProviderEnabled(id: String, enabled: Bool) async throws {
+        _ = try await providerAction(
+            id: id,
+            body: ProviderActionBody(action: enabled ? "enable" : "disable"),
+            as: OkPayload.self
+        )
+    }
+
+    func removeModelProvider(id: String) async throws {
+        _ = try await providerAction(id: id, body: ProviderActionBody(action: "remove"), as: OkPayload.self)
+    }
+
+    func addProviderModel(
+        connectionId: String,
+        model: String,
+        label: String?,
+        inputPrice: String,
+        outputPrice: String,
+        thinking: Bool?
+    ) async throws {
+        _ = try await providerAction(
+            id: connectionId,
+            body: ProviderActionBody(
+                action: "add_model",
+                model: model,
+                label: label,
+                promptCostPerMTok: inputPrice,
+                completionCostPerMTok: outputPrice,
+                thinking: thinking
+            ),
+            as: EmptyPayload.self
+        )
+    }
+
+    func chooseTextModels(main: String, fast: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/providers/choice")
+        )
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["mainModel": main, "fastModel": fast])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    private func providerAction<T: Decodable>(
+        id: String,
+        body: ProviderActionBody,
+        as type: T.Type
+    ) async throws -> T {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/providers/\(id)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(body)
+        return try await perform(request, as: type)
+    }
+
     func createMemory(_ memory: MemoryMutation) async throws {
         var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/memory"))
         request.httpMethod = "POST"
@@ -1127,6 +1201,15 @@ private struct ErrorBody: Decodable { let error: String }
 
 private struct OkPayload: Decodable { let ok: Bool }
 private struct EmptyPayload: Decodable {}
+
+private struct ProviderActionBody: Encodable {
+    let action: String
+    var model: String?
+    var label: String?
+    var promptCostPerMTok: String?
+    var completionCostPerMTok: String?
+    var thinking: Bool?
+}
 
 private struct ActivityActionBody: Encodable {
     let action: String
