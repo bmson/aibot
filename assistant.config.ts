@@ -1,6 +1,7 @@
 import {
   browserModule,
   calendarModule,
+  callsModule,
   codeModule,
   defineAssistant,
   documentsModule,
@@ -32,6 +33,7 @@ export default defineAssistant({
   modules: [
     browserModule,
     calendarModule,
+    callsModule,
     codeModule,
     documentsModule,
     googleModule,

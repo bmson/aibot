@@ -8,7 +8,9 @@ import { Check, KeyRound, LoaderCircle, Plus, RefreshCw, Trash2 } from 'lucide-r
 import { useMemo, useState, useTransition } from 'react';
 import {
   addProviderModelAction,
+  addVoicePresetAction,
   chooseTextModelsAction,
+  chooseVoiceModelAction,
   removeProviderConnectionAction,
   saveProviderConnectionAction,
   setProviderConnectionEnabledAction,
@@ -78,8 +80,13 @@ export function AiProvidersPanel({ settings }: { settings: ModelProviderSettings
   );
   const usable = new Set(settings.connections.filter((c) => c.enabled).map((c) => c.id));
   const chatModels = settings.models.filter(
-    (model) => model.routable && !model.embedding && usable.has(model.connectionId),
+    (model) =>
+      model.routable && !model.embedding && !model.realtime && usable.has(model.connectionId),
   );
+  const voiceModels = settings.models.filter(
+    (model) => model.routable && model.realtime && usable.has(model.connectionId),
+  );
+  const [voiceModel, setVoiceModel] = useState(settings.voiceModel ?? '');
   const groups = [...new Set(chatModels.map((model) => model.connectionId))].map((id) => ({
     id,
     label: connectionLabel.get(id) ?? id,
@@ -150,6 +157,93 @@ export function AiProvidersPanel({ settings }: { settings: ModelProviderSettings
             Use these
           </button>
         </form>
+      </div>
+
+      <div className="rounded-2xl bg-sunken/55 p-4">
+        <p className="text-sm font-medium text-strong">Voice model (phone calls)</p>
+        <p className="mt-1 text-sm leading-6 text-muted">
+          The live speech model that holds phone conversations for you. It is billed per audio token
+          by its provider, on top of the phone line’s per-minute rate.
+        </p>
+        {voiceModels.length > 0 ? (
+          <form
+            className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end"
+            onSubmit={(event) => {
+              event.preventDefault();
+              run(
+                'voice',
+                () => chooseVoiceModelAction(voiceModel),
+                () => setNotice('Saved. The next call uses this voice model.'),
+              );
+            }}
+          >
+            <label className={field}>
+              Voice model
+              <select
+                value={voiceModel}
+                onChange={(event) => setVoiceModel(event.target.value)}
+                className={selectClass}
+              >
+                {!voiceModels.some((model) => model.id === voiceModel) ? (
+                  <option value={voiceModel}>{voiceModel || 'Choose a voice model'}</option>
+                ) : null}
+                {voiceModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.label} · audio ${model.audioInputPerMTok?.toFixed(2)} / $
+                    {model.audioOutputPerMTok?.toFixed(2)} per M
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="submit"
+              disabled={pending || !voiceModel || voiceModel === settings.voiceModel}
+              className={`${btn.primary} justify-center`}
+            >
+              {pendingAction === 'voice' ? (
+                <LoaderCircle className="size-4 motion-safe:animate-spin" />
+              ) : (
+                <Check className="size-4" />
+              )}
+              Use for calls
+            </button>
+          </form>
+        ) : null}
+        {settings.voicePresets.length > 0 ? (
+          <ul className="mt-3 grid gap-2">
+            {settings.voicePresets.map((preset) => (
+              <li
+                key={`${preset.connectionId}:${preset.model}`}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-edge bg-raised px-3 py-2"
+              >
+                <span className="min-w-0 text-sm">
+                  <span className="font-medium text-strong">{preset.label}</span>
+                  <span className="text-muted"> — {preset.note}</span>
+                </span>
+                <button
+                  type="button"
+                  disabled={pending}
+                  className={btnSm.outline}
+                  onClick={() =>
+                    run(`preset:${preset.model}`, () =>
+                      addVoicePresetAction({
+                        connectionId: preset.connectionId,
+                        model: preset.model,
+                      }),
+                    )
+                  }
+                >
+                  <Plus className="size-3" />
+                  Add
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : voiceModels.length === 0 ? (
+          <p className="mt-3 text-sm text-muted">
+            Connect OpenAI or Google Vertex AI below to add a voice model.
+          </p>
+        ) : null}
       </div>
 
       {error ? (

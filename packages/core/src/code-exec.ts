@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { type BrowserJobPendingResult, isBrowserJobPending } from './browse.js';
+import { type CallPendingResult, isCallPending } from './phone-call.js';
 
 /**
  * Code execution (Phase 13). A second occupant of the credential-free Cloud Run
@@ -98,8 +99,8 @@ export function isCodeJobPending(result: unknown): result is CodeJobPendingResul
  */
 export function isJobPending(
   result: unknown,
-): result is BrowserJobPendingResult | CodeJobPendingResult {
-  return isBrowserJobPending(result) || isCodeJobPending(result);
+): result is BrowserJobPendingResult | CodeJobPendingResult | CallPendingResult {
+  return isBrowserJobPending(result) || isCodeJobPending(result) || isCallPending(result);
 }
 
 /** The result a completed code run reports back through its callback. */

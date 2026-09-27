@@ -2,6 +2,7 @@ import type { ExecutionPersistence } from '@assistant/persistence';
 import { createPostgresApplicationConfirmationRepository } from './application-confirmation-repository.js';
 import { createPostgresApprovalPolicyRepository } from './approval-policy-repository.js';
 import { createPostgresApprovalRepository } from './approval-repository.js';
+import { createPostgresCallSessionRepository } from './call-session-repository.js';
 import { createPostgresCardRefreshRepository } from './card-refresh-repository.js';
 import type { Db } from './client.js';
 import { createPostgresCostRepository } from './cost-repository.js';
@@ -21,6 +22,8 @@ import { createPostgresMemorySupersedeRepository } from './memory-supersede-repo
 import { createPostgresMemoryToolRepository } from './memory-tool-repository.js';
 import { createPostgresMessageRepository } from './message-repository.js';
 import { createPostgresMissionRepository } from './mission-repository.js';
+import { createPostgresModelCatalogRepository } from './model-catalog-repository.js';
+import { createPostgresModelConnectionRepository } from './model-connection-repository.js';
 import { createPostgresModelRoutingRepository } from './model-routing-repository.js';
 import { createPostgresNotificationsConversationRepository } from './notifications-conversation-repository.js';
 import { createPostgresNudgePolicyRepository } from './nudge-policy-repository.js';
@@ -66,6 +69,9 @@ export function createPostgresExecutionPersistence(db: Db): ExecutionPersistence
     nudgePolicy: createPostgresNudgePolicyRepository(db),
     voiceContext: createPostgresVoiceContextRepository(db),
     smsChannel: createPostgresSmsChannelRepository(db),
+    callSessions: createPostgresCallSessionRepository(db),
+    modelConnections: createPostgresModelConnectionRepository(db),
+    modelCatalog: createPostgresModelCatalogRepository(db),
     applications: createPostgresApplicationConfirmationRepository(db),
     emailSync: createPostgresEmailSyncRepository(db),
     documentSearch: createPostgresDocumentSearchRepository(db),

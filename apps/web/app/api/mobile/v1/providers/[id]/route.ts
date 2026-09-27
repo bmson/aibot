@@ -1,5 +1,6 @@
 import {
   addCatalogModel,
+  addVoicePreset,
   removeModelConnection,
   setModelConnectionEnabled,
   testModelConnection,
@@ -63,9 +64,17 @@ export async function POST(
         ? mobileJson({ id: result.id })
         : mobileJson({ error: result.error }, { status: 400 });
     }
+    case 'add_voice_preset': {
+      if (typeof body.model !== 'string')
+        return mobileJson({ error: 'model is required' }, { status: 400 });
+      const result = await addVoicePreset(ports, { connectionId: id, model: body.model });
+      return result.ok
+        ? mobileJson({ id: result.id })
+        : mobileJson({ error: result.error }, { status: 400 });
+    }
     default:
       return mobileJson(
-        { error: 'action must be test, enable, disable, remove, or add_model' },
+        { error: 'action must be test, enable, disable, remove, add_model, or add_voice_preset' },
         { status: 400 },
       );
   }

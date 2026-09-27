@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./approvals": "./src/approvals.ts",
+    "./calls": "./src/calls.ts",
     "./chat": "./src/chat.ts",
     "./cards": "./src/cards.ts",
     "./situations": "./src/situations.ts",

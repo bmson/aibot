@@ -19,6 +19,7 @@ struct AIProvidersView: View {
             Group {
                 if let settings {
                     modelsSection(settings)
+                voiceSection(settings)
                     Section {
                         ForEach(settings.connections) { connection in
                             NavigationLink {
@@ -88,6 +89,47 @@ struct AIProvidersView: View {
             Text("Models")
         } footer: {
             Text("The main model plans, uses tools and writes your replies. The fast model sorts, extracts and rewrites in the background.")
+        }
+    }
+
+    private func voiceSection(_ settings: ModelProviderSettings) -> some View {
+        let chosen = settings.models.first { $0.id == settings.voiceModel }
+        let presets = settings.voicePresets ?? []
+        return Section {
+            if !settings.voiceGroups.isEmpty {
+                NavigationLink {
+                    ModelChoiceList(
+                        title: "Voice model",
+                        groups: settings.voiceGroups,
+                        selection: Binding(
+                            get: { settings.voiceModel ?? "" },
+                            set: { id in Task { _ = await model.chooseVoiceModel(id) } }
+                        )
+                    )
+                } label: {
+                    LabeledContent("Voice model", value: chosen?.label ?? "Choose")
+                }
+            }
+            ForEach(presets) { preset in
+                Button {
+                    Task { _ = await model.addVoicePreset(connectionId: preset.connectionId, model: preset.model) }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Add \(preset.label)", systemImage: "plus.circle")
+                        Text(preset.note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if settings.voiceGroups.isEmpty && presets.isEmpty {
+                Text("Connect OpenAI or Google Vertex AI to add a voice model.")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Voice model (phone calls)")
+        } footer: {
+            Text("The live speech model that holds phone conversations for you, billed per audio token by its provider.")
         }
     }
 

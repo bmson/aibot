@@ -27,7 +27,7 @@ function tokensMatch(expected: string, given: string): boolean {
 function decide(
   task: Records['tasks'] | null,
   tokenHash: string,
-  kind: 'browser' | 'code',
+  kind: 'browser' | 'code' | 'call',
 ): ExecutionJobCallbackDecision {
   if (!task) return { accept: false, status: 404, error: 'task not found' };
   const pending = TaskStateSchema.parse(task.state ?? {}).pendingJob;
@@ -54,7 +54,7 @@ export type JobCallbackOutcome =
 /** Verify a one-shot job callback, record its result, and wake the task. */
 export async function recordJobCallback(
   jobs: ExecutionJobRepository,
-  kind: 'browser' | 'code',
+  kind: 'browser' | 'code' | 'call',
   input: { taskId: string; token: string } & Omit<ExecutionJobCallbackInput, 'taskId'>,
 ): Promise<JobCallbackOutcome> {
   if (!input.taskId || !input.token) return { ok: false, status: 400, error: 'bad request' };

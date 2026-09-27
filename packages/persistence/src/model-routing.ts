@@ -82,6 +82,11 @@ export interface ModelCatalogRepository {
   listRoles(): Promise<Records['modelRoles'][]>;
   upsertModel(input: ModelCatalogWrite): Promise<void>;
   assignRoles(assignments: readonly ModelRoleAssignment[]): Promise<void>;
+  /**
+   * Point the optional `voice` role (live phone calls) at a model, creating the
+   * role on first use. Refuses a model that is not enabled with prices.
+   */
+  setVoiceModel(modelId: string): Promise<void>;
 }
 
 /** A model the router can call: enabled and carrying both cost rates. */

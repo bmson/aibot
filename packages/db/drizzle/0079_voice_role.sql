@@ -1,0 +1,2 @@
+ALTER TABLE "model_roles" DROP CONSTRAINT "model_roles_role_check";--> statement-breakpoint
+ALTER TABLE "model_roles" ADD CONSTRAINT "model_roles_role_check" CHECK ("model_roles"."role" IN ('plan','classify','extract','draft','reason','rewrite','embed','batch','voice'));

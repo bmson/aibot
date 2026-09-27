@@ -17,7 +17,12 @@ import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from 
 /** Artifact rows one callback transaction inventories before it fails explicitly. */
 const CALLBACK_FILE_LIMIT = 400;
 
-const PENDING_KINDS = new Set(['browser_job_pending', 'code_job_pending', 'document_job_pending']);
+const PENDING_KINDS = new Set([
+  'browser_job_pending',
+  'code_job_pending',
+  'document_job_pending',
+  'call_pending',
+]);
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 function live(row: Records['tasks'], lease: TaskLease, now: Date) {

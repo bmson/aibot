@@ -107,6 +107,13 @@ const navItems: Array<Omit<NavDestination, 'count'>> = [
     aliases: [],
   },
   {
+    href: '/calls',
+    label: 'Calls',
+    command: '/calls',
+    hint: 'Phone calls the assistant made for you',
+    aliases: ['phone'],
+  },
+  {
     href: '/cards',
     label: 'Cards',
     command: '/cards',

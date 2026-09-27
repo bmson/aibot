@@ -72,8 +72,12 @@ export interface CatalogModelView {
   enabled: boolean;
   routable: boolean;
   embedding: boolean;
+  /** A live speech-to-speech model, usable only as the voice model. */
+  realtime: boolean;
   promptCostPerMTok: string | null;
   completionCostPerMTok: string | null;
+  audioInputPerMTok: number | null;
+  audioOutputPerMTok: number | null;
 }
 
 export interface ModelProviderSettingsView {
@@ -82,6 +86,10 @@ export interface ModelProviderSettingsView {
   roles: Array<{ role: string; primaryModel: string; fallbackModel: string }>;
   mainModel: string | null;
   fastModel: string | null;
+  /** The live voice model phone calls use, when one is chosen. */
+  voiceModel: string | null;
+  /** Suggested voice models for connected providers that are not in the catalog yet. */
+  voicePresets: VoiceModelPreset[];
 }
 
 function isKind(value: string): value is ModelConnectionKind {
@@ -154,16 +162,27 @@ export async function getModelProviderSettings(
   const primary = (role: string) => roles.find((row) => row.role === role)?.primaryModel ?? null;
   return {
     connections,
-    models: models.map((model) => ({
-      id: model.id,
-      label: model.label,
-      connectionId: connectionIdForModel(model.id),
-      enabled: model.enabled,
-      routable: isRoutableModel(model),
-      embedding: (model.capabilities as { embedding?: boolean } | null)?.embedding === true,
-      promptCostPerMTok: model.promptCostPerMTok,
-      completionCostPerMTok: model.completionCostPerMTok,
-    })),
+    models: models.map((model) => {
+      const caps = (model.capabilities ?? {}) as {
+        embedding?: boolean;
+        realtime?: boolean;
+        audioInputPerMTok?: number;
+        audioOutputPerMTok?: number;
+      };
+      return {
+        id: model.id,
+        label: model.label,
+        connectionId: connectionIdForModel(model.id),
+        enabled: model.enabled,
+        routable: isRoutableModel(model),
+        embedding: caps.embedding === true,
+        realtime: caps.realtime === true,
+        promptCostPerMTok: model.promptCostPerMTok,
+        completionCostPerMTok: model.completionCostPerMTok,
+        audioInputPerMTok: caps.audioInputPerMTok ?? null,
+        audioOutputPerMTok: caps.audioOutputPerMTok ?? null,
+      };
+    }),
     roles: roles.map(({ role, primaryModel, fallbackModel }) => ({
       role,
       primaryModel,
@@ -171,6 +190,16 @@ export async function getModelProviderSettings(
     })),
     mainModel: primary('reason'),
     fastModel: primary('classify'),
+    voiceModel: primary('voice'),
+    voicePresets: VOICE_MODEL_PRESETS.filter(
+      (preset) =>
+        connections.some((c) => c.id === preset.connectionId && c.enabled) &&
+        !models.some(
+          (model) =>
+            model.id ===
+            catalogModelId({ id: preset.connectionId, kind: preset.connectionId }, preset.model),
+        ),
+    ),
   };
 }
 
@@ -515,6 +544,12 @@ export interface AddCatalogModelInput {
   promptCostPerMTok: string | number;
   completionCostPerMTok: string | number;
   thinking?: boolean;
+  /** Present for a live voice model: its audio token prices and voice. */
+  realtime?: {
+    audioInputPerMTok: string | number;
+    audioOutputPerMTok: string | number;
+    voice?: string;
+  };
 }
 
 /**
@@ -543,15 +578,38 @@ export async function addCatalogModel(
       error:
         'Enter the input and output price in USD per million tokens (see the provider’s pricing page).',
     };
+  let realtime: Record<string, unknown> = {};
+  if (input.realtime) {
+    if (connection.kind !== 'openai' && connection.kind !== 'vertex')
+      return {
+        ok: false,
+        error: 'Live voice models come from OpenAI (Realtime) or Google Vertex (Gemini Live).',
+      };
+    const audioIn = cleanPrice(input.realtime.audioInputPerMTok);
+    const audioOut = cleanPrice(input.realtime.audioOutputPerMTok);
+    if (audioIn === null || audioOut === null)
+      return { ok: false, error: 'Enter the audio input and output price per million tokens.' };
+    const voice = (input.realtime.voice ?? '').trim();
+    if (voice && !/^[A-Za-z][A-Za-z0-9_-]{0,39}$/.test(voice))
+      return { ok: false, error: 'A voice name is one word, like marin or Aoede.' };
+    realtime = {
+      realtime: true,
+      audioInputPerMTok: Number(audioIn),
+      audioOutputPerMTok: Number(audioOut),
+      ...(voice ? { voice } : {}),
+    };
+  }
   const id = catalogModelId(connection, model);
   const existing = (await ports.catalog.listModels()).find((row) => row.id === id);
-  const capabilities = {
-    ...((existing?.capabilities as Record<string, unknown> | null) ?? {}),
-    tools: true,
-    json: true,
-    streaming: true,
-    ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
-  };
+  const capabilities = input.realtime
+    ? realtime
+    : {
+        ...((existing?.capabilities as Record<string, unknown> | null) ?? {}),
+        tools: true,
+        json: true,
+        streaming: true,
+        ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
+      };
   await ports.catalog.upsertModel({
     id,
     label: (input.label ?? '').trim().slice(0, 120) || existing?.label || model,
@@ -584,7 +642,8 @@ export async function chooseTextModels(
     rows.some((row) => row.id === connectionIdForModel(modelId) && !row.enabled);
   for (const chosen of [input.mainModel, input.fastModel]) {
     const model = byId.get(chosen);
-    if (!isRoutableModel(model) || (model?.capabilities as { embedding?: boolean })?.embedding)
+    const caps = (model?.capabilities ?? {}) as { embedding?: boolean; realtime?: boolean };
+    if (!isRoutableModel(model) || caps.embedding || caps.realtime)
       return { ok: false, error: `${chosen} is not an enabled, priced chat model.` };
     if (connectionOff(chosen))
       return { ok: false, error: `Turn on the connection for ${chosen} first.` };
@@ -600,5 +659,98 @@ export async function chooseTextModels(
   if (!assignments.every(({ role }) => (MODEL_ROLE_NAMES as readonly string[]).includes(role)))
     return { ok: false, error: 'Unknown model role.' };
   await ports.catalog.assignRoles(assignments);
+  return { ok: true };
+}
+
+export interface VoiceModelPreset {
+  connectionId: 'openai' | 'vertex';
+  model: string;
+  label: string;
+  audioInputPerMTok: number;
+  audioOutputPerMTok: number;
+  textInputPerMTok: number;
+  textOutputPerMTok: number;
+  voice?: string;
+  note: string;
+}
+
+/**
+ * Live voice models the app can add in one tap once their provider is
+ * connected. Prices are the providers' published list prices, checked
+ * 2026-09-27 (developers.openai.com/api/docs/pricing; Google Cloud Agent
+ * Platform pricing, "Gemini 3.8 Live API", non-global). The owner can edit
+ * them like any catalog price.
+ */
+export const VOICE_MODEL_PRESETS: readonly VoiceModelPreset[] = [
+  {
+    connectionId: 'openai',
+    model: 'gpt-realtime-2.1',
+    label: 'GPT-Realtime 2.1',
+    audioInputPerMTok: 32,
+    audioOutputPerMTok: 64,
+    textInputPerMTok: 4,
+    textOutputPerMTok: 24,
+    voice: 'marin',
+    note: 'Most natural on the phone; about $0.07 per minute of conversation plus context.',
+  },
+  {
+    connectionId: 'openai',
+    model: 'gpt-realtime-2.1-mini',
+    label: 'GPT-Realtime 2.1 mini',
+    audioInputPerMTok: 10,
+    audioOutputPerMTok: 20,
+    textInputPerMTok: 0.6,
+    textOutputPerMTok: 2.4,
+    voice: 'marin',
+    note: 'A third of the price of the full model, a little less polished.',
+  },
+  {
+    connectionId: 'vertex',
+    model: 'gemini-3.8-live',
+    label: 'Gemini 3.8 Live',
+    audioInputPerMTok: 3,
+    audioOutputPerMTok: 12,
+    textInputPerMTok: 0.75,
+    textOutputPerMTok: 4.5,
+    note: 'The cheapest by far (under $0.02 a minute); billed to your Google Cloud project.',
+  },
+];
+
+/** Add a suggested voice model with its published prices. */
+export async function addVoicePreset(
+  ports: ModelProviderPorts,
+  input: { connectionId: string; model: string },
+): Promise<Result<{ id: string }>> {
+  const preset = VOICE_MODEL_PRESETS.find(
+    (candidate) => candidate.connectionId === input.connectionId && candidate.model === input.model,
+  );
+  if (!preset) return { ok: false, error: 'Unknown voice model.' };
+  return addCatalogModel(ports, {
+    connectionId: preset.connectionId,
+    model: preset.model,
+    label: preset.label,
+    promptCostPerMTok: preset.textInputPerMTok,
+    completionCostPerMTok: preset.textOutputPerMTok,
+    realtime: {
+      audioInputPerMTok: preset.audioInputPerMTok,
+      audioOutputPerMTok: preset.audioOutputPerMTok,
+      voice: preset.voice,
+    },
+  });
+}
+
+/** Choose the live voice model phone calls use. */
+export async function chooseVoiceModel(
+  ports: ModelProviderPorts,
+  modelId: string,
+): Promise<Result> {
+  const [models, rows] = await Promise.all([ports.catalog.listModels(), ports.connections.list()]);
+  const model = models.find((row) => row.id === modelId);
+  const caps = (model?.capabilities ?? {}) as { realtime?: boolean };
+  if (!isRoutableModel(model) || caps.realtime !== true)
+    return { ok: false, error: `${modelId} is not an enabled live voice model.` };
+  if (rows.some((row) => row.id === connectionIdForModel(modelId) && !row.enabled))
+    return { ok: false, error: `Turn on the connection for ${modelId} first.` };
+  await ports.catalog.setVoiceModel(modelId);
   return { ok: true };
 }

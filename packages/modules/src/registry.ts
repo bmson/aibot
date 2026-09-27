@@ -1,4 +1,5 @@
 import { browserMeta } from './browser/meta.js';
+import { callsMeta } from './calls/meta.js';
 import { codeMeta } from './code/meta.js';
 import type { ModuleMeta } from './contract.js';
 import { documentsMeta } from './documents/meta.js';
@@ -19,6 +20,7 @@ import { watchesMeta } from './watches/meta.js';
 export const assistantModuleMetas: readonly ModuleMeta[] = [
   browserMeta,
   calendarMeta,
+  callsMeta,
   codeMeta,
   documentsMeta,
   googleMeta,

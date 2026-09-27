@@ -139,6 +139,34 @@ export class FirestoreModelCatalogRepository implements ModelCatalogRepository {
     });
   }
 
+  async setVoiceModel(modelId: string): Promise<void> {
+    await this.store.db.runTransaction(async (tx) => {
+      const roleRef = this.store.doc('modelRoles', 'voice');
+      const [modelSnapshot, roleSnapshot] = await tx.getAll(
+        this.store.doc('models', modelId),
+        roleRef,
+      );
+      const model = modelSnapshot?.exists
+        ? decodeRecord<Records['models']>(modelSnapshot.data())
+        : null;
+      if (model?.id !== modelId || !isRoutableModel(model))
+        throw new Error(`Model ${modelId} is not enabled with prices`);
+      const existing = roleSnapshot?.exists
+        ? decodeRecord<Records['modelRoles']>(roleSnapshot.data())
+        : null;
+      tx.set(
+        roleRef,
+        encodeRecord({
+          role: 'voice',
+          params: existing?.params ?? {},
+          primaryModel: modelId,
+          fallbackModel: modelId,
+          updatedAt: this.store.now(),
+        }),
+      );
+    });
+  }
+
   async assignRoles(assignments: readonly ModelRoleAssignment[]): Promise<void> {
     if (assignments.length === 0) return;
     await this.store.db.runTransaction(async (tx) => {

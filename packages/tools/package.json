@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./browser": "./src/browser/index.ts",
+    "./calls": "./src/calls/index.ts",
     "./builtin": "./src/builtin/index.ts",
     "./code": "./src/code/index.ts",
     "./dispatcher": "./src/dispatcher.ts",

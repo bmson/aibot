@@ -713,6 +713,50 @@ struct APIClient: Sendable {
         _ = try await perform(request, as: OkPayload.self)
     }
 
+    func chooseVoiceModel(_ modelId: String) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/providers/choice")
+        )
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(["voiceModel": modelId])
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
+    func addVoicePreset(connectionId: String, model: String) async throws {
+        _ = try await providerAction(
+            id: connectionId,
+            body: ProviderActionBody(action: "add_voice_preset", model: model),
+            as: EmptyPayload.self
+        )
+    }
+
+    func phoneCalls() async throws -> PhoneCallsResponse {
+        try await get("api/mobile/v1/calls")
+    }
+
+    func phoneCall(id: String) async throws -> PhoneCallResponse {
+        try await get("api/mobile/v1/calls/\(id)")
+    }
+
+    func answerCallCheckin(callId: String, checkinId: String, answer: String) async throws {
+        try await callAction(callId: callId, body: ["action": "answer", "checkinId": checkinId, "answer": answer])
+    }
+
+    func hangUpCall(callId: String) async throws {
+        try await callAction(callId: callId, body: ["action": "hangup"])
+    }
+
+    private func callAction(callId: String, body: [String: String]) async throws {
+        var request = makeRequest(
+            url: configuration.baseURL.appending(path: "api/mobile/v1/calls/\(callId)")
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(body)
+        _ = try await perform(request, as: OkPayload.self)
+    }
+
     private func providerAction<T: Decodable>(
         id: String,
         body: ProviderActionBody,

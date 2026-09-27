@@ -79,6 +79,7 @@ import {
   uploadImport,
   waitForChatUpdates,
 } from '@assistant/application';
+import type { CallsPorts } from '@assistant/application/calls';
 import type { GoalInput } from '@assistant/application/goals';
 import type { ModelProviderPorts } from '@assistant/application/model-providers';
 import {
@@ -94,7 +95,7 @@ import {
   repoRoot,
   validateAgentPersistenceConfig,
 } from '@assistant/config';
-import { encodeMessageCursor } from '@assistant/core/chat';
+import { encodeMessageCursor, getAgent } from '@assistant/core/chat';
 import {
   decryptStoredCredential,
   encryptMcpBearerToken,
@@ -108,6 +109,7 @@ import {
 } from '@assistant/core/workflow/schedules';
 import {
   createDb,
+  createPostgresCallSessionRepository,
   createPostgresCardRefreshRepository,
   createPostgresGeneratedCardRepository,
   createPostgresModelCatalogRepository,
@@ -121,6 +123,7 @@ import {
   createInstallationStore,
   FirestoreActiveJobLookup,
   FirestoreApplicationChatPersistence,
+  FirestoreCallSessionRepository,
   FirestoreCommitmentMutationRepository,
   FirestoreDeviceTokenRepository,
   FirestoreGoalMutationRepository,
@@ -175,6 +178,23 @@ export function getModelProviderPorts(): ModelProviderPorts {
     config,
     seal: encryptStoredCredential,
     open: decryptStoredCredential,
+  };
+}
+
+/** Phone calls for the owner, on whichever driver this installation runs. */
+export async function getCallsPorts(): Promise<CallsPorts> {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore')
+    return {
+      calls: new FirestoreCallSessionRepository(
+        getFirestoreInstallationStore(),
+        config.FIRESTORE_AGENT_ID,
+      ),
+      agentId: config.FIRESTORE_AGENT_ID,
+    };
+  return {
+    calls: createPostgresCallSessionRepository(getDb()),
+    agentId: (await getAgent(getDb())).id,
   };
 }
 

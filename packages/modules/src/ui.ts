@@ -1,4 +1,5 @@
 import { browserToolLabels } from './browser/labels.js';
+import { callsToolLabels } from './calls/labels.js';
 import { codeToolLabels } from './code/labels.js';
 import { documentsToolLabels } from './documents/labels.js';
 import { googleToolLabels } from './google/labels.js';
@@ -16,6 +17,7 @@ import { smsToolLabels } from './sms/labels.js';
 
 const allToolLabels = [
   browserToolLabels,
+  callsToolLabels,
   codeToolLabels,
   documentsToolLabels,
   googleToolLabels,

@@ -43,6 +43,46 @@ export interface Records {
     createdAt: Date;
     updatedAt: Date;
   };
+  /** One outbound phone call the assistant placed for the owner. */
+  callSessions: {
+    id: string;
+    createdAt: Date;
+    updatedAt: Date;
+    agentId: string;
+    taskId: string;
+    /** The tool_calls row the task is parked on until the call ends. */
+    toolCallId: string;
+    /** dialing | ringing | in_progress | completed | no_answer | busy | failed | canceled */
+    status: string;
+    to: string;
+    contactName: string | null;
+    /** The approved brief: goal, context, mayAgreeTo, mustNot, language, onVoicemail. */
+    brief: unknown;
+    voiceModel: string;
+    maxMinutes: number;
+    twilioCallSid: string | null;
+    /** sha256 of the one-shot media-stream token; null once the stream has connected. */
+    streamTokenHash: string | null;
+    /** Raw job-callback token that wakes the parked task when the call ends. */
+    callbackToken: string;
+    reservationId: string | null;
+    /** human | machine | unknown, from answering-machine detection. */
+    answeredBy: string | null;
+    startedAt: Date | null;
+    endedAt: Date | null;
+    durationSeconds: number | null;
+    /** [{ role: 'caller' | 'assistant' | 'system', text, at }] */
+    transcript: unknown;
+    /** Facts the assistant noted during the call. */
+    notes: unknown;
+    /** [{ id, question, askedAt, answer, answeredAt, via }] */
+    checkins: unknown;
+    hangupRequested: boolean;
+    outcome: string | null;
+    summary: string | null;
+    costUsd: string | null;
+    error: string | null;
+  };
   mcpConnections: {
     id: string;
     name: string;

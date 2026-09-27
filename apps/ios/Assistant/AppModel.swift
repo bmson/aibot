@@ -1409,6 +1409,53 @@ final class AppModel: ObservableObject {
         await modelProviderMutation { try await $0.chooseTextModels(main: main, fast: fast) }
     }
 
+    func chooseVoiceModel(_ modelId: String) async -> Bool {
+        await modelProviderMutation { try await $0.chooseVoiceModel(modelId) }
+    }
+
+    func addVoicePreset(connectionId: String, model: String) async -> Bool {
+        await modelProviderMutation { try await $0.addVoicePreset(connectionId: connectionId, model: model) }
+    }
+
+    func loadPhoneCalls() async -> [PhoneCall]? {
+        guard let client else { return nil }
+        do {
+            return try await client.phoneCalls().calls
+        } catch {
+            reportError(error)
+            return nil
+        }
+    }
+
+    func loadPhoneCall(id: String) async -> PhoneCall? {
+        guard let client else { return nil }
+        return try? await client.phoneCall(id: id).call
+    }
+
+    func answerCallCheckin(callId: String, checkinId: String, answer: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.answerCallCheckin(callId: callId, checkinId: checkinId, answer: answer)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
+    func hangUpCall(callId: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.hangUpCall(callId: callId)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
     private func modelProviderMutation(_ work: (APIClient) async throws -> Void) async -> Bool {
         guard let client else { return false }
         errorMessage = nil

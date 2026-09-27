@@ -164,6 +164,16 @@ const ConfigSchema = z.object({
   TWILIO_ACCOUNT_SID: z.string().default(''),
   TWILIO_AUTH_TOKEN: z.string().default(''),
   TWILIO_FROM_NUMBER: z.string().default(''),
+  /** The web dashboard's public URL, for links the agent sends the owner. */
+  WEB_URL: z.string().default(''),
+  /** Caller ID for outbound calls; defaults to TWILIO_FROM_NUMBER. */
+  TWILIO_VOICE_FROM_NUMBER: z.string().default(''),
+  /** Country calling codes the assistant may dial, comma-separated (default: US/Canada). */
+  CALL_ALLOWED_COUNTRY_CODES: z.string().default('1'),
+  /** Outbound calls per rolling day. */
+  CALL_DAILY_LIMIT: z.coerce.number().int().min(0).max(100).default(10),
+  /** Hard ceiling on one call's length; a brief may ask for less. */
+  CALL_MAX_MINUTES: z.coerce.number().int().min(1).max(60).default(15),
   PROFILE_ENC_KEY: z.string().default(''),
   /** Encryption key for owner-managed MCP bearer credentials. */
   MCP_ENC_KEY: z.string().default(''),
@@ -382,6 +392,7 @@ export function modelProviderConfigProblems(config: Config): string[] {
 export const FIRESTORE_PORTABLE_MODULES: readonly AssistantModule[] = [
   'reminders',
   'calendar',
+  'calls',
   'browser',
   'code',
   'search',

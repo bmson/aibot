@@ -1,8 +1,11 @@
+import type { Server } from 'node:http';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
+import { callsModule } from '@assistant/modules';
 import { validateAssistantConfig } from '@assistant/modules/meta';
 import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
-import { buildDeps } from './deps.js';
+import { attachCallStream } from './call-stream.js';
+import { agentServices, buildDeps } from './deps.js';
 import { initOtel } from './otel-init.js';
 import { startPoller } from './poller.js';
 
@@ -39,6 +42,10 @@ const app = createApp();
 
 // Cloud Run injects PORT; local dev uses AGENT_PORT (8787).
 const port = process.env.PORT ? Number(process.env.PORT) : config.AGENT_PORT;
-serve({ fetch: app.fetch, port }, (info) => {
+const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`agent service listening on :${info.port}`);
 });
+
+// Live phone calls: Twilio media streams arrive as WebSocket upgrades.
+const callBridge = deps.modules.exportsOf(callsModule);
+if (callBridge) attachCallStream(server as Server, callBridge, () => agentServices(deps));

@@ -3,7 +3,9 @@
 import {
   type AddCatalogModelInput,
   addCatalogModel,
+  addVoicePreset,
   chooseTextModels,
+  chooseVoiceModel,
   type ProviderModelListing,
   removeModelConnection,
   type SaveModelConnectionInput,
@@ -69,4 +71,17 @@ export async function chooseTextModelsAction(input: {
 }): Promise<ActionResult> {
   await requireOwner();
   return done(await chooseTextModels(getModelProviderPorts(), input));
+}
+
+export async function addVoicePresetAction(input: {
+  connectionId: string;
+  model: string;
+}): Promise<ActionResult> {
+  await requireOwner();
+  return done(await addVoicePreset(getModelProviderPorts(), input));
+}
+
+export async function chooseVoiceModelAction(modelId: string): Promise<ActionResult> {
+  await requireOwner();
+  return done(await chooseVoiceModel(getModelProviderPorts(), modelId));
 }

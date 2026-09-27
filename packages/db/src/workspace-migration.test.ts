@@ -108,7 +108,7 @@ describe.skipIf(!enabled)('PostgreSQL workspace migration export', () => {
         revision: '1',
       },
     });
-    expect(Object.keys(complete.manifest.tables)).toHaveLength(67);
+    expect(Object.keys(complete.manifest.tables)).toHaveLength(68);
     const exportedModel = complete.records.find((record) => record.table === 'models');
     expect(exportedModel?.data).toHaveProperty('promptCostPerMTok');
     expect(exportedModel?.data).toHaveProperty('completionCostPerMTok');

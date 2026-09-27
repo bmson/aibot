@@ -93,6 +93,11 @@ struct MoreView: View {
                     Label("AI providers", systemImage: "cpu")
                 }
                 NavigationLink {
+                    CallsView()
+                } label: {
+                    Label("Calls", systemImage: "phone")
+                }
+                NavigationLink {
                     MCPConnectionsView()
                 } label: {
                     Label("MCP connections", systemImage: "point.3.connected.trianglepath.dotted")

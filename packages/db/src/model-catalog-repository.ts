@@ -25,6 +25,20 @@ export function createPostgresModelCatalogRepository(db: Db): ModelCatalogReposi
           },
         });
     },
+    async setVoiceModel(modelId) {
+      await db.transaction(async (tx) => {
+        const [model] = await tx.select().from(models).where(eq(models.id, modelId)).for('share');
+        if (!isRoutableModel(model ?? null))
+          throw new Error(`Model ${modelId} is not enabled with prices`);
+        await tx
+          .insert(modelRoles)
+          .values({ role: 'voice', primaryModel: modelId, fallbackModel: modelId, params: {} })
+          .onConflictDoUpdate({
+            target: modelRoles.role,
+            set: { primaryModel: modelId, fallbackModel: modelId, updatedAt: sql`now()` },
+          });
+      });
+    },
     async assignRoles(assignments) {
       if (assignments.length === 0) return;
       await db.transaction(async (tx) => {

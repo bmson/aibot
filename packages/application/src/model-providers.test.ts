@@ -8,7 +8,9 @@ import { isRoutableModel } from '@assistant/persistence';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addCatalogModel,
+  addVoicePreset,
   chooseTextModels,
+  chooseVoiceModel,
   getModelProviderSettings,
   type ModelProviderPorts,
   removeModelConnection,
@@ -93,6 +95,16 @@ function memoryCatalog(): ModelCatalogRepository & {
       models.set(input.id, {
         ...input,
         createdAt: models.get(input.id)?.createdAt ?? new Date(0),
+        updatedAt: new Date(),
+      });
+    },
+    async setVoiceModel(modelId: string) {
+      if (!isRoutableModel(models.get(modelId))) throw new Error(`Model ${modelId} not routable`);
+      roles.set('voice', {
+        role: 'voice',
+        primaryModel: modelId,
+        fallbackModel: modelId,
+        params: {},
         updatedAt: new Date(),
       });
     },
@@ -324,5 +336,64 @@ describe('AI provider settings', () => {
       error: 'The provider rejected the API key.',
     });
     expect(connections.rows.get('openai')?.lastError).toBe('The provider rejected the API key.');
+  });
+
+  it('offers voice presets for connected providers and routes calls to the chosen one', async () => {
+    expect((await getModelProviderSettings(ports)).voicePresets).toEqual([]);
+    await saveModelConnection(ports, { kind: 'openai', apiKey: 'sk-1' });
+    const offered = (await getModelProviderSettings(ports)).voicePresets.map((p) => p.model);
+    expect(offered).toEqual(['gpt-realtime-2.1', 'gpt-realtime-2.1-mini']);
+
+    expect(
+      await addVoicePreset(ports, { connectionId: 'openai', model: 'gpt-realtime-2.1' }),
+    ).toEqual({ ok: true, id: 'openai:gpt-realtime-2.1' });
+    expect(catalog.models.get('openai:gpt-realtime-2.1')).toMatchObject({
+      promptCostPerMTok: '4.0000',
+      completionCostPerMTok: '24.0000',
+      capabilities: {
+        realtime: true,
+        audioInputPerMTok: 32,
+        audioOutputPerMTok: 64,
+        voice: 'marin',
+      },
+    });
+
+    // A live voice model is never a chat model, and a chat model is never a voice.
+    expect(
+      await chooseTextModels(ports, {
+        mainModel: 'openai:gpt-realtime-2.1',
+        fastModel: 'minimax/minimax-m2.7',
+      }),
+    ).toEqual({ ok: false, error: expect.stringContaining('chat model') });
+    expect(await chooseVoiceModel(ports, 'minimax/minimax-m2.7')).toEqual({
+      ok: false,
+      error: expect.stringContaining('live voice model'),
+    });
+    expect(await chooseVoiceModel(ports, 'openai:gpt-realtime-2.1')).toEqual({ ok: true });
+    const settings = await getModelProviderSettings(ports);
+    expect(settings.voiceModel).toBe('openai:gpt-realtime-2.1');
+    expect(settings.voicePresets.map((p) => p.model)).toEqual(['gpt-realtime-2.1-mini']);
+    expect(settings.models.find((m) => m.id === 'openai:gpt-realtime-2.1')).toMatchObject({
+      realtime: true,
+      audioInputPerMTok: 32,
+    });
+  });
+
+  it('only accepts live voice models from OpenAI or Vertex', async () => {
+    await saveModelConnection(ports, {
+      kind: 'openai_compatible',
+      id: 'groq',
+      baseUrl: 'https://api.groq.com/openai/v1',
+      apiKey: 'gsk',
+    });
+    expect(
+      await addCatalogModel(ports, {
+        connectionId: 'groq',
+        model: 'voice',
+        promptCostPerMTok: 1,
+        completionCostPerMTok: 1,
+        realtime: { audioInputPerMTok: 1, audioOutputPerMTok: 1 },
+      }),
+    ).toEqual({ ok: false, error: expect.stringContaining('OpenAI') });
   });
 });

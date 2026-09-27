@@ -12,6 +12,7 @@ export * from './mcp-secrets.js';
 export * from './memory/index.js';
 export * from './model-router/index.js';
 export * from './otel.js';
+export * from './phone-call.js';
 export * from './queue.js';
 export * from './sports/index.js';
 export * from './voice.js';

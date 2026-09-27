@@ -62,6 +62,7 @@ describe('deploy.sh delivers every module setting', () => {
     ['PROCESSOR_JOB_NAME', 'the Cloud Run Job this script creates'],
     ['TRACES_BUCKET', 'derived from the project id'],
     ['PROFILE_ENC_KEY', 'delivered from Secret Manager; generated on first deploy'],
+    ['PUBLIC_URL', 'the agent service URL, discovered after its first deploy'],
   ]);
 
   const declared = [...new Set(assistantModuleMetas.flatMap((meta) => meta.configKeys))].sort();
