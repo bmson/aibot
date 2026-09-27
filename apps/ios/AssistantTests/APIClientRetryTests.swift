@@ -471,15 +471,27 @@ final class APIClientRetryTests: XCTestCase {
         let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
         let graph = RelationshipGraphFixture.snapshot()
         view.configure(snapshot: graph, selectedID: nil, dark: false, reduceMotion: true)
-        var connected: (String, String)?
+        var connected: (String, String?)?
         view.onConnect = { connected = ($0, $1) }
         let ids = view.layout.ids
         let from = view.viewport.screen(view.layout.positions[0], size: view.bounds.size)
         let to = view.viewport.screen(view.layout.positions[ids.count - 1], size: view.bounds.size)
         view.beginConnect(from: ids[0], at: from)
+        view.moveConnect(to: CGPoint(x: from.x + 20, y: from.y + 20))
+        view.endConnect(cancelled: false)
+        XCTAssertNil(connected, "A thread let go close to its own item is a change of mind")
+        view.beginConnect(from: ids[0], at: from)
+        view.moveConnect(to: CGPoint(x: -300, y: -300))
+        XCTAssertTrue(view.connectWouldCreate)
+        view.endConnect(cancelled: true)
+        XCTAssertNil(connected, "A cancelled drag connects nothing")
+        view.beginConnect(from: ids[0], at: from)
         view.moveConnect(to: CGPoint(x: -300, y: -300))
         view.endConnect(cancelled: false)
-        XCTAssertNil(connected, "Letting go over empty canvas connects nothing")
+        let created = try XCTUnwrap(connected, "Let go on open canvas, far out, starts a new item")
+        XCTAssertEqual(created.0, ids[0])
+        XCTAssertNil(created.1)
+        connected = nil
         view.beginConnect(from: ids[0], at: from)
         view.moveConnect(to: from)
         XCTAssertNil(view.connectTargetID, "An item cannot be connected to itself")
@@ -488,7 +500,7 @@ final class APIClientRetryTests: XCTestCase {
         let target = view.connectTargetID
         view.endConnect(cancelled: false)
         XCTAssertEqual(connected?.0, ids[0])
-        XCTAssertEqual(connected?.1, target)
+        XCTAssertEqual(connected.flatMap { $0.1 }, target)
         XCTAssertNil(view.connectSourceID)
     }
 
@@ -569,7 +581,9 @@ final class APIClientRetryTests: XCTestCase {
             let model = AppModel(apiClient: makeClient())
             for (name, content) in [
                 ("groups", AnyView(GraphGroupsSheet(graph: graph, focus: { _ in }, saved: { _ in }))),
-                ("connect", AnyView(GraphConnectSheet(source: source, graph: graph, saved: {}))),
+                ("connect", AnyView(GraphConnectSheet(source: source, graph: graph, saved: { _ in }))),
+                ("quick-connect", AnyView(GraphQuickConnectSheet(draft: GraphConnectionDraft(first: source, second: graph.nodes[1]), saved: { _ in }))),
+                ("quick-connect-new", AnyView(GraphQuickConnectSheet(draft: GraphConnectionDraft(first: source, second: nil), saved: { _ in }))),
                 ("editor", AnyView(KnowledgeConnectionEditor(selected: source.entity, initialObject: graph.nodes[1].entity, candidates: [], didSave: {})))
             ] {
                 let window = UIWindow(windowScene: scene)

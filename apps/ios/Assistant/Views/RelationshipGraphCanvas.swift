@@ -11,8 +11,9 @@ struct RelationshipGraphCanvas: UIViewRepresentable {
     /// clear of them, and the camera frames the map inside what is left.
     var insets = UIEdgeInsets.zero
     var select: (String?) -> Void = { _ in }
-    /// Long-press one item and let go over another.
-    var connect: ((String, String) -> Void)? = nil
+    /// Long-press one item and let go over another — or over open canvas,
+    /// which passes nil for the second end: a new item.
+    var connect: ((String, String?) -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -111,7 +112,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     }
     private var cameraTouched = false
     var onSelect: ((String?) -> Void)?
-    var onConnect: ((String, String) -> Void)?
+    var onConnect: ((String, String?) -> Void)?
 
     // Gesture state.
     private(set) var dragID: String?
@@ -585,14 +586,27 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
+    /// How far from its item a thread has to be pulled before letting go on
+    /// open canvas means "a new item" rather than "never mind".
+    static let newItemPull: CGFloat = 90
+
+    /// True while the thread is far enough out that releasing it would start
+    /// a new item.
+    var connectWouldCreate: Bool {
+        guard connectTargetID == nil, let source = connectSourceID, let finger = connectPoint,
+              let position = position(of: source) else { return false }
+        let from = viewport.screen(position, size: bounds.size)
+        return hypot(finger.x - from.x, finger.y - from.y) >= Self.newItemPull
+    }
+
     func endConnect(cancelled: Bool) {
         let source = connectSourceID, target = connectTargetID
+        let create = connectWouldCreate
         connectSourceID = nil; connectTargetID = nil; connectPoint = nil
         setNeedsDisplay()
-        if !cancelled, let source, let target {
-            impactFeedback.impactOccurred(intensity: 0.7)
-            onConnect?(source, target)
-        }
+        guard !cancelled, let source, target != nil || create else { return }
+        impactFeedback.impactOccurred(intensity: 0.7)
+        onConnect?(source, target)
     }
 
     // MARK: - Drawing
@@ -653,8 +667,19 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             context.move(to: from); context.addLine(to: to); context.strokePath()
             context.setLineDash(phase: 0, lengths: [])
             if connectTargetID == nil {
-                context.setFillColor(accent.withAlphaComponent(0.25).cgColor)
-                context.fillEllipse(in: CGRect(x: finger.x - 14, y: finger.y - 14, width: 28, height: 28))
+                // Out on open canvas the thread ends in a "+": letting go
+                // there makes a new item.
+                let creating = connectWouldCreate
+                let radius: CGFloat = creating ? 17 : 14
+                context.setFillColor(accent.withAlphaComponent(creating ? 0.9 : 0.25).cgColor)
+                context.fillEllipse(in: CGRect(x: finger.x - radius, y: finger.y - radius, width: radius * 2, height: radius * 2))
+                if creating {
+                    context.setStrokeColor(canvas.cgColor)
+                    context.setLineWidth(2.4)
+                    context.move(to: CGPoint(x: finger.x - 7, y: finger.y)); context.addLine(to: CGPoint(x: finger.x + 7, y: finger.y))
+                    context.move(to: CGPoint(x: finger.x, y: finger.y - 7)); context.addLine(to: CGPoint(x: finger.x, y: finger.y + 7))
+                    context.strokePath()
+                }
             }
         }
 

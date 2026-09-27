@@ -200,3 +200,28 @@ simulator, with new coverage for settling, collision spacing, drag-follows-neigh
 node-drag vs pan, the connect gesture (self and empty drops ignored), label fading, and
 snapshots of the memory home and the map opened on an item in light and dark. Touch feel
 and frame rate have not been checked on a physical iPhone.
+
+### The map keeps up with changes; a note is optional — September 26, 2026
+
+- **Saved changes now show on the map.** After a save, confirm or correction the phone re-fetched
+  the item's neighbourhood but skipped merging it whenever the map already held 200 items — which
+  on a real account is always — so nothing visibly changed. The map is now a sliding window of up
+  to 320 items: a fetched neighbourhood always merges, fresh claims about the item replace its old
+  ones, and when the window is full the items furthest away in hops (unreachable first, then the
+  least connected) are let go. The neighbourhood just fetched, the selection and the last twelve
+  items visited are never let go, so walking back retraces familiar ground. Letting go marks the
+  view partial. A drawn connection also appears instantly as a provisional line, replaced by the
+  real claim when the fetch returns.
+- **The source note is optional**, on web and iPhone, for new connections and corrections alike.
+  The owner stating the relationship is the provenance: an owner-drawn edge is still saved as a
+  durable owner memory, reading `Anna parent of Baldvin.`, with ` Owner note: …` appended only when
+  a note was written. Relationship and endpoints remain required.
+- **Connect to something new.** Letting a connection thread go on open canvas, pulled at least
+  90pt from its item, opens the connect sheet with a name and type for a new item; the thread
+  shows a "+" once it is far enough out. The card's Connect button now uses the same short sheet
+  for both existing and new items instead of the long connection form.
+- **Hide me.** The owner's own item is hidden by default, because it links to nearly everything
+  and pulls the map into one star. "Show me" in the options menu brings it back, as does picking
+  yourself from Find or a neighbour chip. Your connections still appear on other people's cards.
+
+Server change (core owner-fact creation, both persistences) plus a new iOS build.

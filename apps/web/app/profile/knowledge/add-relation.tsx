@@ -309,8 +309,9 @@ function connectionSentence(subject: string, predicate: string, object: string):
 }
 
 /**
- * The form intentionally requires a note. A manual edge is written as a
- * durable owner memory first, rather than becoming an unexplained graph row.
+ * A manual edge is written as a durable owner memory first, rather than
+ * becoming an unexplained graph row. The owner saying it is the source, so the
+ * note is optional context rather than a gate.
  *
  * The predicate vocabulary arrives as props from the server page: the typed
  * registry lives in core, and a client component must not import it.
@@ -384,7 +385,7 @@ export function AddKnowledgeRelation({
           <p className="mt-1 text-sm leading-5 text-muted">
             {correction
               ? 'Save the corrected fact first. The earlier connection will remain as evidence but stop being used.'
-              : 'Save a relationship the assistant can understand and trace back to your note.'}
+              : 'Save a relationship the assistant can understand and trace back to you.'}
           </p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -444,19 +445,14 @@ export function AddKnowledgeRelation({
           </p>
         </div>
         <label className={`grid gap-1 ${labelClass}`}>
-          Your source note
+          Note (optional)
           <textarea
             name="note"
-            required
-            minLength={3}
             maxLength={1000}
-            rows={3}
-            placeholder="Why this is true, or where you learned it…"
+            rows={2}
+            placeholder="How you know, e.g. met at university"
             className={textareaClass}
           />
-          <span className="text-xs leading-5 font-normal text-muted">
-            This note is the evidence behind the connection, never an unsupported graph-only fact.
-          </span>
         </label>
         <div className="flex flex-wrap items-center gap-2">
           <button

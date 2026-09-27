@@ -2502,6 +2502,41 @@ extension APIModelsTests {
         XCTAssertEqual(merged.merging(replacement, around: "node-0").edges.count, merged.edges.count)
     }
 
+    func testExpandingAFullMapStillShowsTheFreshNeighbourhood() {
+        // A full map used to skip the merge entirely, so a connection saved on
+        // a real account — whose map is always full — never appeared.
+        let full = RelationshipGraphFixture.snapshot(count: 200)
+        let fresh = RelationshipGraphSnapshot(
+            nodes: [full.nodes[0], RelationshipGraphNode(id: "new-a", label: "New A", kind: "person"),
+                    RelationshipGraphNode(id: "new-b", label: "New B", kind: "place")],
+            edges: [RelationshipGraphFixture.edge("fresh-1", from: "node-0", to: "new-a"),
+                    RelationshipGraphFixture.edge("fresh-2", from: "new-b", to: "node-0")],
+            totalEdges: 2, truncated: false, focusId: "node-0")
+        let merged = full.merging(fresh, around: "node-0", keep: ["node-150"], nodeCap: 200)
+        XCTAssertEqual(merged.nodes.count, 200, "The window holds its size")
+        XCTAssertTrue(merged.edges.contains { $0.id == "fresh-1" })
+        XCTAssertTrue(merged.edges.contains { $0.id == "fresh-2" })
+        XCTAssertTrue(merged.nodes.contains { $0.id == "node-150" }, "The recent trail is never let go")
+        XCTAssertTrue(merged.truncated, "Letting items go is reported as a partial view")
+        XCTAssertEqual(merged.edges.filter { $0.subjectId == "node-0" || $0.objectId == "node-0" }.map(\.id).sorted(),
+                       ["fresh-1", "fresh-2"], "Fresh claims about the item replace its old ones")
+        let ids = Set(merged.nodes.map(\.id))
+        XCTAssertTrue(merged.edges.allSatisfy { ids.contains($0.subjectId) && ids.contains($0.objectId) },
+                      "No line is left pointing at an item that was let go")
+    }
+
+    func testWindowLetsGoOfTheFurthestItemsFirst() {
+        // A chain a–b–c–d–e plus an unconnected f: opening a, over capacity,
+        // gives up f (unreachable) and then e (furthest) before anything near a.
+        let nodes = ["a", "b", "c", "d", "e", "f"].map { RelationshipGraphNode(id: $0, label: $0.uppercased(), kind: "person") }
+        let edges = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "e")].map { RelationshipGraphFixture.edge("\($0)\($1)", from: $0, to: $1) }
+        let map = RelationshipGraphSnapshot(nodes: nodes, edges: edges, totalEdges: 4, truncated: false, focusId: nil)
+        let fresh = RelationshipGraphSnapshot(nodes: [nodes[0], nodes[1]], edges: [edges[0]], totalEdges: 1, truncated: false, focusId: "a")
+        let merged = map.merging(fresh, around: "a", nodeCap: 4)
+        XCTAssertEqual(Set(merged.nodes.map(\.id)), ["a", "b", "c", "d"])
+        XCTAssertFalse(map.merging(fresh, around: "a").truncated, "Under capacity nothing is let go")
+    }
+
     func testForceLayoutKeepsExistingPositionsDuringExpansionAndRemainsFiniteAtCapacity() {
         let graph = RelationshipGraphFixture.snapshot(count: 200)
         var layout = RelationshipGraphLayout()

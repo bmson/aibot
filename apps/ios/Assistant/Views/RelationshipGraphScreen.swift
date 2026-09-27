@@ -35,12 +35,26 @@ struct RelationshipGraphScreen: View {
     @State private var editingItem: RelationshipGraphNode?
     @State private var notice: String?
     @State private var cardHeight: CGFloat = 0
+    /// Items recently looked at. They survive when the map is full and has to
+    /// let something go, so walking back retraces familiar ground.
+    @State private var trail: [String] = []
     @AppStorage("assistant.graph.gestureHintSeen") private var hintSeen = false
+    /// The owner is connected to nearly everything, so their own dot pulls the
+    /// whole map into one star. Hidden by default, as Obsidian users tend to
+    /// hide their own note; one toggle, or picking yourself, brings it back.
+    @AppStorage("assistant.graph.showMe") private var showMe = false
 
     private var usesList: Bool { listView || dynamicTypeSize.isAccessibilitySize }
     private var selected: RelationshipGraphNode? { graph.nodes.first { $0.id == selectedID } }
+    /// The owner's own item on the map, when the workspace says who that is.
+    private var ownerNodeID: String? {
+        guard let owner = model.workspace?.memory.ownerContactId else { return nil }
+        return graph.nodes.first { $0.contactId == owner }?.id
+    }
     private var visible: RelationshipGraphSnapshot {
-        peopleOnly ? graph.showing(Set(graph.nodes.filter { $0.kind == "person" }.map(\.id))) : graph
+        let hidden = showMe ? nil : ownerNodeID
+        guard peopleOnly || hidden != nil else { return graph }
+        return graph.showing(Set(graph.nodes.filter { ($0.kind == "person" || !peopleOnly) && $0.id != hidden }.map(\.id)))
     }
     private var selectedEdges: [RelationshipGraphEdge] {
         guard let selectedID else { return [] }
@@ -57,11 +71,14 @@ struct RelationshipGraphScreen: View {
             if only, let selected, selected.kind != "person" { selectedID = nil }
             send(.fit)
         }
+        .onChange(of: showMe) { _, shown in
+            if !shown, selectedID != nil, selectedID == ownerNodeID { selectedID = nil }
+        }
         .sheet(isPresented: $showSearch) { itemBrowser }
         .sheet(item: $connecting) { node in
             NavigationStack {
-                GraphConnectSheet(source: node, graph: graph) {
-                    await didConnect(node.id)
+                GraphConnectSheet(source: node, graph: graph) { provisional in
+                    await didConnect(node.id, provisional: provisional)
                     connecting = nil
                 }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { connecting = nil } } }
@@ -69,8 +86,8 @@ struct RelationshipGraphScreen: View {
         }
         .sheet(item: $quickConnect) { draft in
             NavigationStack {
-                GraphQuickConnectSheet(draft: draft) {
-                    await didConnect(draft.first.id)
+                GraphQuickConnectSheet(draft: draft) { provisional in
+                    await didConnect(draft.first.id, provisional: provisional)
                     quickConnect = nil
                 }
             }
@@ -165,6 +182,9 @@ struct RelationshipGraphScreen: View {
             Menu {
                 Button("Fit to screen", systemImage: "arrow.up.left.and.arrow.down.right") { send(.fit) }
                 Toggle(isOn: $peopleOnly) { Label("People only", systemImage: "person.2") }
+                if ownerNodeID != nil {
+                    Toggle(isOn: $showMe) { Label("Show me", systemImage: "person.crop.circle") }
+                }
                 Button("Show as a list", systemImage: "list.bullet") { listView = true }
                 Divider()
                 Button("Connect loose groups", systemImage: "point.3.connected.trianglepath.dotted") { showGroups = true }
@@ -403,6 +423,9 @@ struct RelationshipGraphScreen: View {
     private func select(_ id: String?) {
         selectedID = id
         guard let id else { return }
+        trail.removeAll { $0 == id }
+        trail.append(id)
+        if trail.count > 12 { trail.removeFirst(trail.count - 12) }
         // A truncated map may be missing some of this item's neighbours; fetch
         // them in the background and let them bloom out of it.
         if graph.truncated { Task { await expand(id) } }
@@ -410,22 +433,29 @@ struct RelationshipGraphScreen: View {
 
     /// Select an item and bring the camera to it.
     private func choose(_ id: String) {
+        if id == ownerNodeID { showMe = true }
         select(id)
         send(.reveal(id))
     }
 
-    private func beginQuickConnect(_ first: String, _ second: String) {
-        guard let a = graph.nodes.first(where: { $0.id == first }),
-              let b = graph.nodes.first(where: { $0.id == second }) else { return }
+    private func beginQuickConnect(_ first: String, _ second: String?) {
+        guard let a = graph.nodes.first(where: { $0.id == first }) else { return }
         hintSeen = true
-        quickConnect = GraphConnectionDraft(first: a, second: b)
+        quickConnect = GraphConnectionDraft(first: a, second: second.flatMap { id in graph.nodes.first { $0.id == id } })
     }
 
-    private func didConnect(_ id: String) async {
-        await expand(id)
-        model.invalidatePersonCaches()
+    /// Show a saved connection straight away, then settle it against the
+    /// server. The provisional line is replaced when the item's neighbourhood
+    /// comes back, because fresh claims about an item replace its old ones.
+    private func didConnect(_ id: String, provisional: RelationshipGraphEdge? = nil) async {
+        if let provisional, graph.nodes.contains(where: { $0.id == provisional.subjectId }),
+           graph.nodes.contains(where: { $0.id == provisional.objectId }) {
+            graph.edges.append(provisional)
+        }
         selectedID = id
         flash("Connection saved")
+        await expand(id)
+        model.invalidatePersonCaches()
     }
 
     private func flash(_ message: String) {
@@ -462,9 +492,9 @@ struct RelationshipGraphScreen: View {
         if let focus, graph.nodes.contains(where: { $0.id == focus }) { choose(focus) }
     }
 
-    /// Pull one item's neighbourhood into the map. Grows the map around it
-    /// while there is room; past the node cap, only an explicit jump (Find)
-    /// swaps the map for that neighbourhood, so tapping around never resets it.
+    /// Pull one item's neighbourhood into the map, always. When the map is
+    /// full, what gets let go is whatever is furthest from here and not on the
+    /// recent trail — so digging in keeps going instead of hitting a wall.
     private func expand(_ id: String, chooseAfter: Bool = false) async {
         let token = UUID(); requestID = token
         loading = true
@@ -475,21 +505,19 @@ struct RelationshipGraphScreen: View {
             if chooseAfter { flash("Couldn’t load that item") }
             return
         }
-        if Set((graph.nodes + result.nodes).map(\.id)).count > 200 {
-            guard chooseAfter else { return }
-            graph = result
-        } else {
-            graph = graph.merging(result, around: id)
-        }
+        var keep = Set(trail)
+        if let selectedID { keep.insert(selectedID) }
+        graph = graph.merging(result, around: id, keep: keep)
         if chooseAfter { choose(id) }
     }
 }
 
-/// Two items the owner has just joined on the map, before they say how.
+/// An item the owner has just joined to another — or to something new, when
+/// `second` is nil — before they say how.
 struct GraphConnectionDraft: Identifiable {
     let first: RelationshipGraphNode
-    let second: RelationshipGraphNode
-    var id: String { first.id + "→" + second.id }
+    let second: RelationshipGraphNode?
+    var id: String { first.id + "→" + (second?.id ?? "new") }
 }
 
 /// The selected item, and the way on from it.
@@ -599,28 +627,42 @@ private struct GraphPeekCard: View {
     }
 }
 
-/// Saying how two items the owner just joined are related. Both ends are
-/// already chosen — by the drag — so this asks only the one thing left.
+/// Saying how two items the owner just joined are related. The ends are
+/// already chosen — by the drag, or by Find — so this asks only what is left:
+/// how they relate, a name when one end is new, and an optional note.
 struct GraphQuickConnectSheet: View {
     let draft: GraphConnectionDraft
-    let saved: () async -> Void
+    /// Called after the server accepts it, with a line the map can draw at
+    /// once while the real one is fetched (nil when an end is new).
+    let saved: (RelationshipGraphEdge?) async -> Void
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @State private var subject: RelationshipGraphNode
-    @State private var object: RelationshipGraphNode
+    @State private var reversed = false
     @State private var predicate: String?
     @State private var ownWords = ""
     @State private var note = ""
+    @State private var newName = ""
+    @State private var newKind = "person"
     @State private var saving = false
     @State private var failure: String?
+    @FocusState private var nameFocused: Bool
 
-    init(draft: GraphConnectionDraft, saved: @escaping () async -> Void) {
+    private struct End { let id: String?; let label: String; let kind: String }
+
+    init(draft: GraphConnectionDraft, saved: @escaping (RelationshipGraphEdge?) async -> Void) {
         self.draft = draft
         self.saved = saved
-        _subject = State(initialValue: draft.first)
-        _object = State(initialValue: draft.second)
     }
+
+    private var other: End {
+        if let second = draft.second { return End(id: second.id, label: second.label, kind: second.kind) }
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return End(id: nil, label: name, kind: newKind)
+    }
+    private var mine: End { End(id: draft.first.id, label: draft.first.label, kind: draft.first.kind) }
+    private var subject: End { reversed ? other : mine }
+    private var object: End { reversed ? mine : other }
 
     private var options: [(id: String, label: String)] {
         KnowledgeConnectionEditor.relationshipOptions(subjectKind: subject.kind, objectKind: object.kind)
@@ -631,22 +673,40 @@ struct GraphQuickConnectSheet: View {
         return typed.isEmpty ? (predicate ?? "") : typed
     }
 
+    private var otherLabel: String { other.label.isEmpty ? "the new item" : other.label }
+
     var body: some View {
         AssistantForm {
+            if draft.second == nil {
+                Section("New item") {
+                    TextField("Name", text: $newName)
+                        .focused($nameFocused)
+                        .textInputAutocapitalization(.words)
+                    Picker("Type", selection: $newKind) {
+                        ForEach(["person", "place", "organization", "project", "event", "topic"], id: \.self) {
+                            Text($0.sentenceCaseIdentifier).tag($0)
+                        }
+                    }
+                    .onChange(of: newKind) { _, _ in predicate = nil }
+                }
+            }
             Section {
                 HStack(spacing: 12) {
-                    endpoint(subject)
+                    endpoint(subject.label.isEmpty ? otherLabel : subject.label, subject.kind)
                     Button("Swap direction", systemImage: "arrow.left.arrow.right") {
-                        swap(&subject, &object); predicate = nil
+                        reversed.toggle(); predicate = nil
                     }
                     .labelStyle(.iconOnly)
                     .frame(width: 44, height: 44)
-                    endpoint(object)
+                    endpoint(object.label.isEmpty ? otherLabel : object.label, object.kind)
                 }
             } footer: {
                 Text(chosenPredicate.isEmpty
-                     ? "Choose how \(subject.label) relates to \(object.label)."
-                     : KnowledgeConnectionEditor.previewSentence(subject: subject.label, predicate: chosenPredicate, objectLabel: object.label))
+                     ? "Choose how they relate."
+                     : KnowledgeConnectionEditor.previewSentence(
+                        subject: subject.label.isEmpty ? otherLabel : subject.label,
+                        predicate: chosenPredicate,
+                        objectLabel: object.label.isEmpty ? otherLabel : object.label))
             }
             Section("How are they connected?") {
                 ForEach(options, id: \.id) { option in
@@ -667,49 +727,58 @@ struct GraphQuickConnectSheet: View {
                 TextField(options.isEmpty ? "In your own words, e.g. advises" : "Or in your own words", text: $ownWords)
                     .autocorrectionDisabled()
             }
-            Section("Note") {
-                TextField("How do you know? (optional)", text: $note, axis: .vertical)
+            Section("Note (optional)") {
+                TextField("How you know, e.g. met at university", text: $note, axis: .vertical)
                     .lineLimit(1...4)
             }
             if let failure {
                 Section { Text(failure).foregroundStyle(AssistantTheme.errorInk(for: colorScheme)) }
             }
         }
-        .navigationTitle("Connect")
+        .navigationTitle(draft.second == nil ? "New connection" : "Connect")
         .navigationBarTitleDisplayMode(.inline)
         .interactiveDismissDisabled(saving)
+        .onAppear { if draft.second == nil { nameFocused = true } }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
             ToolbarItem(placement: .confirmationAction) {
                 Button(saving ? "Saving…" : "Save") { save() }
-                    .disabled(saving || chosenPredicate.isEmpty)
+                    .disabled(saving || chosenPredicate.isEmpty || other.label.isEmpty)
             }
         }
     }
 
-    private func endpoint(_ node: RelationshipGraphNode) -> some View {
+    private func endpoint(_ label: String, _ kind: String) -> some View {
         VStack(spacing: 3) {
-            Text(node.label).font(.headline).lineLimit(2).multilineTextAlignment(.center)
-            Text(node.kind.sentenceCaseIdentifier).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(.headline).lineLimit(2).multilineTextAlignment(.center)
+            Text(kind.sentenceCaseIdentifier).font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
     }
 
     private func save() {
         saving = true; failure = nil
-        let typedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Every recorded claim carries a source. When the owner adds none, the
-        // source is the truth of the matter: they drew it themselves.
-        let source = typedNote.count >= 3 ? typedNote : "Connected by the owner on the relationship map."
+        let subject = subject, object = object, predicate = chosenPredicate
         let mutation = KnowledgeConnectionMutation(
             subjectLabel: subject.label, subjectKind: subject.kind, subjectId: subject.id,
-            predicate: chosenPredicate,
+            predicate: predicate,
             objectLabel: object.label, objectKind: object.kind, objectId: object.id,
-            note: source
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+        var provisional: RelationshipGraphEdge?
+        if let subjectID = subject.id, let objectID = object.id {
+            let sentence = KnowledgeConnectionEditor.previewSentence(subject: subject.label, predicate: predicate, objectLabel: object.label)
+            let label = options.first { $0.id == predicate }?.label
+                ?? predicate.replacingOccurrences(of: "_", with: " ")
+            provisional = RelationshipGraphEdge(
+                id: "pending-\(UUID().uuidString)", subjectId: subjectID, objectId: objectID, predicate: predicate,
+                reviewStatus: "confirmed", sourceContent: sentence,
+                presentation: KnowledgePresentation(sentence: sentence, label: label.sentenceCaseIdentifier, accessibleLabel: sentence),
+                validFrom: nil, validUntil: nil)
+        }
         Task {
             if await model.createKnowledgeConnection(mutation) {
-                await saved()
+                await saved(provisional)
                 dismiss()
             } else {
                 failure = model.errorMessage ?? "Couldn’t save this connection. Try again."
@@ -890,7 +959,7 @@ struct GraphGroupsSheet: View {
                 Section("Items without a visible connection") {
                     ForEach(graph.groups.filter { $0.nodes.count == 1 }.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }) { group in
                         if let node = group.nodes.first {
-                            NavigationLink { GraphConnectSheet(source: node, graph: graph) { await saved(node.id) } } label: {
+                            NavigationLink { GraphConnectSheet(source: node, graph: graph) { _ in await saved(node.id) } } label: {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(node.label)
                                     Text(node.kind.sentenceCaseIdentifier).font(.caption).foregroundStyle(.secondary)
@@ -934,7 +1003,7 @@ struct GraphGroupsSheet: View {
 
     private func connectLink(_ node: RelationshipGraphNode) -> some View {
         NavigationLink {
-            GraphConnectSheet(source: node, graph: graph) { await saved(node.id) }
+            GraphConnectSheet(source: node, graph: graph) { _ in await saved(node.id) }
         } label: { Label("Connect \(node.label)", systemImage: "plus") }
     }
 }
@@ -943,7 +1012,7 @@ struct GraphConnectSheet: View {
     @Environment(\.colorScheme) private var colorScheme
     let source: RelationshipGraphNode
     let graph: RelationshipGraphSnapshot
-    let saved: () async -> Void
+    let saved: (RelationshipGraphEdge?) async -> Void
     @EnvironmentObject private var model: AppModel
     @State private var search = ""
     @State private var results: [KnowledgeEntity] = []
@@ -994,8 +1063,8 @@ struct GraphConnectSheet: View {
                 }
             }
             Section {
-                NavigationLink("Connect a new item…") {
-                    KnowledgeConnectionEditor(selected: source.entity, candidates: [], didSave: saved)
+                NavigationLink("Connect to something new…") {
+                    GraphQuickConnectSheet(draft: GraphConnectionDraft(first: source, second: nil), saved: saved)
                 }
             } footer: { Text("Search first to reuse an existing item and avoid duplicate nodes.") }
         }
@@ -1006,7 +1075,9 @@ struct GraphConnectSheet: View {
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, prompt: "Find a person, place, project…")
         .navigationDestination(item: $target) { item in
-            KnowledgeConnectionEditor(selected: source.entity, initialObject: item, candidates: [], didSave: saved)
+            GraphQuickConnectSheet(
+                draft: GraphConnectionDraft(first: source, second: RelationshipGraphNode(id: item.id, label: item.displayLabel, kind: item.kind)),
+                saved: saved)
         }
         .task(id: query) {
             results = []; searchFailed = false; searching = false

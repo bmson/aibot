@@ -30,21 +30,70 @@ struct RelationshipGraphSnapshot: Codable, Sendable {
 
     static let empty = Self(nodes: [], edges: [], totalEdges: 0, truncated: false, focusId: nil)
 
-    /// Exact source IDs deduplicate expansion. A refreshed neighborhood replaces its old claims.
-    func merging(_ other: Self, around entityID: String) -> Self {
+    /// How much of the graph the phone holds at once. The server sends at most
+    /// about two hundred items per request; the window is larger so that
+    /// opening a neighbourhood adds to the map rather than replacing it.
+    static let windowNodeCap = 320
+    static let windowEdgeCap = 1600
+
+    /// Merges a freshly fetched neighbourhood of `entityID` into the map.
+    ///
+    /// The fresh claims about `entityID` replace the old ones — that is how an
+    /// edit, a confirmation or a new connection shows up. When the result is
+    /// bigger than the window, the items furthest from `entityID` (in hops)
+    /// are dropped first, never the neighbourhood just fetched or anything in
+    /// `keep`. It never silently discards the fetch: an earlier version
+    /// skipped the merge whenever the map was full, which on a real account
+    /// meant saved changes never appeared.
+    func merging(_ other: Self, around entityID: String, keep: Set<String> = [],
+                 nodeCap: Int = windowNodeCap, edgeCap: Int = windowEdgeCap) -> Self {
         var nextNodes = nodes
         var byID = Dictionary(uniqueKeysWithValues: nodes.enumerated().map { ($0.element.id, $0.offset) })
         for node in other.nodes {
             if let index = byID[node.id] { nextNodes[index] = node }
-            else if nextNodes.count < 200 { byID[node.id] = nextNodes.count; nextNodes.append(node) }
+            else { byID[node.id] = nextNodes.count; nextNodes.append(node) }
         }
         var nextEdges = edges.filter { $0.subjectId != entityID && $0.objectId != entityID }
         var edgeIDs = Set(nextEdges.map(\.id))
         for edge in other.edges where edge.reviewStatus != "rejected" && byID[edge.subjectId] != nil && byID[edge.objectId] != nil {
-            if nextEdges.count < 1000, edgeIDs.insert(edge.id).inserted { nextEdges.append(edge) }
+            if edgeIDs.insert(edge.id).inserted { nextEdges.append(edge) }
+        }
+        var evicted = false
+        if nextNodes.count > nodeCap {
+            let protected = keep.union(other.nodes.map(\.id)).union([entityID])
+            var adjacent: [String: [String]] = [:]
+            for edge in nextEdges where edge.reviewStatus != "rejected" {
+                adjacent[edge.subjectId, default: []].append(edge.objectId)
+                adjacent[edge.objectId, default: []].append(edge.subjectId)
+            }
+            var distance = [entityID: 0], queue = [entityID], head = 0
+            while head < queue.count {
+                let id = queue[head]; head += 1
+                for next in adjacent[id] ?? [] where distance[next] == nil {
+                    distance[next] = distance[id]! + 1; queue.append(next)
+                }
+            }
+            let removable = nextNodes.filter { !protected.contains($0.id) }.sorted {
+                let a = distance[$0.id] ?? .max, b = distance[$1.id] ?? .max
+                if a != b { return a > b }
+                let da = adjacent[$0.id]?.count ?? 0, db = adjacent[$1.id]?.count ?? 0
+                return da != db ? da < db : $0.id < $1.id
+            }
+            let dropping = Set(removable.prefix(nextNodes.count - nodeCap).map(\.id))
+            evicted = !dropping.isEmpty
+            nextNodes.removeAll { dropping.contains($0.id) }
+            nextEdges.removeAll { dropping.contains($0.subjectId) || dropping.contains($0.objectId) }
+        }
+        var edgesCapped = false
+        if nextEdges.count > edgeCap {
+            // The claims about the item in hand are the ones being looked at.
+            let touching = nextEdges.filter { $0.subjectId == entityID || $0.objectId == entityID }
+            let rest = nextEdges.filter { $0.subjectId != entityID && $0.objectId != entityID }
+            nextEdges = Array((touching + rest).prefix(edgeCap))
+            edgesCapped = true
         }
         return Self(nodes: nextNodes, edges: nextEdges, totalEdges: max(totalEdges, other.totalEdges),
-                    truncated: truncated || other.truncated || nextNodes.count < Set((nodes + other.nodes).map(\.id)).count || nextEdges.count >= 1000,
+                    truncated: truncated || other.truncated || evicted || edgesCapped,
                     focusId: focusId)
     }
 
