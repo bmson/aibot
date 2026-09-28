@@ -89,6 +89,7 @@ import {
   type ProfileMemoryCommandPersistence,
   profileMemoryCommands,
 } from '@assistant/application/profile';
+import { getProviderBilling } from '@assistant/application/provider-billing';
 import {
   loadConfig,
   parseFirestoreEmbeddingSpace,
@@ -114,6 +115,7 @@ import {
   createPostgresGeneratedCardRepository,
   createPostgresModelCatalogRepository,
   createPostgresModelConnectionRepository,
+  createPostgresToolExecutionRepository,
   type Db,
 } from '@assistant/db';
 import {
@@ -136,6 +138,7 @@ import {
   FirestoreRecallFeedbackRepository,
   FirestoreShellStatusRepository,
   FirestoreSkillMutationRepository,
+  FirestoreToolExecutionRepository,
   FirestoreWorkspaceFileLookup,
 } from '@assistant/firestore';
 import { embeddingModelId, validateEmbedding } from '@assistant/persistence';
@@ -179,6 +182,19 @@ export function getModelProviderPorts(): ModelProviderPorts {
     seal: encryptStoredCredential,
     open: decryptStoredCredential,
   };
+}
+
+/** Shared by the web Costs page and native workspace, with durable hourly snapshots. */
+export function getBillingOverview() {
+  const config = loadConfig();
+  return getProviderBilling({
+    config,
+    models: getModelProviderPorts(),
+    cache:
+      config.PERSISTENCE_DRIVER === 'firestore'
+        ? new FirestoreToolExecutionRepository(getFirestoreInstallationStore())
+        : createPostgresToolExecutionRepository(getDb()),
+  });
 }
 
 /** Phone calls for the owner, on whichever driver this installation runs. */

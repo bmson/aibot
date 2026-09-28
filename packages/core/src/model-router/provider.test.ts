@@ -300,7 +300,11 @@ describe('injected model providers', () => {
     expect(stubs.reconcileReservation).toHaveBeenCalledWith(
       expect.anything(),
       'reservation-1',
-      expect.objectContaining({ usd: 0, quantity: 5 }),
+      expect.objectContaining({
+        usd: 0,
+        quantity: 5,
+        evidence: expect.objectContaining({ basis: 'provider_reported', provider: 'vertex' }),
+      }),
     );
   });
 
@@ -486,7 +490,15 @@ describe('injected model providers', () => {
     expect(stubs.reconcileReservation).toHaveBeenCalledWith(
       expect.anything(),
       'reservation-1',
-      expect.objectContaining({ usd: 0.00001, quantity: 10 }),
+      expect.objectContaining({
+        usd: 0.00001,
+        quantity: 10,
+        evidence: expect.objectContaining({
+          basis: 'token_rate',
+          provider: 'vertex',
+          model: 'vertex:text-embedding-005',
+        }),
+      }),
     );
   });
 
@@ -583,6 +595,7 @@ describe('injected model providers', () => {
       expect.objectContaining({
         usd: 0.012345,
         description: 'draft:vertex/gemini-test estimated: provider usage unavailable',
+        evidence: expect.objectContaining({ basis: 'preflight_estimate' }),
       }),
     );
   });

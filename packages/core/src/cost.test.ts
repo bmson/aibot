@@ -146,6 +146,7 @@ describe('reservations (integration)', () => {
 
     // reconcile to actuals: hold released, ledger row written, task spend bumped
     await reconcileReservation(db, okRes.reservationId, {
+      evidence: { basis: 'unknown', provider: 'google-cloud' },
       usd: 0.004,
       quantity: 60,
       unit: 'second',
@@ -163,6 +164,7 @@ describe('reservations (integration)', () => {
       .from(costEvents)
       .where(eq(costEvents.reservationId, okRes.reservationId));
     expect(event?.source).toBe('cloud_run_job_sec');
+    expect(event?.evidence).toEqual({ basis: 'unknown', provider: 'google-cloud' });
     expect(Number(event?.usd)).toBeCloseTo(0.004, 6);
 
     const [after] = await db.select().from(tasks).where(eq(tasks.id, task.id));

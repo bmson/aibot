@@ -23,6 +23,7 @@ import { assistantModuleMetas } from '@assistant/modules/meta';
 import type { AgentReadinessSource } from '@assistant/persistence';
 import { policyLabels, scheduleLabels } from '@/app/settings/labels';
 import {
+  getBillingOverview,
   getChatApplication,
   getFirestoreInstallationStore,
   getWorkspace,
@@ -49,6 +50,7 @@ export async function getFirestoreMobileWorkspace(readinessSource: AgentReadines
     improvements,
     imports,
     capabilities,
+    billing,
   ] = await Promise.all([
     chat.listChatHistory(false),
     chat.listChatHistory(true),
@@ -65,6 +67,7 @@ export async function getFirestoreMobileWorkspace(readinessSource: AgentReadines
       assistantModuleMetas,
       config.ASSISTANT_MODULES,
     ),
+    getBillingOverview(),
   ]);
 
   const conversations = (history: typeof currentChats) =>
@@ -117,6 +120,8 @@ export async function getFirestoreMobileWorkspace(readinessSource: AgentReadines
       goalAutomationCount: settings.goalAutomationCount,
     },
     costs: {
+      billing,
+      byEvidence: costs.byEvidence,
       dailySpentUsd: costs.totals.dailySpentUsd,
       monthlySpentUsd: costs.totals.monthlySpentUsd,
       heldUsd: costs.totals.heldUsd,

@@ -1,3 +1,4 @@
+import type { CostEvidence } from './cost-evidence.js';
 import type { Records } from './records.js';
 
 /** Interfaces describe atomic domain operations, never SDK queries or transaction objects. */
@@ -20,6 +21,7 @@ export interface CostTotals {
 }
 
 export interface CostEventInput {
+  evidence?: CostEvidence;
   source: SpendSource;
   usd: number;
   taskId?: string | null;
@@ -47,6 +49,7 @@ export type ReserveOutcome =
   | { ok: false; reason: string; resumeAt: Date };
 
 export interface ReservationActual {
+  evidence?: CostEvidence;
   usd: number;
   quantity?: number;
   unit?: string;

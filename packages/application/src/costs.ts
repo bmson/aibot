@@ -1,10 +1,16 @@
 import { getAgent } from '@assistant/core/chat';
 import { type CostTotals, costTotals } from '@assistant/core/cost';
 import { budgets, costEvents, costReservations, type Db, modelCalls, tasks } from '@assistant/db';
-import type { BudgetCapsRepository } from '@assistant/persistence';
+import {
+  type BudgetCapsRepository,
+  type CostEvidence,
+  type CostEvidenceTotal,
+  costBasis,
+} from '@assistant/persistence';
 import { desc, eq, gte, sql, sum } from 'drizzle-orm';
 
 export interface CostsDashboard {
+  byEvidence: CostEvidenceTotal[];
   timezone: string;
   totals: CostTotals;
   bySource: Array<{ source: string; usd: string | null; count: number }>;
@@ -22,6 +28,7 @@ export interface CostsDashboard {
     source: string;
     description: string;
     usd: string;
+    evidence: CostEvidence;
   }>;
   parkedTasks: number;
   taskDefaultLimit: string | null;
@@ -84,6 +91,7 @@ export async function getCostsDashboard(db: Db): Promise<CostsDashboard> {
           source: costEvents.source,
           description: costEvents.description,
           usd: costEvents.usd,
+          evidence: costEvents.evidence,
         })
         .from(costEvents)
         .orderBy(desc(costEvents.createdAt))
@@ -98,7 +106,22 @@ export async function getCostsDashboard(db: Db): Promise<CostsDashboard> {
         .where(eq(budgets.scope, 'task_default')),
     ]);
 
+  const evidenceRows = await db
+    .select({
+      basis: sql<string>`${costEvents.evidence}->>'basis'`,
+      usd: sum(costEvents.usd),
+      count: sql<number>`count(*)`,
+    })
+    .from(costEvents)
+    .where(gte(costEvents.createdAt, monthStart))
+    .groupBy(sql`${costEvents.evidence}->>'basis'`);
+
   return {
+    byEvidence: evidenceRows.map((row) => ({
+      basis: costBasis({ basis: row.basis } as CostEvidence),
+      usd: row.usd ?? '0',
+      count: Number(row.count),
+    })),
     timezone: agent.timezone,
     totals,
     bySource,

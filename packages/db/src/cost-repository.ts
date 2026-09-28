@@ -28,6 +28,7 @@ export async function getRate(
 }
 
 export interface CostEventInput {
+  evidence?: import('@assistant/persistence').CostEvidence;
   source: SpendSource;
   usd: number;
   taskId?: string | null;
@@ -53,6 +54,7 @@ async function lockCostLedger(db: Db): Promise<void> {
 
 async function writeCostEvent(db: Db, input: CostEventInput): Promise<void> {
   await db.insert(costEvents).values({
+    evidence: input.evidence ?? { basis: 'unknown' },
     source: input.source,
     taskId: input.taskId ?? undefined,
     toolCallId: input.toolCallId ?? undefined,
@@ -246,6 +248,7 @@ export async function reconcileReservation(
   db: Db,
   reservationId: string,
   actual: {
+    evidence?: import('@assistant/persistence').CostEvidence;
     usd: number;
     quantity?: number;
     unit?: string;
@@ -268,6 +271,7 @@ export async function reconcileReservation(
     if (!reservation) return; // another reconciler/releaser already won
 
     await writeCostEvent(tx as unknown as Db, {
+      evidence: actual.evidence,
       source: reservation.source as SpendSource,
       usd: actual.usd,
       taskId: reservation.taskId,

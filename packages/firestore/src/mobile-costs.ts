@@ -1,4 +1,11 @@
-import { addMicros, microsToUsd, usdToMicros } from '@assistant/persistence';
+import {
+  addMicros,
+  type CostBasis,
+  type CostEvidence,
+  costBasis,
+  microsToUsd,
+  usdToMicros,
+} from '@assistant/persistence';
 import type { Query, QueryDocumentSnapshot } from '@google-cloud/firestore';
 import { FirestoreCostRepository } from './costs.js';
 import { assertPrivacyErasureFenceUnchanged, readPrivacyErasureFence } from './privacy-erasure.js';
@@ -8,6 +15,7 @@ import { decodeRecord, type InstallationStore } from './store.js';
 const PAGE_SIZE = 500;
 
 interface CostEvent {
+  evidence?: CostEvidence;
   id: string;
   taskId: string | null;
   source: string;
@@ -61,6 +69,7 @@ export async function getFirestoreMobileCosts(store: InstallationStore, agentId:
   const bySource = new Map<string, { micros: number; count: number }>();
   const byModel = new Map<string, { micros: number; count: number }>();
   const byTask = new Map<string, number>();
+  const byEvidence = new Map<CostBasis, { micros: number; count: number }>();
   const totals = await new FirestoreCostRepository(store).totals();
 
   await Promise.all([
@@ -74,6 +83,11 @@ export async function getFirestoreMobileCosts(store: InstallationStore, agentId:
         aggregate.micros = addMicros(aggregate.micros, micros);
         aggregate.count += 1;
         bySource.set(event.source, aggregate);
+        const basis = costBasis(event.evidence);
+        const evidenceTotal = byEvidence.get(basis) ?? { micros: 0, count: 0 };
+        evidenceTotal.micros = addMicros(evidenceTotal.micros, micros);
+        evidenceTotal.count += 1;
+        byEvidence.set(basis, evidenceTotal);
         if (event.taskId)
           byTask.set(event.taskId, addMicros(byTask.get(event.taskId) ?? 0, micros));
       },
@@ -132,12 +146,14 @@ export async function getFirestoreMobileCosts(store: InstallationStore, agentId:
       source: row.source,
       description: row.description,
       usd: row.usd,
+      evidence: row.evidence ?? { basis: 'unknown' as const },
     };
   });
   const defaultBudget = taskDefault.exists
     ? decodeRecord<{ limitUsd: string }>(taskDefault.data())
     : null;
   const result = {
+    byEvidence: ranked(byEvidence).map(({ key, ...value }) => ({ basis: key, ...value })),
     timezone: owner.timezone,
     totals,
     bySource: ranked(bySource).map(({ key, ...value }) => ({ source: key, ...value })),

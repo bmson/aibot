@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ owner: vi.fn(), db: vi.fn(), revalidate: vi.fn() }));
 vi.mock('@/auth', () => ({ requireOwner: mocks.owner }));
-vi.mock('@/lib/server', () => ({ getDb: mocks.db }));
+vi.mock('@/lib/server', () => ({ getDb: mocks.db, getBillingOverview: async () => [] }));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidate }));
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';

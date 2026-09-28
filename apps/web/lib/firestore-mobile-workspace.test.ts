@@ -12,6 +12,8 @@ vi.mock('@/lib/agent-readiness-source', () => ({
   getAgentReadinessSource: () => ({ read: async () => null }),
 }));
 
+vi.mock('@assistant/application/provider-billing', () => ({ getProviderBilling: async () => [] }));
+
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST ?? '';
 const localEmulator = /^(?:127\.0\.0\.1|localhost):\d+$/.test(emulatorHost);
 

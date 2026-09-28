@@ -1,0 +1,1 @@
+ALTER TABLE "cost_events" ADD COLUMN "evidence" jsonb DEFAULT '{"basis":"unknown"}'::jsonb NOT NULL;

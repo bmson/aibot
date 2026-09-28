@@ -1323,7 +1323,7 @@ export const modelCalls = pgTable(
     model: text('model').notNull(),
     inputTokens: integer('input_tokens').notNull().default(0),
     outputTokens: integer('output_tokens').notNull().default(0),
-    /** Authoritative per-request cost from OpenRouter usage.cost. */
+    /** Budget-accounting cost; cost_events.evidence identifies reported versus estimated cost. */
     costUsd: numeric('cost_usd', { precision: 10, scale: 6 }).notNull().default('0'),
     latencyMs: integer('latency_ms'),
     finishReason: text('finish_reason'),
@@ -1402,6 +1402,10 @@ export const costEvents = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     source: text('source').notNull(),
+    evidence: jsonb('evidence')
+      .$type<import('@assistant/persistence').CostEvidence>()
+      .notNull()
+      .default({ basis: 'unknown' }),
     taskId: uuid('task_id').references(() => tasks.id),
     toolCallId: uuid('tool_call_id').references(() => toolCalls.id),
     /** How much of the unit was consumed (tokens, messages, seconds, GB-months). */
