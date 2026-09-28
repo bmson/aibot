@@ -26,6 +26,10 @@ export type ExecutionEvidenceRepository = {
     taskId: string;
     maxRows?: number;
   }): Promise<ExecutionEvidenceRecord[]>;
+  /**
+   * The conversation's most recent prior tool calls — at most `maxRows`
+   * (default 500) — oldest first. A longer history is windowed, never an error.
+   */
   conversationEvidence(input: {
     agentId: string;
     conversationId: string;

@@ -1,6 +1,6 @@
 import type { ExecutionEvidenceRepository, ResponseCheckInput } from '@assistant/persistence';
 import { evidenceLimit } from '@assistant/persistence';
-import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { approvals, conversations, messages, responseChecks, tasks, toolCalls } from './schema.js';
 
@@ -67,10 +67,11 @@ export function createPostgresExecutionEvidenceRepository(db: Db): ExecutionEvid
             ne(toolCalls.taskId, excludeTaskId),
           ),
         )
-        .orderBy(toolCalls.createdAt, toolCalls.step, toolCalls.id);
-      const rows = max === undefined ? await query : await query.limit(max + 1);
-      const values = rows.map(({ toolCall }) => evidence(toolCall));
-      return max === undefined ? values : bounded(values, max);
+        // Newest first, so a thread past the window keeps its recent history
+        // instead of failing every later turn; returned oldest first.
+        .orderBy(desc(toolCalls.createdAt), desc(toolCalls.step), desc(toolCalls.id))
+        .limit(evidenceLimit(max));
+      return (await query).reverse().map(({ toolCall }) => evidence(toolCall));
     },
     async hasConversationToolCall({ agentId, conversationId, toolName, documentId }) {
       const [match] = await db

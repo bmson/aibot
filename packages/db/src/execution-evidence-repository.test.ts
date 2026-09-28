@@ -191,3 +191,66 @@ describe('PostgreSQL execution evidence repository', () => {
     ).toEqual([false, true]);
   });
 });
+
+describe('PostgreSQL conversation evidence window', () => {
+  it('keeps the newest prior tool calls when a thread outgrows the bound', async () => {
+    const db = createDb(testUrl());
+    const repository = createPostgresExecutionEvidenceRepository(db);
+    const agent = randomUUID();
+    const conversation = randomUUID();
+    const current = randomUUID();
+    const prior = randomUUID();
+    try {
+      await db.insert(agents).values({
+        id: agent,
+        name: 'window owner',
+        email: `${agent}@invalid.test`,
+        workspacePrefix: `evidence/${agent}`,
+      });
+      await db
+        .insert(conversations)
+        .values({
+          id: conversation,
+          agentId: agent,
+          title: 'Window',
+          channel: 'chat',
+          trust: 'owner',
+        });
+      await db.insert(tasks).values(
+        [current, prior].map((id) => ({
+          id,
+          agentId: agent,
+          conversationId: conversation,
+          type: 'chat_turn',
+          trust: 'owner',
+          status: 'done',
+        })),
+      );
+      await db.insert(toolCalls).values(
+        [1, 2, 3].map((step) => ({
+          taskId: prior,
+          step,
+          toolName: `test.step${step}`,
+          risk: 'autonomous',
+          status: 'succeeded',
+          args: {},
+          result: null,
+          createdAt: new Date(Date.UTC(2026, 8, 12, 12, step)),
+        })),
+      );
+      const window = await repository.conversationEvidence({
+        agentId: agent,
+        conversationId: conversation,
+        excludeTaskId: current,
+        maxRows: 2,
+      });
+      expect(window.map((row) => row.toolName)).toEqual(['test.step2', 'test.step3']);
+    } finally {
+      await db.delete(toolCalls).where(eq(toolCalls.taskId, prior));
+      await db.delete(tasks).where(inArray(tasks.id, [current, prior]));
+      await db.delete(conversations).where(eq(conversations.id, conversation));
+      await db.delete(agents).where(eq(agents.id, agent));
+      await db.$client.end();
+    }
+  });
+});

@@ -229,6 +229,36 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore execution evide
       }),
     ).resolves.toEqual([expect.objectContaining({ id: 'late-evidence' })]);
   });
+  it('keeps the newest evidence window when a thread outgrows the bound', async () => {
+    const minute = (n: number) => new Date(Date.UTC(2026, 8, 12, 12, n));
+    for (let t = 0; t < 3; t += 1) {
+      const id = `older-${t}`;
+      await store
+        .doc('tasks', id)
+        .set({ id, agentId: 'owner', conversationId: 'conversation', createdAt: minute(t * 10) });
+      for (let step = 1; step <= 2; step += 1)
+        await store.doc('toolCalls', `${id}-${step}`).set({
+          id: `${id}-${step}`,
+          taskId: id,
+          step,
+          toolName: 'test.step',
+          status: 'succeeded',
+          args: {},
+          result: null,
+          error: null,
+          createdAt: minute(t * 10 + step),
+        });
+    }
+    const window = await repository.conversationEvidence({
+      agentId: 'owner',
+      conversationId: 'conversation',
+      excludeTaskId: 'task',
+      maxRows: 3,
+    });
+    // Six prior rows exist; the three newest come back, oldest first.
+    expect(window.map((row) => row.id)).toEqual(['older-1-2', 'older-2-1', 'older-2-2']);
+  });
+
   it('deduplicates notification finals for conversationless tasks and quality writes', async () => {
     await store.doc('tasks', 'task').update({ conversationId: null });
     await store.doc('messages', 'notification-final').set({
