@@ -5,7 +5,7 @@ import { policyLabels, scheduleLabels } from '@/app/settings/labels';
 import { getAgentReadinessSource } from '@/lib/agent-readiness-source';
 import { capabilityStatus, getCapabilityDiagnostics } from '@/lib/capabilities';
 import { getFirestoreMobileWorkspace } from '@/lib/firestore-mobile-workspace';
-import { getApplication, getDb, getWorkspaceSettings } from '@/lib/server';
+import { getApplication, getBillingOverview, getDb, getWorkspaceSettings } from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -34,6 +34,7 @@ export async function GET(request: Request): Promise<Response> {
     anomalies,
     improvements,
     imports,
+    billing,
   ] = await Promise.all([
     getCapabilityDiagnostics(),
     application.listChatHistory(false),
@@ -45,6 +46,7 @@ export async function GET(request: Request): Promise<Response> {
     application.listAnomalies(),
     application.listImprovementProposals(),
     application.getImports(),
+    getBillingOverview(),
   ]);
   const diagnosticsByModule = new Map(
     capabilityDiagnostics.diagnostics.map((diagnostic) => [diagnostic.module, diagnostic]),
@@ -165,6 +167,8 @@ export async function GET(request: Request): Promise<Response> {
       goalAutomationCount: settings.goalAutomationCount,
     },
     costs: {
+      billing,
+      byEvidence: costs.byEvidence,
       dailySpentUsd: costs.totals.dailySpentUsd,
       monthlySpentUsd: costs.totals.monthlySpentUsd,
       heldUsd: costs.totals.heldUsd,

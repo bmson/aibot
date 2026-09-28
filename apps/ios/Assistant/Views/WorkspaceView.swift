@@ -455,6 +455,19 @@ struct WorkspaceView: View {
 
     private func costs(_ costs: WorkspaceCosts) -> some View {
         VStack(alignment: .leading, spacing: 16) {
+            if let billing = costs.billing {
+                sectionHeading("Provider billing")
+                ForEach(billing) { report in
+                    providerBillingCard(report)
+                }
+            }
+            sectionHeading("Assistant usage ledger")
+            Text("Includes estimates used for spending limits. These limits do not cap your cloud bill. Ledger costs overlap provider billing and are not added to it.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            if let evidence = costs.byEvidence {
+                SpendingBreakdownCard(title: "Cost evidence this month", rows: evidence.map { ($0.label, Optional($0.usd), $0.count) })
+            }
             if usesAccessibilityLayout {
                 VStack(spacing: 10) {
                     costMetric("Today", spent: costs.dailySpentUsd, limit: costs.dailyLimitUsd)
@@ -493,6 +506,51 @@ struct WorkspaceView: View {
             }
             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
         }
+    }
+
+    private func providerBillingCard(_ report: WorkspaceProviderBilling) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(report.label).font(.headline)
+            Text("\(report.scope) · \(report.period) · \(report.source)").font(.caption).foregroundStyle(.secondary)
+            if report.lines.isEmpty {
+                Text("Unavailable").font(.title3.weight(.semibold))
+            } else {
+                let currencies = Dictionary(grouping: report.lines, by: \.currency)
+                ForEach(currencies.keys.sorted(), id: \.self) { code in
+                    let total = currencies[code, default: []].reduce(0) { $0 + $1.net }
+                    Text(total, format: .currency(code: code).precision(.fractionLength(2...8))).font(.title3.weight(.semibold)).monospacedDigit()
+                }
+                DisclosureGroup("Services and credits") {
+                    ForEach(Array(report.lines.enumerated()), id: \.offset) { _, line in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(line.service).font(.subheadline)
+                            Text(line.detail).font(.caption).foregroundStyle(.secondary)
+                            Text(line.net, format: .currency(code: line.currency).precision(.fractionLength(2...8))).monospacedDigit()
+                            if line.credits != 0 {
+                                Text("Credits: \(line.credits.formatted(.currency(code: line.currency)))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
+                    }
+                }
+            }
+            if report.status == "stale" {
+                Label("Stale snapshot", systemImage: "clock.badge.exclamationmark").font(.subheadline)
+            }
+            Text(report.message).font(.footnote).foregroundStyle(.secondary)
+            if let fetched = report.fetchedAt {
+                Text("Fetched \(fetched)").font(.caption2).foregroundStyle(.secondary)
+            }
+            if let exported = report.latestExportAt {
+                Text("Latest export \(exported)").font(.caption2).foregroundStyle(.secondary)
+            }
+            if let used = report.latestUsageAt {
+                Text("Latest usage \(used)").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
     }
 
     private func anomalies(_ anomalies: [WorkspaceAnomaly]) -> some View {

@@ -5,6 +5,7 @@ import {
   recordCallResult,
   recordCostEvent,
 } from '@assistant/core';
+import { connectionIdForModel } from '@assistant/core/model-router';
 import type {
   CallSession,
   CallSessionRepository,
@@ -75,6 +76,11 @@ export async function finishCall(
   if (input.modelCostUsd > 0) {
     await recordCostEvent(deps.costs, {
       source: 'model',
+      evidence: {
+        basis: 'token_rate',
+        provider: connectionIdForModel(session.voiceModel),
+        model: session.voiceModel,
+      },
       usd: input.modelCostUsd,
       taskId: session.taskId,
       description: `live voice model ${session.voiceModel} on a phone call`,

@@ -157,6 +157,18 @@ const ConfigSchema = z.object({
   /** projects/<id>/topics/<name> — enables Gmail push; local dev polls instead. */
   GMAIL_PUBSUB_TOPIC: z.string().default(''),
   GCP_PROJECT: z.string().default(''),
+  /** Standard or detailed Cloud Billing export: project.dataset.table. */
+  GCP_BILLING_EXPORT_TABLE: z.string().default(''),
+  GCP_BILLING_QUERY_PROJECT: z.string().default(''),
+  GCP_BILLING_LOCATION: z.string().default('US'),
+  GCP_BILLING_SCOPE: z.enum(['project', 'billing_account']).default('project'),
+  /** Reject a billing query before it exceeds this scan allowance. */
+  GCP_BILLING_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(Number.MAX_SAFE_INTEGER)
+    .default(1_000_000_000),
   GCP_LOCATION: z.string().default('us-west1'),
   CLOUD_TASKS_QUEUE: z.string().default('agent-steps'),
   /** The agent service's own public URL (Cloud Tasks callback target). */

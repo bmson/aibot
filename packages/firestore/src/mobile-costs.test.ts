@@ -54,6 +54,10 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore mobile cost das
         taskId: 'task-a',
         source: 'model',
         description: 'Model call',
+        evidence: {
+          basis: index === 0 ? 'token_rate' : 'provider_reported',
+          provider: 'openrouter',
+        },
         usd: '0.000100',
         createdAt: new Date(Date.UTC(2026, 8, 22, 0, 0, index)),
       });
@@ -89,6 +93,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore mobile cost das
     expect(dashboard.bySource).toEqual([
       { source: 'model', usd: '0.050100', count: 501 },
       { source: 'external_api', usd: '0.000100', count: 1 },
+    ]);
+    expect(dashboard.byEvidence).toEqual([
+      { basis: 'provider_reported', usd: '0.050000', count: 500 },
+      { basis: 'token_rate', usd: '0.000100', count: 1 },
+      { basis: 'unknown', usd: '0.000100', count: 1 },
     ]);
     expect(dashboard.byModel).toEqual([{ model: 'gemini-2.5-flash', usd: '0.004000', count: 1 }]);
     expect(dashboard.topTasks).toEqual([

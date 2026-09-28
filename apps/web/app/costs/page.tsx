@@ -1,11 +1,13 @@
 import { getCostsDashboard } from '@assistant/application/costs';
 import { loadConfig, validateAgentPersistenceConfig } from '@assistant/config';
 import { createInstallationStore, getFirestoreMobileCosts } from '@assistant/firestore';
+import { COST_BASIS_LABELS, costBasis } from '@assistant/persistence';
 import Link from 'next/link';
 import { updateCaps } from '@/app/costs/actions';
+import { ProviderBillingCards } from '@/app/costs/provider-billing-cards';
 import { requireOwner } from '@/auth';
 import { formatDateTime, formatUsd, truncate } from '@/lib/format';
-import { getDb } from '@/lib/server';
+import { getBillingOverview, getDb } from '@/lib/server';
 import { cardShellClass, InfoGrid, InfoItem, inputClass, PageHeader, PageShell } from '@/lib/ui';
 import { SubmitButton } from '@/lib/ui-client';
 import { taskTypeLabel } from '@/lib/views';
@@ -59,17 +61,14 @@ export default async function CostsPage() {
     parkedTasks: parked,
     taskDefaultLimit,
   } = dashboard;
+  const billing = await getBillingOverview();
 
   return (
     <PageShell size="reading">
       <PageHeader
         back={{ href: '/chat', label: 'Chat' }}
         title="Costs"
-        intro={
-          firestore
-            ? 'See what the assistant has spent and update task, daily, and monthly spending caps.'
-            : 'See what the assistant has spent and set limits that keep costs under control.'
-        }
+        intro="See provider-reported spend, understand estimates, and update task, daily, and monthly spending caps."
       />
 
       {parked > 0 ? (
@@ -89,6 +88,23 @@ export default async function CostsPage() {
           )}
         </p>
       ) : null}
+
+      <ProviderBillingCards reports={billing} />
+      <h2 className="mt-8 text-lg font-semibold">Assistant usage ledger</h2>
+      <p className="mt-1 text-sm text-muted">
+        Includes estimates used to enforce task, daily and monthly caps. These caps do not limit
+        your cloud bill. Ledger costs overlap provider billing above and are not added to it.
+      </p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {dashboard.byEvidence.map((row) => (
+          <div key={row.basis} className={`${cardShellClass} p-3 text-sm`}>
+            <p className="text-muted">{COST_BASIS_LABELS[row.basis]}</p>
+            <p className="mt-1 font-medium tabular-nums">
+              {formatUsd(row.usd)} · {row.count} events this month
+            </p>
+          </div>
+        ))}
+      </div>
 
       {/* Burn vs caps */}
       <section className="mt-8 grid gap-4 sm:grid-cols-2">
@@ -271,7 +287,7 @@ export default async function CostsPage() {
           </section>
 
           <section className="mt-6 overscroll-x-contain overflow-x-auto">
-            <h2 className="text-sm font-medium">Recent charges</h2>
+            <h2 className="text-sm font-medium">Recent ledger entries</h2>
             <table className="mt-3 w-full text-sm">
               <tbody>
                 {recent.map((e) => (
@@ -279,7 +295,12 @@ export default async function CostsPage() {
                     <td className="py-1.5 text-xs text-muted whitespace-nowrap">
                       {formatDateTime(e.createdAt, tz)}
                     </td>
-                    <td className="px-2 py-1.5">{e.source}</td>
+                    <td className="px-2 py-1.5">
+                      {e.source}
+                      <span className="block text-xs text-muted">
+                        {COST_BASIS_LABELS[costBasis(e.evidence)]}
+                      </span>
+                    </td>
                     <td className="max-w-0 truncate px-2 py-1.5 text-xs text-muted">
                       {e.description}
                     </td>

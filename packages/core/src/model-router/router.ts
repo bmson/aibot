@@ -1,6 +1,6 @@
 import { loadConfig } from '@assistant/config';
 import { createPostgresModelRoutingRepository, type Db } from '@assistant/db';
-import type { ModelRoutingRepository } from '@assistant/persistence';
+import type { CostBasis, ModelRoutingRepository } from '@assistant/persistence';
 import {
   type EmbeddingModel,
   embedMany,
@@ -23,6 +23,7 @@ import { withSpan } from '../otel.js';
 import { type AuditCaptureMode, captureField, captureInput } from './audit-capture.js';
 import { type BudgetDecision, evaluateBudget } from './budget.js';
 import {
+  connectionIdForModel,
   isModelProviderSet,
   type ModelProviderSet,
   singleModelProviderSet,
@@ -876,12 +877,15 @@ export class ModelRouter {
     // Provider cost is authoritative. If it is absent, fail closed to the
     // configured rate table rather than silently treating a paid call as free.
     let costDescription = `${input.role}:${input.modelId}`;
+    let basis: CostBasis = 'provider_reported';
     if (costUsd === undefined && hasPositiveTokenUsage) {
+      basis = 'token_rate';
       costUsd =
         (inputTokens * input.promptCostPerMTok + outputTokens * input.completionCostPerMTok) /
         1_000_000;
     }
     if (costUsd === undefined) {
+      basis = 'preflight_estimate';
       // A successful provider call with no usage is still paid work. Reconcile
       // to the positive preflight estimate so the hold cannot be refunded as
       // zero; the description keeps the conservative accounting visible.
@@ -893,6 +897,12 @@ export class ModelRouter {
     // insert fails, spend is still safely accounted and the paid provider call
     // must not be repeated.
     await reconcileReservation(this.persistence.costs, input.reservationId, {
+      evidence: {
+        basis,
+        provider: connectionIdForModel(input.modelId),
+        model: input.modelId,
+        ...(usage.generationId ? { requestId: usage.generationId } : {}),
+      },
       usd: costUsd,
       ...(hasPositiveTokenUsage ? { quantity: inputTokens + outputTokens, unit: 'tokens' } : {}),
       unitPriceUsd: hasPositiveTokenUsage ? costUsd / (inputTokens + outputTokens) : undefined,

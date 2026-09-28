@@ -261,6 +261,7 @@ export class FirestoreCostRepository implements CostRepository {
         eventRef,
         encodeRecord({
           id: eventId,
+          evidence: details?.evidence ?? { basis: 'unknown' },
           source: reservation?.get('source') ?? direct?.source,
           taskId,
           toolCallId: details?.toolCallId ?? null,

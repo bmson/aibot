@@ -41,8 +41,14 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore atomic cost led
     expect(reserved.ok).toBe(true);
     if (!reserved.ok) throw new Error('Fixture failed to reserve');
     await Promise.all([
-      costs.reconcile(reserved.reservationId, { usd: 0.07 }),
-      costs.reconcile(reserved.reservationId, { usd: 0.07 }),
+      costs.reconcile(reserved.reservationId, {
+        usd: 0.07,
+        evidence: { basis: 'provider_reported', provider: 'openrouter', requestId: 'gen-1' },
+      }),
+      costs.reconcile(reserved.reservationId, {
+        usd: 0.07,
+        evidence: { basis: 'provider_reported', provider: 'openrouter', requestId: 'gen-1' },
+      }),
     ]);
     expect(await costs.totals()).toMatchObject({
       heldUsd: 0,
@@ -51,6 +57,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore atomic cost led
     });
     expect((await store.doc('tasks', 'task').get()).get('spentUsd')).toBe('0.070000');
     expect((await store.collection('costEvents').get()).size).toBe(1);
+    expect((await store.collection('costEvents').get()).docs[0]?.get('evidence')).toEqual({
+      basis: 'provider_reported',
+      provider: 'openrouter',
+      requestId: 'gen-1',
+    });
   });
 
   it('counts outstanding holds across day/month rollover and settles into the current period', async () => {

@@ -33,18 +33,20 @@
     "./workspace-skills": "./src/workspace-skills.ts",
     "./shell": "./src/shell.ts",
     "./suggestions": "./src/suggestions.ts",
-    "./tasks": "./src/tasks.ts"
+    "./tasks": "./src/tasks.ts",
+    "./provider-billing": "./src/provider-billing.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@assistant/core": "workspace:*",
     "@assistant/config": "workspace:*",
+    "@assistant/core": "workspace:*",
     "@assistant/db": "workspace:*",
+    "@assistant/persistence": "workspace:*",
     "ai": "^7.0.107",
     "drizzle-orm": "^0.45.2",
-    "zod": "^4.6.5",
-    "@assistant/persistence": "workspace:*"
+    "google-auth-library": "^10.9.1",
+    "zod": "^4.6.5"
   }
 }

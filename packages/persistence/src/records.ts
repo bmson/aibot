@@ -559,6 +559,7 @@ export interface Records {
     outputTokens: number;
   };
   costEvents: {
+    evidence: import('./cost-evidence.js').CostEvidence;
     id: string;
     createdAt: Date;
     description: string;
