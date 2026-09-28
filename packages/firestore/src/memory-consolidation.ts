@@ -386,9 +386,10 @@ export class FirestoreMemoryConsolidationRepository implements MemoryConsolidati
       }
       for (let index = 0; index < (input.occasions ?? []).length; index += 1) {
         const occasion = input.occasions?.[index];
+        const id = occasionIds[index];
         const ref = occasionRefs[index];
         const existing = existingOccasions[index];
-        if (!occasion || !ref) continue;
+        if (!occasion || !id || !ref) continue;
         if (
           !Number.isInteger(occasion.month) ||
           occasion.month < 1 ||
@@ -401,7 +402,7 @@ export class FirestoreMemoryConsolidationRepository implements MemoryConsolidati
         if (existing?.exists) {
           const row = decodeRecord<Records['occasions']>(existing.data());
           if (
-            row.id !== ref.id ||
+            row.id !== id ||
             row.agentId !== agentId ||
             row.contactId !== subjectContactId ||
             row.kind !== occasion.kind ||
@@ -422,7 +423,7 @@ export class FirestoreMemoryConsolidationRepository implements MemoryConsolidati
           tx.update(ref, { year: row.year ?? occasion.year, notes, updatedAt: now });
         } else {
           const row: Records['occasions'] = {
-            id: ref.id,
+            id,
             agentId,
             contactId: subjectContactId,
             kind: occasion.kind,

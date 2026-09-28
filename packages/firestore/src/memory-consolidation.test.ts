@@ -1,9 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { EmbeddingSpace, Records } from '@assistant/persistence';
+import type { ConsolidationReview, EmbeddingSpace, Records } from '@assistant/persistence';
 import { FieldValue } from '@google-cloud/firestore';
 import { describe, expect, it } from 'vitest';
 import { embeddingSpaceKey } from './memory.js';
-import { FirestoreMemoryConsolidationRepository } from './memory-consolidation.js';
+import {
+  FirestoreMemoryConsolidationRepository,
+  occasionDocumentId,
+} from './memory-consolidation.js';
+import { getFirestoreMobilePeopleDirectory } from './people-directory.js';
+import { FirestoreProfileOccasionCommandRepository } from './profile-occasion-command.js';
 import { encodeRecord, type InstallationStore } from './store.js';
 import { disposeStore, emulatorStore } from './test-store.js';
 
@@ -64,6 +69,71 @@ async function seed(store: InstallationStore, row: Records['memories']) {
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
   'Firestore memory consolidation repository',
   () => {
+    it('keeps consolidated occasions readable and compatible with owner edits and later reviews', async () => {
+      const store = emulatorStore(() => now);
+      try {
+        await store.doc('agents', 'owner').set({ id: 'owner' });
+        await store.doc('contacts', 'person').set({
+          id: 'person',
+          name: 'Anna Example',
+          relationship: 'friend',
+          trust: 'confirmed',
+        });
+        await seed(store, memory(randomUUID(), 'owner', 'person'));
+        await seed(store, memory(randomUUID(), 'owner', 'person'));
+        const repo = new FirestoreMemoryConsolidationRepository(store, space);
+        const birthday = {
+          kind: 'birthday' as const,
+          label: 'Birthday',
+          month: 10,
+          day: 1,
+          year: null,
+          notes: 'From consolidation',
+        };
+        const apply = async (occasions: ConsolidationReview['occasions']) =>
+          repo.applyReview({
+            agentId: 'owner',
+            subjectContactId: 'person',
+            facts: (await repo.candidates('owner')).window?.facts ?? [],
+            retirements: [],
+            merges: [],
+            domainFixes: [],
+            timeline: [],
+            occasions,
+          });
+
+        expect(await apply([birthday])).toMatchObject({ occasionsSaved: 1 });
+        const directory = await getFirestoreMobilePeopleDirectory(store, 'owner', now, 1);
+        const id = occasionDocumentId('owner', 'person', birthday);
+        expect(directory[0]?.birthday).toMatchObject({ id, month: 10, day: 1, year: null });
+
+        // A later review must find the same logical ID, merge, and avoid duplicates.
+        await seed(store, memory(randomUUID(), 'owner', 'person'));
+        await apply([{ ...birthday, year: 1990, notes: 'Birth year learned' }]);
+        const ref = store.doc('occasions', id);
+        expect((await ref.get()).data()).toMatchObject({
+          id,
+          year: 1990,
+          notes: 'From consolidation; Birth year learned',
+        });
+
+        // The owner can confirm that same record, and consolidation preserves it.
+        const commands = new FirestoreProfileOccasionCommandRepository(store, 'owner');
+        await commands.review(id, 'approve');
+        const confirmed = (await ref.get()).data();
+        await seed(store, memory(randomUUID(), 'owner', 'person'));
+        await apply([{ ...birthday, year: 2000, notes: 'Must not replace owner data' }]);
+        expect((await ref.get()).data()).toEqual(confirmed);
+        expect((await store.collection('occasions').get()).size).toBe(1);
+        await commands.forget(id);
+        expect(
+          (await getFirestoreMobilePeopleDirectory(store, 'owner', now, 1))[0]?.birthday,
+        ).toBeNull();
+      } finally {
+        await disposeStore(store);
+      }
+    });
+
     it('selects only live owner facts, stamps standalones, and rotates a bounded person window', async () => {
       const store = emulatorStore(() => now);
       try {
