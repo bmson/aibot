@@ -1891,7 +1891,10 @@ export function cardsReplaceProse(cards: Raw[]): boolean {
   // scoreboard), leaves the reply's own words in place.
   return (
     cards.length > 0 &&
-    !cards.every((card) => str(card.grounding) === 'answer' || card.accompaniesProse === true)
+    !cards.every(
+      (card) =>
+        ['answer', 'message'].includes(str(card.grounding)) || card.accompaniesProse === true,
+    )
   );
 }
 

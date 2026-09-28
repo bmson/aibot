@@ -1053,6 +1053,10 @@ enum MessageResponseCard: Identifiable {
         let label: String
         let factId: String?
         let prompt: String?
+        /// add_to_calendar: fact ids of zoned instants and a place.
+        var startFact: String? = nil
+        var endFact: String? = nil
+        var locationFact: String? = nil
     }
 
     /// One call behind a composed card, as the runtime reported it
@@ -1149,12 +1153,19 @@ enum MessageResponseCard: Identifiable {
         let facts: [GeneratedFact]
         let blocks: [GeneratedBlock]
         let actions: [GeneratedAction]
-        let steps: [CardStep]
+        var steps: [CardStep]
         var updatedAt: String? = nil
         var stale: Bool? = nil
         var refreshState: String? = nil
         var refreshError: String? = nil
         var refreshable: Bool = false
+
+        /// The clocks a journey block already shows, top level or in a section.
+        var journeyClockFacts: Set<String> {
+            Set((blocks + blocks.flatMap(\.children))
+                .filter { $0.type == "journey" }
+                .flatMap { [$0.values["departFact"]?.string, $0.values["arriveFact"]?.string].compactMap { $0 } })
+        }
 
         var blockSections: (preview: [GeneratedBlock], details: [GeneratedBlock]) {
             var preview: [GeneratedBlock] = []
@@ -1612,7 +1623,10 @@ enum MessageResponseCard: Identifiable {
                         type: type,
                         label: label,
                         factId: action["factId"]?.string,
-                        prompt: action["prompt"]?.string
+                        prompt: action["prompt"]?.string,
+                        startFact: action["startFact"]?.string,
+                        endFact: action["endFact"]?.string,
+                        locationFact: action["locationFact"]?.string
                     )
                 }
             }()
@@ -1641,7 +1655,8 @@ enum MessageResponseCard: Identifiable {
                 // model-authored spec: which corpus a card stands on is the
                 // runtime's finding, never the composer's claim. An older
                 // build sends none, and a lookup card is the safe default.
-                groundedOnAnswer: data["grounding"]?.string == "answer",
+                // A card from the owner's own message heads the reply the same way.
+                groundedOnAnswer: ["answer", "message"].contains(data["grounding"]?.string ?? ""),
                 title: title,
                 subtitle: spec["subtitle"]?.string ?? "",
                 sourceLabel: spec["sourceLabel"]?.string ?? "Assistant card",
@@ -3539,7 +3554,7 @@ struct RichResponseCards: View {
     private func generatedCard(_ card: MessageResponseCard.GeneratedCard) -> some View {
         let facts = Dictionary(card.facts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let sections = card.blockSections
-        return VStack(alignment: .leading, spacing: 16) {
+        return VStack(alignment: .leading, spacing: CardStyle.blockSpacing) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: generatedSymbol(card.icon))
                     .font(.system(size: 16, weight: .semibold))
@@ -3562,15 +3577,26 @@ struct RichResponseCards: View {
                             .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
                     }
                 }
+                Spacer(minLength: 8)
+                ShareLink(item: GeneratedCardValue.shareText(card)) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Share \(card.title)")
             }
 
             ForEach(sections.preview) { block in
-                generatedBlock(block, facts: facts, cardId: card.id)
+                generatedBlock(block, facts: facts, cardId: card.id, shownElsewhere: card.journeyClockFacts)
             }
             if !sections.details.isEmpty {
                 DisclosureGroup("More details") {
-                    VStack(alignment: .leading, spacing: 16) {
-                        ForEach(sections.details) { block in generatedBlock(block, facts: facts, cardId: card.id) }
+                    VStack(alignment: .leading, spacing: CardStyle.blockSpacing) {
+                        ForEach(sections.details) { block in
+                            generatedBlock(block, facts: facts, cardId: card.id, shownElsewhere: card.journeyClockFacts)
+                        }
                     }
                     .padding(.top, 12)
                 }
@@ -3580,14 +3606,25 @@ struct RichResponseCards: View {
 
             GeneratedCardFreshness(card: card, refresh: onRefresh)
 
+            // A revealed secret is a value, not a button, so it sits above
+            // the row. Everything else shares one row of equal tiles.
             let actions = card.actions.filter { $0.type != "refresh" }
-            if !actions.isEmpty {
-                Divider()
-                AssistantFlowLayout(spacing: 8) {
-                    ForEach(actions) { action in
-                        generatedAction(action, card: card, facts: facts)
+            ForEach(actions.filter { $0.type == "reveal_sensitive" }) { action in
+                generatedAction(action, card: card, facts: facts)
+            }
+            let tiles = actions.filter { $0.type != "reveal_sensitive" && actionAvailable($0, facts: facts) }
+            if !tiles.isEmpty {
+                let perRow = dynamicTypeSize.isAccessibilitySize ? 1 : 3
+                Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                    ForEach(Array(stride(from: 0, to: tiles.count, by: perRow)), id: \.self) { start in
+                        GridRow {
+                            ForEach(tiles[start..<min(start + perRow, tiles.count)]) { action in
+                                generatedAction(action, card: card, facts: facts)
+                            }
+                        }
                     }
                 }
+                .environment(\.cardActionSolo, tiles.count == 1)
             }
 
             // Last in the card, after the actions: the answer, then what acts
@@ -3606,7 +3643,8 @@ struct RichResponseCards: View {
     private func generatedBlock(
         _ block: MessageResponseCard.GeneratedBlock,
         facts: [String: MessageResponseCard.GeneratedFact],
-        cardId: String
+        cardId: String,
+        shownElsewhere: Set<String> = []
     ) -> some View {
         if block.type == "section" {
             VStack(alignment: .leading, spacing: 12) {
@@ -3617,12 +3655,12 @@ struct RichResponseCards: View {
                         .accessibilityAddTraits(.isHeader)
                 }
                 ForEach(block.children) { child in
-                    generatedLeafBlock(child, facts: facts, cardId: cardId)
+                    generatedLeafBlock(child, facts: facts, cardId: cardId, shownElsewhere: shownElsewhere)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            generatedLeafBlock(block, facts: facts, cardId: cardId)
+            generatedLeafBlock(block, facts: facts, cardId: cardId, shownElsewhere: shownElsewhere)
         }
     }
 
@@ -3630,36 +3668,51 @@ struct RichResponseCards: View {
     private func generatedLeafBlock(
         _ block: MessageResponseCard.GeneratedBlock,
         facts: [String: MessageResponseCard.GeneratedFact],
-        cardId: String
+        cardId: String,
+        shownElsewhere: Set<String> = []
     ) -> some View {
         switch block.type {
         case "hero":
+            // The one thing the card is about, set large; no rules around it,
+            // the spacing does the separating.
             if let id = block.values["titleFact"]?.string, let fact = facts[id] {
-                VStack(alignment: .leading, spacing: 5) {
-                    generatedFactValue(fact, prominent: true)
+                VStack(alignment: .leading, spacing: CardStyle.labelSpacing) {
+                    if fact.sensitive {
+                        SensitiveCardValue(fact: fact, prominent: true)
+                    } else {
+                        Text(fact.value)
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(AssistantTheme.ink(for: colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
                     if let subtitleId = block.values["subtitleFact"]?.string,
                        let subtitle = facts[subtitleId] {
-                        generatedFactValue(subtitle, prominent: false)
+                        if subtitle.sensitive {
+                            SensitiveCardValue(fact: subtitle)
+                        } else {
+                            Text(subtitle.value)
+                                .font(CardStyle.body)
+                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 12)
-                .overlay(alignment: .top) { Divider() }
-                .overlay(alignment: .bottom) { Divider() }
             }
         case "facts":
             let ids = block.values["factIds"]?.arrayStrings ?? []
             // A lone fact owns the row. At large text sizes, keep each value
             // readable instead of squeezing a reference into half a card.
-            LazyVGrid(columns: ids.count == 1 || dynamicTypeSize.isAccessibilitySize
-                ? [GridItem(.flexible())]
-                : [GridItem(.adaptive(minimum: 140))], alignment: .leading, spacing: 14) {
+            LazyVGrid(
+                columns: CardStyle.columns(min(ids.count, 2), accessibility: dynamicTypeSize.isAccessibilitySize),
+                alignment: .leading,
+                spacing: CardStyle.partSpacing + 4
+            ) {
                 ForEach(ids, id: \.self) { id in
                     if let fact = facts[id] {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(CardText.presentationLabel(fact.label))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                        VStack(alignment: .leading, spacing: CardStyle.labelSpacing) {
+                            CardEyebrow(fact.label)
                             generatedFactValue(fact, prominent: false)
                         }
                     }
@@ -3684,10 +3737,8 @@ struct RichResponseCards: View {
                                 }
                             }
                             .padding(.top, 5)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(CardText.presentationLabel(fact.label))
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                            VStack(alignment: .leading, spacing: CardStyle.labelSpacing) {
+                                CardEyebrow(fact.label)
                                 generatedFactValue(fact, prominent: false)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -3735,7 +3786,7 @@ struct RichResponseCards: View {
         default:
             // The layout blocks added since (GeneratedCardBlocks.swift); a
             // type neither knows draws nothing and leaves the card intact.
-            GeneratedCardBlockView(block: block, facts: facts, cardId: cardId)
+            GeneratedCardBlockView(block: block, facts: facts, cardId: cardId, shownElsewhere: shownElsewhere)
         }
     }
 
@@ -3747,7 +3798,7 @@ struct RichResponseCards: View {
             SensitiveCardValue(fact: fact, prominent: prominent)
         } else {
             Text(fact.value)
-                .font(prominent ? .title3.weight(.semibold) : .callout.weight(.medium))
+                .font(prominent ? .title3.weight(.semibold) : CardStyle.value)
                 .foregroundStyle(AssistantTheme.ink(for: colorScheme))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -3787,6 +3838,27 @@ struct RichResponseCards: View {
         }
     }
 
+    /// Whether an action can be drawn from what the card holds; one that
+    /// cannot takes no tile in the row.
+    private func actionAvailable(
+        _ action: MessageResponseCard.GeneratedAction,
+        facts: [String: MessageResponseCard.GeneratedFact]
+    ) -> Bool {
+        let fact = action.factId.flatMap { facts[$0] }
+        switch action.type {
+        case "open_url":
+            guard let value = fact?.value, let url = URL(string: value) else { return false }
+            return ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+        case "copy_value": return fact != nil
+        case "directions": return fact.map { !$0.sensitive } ?? false
+        case "add_to_calendar":
+            guard let start = action.startFact.flatMap({ facts[$0] }), !start.sensitive else { return false }
+            return GeneratedCardValue.instant(start.value) != nil
+        case "ask_assistant": return !(action.prompt ?? "").isEmpty && onSend != nil
+        default: return false
+        }
+    }
+
     @ViewBuilder
     private func generatedAction(
         _ action: MessageResponseCard.GeneratedAction,
@@ -3798,26 +3870,42 @@ struct RichResponseCards: View {
            let value = fact?.value,
            let url = URL(string: value),
            ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
-            Link(action.label, destination: url)
-                .font(.caption.weight(.semibold))
-                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            Link(destination: url) { Label(action.label, systemImage: "arrow.up.right.square") }
+                .buttonStyle(CardActionButtonStyle())
         } else if action.type == "reveal_sensitive", let fact {
             SensitiveCardValue(fact: fact, format: "")
         } else if action.type == "copy_value", let fact {
-            Button(copiedAction == "\(card.id)-\(action.id)" ? "Copied" : action.label) {
+            let copied = copiedAction == "\(card.id)-\(action.id)"
+            Button {
                 UIPasteboard.general.string = fact.value
                 copiedAction = "\(card.id)-\(action.id)"
                 AccessibilityNotification.Announcement("Copied").post()
+            } label: {
+                Label(copied ? "Copied" : action.label, systemImage: copied ? "checkmark" : "doc.on.doc")
             }
-            .font(.caption.weight(.semibold))
-            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            .buttonStyle(CardActionButtonStyle())
+        } else if action.type == "add_to_calendar",
+                  let start = action.startFact.flatMap({ facts[$0] }), !start.sensitive,
+                  let draft = CalendarDraft(
+                      title: card.title,
+                      start: start.value,
+                      end: action.endFact.flatMap { facts[$0]?.value },
+                      location: action.locationFact.flatMap { facts[$0] }.flatMap { $0.sensitive ? nil : $0.value }
+                  ) {
+            AddToCalendarButton(label: action.label, draft: draft)
+        } else if action.type == "directions", let fact, !fact.sensitive,
+                  let url = GeneratedCardValue.directionsURL(fact.value) {
+            Link(destination: url) {
+                Label(action.label, systemImage: "arrow.triangle.turn.up.right.diamond")
+            }
+            .buttonStyle(CardActionButtonStyle())
+            .accessibilityHint("Opens directions in Maps.")
         } else if action.type == "ask_assistant", let prompt = action.prompt, !prompt.isEmpty {
-            Button(action.label) { onSend?(prompt) }
-            .font(.caption.weight(.semibold))
-            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-            .disabled(
-                onSend == nil
-            )
+            Button { onSend?(prompt) } label: {
+                Label(action.label, systemImage: "bubble.left.and.text.bubble.right")
+            }
+            .buttonStyle(CardActionButtonStyle())
+            .disabled(onSend == nil)
         }
     }
 

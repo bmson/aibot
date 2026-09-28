@@ -14,6 +14,9 @@ struct GeneratedCardBlockView: View {
     let block: MessageResponseCard.GeneratedBlock
     let facts: [String: MessageResponseCard.GeneratedFact]
     let cardId: String
+    /// Facts another block on this card already shows — a journey's clocks —
+    /// so a countdown to the same moment need not repeat it.
+    var shownElsewhere: Set<String> = []
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -55,105 +58,180 @@ struct GeneratedCardBlockView: View {
     }
 
     private func caption(_ text: String) -> some View {
-        Text(CardText.presentationLabel(text))
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(muted)
+        CardEyebrow(text)
     }
 
     // MARK: - Metrics
 
-    /// Two to four headline values abreast: Gate · Seat · Boards.
+    /// Two to four headline values abreast on one panel: Gate · Seat · Boards.
+    /// Each column is the same width, so values line up card to card.
     private var metrics: some View {
         let items = ids("factIds").compactMap { facts[$0] }
         return LazyVGrid(
-            columns: Array(
-                repeating: GridItem(.flexible(), alignment: .leading),
-                count: dynamicTypeSize.isAccessibilitySize ? 1 : max(1, min(items.count, 4))
-            ),
+            columns: CardStyle.columns(min(items.count, 4), accessibility: dynamicTypeSize.isAccessibilitySize),
             alignment: .leading,
-            spacing: 12
+            spacing: CardStyle.partSpacing
         ) {
             ForEach(items) { item in
-                VStack(alignment: .leading, spacing: 3) {
-                    caption(item.label)
-                    value(item, font: .title3.weight(.semibold).monospacedDigit())
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.75)
+                VStack(alignment: .leading, spacing: CardStyle.labelSpacing) {
+                    CardEyebrow(item.label)
+                    value(item, font: CardStyle.figure)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                 }
                 .accessibilityElement(children: .combine)
             }
         }
-        .padding(12)
-        .background(AssistantTheme.sunken(for: colorScheme), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(CardStyle.panelPadding)
+        .background(
+            AssistantTheme.sunken(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: CardStyle.panelRadius, style: .continuous)
+        )
     }
 
     // MARK: - Journey
 
+    /// A boarding pass: the codes are the anchors, each clock sits under its
+    /// own end, and the line between carries the mode and the duration. A
+    /// place written "Reykjavik (KEF)" splits into its code and its city; one
+    /// with no code is shown whole.
     private var journey: some View {
         let mode = block.values["mode"]?.string ?? "flight"
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                endpoint(fact("fromFact"), time: fact("departFact"), alignment: .leading)
-                VStack(spacing: 4) {
-                    Image(systemName: Self.modeSymbol(mode))
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(accent)
-                    Rectangle()
-                        .fill(accent.opacity(0.3))
-                        .frame(height: 1)
-                        .frame(minWidth: 28)
-                    if let duration = fact("durationFact"), !duration.sensitive {
-                        Text(duration.value)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(muted)
-                            .multilineTextAlignment(.center)
-                    }
+        let from = fact("fromFact").map(JourneyPlace.init)
+        let to = fact("toFact").map(JourneyPlace.init)
+        return VStack(alignment: .leading, spacing: CardStyle.partSpacing) {
+            Grid(horizontalSpacing: CardStyle.gutter, verticalSpacing: 2) {
+                GridRow(alignment: .lastTextBaseline) {
+                    placeName(from, alignment: .leading)
+                    Color.clear.frame(height: 1).gridCellUnsizedAxes([.horizontal, .vertical])
+                    placeName(to, alignment: .trailing)
                 }
-                .frame(maxWidth: 90)
-                .padding(.top, 4)
-                .accessibilityHidden(true)
-                endpoint(fact("toFact"), time: fact("arriveFact"), alignment: .trailing)
+                GridRow(alignment: .center) {
+                    placeCity(from, alignment: .leading)
+                    route(mode: mode)
+                    placeCity(to, alignment: .trailing)
+                }
+                GridRow(alignment: .firstTextBaseline) {
+                    clock(fact("departFact"), alignment: .leading)
+                    Color.clear.frame(height: 1).gridCellUnsizedAxes([.horizontal, .vertical])
+                    clock(fact("arriveFact"), alignment: .trailing)
+                }
             }
             if let status = fact("statusFact"), !status.sensitive {
-                Text(status.value)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(accent)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(accent.opacity(0.1), in: Capsule())
+                CardStatusPill(text: status.value)
             }
         }
         .accessibilityElement(children: .combine)
     }
 
-    private func endpoint(
-        _ place: MessageResponseCard.GeneratedFact?,
-        time: MessageResponseCard.GeneratedFact?,
-        alignment: HorizontalAlignment
-    ) -> some View {
-        VStack(alignment: alignment, spacing: 3) {
-            if let place { value(place, font: .headline.weight(.semibold)) }
-            if let time {
-                if time.sensitive {
-                    SensitiveCardValue(fact: time)
-                } else {
-                    if let clock = GeneratedCardValue.clockAndDay(time.value) {
-                        Text(clock.time)
-                            .font(.title3.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(ink)
-                        Text(clock.day)
-                            .font(.caption)
-                            .foregroundStyle(muted)
-                    } else {
-                        Text(time.value)
-                            .font(.callout.monospacedDigit().weight(.medium))
-                            .foregroundStyle(ink)
-                    }
-                }
+    private struct JourneyPlace {
+        let code: String?
+        let name: String
+        let fact: MessageResponseCard.GeneratedFact
+
+        init(_ fact: MessageResponseCard.GeneratedFact) {
+            self.fact = fact
+            let value = fact.value.trimmingCharacters(in: .whitespaces)
+            if value.hasSuffix(")"), let open = value.lastIndex(of: "(") {
+                let inner = value[value.index(after: open)..<value.index(before: value.endIndex)]
+                let place = value[..<open].trimmingCharacters(in: .whitespaces)
+                let isCode = (2...4).contains(inner.count) && inner.allSatisfy { $0.isUppercase || $0.isNumber }
+                code = isCode ? String(inner) : nil
+                name = isCode ? place : value
+            } else {
+                code = nil
+                name = value
             }
         }
-        .multilineTextAlignment(alignment == .leading ? .leading : .trailing)
-        .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
+    }
+
+    @ViewBuilder
+    private func placeName(_ place: JourneyPlace?, alignment: HorizontalAlignment) -> some View {
+        if let place {
+            if place.fact.sensitive {
+                SensitiveCardValue(fact: place.fact)
+            } else {
+                Text(place.code ?? place.name)
+                    .font(place.code == nil ? .headline.weight(.semibold) : CardStyle.display)
+                    .foregroundStyle(ink)
+                    .lineLimit(place.code == nil ? 2 : 1)
+                    .minimumScaleFactor(0.8)
+                    .multilineTextAlignment(alignment == .leading ? .leading : .trailing)
+                    .gridColumnAlignment(alignment == .leading ? .leading : .trailing)
+                    .textSelection(.enabled)
+            }
+        } else {
+            Color.clear.frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func placeCity(_ place: JourneyPlace?, alignment: HorizontalAlignment) -> some View {
+        if let place, place.code != nil, !place.fact.sensitive, !place.name.isEmpty {
+            Text(place.name)
+                .font(.caption)
+                .foregroundStyle(muted)
+                .lineLimit(1)
+                .gridColumnAlignment(alignment == .leading ? .leading : .trailing)
+        } else {
+            Color.clear.frame(height: 1)
+        }
+    }
+
+    private func route(mode: String) -> some View {
+        HStack(spacing: 6) {
+            line
+            VStack(spacing: 2) {
+                Image(systemName: Self.modeSymbol(mode))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(accent)
+                if let duration = fact("durationFact"), !duration.sensitive {
+                    Text(duration.value)
+                        .font(.caption2.weight(.medium).monospacedDigit())
+                        .foregroundStyle(muted)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            }
+            line
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityHidden(true)
+    }
+
+    private var line: some View {
+        Rectangle()
+            .fill(accent.opacity(0.28))
+            .frame(height: 1)
+            .frame(minWidth: 12, maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func clock(_ time: MessageResponseCard.GeneratedFact?, alignment: HorizontalAlignment) -> some View {
+        let trailing = alignment == .trailing
+        if let time {
+            VStack(alignment: trailing ? .trailing : .leading, spacing: 1) {
+                if time.sensitive {
+                    SensitiveCardValue(fact: time)
+                } else if let reading = GeneratedCardValue.clockAndDay(time.value) {
+                    Text(reading.time)
+                        .font(CardStyle.figure)
+                        .foregroundStyle(ink)
+                    Text(reading.day)
+                        .font(.caption)
+                        .foregroundStyle(muted)
+                } else {
+                    Text(time.value)
+                        .font(CardStyle.value)
+                        .foregroundStyle(ink)
+                        .multilineTextAlignment(trailing ? .trailing : .leading)
+                }
+            }
+            .padding(.top, 8)
+            .gridColumnAlignment(trailing ? .trailing : .leading)
+        } else {
+            Color.clear.frame(height: 1)
+        }
     }
 
     static func modeSymbol(_ mode: String) -> String {
@@ -174,12 +252,12 @@ struct GeneratedCardBlockView: View {
         if let current = fact("valueFact"), !current.sensitive,
            let fraction = GeneratedCardValue.fraction(value: current.value, total: fact("totalFact")?.value) {
             let total = fact("totalFact")
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
-                    caption(fact("labelFact")?.value ?? current.label)
+                    CardEyebrow(fact("labelFact")?.value ?? current.label)
                     Spacer(minLength: 8)
                     Text(total.map { "\(current.value) / \($0.value)" } ?? current.value)
-                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .font(CardStyle.value.monospacedDigit())
                         .foregroundStyle(ink)
                 }
                 // Drawn rather than a ProgressView, so the bar takes the
@@ -246,30 +324,49 @@ struct GeneratedCardBlockView: View {
 
     // MARK: - Countdown
 
+    /// A tinted callout: the time left as the figure, and the moment itself,
+    /// on its own clock, beside it — the one thing on the card that moves.
     @ViewBuilder
     private var countdown: some View {
         if let target = fact("dateFact"), !target.sensitive,
            let instant = GeneratedCardValue.instant(target.value) {
             TimelineView(.everyMinute) { context in
                 let future = instant.date > context.date
-                VStack(alignment: .leading, spacing: 4) {
-                    caption(fact("labelFact")?.value ?? target.label)
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(future ? "in" : "")
-                            .font(.callout)
-                            .foregroundStyle(muted)
-                        Text(instant.date, style: .relative)
-                            .font(.title2.weight(.bold).monospacedDigit())
-                            .foregroundStyle(future ? accent : muted)
-                        Text(future ? "" : "ago")
-                            .font(.callout)
-                            .foregroundStyle(muted)
+                HStack(alignment: .center, spacing: CardStyle.gutter) {
+                    VStack(alignment: .leading, spacing: CardStyle.labelSpacing) {
+                        CardEyebrow(fact("labelFact")?.value ?? target.label)
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            if future {
+                                Text("in").font(CardStyle.body).foregroundStyle(muted)
+                            }
+                            Text(instant.date, style: .relative)
+                                .font(.title2.weight(.bold).monospacedDigit())
+                                .foregroundStyle(future ? accent : muted)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                            if !future {
+                                Text("ago").font(CardStyle.body).foregroundStyle(muted)
+                            }
+                        }
                     }
-                    Text(GeneratedCardValue.displayInstant(target.value) ?? target.value)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(muted)
+                    Spacer(minLength: 0)
+                    if !shownElsewhere.contains(target.id),
+                       let reading = GeneratedCardValue.clockAndDay(target.value) {
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text(reading.time)
+                                .font(CardStyle.value.monospacedDigit())
+                                .foregroundStyle(ink)
+                            Text(reading.day)
+                                .font(.caption)
+                                .foregroundStyle(muted)
+                        }
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(CardStyle.panelPadding)
+                .background(
+                    accent.opacity(future ? 0.08 : 0.04),
+                    in: RoundedRectangle(cornerRadius: CardStyle.panelRadius, style: .continuous)
+                )
                 .accessibilityElement(children: .combine)
             }
         }
@@ -283,16 +380,29 @@ struct GeneratedCardBlockView: View {
             guard case let .array(values)? = block.values["rows"] else { return [] }
             return values.compactMap { $0.arrayStrings }.filter { $0.count == columns.count }
         }()
-        return Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+        // A column of figures reads down its right edge, the way prices and
+        // weights line up on a receipt; words stay on the left.
+        let numeric = columns.indices.map { index in
+            !rows.isEmpty && rows.allSatisfy { row in
+                row.indices.contains(index) && facts[row[index]].map { GeneratedCardValue.number($0.value) != nil } == true
+            }
+        }
+        return Grid(alignment: .leading, horizontalSpacing: CardStyle.gutter, verticalSpacing: 10) {
             GridRow {
-                ForEach(Array(columns.enumerated()), id: \.offset) { _, column in caption(column) }
+                ForEach(Array(columns.enumerated()), id: \.offset) { index, column in
+                    CardEyebrow(column)
+                        .gridColumnAlignment(numeric[index] ? .trailing : .leading)
+                        .frame(maxWidth: index == columns.count - 1 ? .infinity : nil,
+                               alignment: numeric[index] ? .trailing : .leading)
+                }
             }
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 Divider().gridCellUnsizedAxes(.horizontal)
                 GridRow(alignment: .firstTextBaseline) {
                     ForEach(Array(row.enumerated()), id: \.offset) { index, id in
                         if let cell = facts[id] {
-                            value(cell, font: index == 0 ? .callout.weight(.semibold) : .callout.monospacedDigit())
+                            value(cell, font: index == 0 ? CardStyle.value : CardStyle.body.monospacedDigit())
+                                .multilineTextAlignment(numeric[index] ? .trailing : .leading)
                         } else {
                             Text("")
                         }
@@ -540,5 +650,149 @@ enum GeneratedCardValue {
 
     static func plain(_ number: Double) -> String {
         number.formatted(.number.precision(.fractionLength(0...2)))
+    }
+}
+
+// MARK: - Grid and type
+
+/// The generated card's grid and type scale, on a 4-point grid. Blocks sit
+/// 20 apart, the parts of a block 12 apart, a label 4 above its value, and
+/// columns split the card's width evenly across a 12-point gutter. Five text
+/// styles, all Dynamic Type: an uppercase eyebrow for labels, body and value
+/// for facts, a figure for anything read at a glance (a gate, a clock), and
+/// a display size for the one thing a block is about (an airport code).
+enum CardStyle {
+    static let blockSpacing: CGFloat = 20
+    static let partSpacing: CGFloat = 12
+    static let labelSpacing: CGFloat = 4
+    static let gutter: CGFloat = 12
+    static let panelPadding: CGFloat = 14
+    static let panelRadius: CGFloat = 14
+
+    static let eyebrow = Font.caption2.weight(.semibold)
+    static let body = Font.callout
+    static let value = Font.callout.weight(.semibold)
+    static let figure = Font.title3.weight(.semibold).monospacedDigit()
+    static let display = Font.title.weight(.bold)
+
+    /// Equal columns for `count` items, one column at accessibility sizes.
+    static func columns(_ count: Int, accessibility: Bool) -> [GridItem] {
+        Array(
+            repeating: GridItem(.flexible(), spacing: gutter, alignment: .topLeading),
+            count: accessibility ? 1 : max(1, count)
+        )
+    }
+}
+
+/// A label above a value: small, uppercase, muted — never competing with
+/// the value it names.
+struct CardEyebrow: View {
+    let text: String
+    @Environment(\.colorScheme) private var colorScheme
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(CardText.presentationLabel(text))
+            .font(CardStyle.eyebrow)
+            .textCase(.uppercase)
+            .tracking(0.5)
+            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            .lineLimit(1)
+    }
+}
+
+/// A status in the colour of what it means: trouble in amber, a cancellation
+/// in red, everything else in the card's accent. Read from the words
+/// themselves, since a status is a verbatim fact.
+struct CardStatusPill: View {
+    let text: String
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(tint.opacity(0.12), in: Capsule())
+            .lineLimit(1)
+    }
+
+    private var tint: Color {
+        let lower = text.lowercased()
+        if ["cancel", "divert"].contains(where: lower.contains) { return AssistantTheme.errorInk(for: colorScheme) }
+        if ["delay", "late"].contains(where: lower.contains) { return AssistantTheme.warning(for: colorScheme) }
+        return AssistantTheme.accent(for: colorScheme)
+    }
+}
+
+/// The card's action row: equal tiles, icon over a short label, so three
+/// actions read as one row rather than a stack of wide buttons.
+struct CardActionButtonStyle: ButtonStyle {
+    @Environment(\.cardActionSolo) private var solo
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .labelStyle(CardActionLabelStyle(solo: solo))
+            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
+            .padding(.horizontal, solo ? 16 : 6)
+            .padding(.vertical, 10)
+            // Tiles in a row share its height, so a label that wraps does not
+            // leave its neighbours short.
+            .frame(maxWidth: .infinity, minHeight: solo ? 44 : 58, maxHeight: solo ? nil : .infinity)
+            .background(
+                AssistantTheme.sunken(for: colorScheme),
+                in: RoundedRectangle(cornerRadius: CardStyle.panelRadius, style: .continuous)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: CardStyle.panelRadius, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.85 : 1) : 0.48)
+            .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: configuration.isPressed)
+    }
+}
+
+struct CardActionLabelStyle: LabelStyle {
+    var solo = false
+
+    @ViewBuilder
+    func makeBody(configuration: Configuration) -> some View {
+        if solo {
+            // One action alone is a plain button, not a tall empty tile.
+            HStack(spacing: 8) {
+                configuration.icon.font(.system(size: 15, weight: .semibold))
+                configuration.title.font(.subheadline.weight(.semibold)).lineLimit(1)
+            }
+        } else {
+            tile(configuration)
+        }
+    }
+
+    private func tile(_ configuration: Configuration) -> some View {
+        VStack(spacing: 5) {
+            configuration.icon
+                .font(.system(size: 17, weight: .semibold))
+                .frame(height: 20)
+            configuration.title
+                .font(.caption.weight(.semibold))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+        }
+    }
+}
+
+private struct CardActionSoloKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// Set by the card when its row holds one action.
+    var cardActionSolo: Bool {
+        get { self[CardActionSoloKey.self] }
+        set { self[CardActionSoloKey.self] = newValue }
     }
 }
