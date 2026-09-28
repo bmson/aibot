@@ -24,6 +24,7 @@
 		B00000000000000000000010 /* Views/ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000010 /* Views/ConnectionView.swift */; };
 		B00000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000011 /* Assets.xcassets */; };
 		B00000000000000000000012 /* APIModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000020 /* APIModelsTests.swift */; };
+		B00000000000000000000095 /* Components/CardActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000095 /* Components/CardActions.swift */; };
 		B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000014 /* System/AssistantActivityAttributes.swift */; };
 		B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000015 /* System/LiveActivityManager.swift */; };
 		B00000000000000000000015 /* System/NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000016 /* System/NotificationManager.swift */; };
@@ -118,6 +119,7 @@
 		C00000000000000000000011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C00000000000000000000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		C00000000000000000000013 /* Assistant.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Assistant.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C00000000000000000000095 /* Components/CardActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/CardActions.swift; sourceTree = "<group>"; };
 		C00000000000000000000014 /* System/AssistantActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/AssistantActivityAttributes.swift; sourceTree = "<group>"; };
 		C00000000000000000000015 /* System/LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/LiveActivityManager.swift; sourceTree = "<group>"; };
 		C00000000000000000000016 /* System/NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = System/NotificationManager.swift; sourceTree = "<group>"; };
@@ -220,6 +222,7 @@
 				C00000000000000000000055 /* Models/PollingPolicy.swift */,
 				C00000000000000000000005 /* Networking/KeychainStore.swift */,
 				C00000000000000000000006 /* Networking/APIClient.swift */,
+				C00000000000000000000095 /* Components/CardActions.swift */,
 				C00000000000000000000014 /* System/AssistantActivityAttributes.swift */,
 				C00000000000000000000015 /* System/LiveActivityManager.swift */,
 				C00000000000000000000016 /* System/NotificationManager.swift */,
@@ -430,6 +433,7 @@
 				B00000000000000000000056 /* Components/MermaidDiagramView.swift in Sources */,
 				B00000000000000000000005 /* Networking/KeychainStore.swift in Sources */,
 				B00000000000000000000006 /* Networking/APIClient.swift in Sources */,
+				B00000000000000000000095 /* Components/CardActions.swift in Sources */,
 				B00000000000000000000013 /* System/AssistantActivityAttributes.swift in Sources */,
 				B00000000000000000000014 /* System/LiveActivityManager.swift in Sources */,
 				B00000000000000000000015 /* System/NotificationManager.swift in Sources */,

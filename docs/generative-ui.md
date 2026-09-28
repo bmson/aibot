@@ -35,7 +35,7 @@ The rules that make this safe, and that every layer below keeps:
 
 ## Layers
 
-### Layer 1 — layout and richer blocks (this change)
+### Layer 1 — layout and richer blocks
 
 | Block | Shape | For |
 |---|---|---|
@@ -55,25 +55,56 @@ model can make without lying (a chart value that isn't a number, a countdown
 on a naive local time) drop that block; a grounding failure still refuses the
 whole card.
 
-### Layer 2 — live data
+### Layer 2 — live data (not planned)
 
-Blocks bound to a refreshable source instead of a snapshot, reusing the card
-refresh machinery (`card-refresh.ts`). A new `flights.status` tool (AeroAPI or
-similar) and a flight-status Live Activity driven by APNs push, alongside the
-existing `AssistantActivityExtension`. Scores move onto the same path.
+Live cards need a live source. Scores already have one (the scoreboard
+refreshes from ESPN). Flight status was built on FlightAware AeroAPI and
+removed: no free source carries gates and delays, and the owner chose not
+to add a paid service. A flight booking is still a card — the confirmation
+as the airline wrote it, from mail or a pasted message — just not a live one.
 
-### Layer 3 — inputs
+### Cards from mail and messages
 
-`text`, `picker`, `date`, `stepper`, `toggle` inputs and a `submit` action. A
-submit produces a structured `ask_assistant` request — never a direct side
-effect — so booking forms, RSVPs and expense entries go through the same
-approval policies as any other action.
+**Every kind of booking, from mail.** The google module observes inbound
+mail for the things worth going back to — reservations, flights, tickets,
+appointments, orders and deliveries. A prefilter (a booking word in
+the subject, or printed as labelled fields; two kinds of detail such as a
+date and a time; no sale language) gates the ordinary card
+composer, whose verbatim check grounds every value in the email. Cards from
+mail carry no links or images, since the sender is untrusted, and land on the
+Cards page with one ambient notice; the same booking mailed again revises its
+card quietly. In chat, a card whose every value is in the owner's own message
+(a pasted confirmation) is grounded `message`: filed to the Cards page, with
+the reply still above it.
 
-### Layer 4 — device capabilities
+### Design
 
-Actions handled by native code, each behind its own permission:
-`add_to_calendar`, `start_live_activity`, `open_maps`. NFC and Wallet passes
-are out of scope.
+Generated cards share one grid and type scale (`CardStyle`): blocks 20pt
+apart, a block's parts 12, a label 4 above its value, equal columns across a
+12pt gutter; an uppercase eyebrow for labels, body and value for facts, a
+monospaced figure for anything read at a glance, and a display size for the
+one thing a block is about. The journey reads like a boarding pass, statuses
+take the colour of what they mean, a countdown does not repeat a clock the
+journey already shows, figures in a table align right, and actions share one
+row of equal tiles (a single action is a plain button).
+
+### Layer 3 — inputs (deferred)
+
+Not built. The composer rewrites every model-authored `ask_assistant` prompt
+to a fixed string, because a prompt lifted from evidence would reach the
+owner's own turn. A form would need the same care: fields that prefill the
+composer for the owner to read and send, never a submit that speaks for
+them. Worth doing when a real flow asks for it.
+
+### Layer 4 — device actions
+
+**Built.** `add_to_calendar` (`startFact`, optional `endFact` and
+`locationFact`, all zoned instants) opens the system event sheet prefilled;
+nothing is written unless the owner taps Add, and the sheet needs no calendar
+permission. `directions` opens Apple Maps to a place fact. Every generated
+card has a share button that sends its title and non-sensitive facts as text.
+An action the phone could not perform — a calendar entry on a wall-clock
+time, directions to a sensitive fact — is dropped and the card kept.
 
 ### Layer 5 — learning loop
 

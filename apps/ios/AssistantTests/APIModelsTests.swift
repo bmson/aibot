@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 import CoreLocation
 @testable import Assistant
@@ -1081,6 +1082,59 @@ final class APIModelsTests: XCTestCase {
 
         XCTAssertEqual(GeneratedCardValue.coordinate("64.1466, -21.9426")?.latitude, 64.1466)
         XCTAssertNil(GeneratedCardValue.coordinate("Laugavegur 1, Reykjavik"))
+    }
+
+    func testCardActionsOpenACalendarDraftAndShareWithoutSecrets() {
+        let draft = CalendarDraft(
+            title: "FI614 to New York",
+            start: "2026-10-02T17:05:00+00:00",
+            end: "2026-10-02T18:35:00-04:00",
+            location: "Reykjavik (KEF)"
+        )
+        XCTAssertEqual(draft?.timeZone.secondsFromGMT(), 0)
+        XCTAssertEqual(draft.map { $0.end.timeIntervalSince($0.start) }, 5.5 * 3600)
+        XCTAssertNil(CalendarDraft(title: "x", start: "16:40", end: nil, location: nil))
+        XCTAssertEqual(
+            CalendarDraft(title: "x", start: "2026-10-02T17:05:00Z", end: nil, location: nil)
+                .map { $0.end.timeIntervalSince($0.start) },
+            3600
+        )
+        XCTAssertEqual(
+            GeneratedCardValue.directionsURL("Keflavik Int'l")?.absoluteString,
+            "https://maps.apple.com/?daddr=Keflavik%20Int'l"
+        )
+
+        let card = MessagePart(
+            type: "data-card",
+            data: .object([
+                "kind": .string("generated-card"),
+                "id": .string("ticket"),
+                "spec": .object([
+                    "version": .number(1),
+                    "title": .string("Movie ticket"),
+                    "sourceLabel": .string("Cinema email"),
+                    "accessibilityLabel": .string("Movie ticket"),
+                    "facts": .array([
+                        .object(["id": .string("movie"), "label": .string("Movie"), "value": .string("Dune")]),
+                        .object(["id": .string("when"), "label": .string("Showtime"), "value": .string("2026-10-02T19:30:00-07:00")]),
+                        .object(["id": .string("code"), "label": .string("Ticket code"), "value": .string("MV-4829"), "sensitive": .bool(true)]),
+                    ]),
+                    "blocks": .array([.object(["type": .string("facts"), "factIds": .array([.string("movie")])])]),
+                    "actions": .array([.object([
+                        "id": .string("cal"), "type": .string("add_to_calendar"), "label": .string("Add to Calendar"),
+                        "startFact": .string("when"),
+                    ])]),
+                ]),
+            ])
+        )
+        guard case let .generated(generated)? = MessageResponseCard(part: card) else {
+            return XCTFail("Expected a generated card")
+        }
+        XCTAssertEqual(generated.actions.first?.startFact, "when")
+        let shared = GeneratedCardValue.shareText(generated)
+        XCTAssertTrue(shared.hasPrefix("Movie ticket\nMovie: Dune"))
+        XCTAssertFalse(shared.contains("MV-4829"))
+        XCTAssertFalse(shared.contains("2026-10-02T19:30"), "times are shared on their own clock, not as ISO")
     }
 
     func testGeneratedCardCarriesTheStepsBehindIt() {

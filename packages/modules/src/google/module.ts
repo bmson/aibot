@@ -19,6 +19,7 @@ import {
   applicationPersistence,
   reapExpiredApplicationWatches,
 } from './application-confirmations.js';
+import { cardFromEmail } from './email-cards.js';
 import { deliverEmailFinal } from './email-channel.js';
 import {
   type EmailSyncDeps,
@@ -106,6 +107,22 @@ export const googleModule = defineModule<GoogleClient>({
     // guards inside self-report), and sync no-ops on an unconfigured client —
     // exactly the behavior the agent had when these were hardcoded.
     const hooks: ModuleHooks = {
+      // Bookings, tickets, deliveries and appointments in the owner's mail
+      // become saved cards as they arrive (email-cards.ts).
+      emailObservers: [
+        async (services, event) => {
+          if (!services.config.GENERATIVE_CARDS_ENABLED) return;
+          await cardFromEmail(
+            {
+              router: services.router,
+              generatedCards: services.persistence.generatedCards,
+              notifications: services.persistence.notifications,
+              notifyOwner: services.ownerNotifier.notifyOwner,
+            },
+            { ...event, now: event.now ?? new Date() },
+          );
+        },
+      ],
       webhooks: [
         {
           path: '/gmail/pubsub',
