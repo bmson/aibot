@@ -207,15 +207,13 @@ describe('PostgreSQL conversation evidence window', () => {
         email: `${agent}@invalid.test`,
         workspacePrefix: `evidence/${agent}`,
       });
-      await db
-        .insert(conversations)
-        .values({
-          id: conversation,
-          agentId: agent,
-          title: 'Window',
-          channel: 'chat',
-          trust: 'owner',
-        });
+      await db.insert(conversations).values({
+        id: conversation,
+        agentId: agent,
+        title: 'Window',
+        channel: 'chat',
+        trust: 'owner',
+      });
       await db.insert(tasks).values(
         [current, prior].map((id) => ({
           id,
