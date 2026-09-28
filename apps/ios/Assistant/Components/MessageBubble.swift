@@ -4,9 +4,6 @@ import UIKit
 struct MessageBubble: View {
     let message: ChatMessage
     let userPrompt: String?
-    /// Only the newest prose reply carries answer context. Historical cards
-    /// stay quiet. This is a static card header and scrolls with the reply.
-    let isCurrentAnswer: Bool
     let isStreaming: Bool
     let openApprovals: () -> Void
     /// The off-course card's fix: resend the prompt through the executor.
@@ -39,8 +36,6 @@ struct MessageBubble: View {
     @ScaledMetric(relativeTo: .body) private var messageFontSize = 14.0
     @ScaledMetric(relativeTo: .body) private var bubbleHorizontalInset: CGFloat = 20
     @ScaledMetric(relativeTo: .body) private var bubbleVerticalInset: CGFloat = 15
-    @ScaledMetric(relativeTo: .caption) private var answerContextLabelFontSize = 12.0
-    @ScaledMetric(relativeTo: .caption) private var answerContextPromptFontSize = 12.0
     // Tool-result cards support the answer; they must not hide its caveats.
 
     @ViewBuilder
@@ -198,7 +193,6 @@ struct MessageBubble: View {
             ForEach(Array(message.visibleTextBubbles.enumerated()), id: \.offset) { index, bubble in
                 assistantBubble(
                     bubble,
-                    showsAnswerContext: isCurrentAnswer && index == 0,
                     showsSources: message.hasSupportingResultCards && index == message.visibleTextBubbles.count - 1
                 )
             }
@@ -281,7 +275,7 @@ struct MessageBubble: View {
 
     /// One assistant bubble's worth of paper. The whole reply remains the
     /// copy unit no matter how many bubbles it was split into.
-    private func assistantBubble(_ text: String, showsAnswerContext: Bool, showsSources: Bool) -> some View {
+    private func assistantBubble(_ text: String, showsSources: Bool) -> some View {
         let shape = RoundedRectangle(
             cornerRadius: AssistantTheme.conversationCornerRadius,
             style: .continuous
@@ -289,10 +283,6 @@ struct MessageBubble: View {
         let borderWidth: CGFloat = colorSchemeContrast == .increased ? 1.05 : 0.7
 
         return VStack(alignment: .leading, spacing: 0) {
-            if showsAnswerContext, let prompt = normalizedUserPrompt {
-                currentAnswerContext(prompt)
-            }
-
             AssistantMarkdownView(
                 source: text,
                 baseFontSize: messageFontSize,
@@ -303,16 +293,13 @@ struct MessageBubble: View {
             )
             .textSelection(.enabled)
             .padding(.horizontal, resolvedBubbleHorizontalInset)
-            .padding(.vertical, resolvedBubbleVerticalInset)
+            .padding(.vertical, resolvedBubbleVerticalInset * 2)
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if showsSources {
                 AnswerSourcesFooter(cards: responseCards, onSend: retry, onRefresh: refreshCard)
             }
         }
-            // The header is a rectangular band inside the paper, not another
-            // rounded card. Clip all contents to the same inset outline so its
-            // tint cannot paint over or extend beyond the card's border.
             .clipShape(shape.inset(by: borderWidth))
             .background(
                 AssistantTheme.bubblePaper(for: colorScheme),
@@ -335,71 +322,6 @@ struct MessageBubble: View {
                 y: 5
             )
             .contextMenu { cardMenu(copyLabel: "Copy reply") }
-    }
-
-    private var normalizedUserPrompt: String? {
-        guard let userPrompt else { return nil }
-        let normalized = userPrompt
-            .split(whereSeparator: \.isWhitespace)
-            .joined(separator: " ")
-        return normalized.isEmpty ? nil : normalized
-    }
-
-    private func currentAnswerContext(_ prompt: String) -> some View {
-        Group {
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 3) {
-                    currentAnswerLabel
-                    currentAnswerPrompt(prompt, lineLimit: 2)
-                }
-            } else {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    currentAnswerLabel
-                    currentAnswerPrompt(prompt, lineLimit: 1)
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-        .padding(.horizontal, resolvedBubbleHorizontalInset)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, minHeight: answerContextMinimumHeight, alignment: .leading)
-        .background {
-            Rectangle().fill(AssistantTheme.sunken(for: colorScheme))
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(AssistantTheme.bubblePaperInk(for: colorScheme).opacity(0.08))
-                .frame(height: 0.75)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Current answer to: \(prompt)")
-    }
-
-    /// The band is the sheet's own header, so it has to clear the sheet's
-    /// corner. A continuous corner sweeps roughly 1.5× its radius along each
-    /// edge, and at 27pt that is longer than the band was tall: both ends were
-    /// pure curve, the divider cut the sweep mid-arc, and the result read as a
-    /// pill floating in the paper rather than the top of it. Sizing the band to
-    /// the corner lets the top edge straighten out between two corners that are
-    /// the bubble's own. Accessibility sizes already exceed this and are
-    /// unaffected.
-    private var answerContextMinimumHeight: CGFloat {
-        AssistantTheme.conversationCornerRadius * 1.55
-    }
-
-    private var currentAnswerLabel: some View {
-        Text("Current answer")
-            .font(.system(size: answerContextLabelFontSize, weight: .semibold, design: .rounded))
-            .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-            .fixedSize(horizontal: true, vertical: false)
-    }
-
-    private func currentAnswerPrompt(_ prompt: String, lineLimit: Int) -> some View {
-        Text(prompt)
-            .font(.system(size: answerContextPromptFontSize, weight: .regular))
-            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-            .lineLimit(lineLimit)
-            .truncationMode(.tail)
     }
 
     private var recallNote: some View {
@@ -6049,7 +5971,6 @@ extension MessageBubble: Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.message == rhs.message
             && lhs.userPrompt == rhs.userPrompt
-            && lhs.isCurrentAnswer == rhs.isCurrentAnswer
             && lhs.isStreaming == rhs.isStreaming
             && (lhs.runForReal == nil) == (rhs.runForReal == nil)
             && (lhs.retry == nil) == (rhs.retry == nil)

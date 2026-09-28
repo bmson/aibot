@@ -443,7 +443,7 @@ final class AssistantMarkdownTests: XCTestCase {
                 pending.applyingApprovalDecisions(["qa-approval": "denied"])]
             let view = VStack(spacing: 16) {
                 ForEach(messages.indices, id: \.self) { index in
-                    MessageBubble(message: messages[index], userPrompt: nil, isCurrentAnswer: false,
+                    MessageBubble(message: messages[index], userPrompt: nil,
                         isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil)
                 }
             }
@@ -786,7 +786,7 @@ final class AssistantMarkdownTests: XCTestCase {
             ("accessible", .light, .accessibility3)
         ] {
             let view = VStack(spacing: 24) {
-                MessageBubble(message: message, userPrompt: nil, isCurrentAnswer: false,
+                MessageBubble(message: message, userPrompt: nil,
                     isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil)
                 SavedResponseCard(card: card, dismiss: {})
             }
@@ -807,7 +807,7 @@ final class AssistantMarkdownTests: XCTestCase {
     }
 
     @MainActor
-    func testCurrentAnswerHeaderSnapshots() throws {
+    func testReplyCardSnapshots() throws {
         for (name, scheme, size, width) in [
             ("light", ColorScheme.light, DynamicTypeSize.large, CGFloat(390)),
             ("dark", .dark, .large, 390),
@@ -817,7 +817,7 @@ final class AssistantMarkdownTests: XCTestCase {
             let view = MessageBubble(
                 message: .optimistic(role: .assistant, text: "Here are two places to stop along the way. Check the opening hours before leaving."),
                 userPrompt: "Can you find a place somewhere along the way?",
-                isCurrentAnswer: true, isStreaming: false, openApprovals: {},
+                isStreaming: false, openApprovals: {},
                 runForReal: nil, retry: nil, decideApproval: nil
             )
             .padding(16).frame(width: width).background(AssistantTheme.stage)
@@ -829,28 +829,8 @@ final class AssistantMarkdownTests: XCTestCase {
             let image = try XCTUnwrap(renderer.uiImage)
             XCTAssertEqual(image.size.width, width)
             XCTAssertGreaterThan(image.size.height, 100)
-            if !size.isAccessibilitySize {
-                // A rounded header background leaves paper-colored wedges
-                // above the divider. Both ends must instead match its center.
-                let cgImage = try XCTUnwrap(image.cgImage)
-                let data = try XCTUnwrap(cgImage.dataProvider?.data)
-                let bytes = try XCTUnwrap(CFDataGetBytePtr(data))
-                let pixelSize = cgImage.bitsPerPixel / 8
-                let y = Int((16 + AssistantTheme.conversationCornerRadius * 1.55 - 4) * renderer.scale)
-                func pixel(_ x: CGFloat) -> [UInt8] {
-                    let offset = y * cgImage.bytesPerRow + Int(x * renderer.scale) * pixelSize
-                    return Array(UnsafeBufferPointer(start: bytes + offset, count: pixelSize))
-                }
-                // Allow tiny rasterization/shadow differences, not the much
-                // lighter paper wedge produced by a separate rounded shape.
-                for x in [CGFloat(20), width - 20] {
-                    let difference = zip(pixel(x), pixel(width / 2))
-                        .map { abs(Int($0.0) - Int($0.1)) }.max() ?? 0
-                    XCTAssertLessThanOrEqual(difference, 2, "Header must have square bottom corners")
-                }
-            }
             let attachment = XCTAttachment(image: image)
-            attachment.name = "current-answer-header-\(name)"
+            attachment.name = "reply-card-\(name)"
             attachment.lifetime = .keepAlways
             add(attachment)
         }
@@ -884,7 +864,7 @@ final class AssistantMarkdownTests: XCTestCase {
         ] {
             let view = VStack(spacing: 16) {
                 ForEach([open, mixed, settled]) { message in
-                    MessageBubble(message: message, userPrompt: nil, isCurrentAnswer: false,
+                    MessageBubble(message: message, userPrompt: nil,
                         isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil,
                         decideSuggestion: { _, _ in nil }, openActivity: {})
                 }
@@ -928,7 +908,7 @@ final class AssistantMarkdownTests: XCTestCase {
         ] {
             let view = VStack(spacing: 14) {
                 ForEach([open, settled]) { message in
-                    MessageBubble(message: message, userPrompt: nil, isCurrentAnswer: false,
+                    MessageBubble(message: message, userPrompt: nil,
                         isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil,
                         decideSuggestion: { _, _ in nil }, openActivity: {})
                 }
@@ -975,7 +955,7 @@ final class AssistantMarkdownTests: XCTestCase {
         let data = Data(#"{"id":"m1","role":"assistant","parts":[{"type":"data-card","data":{"kind":"calendar-event","id":"e1","title":"Google Phone Interview","time":"2:00 PM–2:30 PM","start":"2014-05-05T14:00:00-07:00","calendars":["Personal"]}},{"type":"data-card","data":{"kind":"calendar-event","id":"e2","title":"Twitter Phone Interview","time":"3:00 PM–4:00 PM","start":"2014-05-19T15:00:00-07:00","calendars":["Personal"]}}]}"#.utf8)
         let message = try JSONDecoder().decode(ChatMessage.self, from: data)
         for scheme in [ColorScheme.light, .dark] {
-            let view = MessageBubble(message: message, userPrompt: nil, isCurrentAnswer: false,
+            let view = MessageBubble(message: message, userPrompt: nil,
                 isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil)
                 .padding(16).frame(width: 390).background(AssistantTheme.stage)
                 .environment(\.colorScheme, scheme)
@@ -1001,7 +981,7 @@ final class AssistantMarkdownTests: XCTestCase {
             ("accessible", .light, .accessibility3)
         ] {
             let view = MessageBubble(message: .optimistic(role: .user, text: source), userPrompt: nil,
-                isCurrentAnswer: false, isStreaming: false, openApprovals: {},
+                isStreaming: false, openApprovals: {},
                 runForReal: nil, retry: nil, decideApproval: nil)
                 .padding(16).frame(width: 390).background(AssistantTheme.stage)
                 .environment(\.colorScheme, scheme)
@@ -1066,7 +1046,6 @@ final class AssistantMarkdownTests: XCTestCase {
                 let view = MessageBubble(
                     message: .optimistic(role: .assistant, text: item.response),
                     userPrompt: item.prompt,
-                    isCurrentAnswer: true,
                     isStreaming: false,
                     openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil
                 )

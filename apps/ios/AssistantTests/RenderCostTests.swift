@@ -147,8 +147,7 @@ final class RenderCostTests: XCTestCase {
 
     // MARK: - TranscriptContext
 
-    /// The two facts this resolves were scans through the log inside the row
-    /// builder. Both must still agree with those scans, for every row.
+    /// The prompt for each row must agree with a backwards scan of the log.
     func testContextAgreesWithTheScansItReplaced() {
         let log: [ChatMessage] = [
             .optimistic(role: .assistant, text: "Morning.", id: "a1"),
@@ -168,18 +167,8 @@ final class RenderCostTests: XCTestCase {
                 log[..<index].reversed().first(where: { $0.role == .user })?.text,
                 "prompt at \(index)"
             )
-            XCTAssertEqual(
-                context.isCurrentAnswer(at: index),
-                log[index].isConversationAnswer
-                    && !log.dropFirst(index + 1).contains(where: { $0.isConversationAnswer }),
-                "answer at \(index)"
-            )
         }
 
-        // Concretely: the last prose reply is the current answer, and it is
-        // answering the newest user turn.
-        XCTAssertTrue(context.isCurrentAnswer(at: 5))
-        XCTAssertFalse(context.isCurrentAnswer(at: 2))
         XCTAssertEqual(context.userPrompt(before: 5), "And tell Ana")
         XCTAssertNil(context.userPrompt(before: 0))
     }
@@ -187,7 +176,6 @@ final class RenderCostTests: XCTestCase {
     func testContextIsEmptyForAnEmptyLog() {
         let context = TranscriptContext(messages: [])
         XCTAssertNil(context.userPrompt(before: 0))
-        XCTAssertFalse(context.isCurrentAnswer(at: 0))
     }
 
     // MARK: - Row equality
@@ -198,7 +186,6 @@ final class RenderCostTests: XCTestCase {
             MessageBubble(
                 message: message,
                 userPrompt: prompt,
-                isCurrentAnswer: true,
                 isStreaming: streaming,
                 openApprovals: {},
                 runForReal: nil,
@@ -225,7 +212,6 @@ final class RenderCostTests: XCTestCase {
             MessageBubble(
                 message: message,
                 userPrompt: "Book it",
-                isCurrentAnswer: true,
                 isStreaming: false,
                 openApprovals: {},
                 runForReal: nil,
@@ -261,14 +247,14 @@ final class RenderCostTests: XCTestCase {
 
     func testRowNoticesCardRefreshAvailabilityAndFreshnessChanges() {
         let message = ChatMessage(id: "m", role: .assistant, parts: [RichMessageFixture.generated(stale: true)])
-        let row = MessageBubble(message: message, userPrompt: nil, isCurrentAnswer: false,
+        let row = MessageBubble(message: message, userPrompt: nil,
             isStreaming: false, openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil)
         var available = row
         available.refreshCard = { _ in nil }
         XCTAssertNotEqual(row, available)
         let fresh = MessageBubble(message: ChatMessage(id: "m", role: .assistant, parts: [
             RichMessageFixture.generated(updatedAt: "2026-09-19T18:01:00.000Z")
-        ]), userPrompt: nil, isCurrentAnswer: false, isStreaming: false,
+        ]), userPrompt: nil, isStreaming: false,
             openApprovals: {}, runForReal: nil, retry: nil, decideApproval: nil)
         XCTAssertNotEqual(row, fresh)
     }

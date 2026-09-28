@@ -236,11 +236,6 @@ body:has(.chat-viewport) {
   max-width: 72ch;
 }
 
-/* The prompt reference is part of the card, never a pinned transcript overlay. */
-.bubble-assistant[data-current-answer="true"] {
-  overflow: clip;
-}
-
 /* Rules mark a new named section, not every paragraph. A first heading (or one
    immediately after an explicit rule) does not need another separator. */
 .message-markdown > :where(h1, h2):not(:first-child) {
