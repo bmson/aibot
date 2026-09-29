@@ -84,15 +84,15 @@
     "@assistant/tools": "workspace:*",
     "@biomejs/biome": "^2.5.14",
     "@google-cloud/firestore": "^9.2.0",
-    "@types/node": "^26.6.2",
-    "drizzle-orm": "^0.45.2",
+    "@types/node": "^26.6.3",
+    "drizzle-orm": "^0.45.3",
     "google-auth-library": "^10.9.1",
     "playwright": "^1.63.0",
     "sharp": "^0.35.4",
-    "tsx": "^4.23.13",
-    "turbo": "^2.11.2",
+    "tsx": "^4.23.15",
+    "turbo": "^2.11.4",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1",
+    "vitest": "^5.0.2",
     "zod": "^4.6.5"
   }
 }

@@ -19,6 +19,6 @@
     "google-auth-library": "^10.9.1"
   },
   "devDependencies": {
-    "tsx": "^4.23.13"
+    "tsx": "^4.23.15"
   }
 }

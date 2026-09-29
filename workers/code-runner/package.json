@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "tsx": "^4.23.13",
-    "vitest": "^5.0.1"
+    "tsx": "^4.23.15",
+    "vitest": "^5.0.2"
   }
 }
