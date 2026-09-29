@@ -18,9 +18,37 @@ import type { ReactNode } from 'react';
 export const focusRing =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
 
-const btnBase = `mobile-touch-target inline-flex shrink-0 items-center justify-center gap-2 whitespace-normal text-center font-medium motion-safe:transition-[background-color,border-color,color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`;
-const btnMd = 'min-h-11 rounded-lg px-5 py-2.5 text-sm';
-const btnXs = 'min-h-9 rounded-lg px-4 py-2 text-xs';
+/*
+ * The action vocabulary. Every button in the app picks its variant by what the
+ * action *means*, never by the screen it sits on, so "Approve" looks and
+ * behaves the same on the Approvals page, in a chat card, and in a memory row:
+ *
+ *   primary       — the affirmative answer to something that is waiting on
+ *                   the owner (Approve, Apply, Start) or the submit of a form
+ *                   (Save). One per group, and always first in the row.
+ *                   Optional housekeeping on an ordinary list row stays
+ *                   outline, so a long list doesn't turn into a wall of fills.
+ *   outline       — the neutral answer or a way out: Deny, Dismiss, Later,
+ *                   Cancel, Edit. Follows the primary action.
+ *   dangerOutline — an action that destroys data or stops work (Reject,
+ *                   Forget, Delete, Stop task). Always behind <ConfirmButton>,
+ *                   which fills it to `danger` while armed.
+ *   danger        — the armed state of a destructive confirm, or the commit
+ *                   button inside a confirmation panel that has already spelled
+ *                   out the impact (followed by an outline "Cancel"). Never a
+ *                   first-sight resting style: a filled red button reads as an
+ *                   alarm.
+ *
+ * There is deliberately no green "success" button. Approve used to be accent
+ * in one place and emerald in two others, so the same decision changed colour
+ * depending on which surface asked it.
+ *
+ * Icons inside a button are sized by the scale, not by the caller — callers
+ * had drifted between size-3, size-3.5 and size-4 inside identical buttons.
+ */
+const btnBase = `mobile-touch-target inline-flex shrink-0 items-center justify-center gap-2 whitespace-normal text-center font-medium select-none motion-safe:transition-[background-color,border-color,color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:shrink-0 ${focusRing}`;
+const btnMd = 'min-h-11 rounded-lg px-5 py-2.5 text-sm [&_svg]:size-4';
+const btnXs = 'min-h-9 rounded-lg px-4 py-2 text-xs [&_svg]:size-3.5';
 
 const btnVariants = {
   outline:
@@ -28,12 +56,11 @@ const btnVariants = {
   dangerOutline:
     'border border-red-300 text-red-700 hover:bg-red-50 active:bg-red-100 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40 dark:active:bg-red-950/70',
   // Flat: the accent plane is the emphasis. The old hover glow read as a
-  // sticker hovering over the page rather than a control set into it.
-  primary: 'bg-accent text-on-accent hover:bg-accent-hover',
-  danger: 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800',
-  // emerald-600 gives white text only 3.65:1, under AA for the 12px label the
-  // small variant uses. emerald-700 clears it at 5.48:1 with the same hue.
-  success: 'bg-emerald-700 text-white hover:bg-emerald-800 active:bg-emerald-900',
+  // sticker hovering over the page rather than a control set into it. The
+  // transparent border keeps a filled button exactly as tall and wide as the
+  // outlined one beside it.
+  primary: 'border border-transparent bg-accent text-on-accent hover:bg-accent-hover',
+  danger: 'border border-transparent bg-red-600 text-white hover:bg-red-700 active:bg-red-800',
 } as const;
 
 /**
@@ -54,7 +81,6 @@ export const btn = {
   dangerOutline: `${btnBase} ${btnMd} ${btnVariants.dangerOutline}`,
   primary: `${btnBase} ${btnMd} ${btnVariants.primary}`,
   danger: `${btnBase} ${btnMd} ${btnVariants.danger}`,
-  success: `${btnBase} ${btnMd} ${btnVariants.success}`,
   ...menuVariants,
 } as const;
 
@@ -64,8 +90,22 @@ export const btnSm = {
   dangerOutline: `${btnBase} ${btnXs} ${btnVariants.dangerOutline}`,
   primary: `${btnBase} ${btnXs} ${btnVariants.primary}`,
   danger: `${btnBase} ${btnXs} ${btnVariants.danger}`,
-  success: `${btnBase} ${btnXs} ${btnVariants.success}`,
   ...menuVariants,
+} as const;
+
+/**
+ * Pill-shaped chips in the chat: quick replies, a card's own actions, "open"
+ * links. A chip is an *offer* — tapping it sends or opens something, never
+ * decides on the owner's behalf; decisions stay rectangular buttons. There
+ * were five hand-written copies at three heights (h-7, h-8, min-h-9) with and
+ * without press and disabled states; this is the one copy.
+ */
+const chipBase = `mobile-touch-target inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3.5 text-xs font-medium select-none motion-safe:transition-colors disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:size-3 [&_svg]:shrink-0 ${focusRing}`;
+export const chip = {
+  /** Something the assistant offers: a quick reply, a link out. */
+  accent: `${chipBase} border-accent/30 text-accent hover:bg-accent/10 active:bg-accent/15`,
+  /** A utility on a card: copy, reveal, ask about this. */
+  neutral: `${chipBase} border-edge text-strong hover:bg-sunken active:bg-sunken/80`,
 } as const;
 
 /**

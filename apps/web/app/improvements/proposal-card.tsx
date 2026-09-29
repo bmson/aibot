@@ -1,11 +1,9 @@
 'use client';
 
-import { LoaderCircle } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { applyProposalAction, dismissProposalAction } from '@/app/improvements/actions';
 import {
   Badge,
-  btn,
   cardBodyClass,
   cardFooterClass,
   cardHeaderClass,
@@ -13,6 +11,7 @@ import {
   cardTitleClass,
   MetaLine,
 } from '@/lib/ui';
+import { ActionButton } from '@/lib/ui-client';
 
 export interface ProposalView {
   id: string;
@@ -84,37 +83,28 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
         />
       </div>
       <footer className={cardFooterClass}>
-        <button
-          type="button"
+        <ActionButton
+          variant="primary"
           disabled={pending}
+          pending={pendingAction === 'apply'}
+          pendingLabel="Applying…"
           onClick={() => runAction('apply', () => applyProposalAction(proposal.id))}
-          className={btn.primary}
           title={
             proposal.applyable
               ? 'Approve and enact this change'
               : 'Acknowledge this advisory suggestion'
           }
         >
-          {pendingAction === 'apply' ? (
-            <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-          ) : null}
-          {pendingAction === 'apply'
-            ? 'Applying…'
-            : proposal.applyable
-              ? 'Approve & apply'
-              : 'Acknowledge'}
-        </button>
-        <button
-          type="button"
+          {proposal.applyable ? 'Approve & apply' : 'Acknowledge'}
+        </ActionButton>
+        <ActionButton
           disabled={pending}
+          pending={pendingAction === 'dismiss'}
+          pendingLabel="Dismissing…"
           onClick={() => runAction('dismiss', () => dismissProposalAction(proposal.id))}
-          className={btn.outline}
         >
-          {pendingAction === 'dismiss' ? (
-            <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-          ) : null}
-          {pendingAction === 'dismiss' ? 'Updating…' : 'Dismiss'}
-        </button>
+          Dismiss
+        </ActionButton>
       </footer>
     </article>
   );

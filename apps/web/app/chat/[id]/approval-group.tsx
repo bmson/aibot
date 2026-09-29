@@ -11,7 +11,7 @@ import { ApprovalRow, type InlineApprovalPart, type RowResolution } from './inli
 /**
  * All approval parts of one assistant message rendered as a single card
  * instead of a stack of near-identical ones: pending rows keep per-row
- * Approve/Decline controls, while settled rows collapse to one-line receipts
+ * Approve/Deny controls, while settled rows collapse to one-line receipts
  * so resolved ceremony stops dominating the log.
  */
 export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
@@ -76,7 +76,7 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
       action={
         <Link href="/approvals" className={btnSm.outline}>
           Review all
-          <ArrowUpRight className="size-3" aria-hidden="true" />
+          <ArrowUpRight aria-hidden="true" />
         </Link>
       }
     >

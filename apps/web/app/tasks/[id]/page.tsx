@@ -15,7 +15,7 @@ import {
   inputClass,
   PageShell,
 } from '@/lib/ui';
-import { SubmitButton } from '@/lib/ui-client';
+import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 import { actionLabel, displayTaskStatus, StatusChip, taskTypeLabel, trustLabel } from '@/lib/views';
 import {
   archiveTask,
@@ -242,7 +242,11 @@ export default async function TaskDetailPage({
               reachable action at all. */}
           {!terminal ? (
             <form action={cancelTask.bind(null, task.id)}>
-              <SubmitButton pendingLabel="Cancelling…">Cancel</SubmitButton>
+              {/* Same words and the same ask-twice as the chat's spending card,
+                  which calls off a task through this very action. */}
+              <ConfirmButton pendingLabel="Stopping…" confirmLabel="Stop task?">
+                Stop task
+              </ConfirmButton>
             </form>
           ) : null}
           {task.archivedAt ? (

@@ -17,7 +17,7 @@ import {
   SectionHeading,
   selectClass,
 } from '@/lib/ui';
-import { ConfirmButton } from '@/lib/ui-client';
+import { ActionButton, ConfirmButton } from '@/lib/ui-client';
 
 /** Plain-serializable occasion view built in the page. */
 export interface OccasionView {
@@ -92,16 +92,26 @@ export function OccasionsPanel({
    * button — for a round trip that only touched one record.
    */
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<'approve' | 'reject' | 'forget' | null>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<OccasionView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
-  const runForRow = (id: string, action: () => Promise<unknown>) => {
+  const runForRow = (
+    id: string,
+    action: () => Promise<unknown>,
+    name: 'approve' | 'reject' | 'forget',
+  ) => {
     setBusyId(id);
+    setBusyAction(name);
     startTransition(async () => {
-      await action();
-      setBusyId(null);
+      try {
+        await action();
+      } finally {
+        setBusyId(null);
+        setBusyAction(null);
+      }
     });
   };
 
@@ -163,7 +173,40 @@ export function OccasionsPanel({
                   Unverified
                 </Badge>
               ) : null}
-              <span className="ml-auto flex gap-2">
+              <span className="ml-auto flex flex-wrap justify-end gap-2">
+                {o.quarantined ? (
+                  <>
+                    <ActionButton
+                      variant="primary"
+                      size="sm"
+                      disabled={busyId === o.id}
+                      pending={busyId === o.id && busyAction === 'approve'}
+                      pendingLabel="Confirming…"
+                      aria-label={`Confirm ${rowName(o)}`}
+                      onClick={() =>
+                        runForRow(o.id, () => reviewOccasionAction(o.id, 'approve'), 'approve')
+                      }
+                    >
+                      Confirm
+                    </ActionButton>
+                    {/* Rejecting deletes the occasion outright, with no
+                        tombstone and no undo, and sits one button away from
+                        Confirm in a list the owner skims. It asks twice. */}
+                    <ConfirmButton
+                      size="sm"
+                      confirmLabel="Reject?"
+                      pendingLabel="Rejecting…"
+                      disabled={busyId === o.id}
+                      pending={busyId === o.id && busyAction === 'reject'}
+                      title={`Deletes this ${kindLabel(o)} permanently`}
+                      onConfirm={() =>
+                        runForRow(o.id, () => reviewOccasionAction(o.id, 'reject'), 'reject')
+                      }
+                    >
+                      Reject
+                    </ConfirmButton>
+                  </>
+                ) : null}
                 <button
                   type="button"
                   disabled={busyId === o.id}
@@ -177,38 +220,15 @@ export function OccasionsPanel({
                 >
                   Edit
                 </button>
-                {o.quarantined ? (
-                  <>
-                    <button
-                      type="button"
-                      disabled={busyId === o.id}
-                      onClick={() => runForRow(o.id, () => reviewOccasionAction(o.id, 'approve'))}
-                      className={btnSm.outline}
-                      aria-label={`Confirm ${rowName(o)}`}
-                    >
-                      Confirm
-                    </button>
-                    {/* Rejecting deletes the occasion outright, with no
-                        tombstone and no undo, and sits one button away from
-                        Confirm in a list the owner skims. It asks twice now,
-                        like every other irreversible action in the app. */}
-                    <ConfirmButton
-                      size="sm"
-                      confirmLabel="Really reject?"
-                      disabled={busyId === o.id}
-                      title={`Deletes this ${kindLabel(o)} permanently`}
-                      onConfirm={() => runForRow(o.id, () => reviewOccasionAction(o.id, 'reject'))}
-                    >
-                      Reject
-                    </ConfirmButton>
-                  </>
-                ) : (
+                {o.quarantined ? null : (
                   <ConfirmButton
                     size="sm"
-                    confirmLabel="Really forget?"
+                    confirmLabel="Forget?"
+                    pendingLabel="Forgetting…"
                     disabled={busyId === o.id}
+                    pending={busyId === o.id && busyAction === 'forget'}
                     title={`Deletes this ${kindLabel(o)} permanently`}
-                    onConfirm={() => runForRow(o.id, () => forgetOccasionAction(o.id))}
+                    onConfirm={() => runForRow(o.id, () => forgetOccasionAction(o.id), 'forget')}
                   >
                     Forget
                   </ConfirmButton>

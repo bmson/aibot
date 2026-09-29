@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { btnSm } from '@/lib/ui';
+import { ActionButton } from '@/lib/ui-client';
 import { removeKnowledgeConnection } from './actions';
 
 export function RemoveConnection({
@@ -27,10 +28,11 @@ export function RemoveConnection({
             saved.
           </p>
           <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              className={btnSm.dangerOutline}
-              disabled={pending}
+            <ActionButton
+              variant="danger"
+              size="sm"
+              pending={pending}
+              pendingLabel="Removing…"
               onClick={() =>
                 startTransition(async () => {
                   setError('');
@@ -47,8 +49,8 @@ export function RemoveConnection({
                 })
               }
             >
-              {pending ? 'Removing…' : 'Remove connection'}
-            </button>
+              Remove connection
+            </ActionButton>
             <button
               type="button"
               className={btnSm.outline}

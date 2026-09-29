@@ -6,7 +6,8 @@ import {
   resolveCommitmentAction,
   snoozeCommitmentAction,
 } from '@/app/profile/actions';
-import { btn, cardShellClass, focusRing, inputClass, microLabelClass } from '@/lib/ui';
+import { cardShellClass, focusRing, inputClass, microLabelClass } from '@/lib/ui';
+import { SubmitButton } from '@/lib/ui-client';
 
 export function CommitmentsPanel({ rows }: { rows: CommitmentView[] }) {
   return (
@@ -67,27 +68,29 @@ export function CommitmentsPanel({ rows }: { rows: CommitmentView[] }) {
                       aria-label="Next action"
                       maxLength={240}
                     />
-                    <button type="submit" className={btn.primary}>
+                    <SubmitButton variant="primary" pendingLabel="Saving…">
                       Save changes
-                    </button>
+                    </SubmitButton>
                   </div>
                 </form>
               </details>
               <div className="flex flex-wrap gap-2">
                 <form action={resolveCommitmentAction.bind(null, row.id)}>
-                  <button type="submit" className={btn.success}>
-                    <Check className="size-3.5" aria-hidden="true" /> Done
-                  </button>
+                  <SubmitButton variant="primary" pendingLabel="Saving…">
+                    <Check aria-hidden="true" /> Done
+                  </SubmitButton>
                 </form>
                 <form action={snoozeCommitmentAction.bind(null, row.id)}>
-                  <button type="submit" className={btn.outline}>
-                    <Clock3 className="size-3.5" aria-hidden="true" /> Later
-                  </button>
+                  <SubmitButton pendingLabel="Saving…">
+                    <Clock3 aria-hidden="true" /> Later
+                  </SubmitButton>
                 </form>
+                {/* Setting a commitment aside is a dismissal, not a deletion —
+                    the same neutral outline as "No thanks" on a suggestion. */}
                 <form action={dismissCommitmentAction.bind(null, row.id)}>
-                  <button type="submit" className={btn.dangerOutline}>
-                    <X className="size-3.5" aria-hidden="true" /> Not relevant
-                  </button>
+                  <SubmitButton pendingLabel="Dismissing…">
+                    <X aria-hidden="true" /> Not relevant
+                  </SubmitButton>
                 </form>
               </div>
             </div>

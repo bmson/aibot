@@ -50,7 +50,7 @@ import {
 import Image from 'next/image';
 import type { ReactNode } from 'react';
 import { useRef, useState } from 'react';
-import { focusRing } from '@/lib/ui';
+import { chip, focusRing } from '@/lib/ui';
 import { requestCardPolling } from './card-refresh-events';
 import { CardSteps, cardStepsOf } from './card-steps';
 import { type CardRefreshAttempt, cardIsRefreshing } from './generated-card-state';
@@ -215,12 +215,7 @@ function CardOverflow({ count, children }: { count: number; children: ReactNode 
 
 function CardLink({ href, label }: { href: string; label: string }) {
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className={`inline-flex h-7 items-center rounded-full border border-accent/30 px-3 text-xs font-medium text-accent motion-safe:transition-colors hover:bg-accent/10 ${focusRing}`}
-    >
+    <a href={href} target="_blank" rel="noreferrer" className={chip.accent}>
       {label}
     </a>
   );
@@ -1670,7 +1665,7 @@ function GeneratedCard({
                 type="button"
                 disabled={refreshing}
                 onClick={() => void refresh()}
-                className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border border-accent/30 px-3 text-xs font-medium text-accent hover:bg-accent/10 disabled:cursor-wait disabled:opacity-60 ${focusRing}`}
+                className={`${chip.accent} disabled:cursor-wait`}
               >
                 <RotateCw
                   className={`size-3 ${refreshing ? 'motion-safe:animate-spin' : ''}`}
@@ -1702,7 +1697,7 @@ function GeneratedCard({
                 <button
                   key={id}
                   type="button"
-                  className={`inline-flex h-7 items-center gap-1.5 rounded-full border border-edge px-3 text-xs font-medium text-strong hover:bg-sunken ${focusRing}`}
+                  className={chip.neutral}
                   onClick={() => {
                     if (type === 'copy_value' && target) void copyValue(str(target.value));
                     if (type === 'reveal_sensitive' && target) toggleReveal(str(target.id));

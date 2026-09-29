@@ -191,14 +191,14 @@ function CleanupCard({ finding }: { finding: KnowledgeCleanupFinding }) {
         ) : null}
         {finding.kind === 'unreviewed_connection' && finding.relationId ? (
           <form action={confirmKnowledgeRelation.bind(null, finding.relationId)}>
-            <SubmitButton size="sm" variant="success" pendingLabel="Confirming…">
+            <SubmitButton size="sm" variant="primary" pendingLabel="Confirming…">
               Confirm connection
             </SubmitButton>
           </form>
         ) : null}
         {finding.kind === 'quarantined' && finding.memoryId ? (
           <form action={approveKnowledgeMemory.bind(null, finding.memoryId)}>
-            <SubmitButton size="sm" variant="success" pendingLabel="Approving…">
+            <SubmitButton size="sm" variant="primary" pendingLabel="Approving…">
               Approve
             </SubmitButton>
           </form>
@@ -859,8 +859,8 @@ export default async function KnowledgePage({
                       <div className="mt-3 flex gap-2">
                         {relation.reviewStatus === 'unreviewed' ? (
                           <form action={confirmKnowledgeRelation.bind(null, relation.id)}>
-                            <SubmitButton size="sm" variant="success" pendingLabel="Confirming…">
-                              <Check className="size-3.5" />
+                            <SubmitButton size="sm" variant="primary" pendingLabel="Confirming…">
+                              <Check aria-hidden="true" />
                               Confirm
                             </SubmitButton>
                           </form>
@@ -871,7 +871,7 @@ export default async function KnowledgePage({
                             confirmLabel="Mark inaccurate?"
                             pendingLabel="Saving…"
                           >
-                            <X className="size-3.5" />
+                            <X aria-hidden="true" />
                             Mark inaccurate
                           </ConfirmButton>
                         </form>

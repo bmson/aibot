@@ -2,7 +2,7 @@
 
 import { FileText } from 'lucide-react';
 import Link from 'next/link';
-import { useState, useTransition } from 'react';
+import { useTransition } from 'react';
 import {
   Badge,
   type BadgeTone,
@@ -14,6 +14,7 @@ import {
   cardTitleClass,
   MetaLine,
 } from '@/lib/ui';
+import { ConfirmButton } from '@/lib/ui-client';
 import { purgeDocumentAction } from './actions';
 
 export interface DocumentCardView {
@@ -43,7 +44,6 @@ const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
 
 export function DocumentCard({ doc }: { doc: DocumentCardView }) {
   const [pending, startTransition] = useTransition();
-  const [confirming, setConfirming] = useState(false);
   const status = STATUS[doc.status] ?? STATUS.pending;
   // A queued heavy format (scan/office/audio) waits for the document processor.
   const waitingForProcessor = doc.status === 'pending' && doc.extractor === 'pending_processor';
@@ -98,30 +98,14 @@ export function DocumentCard({ doc }: { doc: DocumentCardView }) {
             Ask about this
           </Link>
         ) : null}
-        {confirming ? (
-          <>
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => startTransition(() => purgeDocumentAction(doc.id))}
-              className={btn.danger}
-            >
-              {pending ? 'Deleting…' : 'Confirm delete'}
-            </button>
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => setConfirming(false)}
-              className={btn.outline}
-            >
-              Cancel
-            </button>
-          </>
-        ) : (
-          <button type="button" onClick={() => setConfirming(true)} className={btn.dangerOutline}>
-            Delete
-          </button>
-        )}
+        <ConfirmButton
+          pending={pending}
+          pendingLabel="Deleting…"
+          confirmLabel="Delete?"
+          onConfirm={() => startTransition(() => purgeDocumentAction(doc.id))}
+        >
+          Delete
+        </ConfirmButton>
       </footer>
     </article>
   );
