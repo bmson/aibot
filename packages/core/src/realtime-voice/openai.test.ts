@@ -101,6 +101,12 @@ describe('OpenAI Realtime adapter', () => {
     const socket = await fake.client;
     const push = (event: Record<string, unknown>) => socket.send(JSON.stringify(event));
     push({ type: 'response.output_audio.delta', item_id: 'item_1', delta: 'AQI=' });
+    // One second of μ-law speech: the truncation below is measured against it.
+    push({
+      type: 'response.output_audio.delta',
+      item_id: 'item_1',
+      delta: Buffer.alloc(7_998).toString('base64'),
+    });
     push({ type: 'input_audio_buffer.speech_started' });
     push({ type: 'conversation.item.input_audio_transcription.completed', transcript: ' 7pm? ' });
     push({ type: 'response.output_audio_transcript.done', transcript: 'Seven works.' });
@@ -119,9 +125,10 @@ describe('OpenAI Realtime adapter', () => {
         },
       },
     });
-    await until(() => events.log.length === 5);
+    await until(() => events.log.length === 6);
     expect(events.log).toEqual([
       ['audio', [1, 2]],
+      ['audio', new Array(7_998).fill(0)],
       ['speechStarted'],
       ['transcript', 'caller', '7pm?'],
       ['transcript', 'assistant', 'Seven works.'],
@@ -136,7 +143,8 @@ describe('OpenAI Realtime adapter', () => {
       outputTextTokens: 20,
     });
 
-    session.interrupt(640);
+    // 360 ms of the second was still unplayed: the caller heard 640 ms.
+    session.interrupt(360);
     session.sendToolResult({ id: 'call_1', name: 'ask_owner', args: {} }, { answer: 'yes' });
     await until(() => fake.received.length === 4);
     expect(fake.received.slice(1)).toEqual([
@@ -155,6 +163,109 @@ describe('OpenAI Realtime adapter', () => {
 
     socket.close();
     await until(() => events.log.some((entry) => (entry as string[])[0] === 'closed'));
+  });
+
+  it('holds a reply request until the response in flight is done', async () => {
+    const fake = await fakeRealtime();
+    const session = await createOpenAIRealtimeProvider({ apiKey: 'k', url: fake.url }).connect(
+      { model: 'gpt-realtime', instructions: '', tools: [] },
+      recorder(),
+    );
+    const socket = await fake.client;
+    const push = (event: Record<string, unknown>) => socket.send(JSON.stringify(event));
+    push({ type: 'response.created' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Sent now, the API would refuse both and the caller would hear nothing.
+    session.respond('Wrap up now.');
+    session.respond();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fake.received.filter((event) => event.type === 'response.create')).toEqual([]);
+    push({ type: 'response.done', response: {} });
+    await until(() => fake.received.some((event) => event.type === 'response.create'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fake.received.filter((event) => event.type === 'response.create')).toEqual([
+      { type: 'response.create', response: { instructions: 'Wrap up now.' } },
+    ]);
+    await session.close();
+  });
+
+  it('speaks after a tool result only when the turn needs a reply', async () => {
+    const fake = await fakeRealtime();
+    const session = await createOpenAIRealtimeProvider({ apiKey: 'k', url: fake.url }).connect(
+      { model: 'gpt-realtime', instructions: '', tools: [] },
+      recorder(),
+    );
+    const socket = await fake.client;
+    const push = (event: Record<string, unknown>) => socket.send(JSON.stringify(event));
+    const call = (id: string, name: string) => {
+      push({ type: 'response.function_call_arguments.done', call_id: id, name, arguments: '{}' });
+    };
+    const creates = () => fake.received.filter((event) => event.type === 'response.create');
+    const outputs = () =>
+      fake.received.filter((event) => event.type === 'conversation.item.create').length;
+
+    // Spoke, then noted a fact: another reply would repeat what was just said.
+    push({ type: 'response.created' });
+    push({ type: 'response.output_audio.delta', item_id: 'item_1', delta: 'AQI=' });
+    call('spoken_note', 'note');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    session.sendToolResult(
+      { id: 'spoken_note', name: 'note', args: {} },
+      { noted: true },
+      'if_silent',
+    );
+    push({ type: 'response.done', response: {} });
+    await until(() => outputs() === 1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(creates()).toHaveLength(0);
+
+    // Noted without speaking: the caller is still owed an answer.
+    push({ type: 'response.created' });
+    call('silent_note', 'note');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    session.sendToolResult(
+      { id: 'silent_note', name: 'note', args: {} },
+      { noted: true },
+      'if_silent',
+    );
+    push({ type: 'response.done', response: {} });
+    await until(() => creates().length === 1);
+
+    // Hanging up: no second goodbye.
+    push({ type: 'response.created' });
+    call('bye', 'end_call');
+    push({ type: 'response.done', response: {} });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    session.sendToolResult({ id: 'bye', name: 'end_call', args: {} }, { ok: true }, 'none');
+    await until(() => outputs() === 3);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(creates()).toHaveLength(1);
+    await session.close();
+  });
+
+  it('asks for a reply when a finished caller turn gets none', async () => {
+    const fake = await fakeRealtime();
+    const session = await createOpenAIRealtimeProvider({
+      apiKey: 'k',
+      url: fake.url,
+      replyStallMs: 60,
+    }).connect({ model: 'gpt-realtime', instructions: '', tools: [] }, recorder());
+    const socket = await fake.client;
+    const push = (event: Record<string, unknown>) => socket.send(JSON.stringify(event));
+    const creates = () => fake.received.filter((event) => event.type === 'response.create');
+
+    // Turn detection answered in time: nothing extra.
+    push({ type: 'input_audio_buffer.speech_stopped' });
+    push({ type: 'response.created' });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(creates()).toHaveLength(0);
+    push({ type: 'response.done', response: {} });
+
+    // Its reply was lost: the caller is not left in silence.
+    push({ type: 'input_audio_buffer.speech_stopped' });
+    await until(() => creates().length === 1);
+    expect(creates()[0]).toEqual({ type: 'response.create' });
+    await session.close();
   });
 
   it('refuses model names that could alter the URL', async () => {

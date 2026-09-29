@@ -68,7 +68,19 @@ audio only while the model connects, then forwards audio immediately. The
 asynchronous answering-machine verdict is stored for diagnostics; it never
 ends a live call by itself. If no caller speech is detected shortly after the
 connection, the assistant introduces itself and states the approved reason for
-calling. State shared across agent instances — check-in answers, hang-up
+calling.
+
+The bridge tracks how much of the model's speech is still queued on the line,
+so an interruption tells the model exactly what the other person heard and
+`end_call` waits for the goodbye to finish playing. Tool results ask the model
+to speak again only when the other person is owed a reply: an owner's answer
+does, a fact noted alongside speech or keys pressed into a phone menu do not.
+If the voice model's connection drops mid-call, the bridge reconnects (up to
+twice) with the approved brief and the conversation so far, holding the other
+person's audio meanwhile, instead of hanging up. Gemini Live also resumes its
+own session across the server's periodic GoAway. On OpenAI Realtime, a turn
+that ends without a reply for four seconds gets one requested, so a lost
+response never leaves the other person in silence. State shared across agent instances — check-in answers, hang-up
 requests, the machine verdict — lives on the call session (`call_sessions` /
 `callSessions`). The bridge or status webhook, whichever sees the call end
 first, settles cost and wakes the task;

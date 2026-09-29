@@ -329,10 +329,8 @@ function fakeSocket() {
   };
 }
 
-function fakeVoice(connectGate?: Promise<void>) {
-  let events: RealtimeSessionEvents | undefined;
-  let config: RealtimeSessionConfig | undefined;
-  const session = {
+function fakeSession() {
+  return {
     sendAudio: vi.fn(),
     sendToolResult: vi.fn(),
     respond: vi.fn(),
@@ -346,20 +344,35 @@ function fakeVoice(connectGate?: Promise<void>) {
     }),
     close: vi.fn(async () => {}),
   } satisfies RealtimeSession;
+}
+
+/** A voice model that opens a fresh session on every connect (reconnects). */
+function fakeVoice(connectGate?: Promise<void>) {
+  const sessions = [fakeSession()];
+  const events: RealtimeSessionEvents[] = [];
+  const configs: RealtimeSessionConfig[] = [];
   const resolved: ResolvedVoiceModel = {
     model: 'gpt-realtime-2.1',
     rates,
     provider: {
       kind: 'openai',
       connect: async (c, e) => {
-        config = c;
-        events = e;
+        configs.push(c);
+        events.push(e);
         if (connectGate) await connectGate;
-        return session;
+        if (configs.length > sessions.length) sessions.push(fakeSession());
+        return sessions[configs.length - 1] as RealtimeSession;
       },
     },
   };
-  return { resolved, session, events: () => events as RealtimeSessionEvents, config: () => config };
+  return {
+    resolved,
+    session: sessions[0] as ReturnType<typeof fakeSession>,
+    sessions,
+    configs,
+    events: () => events.at(-1) as RealtimeSessionEvents,
+    config: () => configs.at(-1),
+  };
 }
 
 async function connectedBridge(
@@ -579,6 +592,7 @@ describe('live call bridge', () => {
       expect(voice.session.sendToolResult).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'c2' }),
         { answer: 'Yes' },
+        'respond',
       ),
     );
 
@@ -665,5 +679,119 @@ describe('live call bridge', () => {
     await vi.waitFor(() => expect(voice.config()).toBeDefined());
     expect(await calls.requestHangup('agent-1', CALL_ID)).toBe(true);
     await vi.waitFor(() => expect(dialer.hangup).toHaveBeenCalled());
+  });
+
+  async function startedBridge() {
+    const bridge = await connectedBridge();
+    bridge.socket.emit('message', {
+      event: 'start',
+      start: { streamSid: 'MZ1', customParameters: { callId: CALL_ID, token: bridge.token } },
+    });
+    await vi.waitFor(() => expect(bridge.voice.config()).toBeDefined());
+    return bridge;
+  }
+
+  it('reports speech still playing when the caller cuts in after its transcript', async () => {
+    const { voice, socket } = await startedBridge();
+    // Two seconds of speech; its transcript lands long before it finishes
+    // playing. The caller interrupting now has not heard most of it.
+    voice.events().audio(new Uint8Array(16_000));
+    voice.events().transcript('assistant', 'We would like a table for two at half past seven.');
+    voice.events().speechStarted();
+    expect(socket.sent.at(-1)).toEqual({ event: 'clear', streamSid: 'MZ1' });
+    const unplayed = voice.session.interrupt.mock.calls[0]?.[0] as number;
+    expect(unplayed).toBeGreaterThan(1_500);
+
+    // Nothing playing: a new caller turn interrupts nothing.
+    voice.session.interrupt.mockClear();
+    const sentBefore = socket.sent.length;
+    voice.events().speechStarted();
+    expect(voice.session.interrupt).not.toHaveBeenCalled();
+    expect(socket.sent).toHaveLength(sentBefore);
+    socket.emit('close');
+    await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled());
+  });
+
+  it('asks the model to speak after a tool only when the caller needs a reply', async () => {
+    const { voice, socket } = await startedBridge();
+    voice.events().toolCall({ id: 'n1', name: 'note', args: { fact: 'Open until 10pm' } });
+    voice.events().toolCall({ id: 'k1', name: 'press_keys', args: { digits: '2' } });
+    voice.events().toolCall({ id: 'k2', name: 'press_keys', args: { digits: 'nope' } });
+    await vi.waitFor(() => expect(voice.session.sendToolResult).toHaveBeenCalledTimes(3));
+    const followUps = Object.fromEntries(
+      voice.session.sendToolResult.mock.calls.map(([call, , followUp]) => [call.id, followUp]),
+    );
+    expect(followUps).toEqual({ n1: 'if_silent', k1: 'none', k2: 'respond' });
+    socket.emit('close');
+    await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled());
+  });
+
+  it('lets the goodbye finish playing before hanging up', async () => {
+    const { dialer, voice, socket } = await startedBridge();
+    voice.events().audio(new Uint8Array(12_000)); // 1.5 s of goodbye
+    voice.events().transcript('assistant', 'Thanks so much, goodbye!');
+    voice.events().toolCall({
+      id: 'bye',
+      name: 'end_call',
+      args: { outcome: 'achieved', summary: 'Booked.' },
+    });
+    await vi.waitFor(() =>
+      expect(voice.session.sendToolResult).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'bye' }),
+        { ok: true },
+        'none',
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    expect(dialer.hangup).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(dialer.hangup).toHaveBeenCalled(), { timeout: 3_000 });
+    socket.emit('close');
+    await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled(), { timeout: 8_000 });
+  });
+
+  it('reconnects a dropped voice model with the conversation so far', async () => {
+    const { dialer, voice, socket } = await startedBridge();
+    voice.events().transcript('assistant', 'Hi, I would like to book a table for two tonight.');
+    voice.events().transcript('caller', 'We have 7:45, is that OK?');
+    voice.events().closed();
+    await vi.waitFor(() => expect(voice.configs).toHaveLength(2));
+    const resumed = voice.configs[1]?.instructions ?? '';
+    expect(resumed).toContain('GOAL: Book a table for two at 7:30pm tonight.');
+    expect(resumed).toContain('THE CALL IS ALREADY IN PROGRESS');
+    expect(resumed).toContain('Them: We have 7:45, is that OK?');
+    expect(resumed).toContain('You: Hi, I would like to book a table for two tonight.');
+    await vi.waitFor(() => expect(voice.sessions).toHaveLength(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    socket.emit('message', {
+      event: 'media',
+      media: { payload: Buffer.from([7, 7]).toString('base64') },
+    });
+    expect(voice.sessions[1]?.sendAudio).toHaveBeenCalledWith(Uint8Array.of(7, 7));
+    expect(dialer.hangup).not.toHaveBeenCalled();
+
+    socket.emit('close');
+    await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled());
+    // Both sessions' audio is billed.
+    expect(core.recordCostEvent).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        source: 'model',
+        usd: (2 * (1_000 * 32 + 2_000 * 4 + 500 * 64 + 100 * 24)) / 1e6,
+      }),
+    );
+  });
+
+  it('ends the call when the voice model keeps dropping', async () => {
+    const { dialer, voice, socket } = await startedBridge();
+    for (let drop = 1; drop <= 3; drop++) {
+      voice.events().closed();
+      if (drop < 3) await vi.waitFor(() => expect(voice.sessions).toHaveLength(drop + 1));
+    }
+    await vi.waitFor(() => expect(dialer.hangup).toHaveBeenCalled());
+    socket.emit('close');
+    await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled(), { timeout: 8_000 });
+    expect(core.recordCallResult.mock.calls[0]?.[1]).toMatchObject({
+      result: { outcome: 'failed', summary: expect.stringContaining('dropped 3 times') },
+    });
   });
 });
