@@ -233,10 +233,6 @@ struct ActivityView: View {
 
                 if !isTerminal(item) || item.stuckWaiting == true || item.hasActiveAutonomy == true {
                     AssistantFlowLayout(spacing: 9) {
-                        if !isTerminal(item) {
-                            actionButton(item, title: "Cancel", icon: "xmark.circle", action: "cancel")
-                        }
-
                         if item.status == "needs_attention" {
                             if item.progress.hasPrefix("budget: task budget") {
                                 Button {
@@ -261,6 +257,19 @@ struct ActivityView: View {
                                 icon: "hand.raised",
                                 action: "revoke-autonomy"
                             )
+                        }
+
+                        // Calling a task off is the one action here that stops
+                        // work for good: it goes last and asks twice, with the
+                        // same words as the web and the chat's spending card.
+                        if !isTerminal(item) {
+                            AssistantConfirmationButton("Stop task", confirmationTitle: "Stop task?",
+                                systemImage: "xmark.circle", hint: "Cancels this task.") {
+                                activityActionInFlight = item.id
+                                _ = await model.updateActivity(item, action: "cancel")
+                                activityActionInFlight = nil
+                            }
+                            .disabled(activityActionInFlight != nil)
                         }
                     }
                 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { Route } from 'lucide-react';
-import { focusRing } from '@/lib/ui';
+import { chip } from '@/lib/ui';
 import { DecisionCard } from './decision-card';
 
 /**
@@ -31,12 +31,7 @@ export function OffCourseCard({
       </p>
       {onRunForReal ? (
         <div className="mt-3">
-          <button
-            type="button"
-            disabled={!active}
-            onClick={onRunForReal}
-            className={`inline-flex h-8 items-center rounded-full border border-accent/30 px-3.5 text-xs font-medium text-accent motion-safe:transition-colors hover:bg-accent/10 active:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`}
-          >
+          <button type="button" disabled={!active} onClick={onRunForReal} className={chip.accent}>
             Run it for real
           </button>
         </div>

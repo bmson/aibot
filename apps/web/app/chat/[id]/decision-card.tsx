@@ -11,7 +11,6 @@
  */
 import { CircleCheck, CircleX, Clock, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect, useState } from 'react';
 
 /**
  * `waiting` is the only tone that means "nothing moves until you answer" — it
@@ -111,7 +110,11 @@ export function DecisionCard({
   );
 }
 
-/** The row wrapper every card's controls share, so their spacing cannot drift. */
+/**
+ * The row wrapper every card's controls share, so their spacing cannot drift.
+ * Controls inside it use the `sm` button scale, the affirmative action first,
+ * and <ConfirmButton> for anything that acts or stops work.
+ */
 export function DecisionActions({ children }: { children: ReactNode }) {
   return <div className="mt-3 flex flex-wrap items-center gap-2">{children}</div>;
 }
@@ -168,19 +171,4 @@ export function DecisionReceipts({ children }: { children: ReactNode }) {
       {children}
     </div>
   );
-}
-
-/**
- * Approve-then-confirm, shared by the approval rows and the spending request so
- * the two cannot drift apart. Arming lapses on its own — a button left mid-arm
- * must not still be one click from acting minutes later.
- */
-export function useArmedConfirm(resetMs = 3000): [boolean, (armed: boolean) => void] {
-  const [armed, setArmed] = useState(false);
-  useEffect(() => {
-    if (!armed) return;
-    const timer = window.setTimeout(() => setArmed(false), resetMs);
-    return () => window.clearTimeout(timer);
-  }, [armed, resetMs]);
-  return [armed, setArmed];
 }

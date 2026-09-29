@@ -7,7 +7,6 @@ struct ApprovalsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var decisionInFlightID: String?
-    @State private var decisionInFlightAction: String?
     @State private var decisionSuccessFeedback = 0
     @State private var decisionErrorFeedback = 0
     @State private var editingApproval: PendingApproval?
@@ -221,20 +220,30 @@ struct ApprovalsView: View {
         }
     }
 
+    /// Same pair, same order, same ask-twice as the approval row in chat:
+    /// the affirmative answer leads, and both answers take two taps. This
+    /// screen used to put Deny first and approve on a single tap, so the one
+    /// decision that sends something out was the easier one to hit by mistake.
     @ViewBuilder
     private func approvalActions(_ item: PendingApproval) -> some View {
         approvalActionButton(
-            "Deny",
-            decision: "denied",
-            item: item,
-            prominent: false
+            "Approve",
+            confirmationTitle: "Approve?",
+            systemImage: "checkmark",
+            decision: "approved",
+            kind: .primary,
+            hint: "Approves this request and resumes the task.",
+            item: item
         )
 
         approvalActionButton(
-            "Approve",
-            decision: "approved",
-            item: item,
-            prominent: true
+            "Deny",
+            confirmationTitle: "Deny?",
+            systemImage: "xmark",
+            decision: "denied",
+            kind: .neutral,
+            hint: "Stops this action.",
+            item: item
         )
 
         Menu {
@@ -244,11 +253,9 @@ struct ApprovalsView: View {
             if canRemember(item) {
                 Button("Approve and remember recipient", systemImage: "checkmark.shield") {
                     decisionInFlightID = item.id
-                    decisionInFlightAction = "remember"
                     Task {
                         let succeeded = await model.approveAndRemember(item)
                         decisionInFlightID = nil
-                        decisionInFlightAction = nil
                         if succeeded { decisionSuccessFeedback += 1 }
                         else { decisionErrorFeedback += 1 }
                     }
@@ -263,61 +270,29 @@ struct ApprovalsView: View {
         .disabled(decisionInFlightID != nil)
     }
 
-    @ViewBuilder
     private func approvalActionButton(
         _ title: String,
+        confirmationTitle: String,
+        systemImage: String,
         decision: String,
-        item: PendingApproval,
-        prominent: Bool
+        kind: AssistantActionButtonKind,
+        hint: String,
+        item: PendingApproval
     ) -> some View {
-        let isApplyingThisDecision = decisionInFlightID == item.id
-            && decisionInFlightAction == decision
-
-        if prominent {
-            Button {
-                applyDecision(item, decision: decision)
-            } label: {
-                approvalActionLabel(title, isApplying: isApplyingThisDecision)
-            }
-            .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
-            .controlSize(.small)
-            .tint(AssistantTheme.accent(for: colorScheme))
-            .disabled(decisionInFlightID != nil)
-            .accessibilityLabel(isApplyingThisDecision ? "Applying \(title.lowercased())" : title)
-            .accessibilityHint("Resumes this task immediately")
-            .accessibilityIdentifier("assistant.approvals.\(item.id).\(decision)")
-        } else {
-            AssistantConfirmationButton(title, confirmationTitle: "Deny?", systemImage: "xmark",
-                kind: .neutral, hint: "Stops this action.", compact: true) {
-                applyDecision(item, decision: decision)
-            }
-            .disabled(decisionInFlightID != nil)
-            .accessibilityIdentifier("assistant.approvals.\(item.id).\(decision)")
+        AssistantConfirmationButton(title, confirmationTitle: confirmationTitle, systemImage: systemImage,
+            kind: kind, hint: hint, compact: true) {
+            applyDecision(item, decision: decision)
         }
-    }
-
-    private func approvalActionLabel(_ title: String, isApplying: Bool) -> some View {
-        HStack(spacing: 7) {
-            if isApplying {
-                ProgressView()
-                    .controlSize(.small)
-            } else {
-                Image(systemName: "checkmark")
-            }
-            Text(isApplying ? "Applying…" : title)
-        }
-        .font(.subheadline.weight(.semibold))
-        .contentTransition(.opacity)
+        .disabled(decisionInFlightID != nil)
+        .accessibilityIdentifier("assistant.approvals.\(item.id).\(decision)")
     }
 
     private func applyDecision(_ item: PendingApproval, decision: String) {
         guard decisionInFlightID == nil else { return }
         decisionInFlightID = item.id
-        decisionInFlightAction = decision
         Task {
             let succeeded = await model.decide(item, decision: decision)
             decisionInFlightID = nil
-            decisionInFlightAction = nil
             if succeeded {
                 decisionSuccessFeedback += 1
             } else {

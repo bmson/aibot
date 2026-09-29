@@ -1,12 +1,10 @@
 'use client';
 
-import { LoaderCircle } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { dismissAnomalyAction, suspendPolicyAction } from '@/app/anomalies/actions';
 import {
   Badge,
   type BadgeTone,
-  btn,
   cardBodyClass,
   cardFooterClass,
   cardHeaderClass,
@@ -14,6 +12,7 @@ import {
   cardTitleClass,
   MetaLine,
 } from '@/lib/ui';
+import { ActionButton } from '@/lib/ui-client';
 import { toolLabel } from '@/lib/views';
 
 export interface AnomalyView {
@@ -80,31 +79,29 @@ export function AnomalyCard({ anomaly }: { anomaly: AnomalyView }) {
       </div>
       <footer className={cardFooterClass}>
         {anomaly.hasPolicy ? (
-          <button
-            type="button"
+          // The recommended response, so it leads — and it is reversible (the
+          // policy can be resumed), so it is not a red button. Filled red is
+          // reserved for the armed half of a destructive confirm.
+          <ActionButton
+            variant="primary"
             disabled={pending}
+            pending={pendingAction === 'suspend'}
+            pendingLabel="Suspending…"
             onClick={() => runAction('suspend', () => suspendPolicyAction(anomaly.id))}
-            className={btn.danger}
             title="Pause the policy behind this — its matching actions will park for your approval instead of auto-executing"
           >
-            {pendingAction === 'suspend' ? (
-              <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-            ) : null}
-            {pendingAction === 'suspend' ? 'Updating…' : 'Suspend policy'}
-          </button>
+            Suspend policy
+          </ActionButton>
         ) : null}
-        <button
-          type="button"
+        <ActionButton
           disabled={pending}
+          pending={pendingAction === 'dismiss'}
+          pendingLabel="Dismissing…"
           onClick={() => runAction('dismiss', () => dismissAnomalyAction(anomaly.id))}
-          className={btn.outline}
           title="Dismiss as a false positive — this level stops re-flagging for this policy"
         >
-          {pendingAction === 'dismiss' ? (
-            <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-          ) : null}
-          {pendingAction === 'dismiss' ? 'Updating…' : 'Dismiss'}
-        </button>
+          Dismiss
+        </ActionButton>
       </footer>
     </article>
   );

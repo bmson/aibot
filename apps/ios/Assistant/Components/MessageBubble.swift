@@ -507,16 +507,18 @@ struct MessageBubble: View {
             ? AnyLayout(VStackLayout(spacing: 8))
             : AnyLayout(HStackLayout(spacing: 8))
         return layout {
-            AssistantConfirmationButton("Deny", confirmationTitle: "Deny?", systemImage: "xmark",
-                kind: .neutral, hint: "Stops this action.", compact: true, fillsWidth: true) {
-                decidingApproval = true
-                _ = await decide(approvalId, "denied")
-                decidingApproval = false
-            }
+            // The affirmative answer leads, as it does for a suggestion's
+            // answers and on the web — one order for every decision row.
             AssistantConfirmationButton("Approve", confirmationTitle: "Approve?", systemImage: "checkmark",
                 kind: .primary, hint: "Approves this request and resumes the task.", compact: true, fillsWidth: true) {
                 decidingApproval = true
                 _ = await decide(approvalId, "approved")
+                decidingApproval = false
+            }
+            AssistantConfirmationButton("Deny", confirmationTitle: "Deny?", systemImage: "xmark",
+                kind: .neutral, hint: "Stops this action.", compact: true, fillsWidth: true) {
+                decidingApproval = true
+                _ = await decide(approvalId, "denied")
                 decidingApproval = false
             }
         }

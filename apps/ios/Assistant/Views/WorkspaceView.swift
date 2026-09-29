@@ -1011,10 +1011,12 @@ struct WorkspaceView: View {
             updateImport(action: "review", source: source.source, verdict: "approve")
         }
         .buttonStyle(AssistantActionButtonStyle(kind: .primary))
-        Button("Reject all") {
+        // Deletes and tombstones every held-back memory at once, so it asks
+        // twice — as Reject does for a single memory.
+        AssistantConfirmationButton("Reject all", confirmationTitle: "Reject all?", systemImage: "xmark",
+            hint: "Deletes every memory this import is holding for review.") {
             updateImport(action: "review", source: source.source, verdict: "reject")
         }
-        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
     }
 
     private func importOverflowMenu(_ source: WorkspaceImportSource) -> some View {

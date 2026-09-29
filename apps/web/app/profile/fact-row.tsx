@@ -21,7 +21,7 @@ import {
   MetaLine,
   textareaClass,
 } from '@/lib/ui';
-import { ActionMenu } from '@/lib/ui-client';
+import { ActionButton, ActionMenu, ConfirmButton } from '@/lib/ui-client';
 
 /** Plain-serializable fact view, built server-side in page.tsx. */
 export interface FactView {
@@ -74,13 +74,8 @@ function prominenceOf(fact: FactView): ProminenceLevel {
   return 'auto';
 }
 
-const outlineButton = btnSm.outline;
-const dangerOutlineButton = btnSm.dangerOutline;
-
 export function FactRow({ fact, quarantine = false }: { fact: FactView; quarantine?: boolean }) {
   const [editing, setEditing] = useState(false);
-  const [confirmingForget, setConfirmingForget] = useState(false);
-  const [confirmingReject, setConfirmingReject] = useState(false);
   const [draft, setDraft] = useState(fact.content);
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -99,6 +94,21 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
   };
   const pendingIcon = (
     <LoaderCircle className="size-3 motion-safe:animate-spin" aria-hidden="true" />
+  );
+
+  const forgetButton = (
+    <ConfirmButton
+      size="sm"
+      className="w-fit"
+      disabled={pending}
+      pending={pendingAction === 'forget'}
+      pendingLabel="Forgetting…"
+      confirmLabel="Forget?"
+      title="Deletes the fact and tombstones it so it can never be re-extracted"
+      onConfirm={() => runAction('forget', () => forgetFact(fact.id))}
+    >
+      Forget
+    </ConfirmButton>
   );
 
   return (
@@ -197,77 +207,58 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
       <footer className={cardFooterClass}>
         {quarantine ? (
           <>
-            <button
-              type="button"
+            <ActionButton
+              variant="primary"
+              size="sm"
               disabled={pending}
+              pending={pendingAction === 'approve'}
+              pendingLabel="Approving…"
               onClick={() => runAction('approve', () => approveQuarantined(fact.id))}
-              className={outlineButton}
             >
-              {pendingAction === 'approve' ? pendingIcon : null}
-              {pendingAction === 'approve' ? 'Approving…' : 'Approve'}
-            </button>
+              Approve
+            </ActionButton>
             {/* Rejecting tombstones and deletes the memory for good — the same
-                irreversible outcome as Forget, which asks twice a few lines
-                below. It sits immediately beside Approve in a queue the owner
-                skims, so a single misdirected click destroyed a memory with no
-                undo. It now asks the same second time Forget does. */}
-            {confirmingReject ? (
-              <>
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => runAction('reject', () => rejectQuarantined(fact.id))}
-                  className={btnSm.danger}
-                >
-                  {pendingAction === 'reject' ? pendingIcon : null}
-                  {pendingAction === 'reject' ? 'Rejecting…' : 'Really reject'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmingReject(false)}
-                  className={outlineButton}
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => setConfirmingReject(true)}
-                className={dangerOutlineButton}
-                title="Deletes the memory and tombstones it so it can never be re-extracted"
-              >
-                Reject
-              </button>
-            )}
+                irreversible outcome as Forget. It sits immediately beside
+                Approve in a queue the owner skims, so it asks twice. */}
+            <ConfirmButton
+              size="sm"
+              disabled={pending}
+              pending={pendingAction === 'reject'}
+              pendingLabel="Rejecting…"
+              confirmLabel="Reject?"
+              title="Deletes the memory and tombstones it so it can never be re-extracted"
+              onConfirm={() => runAction('reject', () => rejectQuarantined(fact.id))}
+            >
+              Reject
+            </ConfirmButton>
           </>
         ) : (
           <>
             {!fact.ownerConfirmed ? (
-              <button
-                type="button"
+              <ActionButton
+                size="sm"
                 disabled={pending}
+                pending={pendingAction === 'confirm'}
+                pendingLabel="Confirming…"
                 onClick={() => runAction('confirm', () => confirmFact(fact.id))}
-                className={outlineButton}
               >
-                {pendingAction === 'confirm' ? pendingIcon : null}
-                {pendingAction === 'confirm' ? 'Confirming…' : 'Confirm'}
-              </button>
+                Confirm
+              </ActionButton>
             ) : null}
             <button
               type="button"
               disabled={pending}
+              aria-expanded={editing}
               onClick={() => {
                 setEditing((v) => !v);
                 setError(null);
               }}
-              className={outlineButton}
+              className={btnSm.outline}
             >
-              {editing ? 'Close' : 'Correct'}
+              Correct
             </button>
             {fact.workspace && fact.mapHref && (fact.connectionCount ?? 0) > 0 ? (
-              <Link href={fact.mapHref} className={outlineButton}>
+              <Link href={fact.mapHref} className={btnSm.outline}>
                 Inspect connections
               </Link>
             ) : null}
@@ -289,38 +280,11 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                     }
                   />
                   {fact.mapHref && (fact.connectionCount ?? 0) > 0 ? (
-                    <Link href={fact.mapHref} className={`${dangerOutlineButton} w-fit`}>
+                    <Link href={fact.mapHref} className={`${btnSm.dangerOutline} w-fit`}>
                       Forget with impact preview
                     </Link>
-                  ) : confirmingForget ? (
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={pending}
-                        onClick={() => runAction('forget', () => forgetFact(fact.id))}
-                        className={btnSm.danger}
-                      >
-                        {pendingAction === 'forget' ? pendingIcon : null}
-                        {pendingAction === 'forget' ? 'Forgetting…' : 'Really forget'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmingForget(false)}
-                        className={outlineButton}
-                      >
-                        Cancel
-                      </button>
-                    </div>
                   ) : (
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() => setConfirmingForget(true)}
-                      className={`${dangerOutlineButton} w-fit`}
-                      title="Deletes the fact and tombstones it so it can never be re-extracted"
-                    >
-                      Forget
-                    </button>
+                    forgetButton
                   )}
                 </div>
               </ActionMenu>
@@ -335,36 +299,7 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                     runAction(`prominence:${level}`, () => setFactProminence(fact.id, level))
                   }
                 />
-                {confirmingForget ? (
-                  <>
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() => runAction('forget', () => forgetFact(fact.id))}
-                      className={btnSm.danger}
-                    >
-                      {pendingAction === 'forget' ? pendingIcon : null}
-                      {pendingAction === 'forget' ? 'Forgetting…' : 'Really forget'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmingForget(false)}
-                      className={outlineButton}
-                    >
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => setConfirmingForget(true)}
-                    className={dangerOutlineButton}
-                    title="Deletes the fact and tombstones it so it can never be re-extracted"
-                  >
-                    Forget
-                  </button>
-                )}
+                {forgetButton}
               </>
             )}
           </>
@@ -386,10 +321,13 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
             </p>
           ) : null}
           {error ? <p className="text-xs text-red-600 dark:text-red-400">{error}</p> : null}
-          <div>
-            <button
-              type="button"
+          <div className="flex flex-wrap items-center gap-2">
+            <ActionButton
+              variant="primary"
+              size="sm"
               disabled={pending}
+              pending={pendingAction === 'save'}
+              pendingLabel="Saving…"
               onClick={() =>
                 runAction('save', async () => {
                   const result = await correctFact(fact.id, draft);
@@ -397,10 +335,20 @@ export function FactRow({ fact, quarantine = false }: { fact: FactView; quaranti
                   else setEditing(false);
                 })
               }
-              className={btnSm.primary}
             >
-              {pendingAction === 'save' ? pendingIcon : null}
-              {pendingAction === 'save' ? 'Saving…' : 'Save correction'}
+              Save correction
+            </ActionButton>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => {
+                setEditing(false);
+                setDraft(fact.content);
+                setError(null);
+              }}
+              className={btnSm.outline}
+            >
+              Cancel
             </button>
           </div>
         </div>

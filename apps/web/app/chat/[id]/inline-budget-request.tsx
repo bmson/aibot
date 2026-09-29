@@ -1,17 +1,12 @@
 'use client';
 
-import { ArrowUpRight, CircleDollarSign, LoaderCircle } from 'lucide-react';
+import { ArrowUpRight, Check, CircleDollarSign, X } from 'lucide-react';
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { cancelTask, raiseTaskBudgetAndRetry } from '@/app/tasks/actions';
 import { btnSm } from '@/lib/ui';
-import {
-  DecisionActions,
-  DecisionCard,
-  DecisionReceipt,
-  DecisionReceipts,
-  useArmedConfirm,
-} from './decision-card';
+import { ConfirmButton } from '@/lib/ui-client';
+import { DecisionActions, DecisionCard, DecisionReceipt, DecisionReceipts } from './decision-card';
 
 export type InlineBudgetRequestStatus = 'pending' | 'approved' | 'denied' | 'missing';
 
@@ -28,16 +23,12 @@ export interface InlineBudgetRequestPart {
 export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart }) {
   const [resolution, setResolution] = useState<'approved' | 'denied' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [approvalArmed, setApprovalArmed] = useArmedConfirm();
+  const [activeDecision, setActiveDecision] = useState<'approved' | 'denied' | null>(null);
   const [pending, startTransition] = useTransition();
   const status = resolution ?? part.status ?? 'pending';
 
   const approve = () => {
-    if (!approvalArmed) {
-      setApprovalArmed(true);
-      return;
-    }
-    setApprovalArmed(false);
+    setActiveDecision('approved');
     startTransition(async () => {
       try {
         const formData = new FormData();
@@ -47,11 +38,14 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'The budget increase could not be approved.');
+      } finally {
+        setActiveDecision(null);
       }
     });
   };
 
   const decline = () => {
+    setActiveDecision('denied');
     startTransition(async () => {
       try {
         await cancelTask(part.taskId);
@@ -59,6 +53,8 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'The task could not be cancelled.');
+      } finally {
+        setActiveDecision(null);
       }
     });
   };
@@ -102,27 +98,37 @@ export function InlineBudgetRequest({ part }: { part: InlineBudgetRequestPart })
           ${part.spentUsd.toFixed(4)} has been spent. Approval applies only to this task.
         </p>
         <DecisionActions>
-          <button type="button" disabled={pending} onClick={approve} className={btnSm.success}>
-            {pending ? (
-              <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
-            ) : null}
-            {pending
-              ? 'Working…'
-              : approvalArmed
-                ? `Confirm $${part.proposedBudgetUsd.toFixed(2)}`
-                : `Approve $${part.proposedBudgetUsd.toFixed(2)}`}
-          </button>
-          <button
-            type="button"
+          {/* The same pair, in the same order, with the same ask-twice as every
+              approval in the log: this is an approval, of money. */}
+          <ConfirmButton
+            variant="primary"
+            size="sm"
             disabled={pending}
-            onClick={decline}
-            className={btnSm.dangerOutline}
+            pending={pending && activeDecision === 'approved'}
+            pendingLabel="Approving…"
+            confirmLabel="Approve?"
+            onConfirm={approve}
           >
+            <Check aria-hidden="true" />
+            Approve ${part.proposedBudgetUsd.toFixed(2)}
+          </ConfirmButton>
+          {/* Declining cancels the task outright, so it asks twice like every
+              other action that stops work — it used to fire on one click. */}
+          <ConfirmButton
+            variant="dangerOutline"
+            size="sm"
+            disabled={pending}
+            pending={pending && activeDecision === 'denied'}
+            pendingLabel="Stopping…"
+            confirmLabel="Stop task?"
+            onConfirm={decline}
+          >
+            <X aria-hidden="true" />
             Stop task
-          </button>
+          </ConfirmButton>
           <Link href={`/tasks/${part.taskId}`} className={btnSm.outline}>
             Review task
-            <ArrowUpRight className="size-3" aria-hidden="true" />
+            <ArrowUpRight aria-hidden="true" />
           </Link>
         </DecisionActions>
         {error ? (

@@ -32,7 +32,7 @@ import {
   InfoItem,
   MetaLine,
 } from '@/lib/ui';
-import { ConfirmButton } from '@/lib/ui-client';
+import { ConfirmButton, SubmitButton } from '@/lib/ui-client';
 import type { PendingApprovalView } from '@/lib/views';
 
 const actionIcons = {
@@ -168,11 +168,16 @@ export function ApprovalCard({
             <p className="mt-1 text-xs text-red-600 dark:text-red-400">{editState.error}</p>
           ) : null}
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button type="submit" disabled={editPending} className={btn.primary}>
-              <Check className="size-4" aria-hidden="true" />
-              {editPending ? 'Approving…' : 'Approve edited request'}
-            </button>
-            <button type="button" onClick={() => setEditing(false)} className={btn.outline}>
+            <SubmitButton variant="primary" pendingLabel="Approving…">
+              <Check aria-hidden="true" />
+              Approve edited request
+            </SubmitButton>
+            <button
+              type="button"
+              disabled={editPending}
+              onClick={() => setEditing(false)}
+              className={btn.outline}
+            >
               Cancel
             </button>
           </div>
@@ -186,7 +191,7 @@ export function ApprovalCard({
               confirmLabel="Approve?"
               className="w-full sm:w-auto"
             >
-              <Check className="size-4" aria-hidden="true" />
+              <Check aria-hidden="true" />
               Approve
             </ConfirmButton>
           </form>
@@ -197,7 +202,7 @@ export function ApprovalCard({
               confirmLabel="Deny?"
               className="w-full sm:w-auto"
             >
-              <X className="size-4" aria-hidden="true" />
+              <X aria-hidden="true" />
               Deny
             </ConfirmButton>
           </form>
@@ -206,7 +211,7 @@ export function ApprovalCard({
             onClick={() => setEditing(true)}
             className={`${btn.outline} col-span-2 w-full sm:w-auto`}
           >
-            <PencilLine className="size-4" aria-hidden="true" />
+            <PencilLine aria-hidden="true" />
             Edit request
           </button>
           {approval.rememberLabel ? (

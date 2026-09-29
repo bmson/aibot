@@ -666,20 +666,21 @@ struct PersonDetailsView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 AssistantFlowLayout(spacing: 8) {
-                                    Button("Edit") { editingOccasion = occasion }
                                     if occasion.quarantined {
-                                        Button("Approve") {
+                                        Button("Approve", systemImage: "checkmark") {
                                             review(occasion, verdict: "approve")
                                         }
-                                        AssistantConfirmationButton("Reject", systemImage: "xmark") {
+                                        .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
+                                        AssistantConfirmationButton("Reject", systemImage: "xmark", compact: true) {
                                             review(occasion, verdict: "reject")
                                         }
                                     }
-                                    AssistantConfirmationButton("Delete") {
+                                    Button("Edit", systemImage: "pencil") { editingOccasion = occasion }
+                                        .buttonStyle(AssistantActionButtonStyle(kind: .neutral, compact: true))
+                                    AssistantConfirmationButton("Delete", compact: true) {
                                         delete(occasion)
                                     }
                                 }
-                                .font(.caption)
                                 .disabled(isWorking)
                             }
                         }

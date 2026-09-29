@@ -1,10 +1,11 @@
 'use client';
 
-import { ChevronDown, Lightbulb, LoaderCircle, Mail } from 'lucide-react';
+import { ChevronDown, Lightbulb, Mail } from 'lucide-react';
 import Link from 'next/link';
 import { useRef, useState, useTransition } from 'react';
 import { decideSuggestionInline, snoozeSuggestionInline } from '@/app/suggestions/actions';
-import { btnSm, focusRing } from '@/lib/ui';
+import { focusRing } from '@/lib/ui';
+import { ActionButton } from '@/lib/ui-client';
 import { DecisionActions, DecisionCard, DecisionReceipt, DecisionReceipts } from './decision-card';
 import {
   SuggestionContextContent,
@@ -222,38 +223,34 @@ export function SuggestionCard({
                 <p className="break-words [overflow-wrap:anywhere]">{part.summary}</p>
               )}
               <DecisionActions>
-                <button
-                  type="button"
-                  className={btnSm.primary}
+                <ActionButton
+                  variant="primary"
+                  size="sm"
                   disabled={busy}
+                  pending={working && activeDecision === 'accepted'}
+                  pendingLabel="Starting…"
                   onClick={() => decide(part.suggestionId, 'accepted')}
                 >
-                  {working && activeDecision === 'accepted' ? (
-                    <LoaderCircle
-                      className="size-3.5 motion-safe:animate-spin"
-                      aria-hidden="true"
-                    />
-                  ) : null}
-                  {working && activeDecision === 'accepted'
-                    ? 'Starting…'
-                    : part.actionLabel || 'Start task'}
-                </button>
-                <button
-                  type="button"
-                  className={btnSm.outline}
+                  {part.actionLabel || 'Start task'}
+                </ActionButton>
+                <ActionButton
+                  size="sm"
                   disabled={busy}
+                  pending={working && activeDecision === 'snoozed'}
+                  pendingLabel="Saving…"
                   onClick={() => snooze(part.suggestionId)}
                 >
-                  {working && activeDecision === 'snoozed' ? 'Saving…' : 'Later'}
-                </button>
-                <button
-                  type="button"
-                  className={btnSm.outline}
+                  Later
+                </ActionButton>
+                <ActionButton
+                  size="sm"
                   disabled={busy}
+                  pending={working && activeDecision === 'dismissed'}
+                  pendingLabel="Dismissing…"
                   onClick={() => decide(part.suggestionId, 'dismissed')}
                 >
-                  {working && activeDecision === 'dismissed' ? 'Dismissing…' : 'No thanks'}
-                </button>
+                  No thanks
+                </ActionButton>
               </DecisionActions>
             </li>
           );
