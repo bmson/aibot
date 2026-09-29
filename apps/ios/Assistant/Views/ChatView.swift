@@ -326,6 +326,11 @@ struct ChatView: View {
     @State private var menuOpenGestureIsHorizontal = false
     @State private var menuCloseGestureStartedAt: Date?
     @State private var menuCloseGestureIsHorizontal = false
+    // GestureState resets on both release and cancellation. The drag callbacks
+    // alone cannot recover when SwiftUI cancels a recognizer during a layout or
+    // focus change, leaving the sheet visually closed but still blocking taps.
+    @GestureState private var menuOpeningDragActive = false
+    @GestureState private var menuClosingDragActive = false
     @State private var menuOpen = false
     // Radius is a sheet state, not a reveal-progress effect. It switches on
     // at the first real pull point and stays on until a close spring finishes.
@@ -493,6 +498,14 @@ struct ChatView: View {
             .onChange(of: scenePhase) { _, phase in
                 guard phase != .active else { return }
                 settleInterruptedMenuGesture()
+            }
+            .onChange(of: menuOpeningDragActive) { wasActive, isActive in
+                guard wasActive, !isActive else { return }
+                settleCancelledMenuGestureAfterRelease()
+            }
+            .onChange(of: menuClosingDragActive) { wasActive, isActive in
+                guard wasActive, !isActive else { return }
+                settleCancelledMenuGestureAfterRelease()
             }
             .onChange(of: model.restorableDraft) { _, restorable in
                 // A failed send hands its text back — the composer shows the words
@@ -945,6 +958,9 @@ struct ChatView: View {
         // coordinates keep that movement from feeding back into the finger's
         // translation and make slow pulls track as cleanly as quick swipes.
         DragGesture(minimumDistance: minimumDistance, coordinateSpace: .global)
+            .updating($menuOpeningDragActive) { _, active, _ in
+                active = true
+            }
             .onChanged { value in
                 guard !menuOpen else { return }
 
@@ -1468,6 +1484,9 @@ struct ChatView: View {
 
     private var pullMenuCloseGesture: some Gesture {
         DragGesture(minimumDistance: 10)
+            .updating($menuClosingDragActive) { _, active, _ in
+                active = true
+            }
             .onChanged { value in
                 guard menuOpen else { return }
                 if menuCloseGestureIsHorizontal {
@@ -1619,10 +1638,9 @@ struct ChatView: View {
         menuDetentFeedback += 1
     }
 
-    /// SwiftUI may not deliver `onEnded` when the app resigns active (Control
-    /// Center, an incoming call, or backgrounding). Resolve the partial pull
-    /// to its current detent and clear every axis lock so the next touch never
-    /// inherits stale gesture state.
+    /// SwiftUI may not deliver onEnded when a drag is cancelled, including
+    /// app deactivation. Resolve the partial pull to its current detent and
+    /// clear every axis lock so the next touch inherits no stale gesture state.
     private func settleInterruptedMenuGesture() {
         if menuPullActive {
             finishPullMenu(releasedAt: menuPullDistance)
@@ -1640,6 +1658,16 @@ struct ChatView: View {
         menuOpenGestureIsHorizontal = false
         menuCloseGestureStartedAt = nil
         menuCloseGestureIsHorizontal = false
+    }
+
+    private func settleCancelledMenuGestureAfterRelease() {
+        // Let a normal onEnded finish first. A cancelled recognizer has no
+        // onEnded, so its live distance or axis lock is still present on the
+        // next main-queue turn and needs to be cleared here.
+        DispatchQueue.main.async {
+            guard !menuOpeningDragActive, !menuClosingDragActive else { return }
+            settleInterruptedMenuGesture()
+        }
     }
 
     private func openPullMenu() {
