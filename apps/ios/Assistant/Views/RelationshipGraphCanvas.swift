@@ -336,7 +336,8 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         for id in ids {
             guard let point = layout.position(of: id) else { continue }
             let ends = (adjacency[id] ?? []).compactMap { layout.position(of: $0) }
-            let radius = motion[id].map { $0.radius * max(0, $0.presence) } ?? layout.radius(of: id) ?? 6
+            let fallback: CGFloat = layout.radius(of: id) ?? 6
+            let radius: CGFloat = motion[id].map { (m: Motion) -> CGFloat in m.radius * max(0, m.presence) } ?? fallback
             ghosts.append(Ghost(point: point, radius: radius, kind: nodeByID[id]?.kind ?? "", ends: ends))
         }
         if ghosts.count > 80 { ghosts.removeFirst(ghosts.count - 80) }
@@ -845,14 +846,17 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         for (i, id) in layout.ids.enumerated() {
             place[id] = viewport.screen(layout.positions[i], size: size)
             let m = motion[id]
-            let arrived = max(0, m?.presence ?? 1)
+            let arrived: CGFloat = max(0, m?.presence ?? 1)
+            let world: CGFloat = m?.radius ?? layout.radii[i]
             presence[id] = min(1, arrived)
-            radius[id] = screenRadius(world: m?.radius ?? layout.radii[i]) * arrived
+            radius[id] = screenRadius(world: world) * arrived
         }
         /// How visible a dot is: everything outside the focus recedes
         /// together, and a newcomer fades up as it pops in.
         func opacity(_ id: String) -> CGFloat {
-            (1 - dim * (1 - (motion[id]?.lit ?? 0)) * 0.84) * (presence[id] ?? 1)
+            let lit: CGFloat = motion[id]?.lit ?? 0
+            let arrived: CGFloat = presence[id] ?? 1
+            return (1 - dim * (1 - lit) * 0.84) * arrived
         }
 
         drawGhosts(context, palette: palette, size: size)
@@ -931,8 +935,9 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             let isLit = focus != nil && lit.contains(node.id)
             let mustName = isSelected || isConnectEnd || isLit || (focus == nil && rankIndex < 3)
             var alpha = mustName ? 1 : Self.labelOpacity(scale: scale, degree: degree, fade: settings.textFade)
-            alpha *= 1 - dim * (1 - (motion[node.id]?.lit ?? 0)) * 0.65
-            alpha *= presence[node.id] ?? 1
+            let nodeLit: CGFloat = motion[node.id]?.lit ?? 0
+            let arrived: CGFloat = presence[node.id] ?? 1
+            alpha *= (1 - dim * (1 - nodeLit) * 0.65) * arrived
             guard alpha > 0.04 else { continue }
             guard mustName || looseNamesLeft > 0 else { continue }
 
@@ -996,8 +1001,10 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     private func drawLinks(_ context: CGContext, palette: Palette, place: [String: CGPoint], radius: [String: CGFloat],
                            presence: [String: CGFloat], visibleArea: CGRect) {
         let scale = viewport.scale
-        let restAlpha = (dark ? 0.26 : 0.2) * (1 - dim * 0.72)
-        let width = 0.9 * settings.linkThickness * min(1.6, max(0.7, sqrt(scale)))
+        let baseAlpha: CGFloat = dark ? 0.26 : 0.2
+        let restAlpha: CGFloat = baseAlpha * (1 - dim * 0.72)
+        let zoomWidth: CGFloat = min(1.6, max(0.7, sqrt(scale)))
+        let width: CGFloat = 0.9 * settings.linkThickness * zoomWidth
         let arrowsAtRest = settings.arrows && scale >= 1.4
         let arrowsWhenLit = settings.arrows && scale >= 0.55
         let solid = CGMutablePath(), dashed = CGMutablePath(), heads = CGMutablePath()
@@ -1008,12 +1015,14 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             let box = CGRect(x: min(p.x, q.x), y: min(p.y, q.y), width: abs(p.x - q.x) + 1, height: abs(p.y - q.y) + 1)
             guard box.intersects(visibleArea) else { continue }
             let dx = q.x - p.x, dy = q.y - p.y, length = hypot(dx, dy)
-            let ra = (radius[link.a] ?? 0) + 1, rb = (radius[link.b] ?? 0) + 1
+            let ra: CGFloat = (radius[link.a] ?? 0) + 1
+            let rb: CGFloat = (radius[link.b] ?? 0) + 1
             guard length > ra + rb + 1 else { continue }
             let ux = dx / length, uy = dy / length
             let start = CGPoint(x: p.x + ux * ra, y: p.y + uy * ra), end = CGPoint(x: q.x - ux * rb, y: q.y - uy * rb)
-            let glow = linkLit[link] ?? 0
-            let arriving = min(presence[link.a] ?? 1, presence[link.b] ?? 1)
+            let glow: CGFloat = linkLit[link] ?? 0
+            let arrivingA: CGFloat = presence[link.a] ?? 1
+            let arriving: CGFloat = min(arrivingA, presence[link.b] ?? 1)
             if glow > 0.01 || arriving < 0.999 {
                 special.append((link, start, end, glow, arriving))
                 continue
@@ -1037,7 +1046,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             // Lit lines take the accent and thicken; the crossfade is the
             // line's own colour moving, not a second line fading over it.
             let color = Self.mix(palette.ink, palette.accent, line.lit)
-            let alpha = (restAlpha + (0.85 - restAlpha) * line.lit) * line.presence
+            let alpha: CGFloat = (restAlpha + (0.85 - restAlpha) * line.lit) * line.presence
             context.setStrokeColor(color.withAlphaComponent(alpha).cgColor)
             context.setLineWidth(width * (1 + 0.8 * line.lit))
             context.setLineDash(phase: 0, lengths: unreviewed.contains(line.link) ? [3, 4] : [])
@@ -1113,9 +1122,13 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     private func drawPhrases(_ context: CGContext, palette: Palette, place: [String: CGPoint],
                              occupied: inout [CGRect], nodeBounds: [CGRect]) {
         let scale = viewport.scale
-        let lit = linkLit.filter { $0.value > 0.5 }.map { $0.key }.sorted { $0.a == $1.a ? $0.b < $1.b : $0.a < $1.a }
+        // `links` is already sorted, so filtering it keeps the order stable.
+        let lit: [GraphLink] = links.filter { (link: GraphLink) -> Bool in (linkLit[link] ?? 0) > 0.5 }
         let phraseLinks: [GraphLink]
-        if scale >= Self.allEdgePhrasesScale { phraseLinks = lit + links.filter { (linkLit[$0] ?? 0) <= 0.5 } }
+        if scale >= Self.allEdgePhrasesScale {
+            let rest: [GraphLink] = links.filter { (link: GraphLink) -> Bool in (linkLit[link] ?? 0) <= 0.5 }
+            phraseLinks = lit + rest
+        }
         else if scale >= 0.85 { phraseLinks = lit }
         else { phraseLinks = [] }
         // Rationed: a hub's forty meanings at once is a wall of pills, not a
