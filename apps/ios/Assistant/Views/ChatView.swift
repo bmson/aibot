@@ -2548,11 +2548,7 @@ private struct ComposerTextInput: UIViewRepresentable {
             textView.text = text
         }
 
-        if isFocused, !textView.isFirstResponder, textView.window != nil {
-            textView.becomeFirstResponder()
-        } else if !isFocused, textView.isFirstResponder {
-            textView.resignFirstResponder()
-        }
+        context.coordinator.scheduleResponderSync(for: textView)
     }
 
     func sizeThatFits(
@@ -2599,17 +2595,61 @@ private struct ComposerTextInput: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: ComposerTextInput
+        private var responderSyncScheduled = false
 
         init(parent: ComposerTextInput) {
             self.parent = parent
         }
 
+        /// Responder changes never run inside `updateUIView`. Becoming first
+        /// responder there started the keyboard and its safe-area change in
+        /// the middle of SwiftUI's update, and `textViewDidBeginEditing`
+        /// wrote focus state back into the same pass. The composer then hung
+        /// with the layout already shrunk for a keyboard that never drew. It
+        /// only happened when the SwiftUI tap set focus before UITextView's
+        /// own tap did — always, for a tap on the capsule's padding — which
+        /// is why it came and went. The next main-queue turn is outside the
+        /// update, and one pending sync covers any number of passes.
+        func scheduleResponderSync(for textView: UITextView) {
+            guard !responderSyncScheduled, parent.isFocused != textView.isFirstResponder else { return }
+            responderSyncScheduled = true
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self else { return }
+                self.responderSyncScheduled = false
+                guard let textView else { return }
+                self.syncResponder(textView)
+            }
+        }
+
+        private func syncResponder(_ textView: UITextView) {
+            if parent.isFocused, !textView.isFirstResponder {
+                // Not in a window yet: the next update schedules another try.
+                guard textView.window != nil else { return }
+                // A refused request (a cover mid-presentation) would leave the
+                // state claiming focus the field does not have, hiding quick
+                // replies behind a keyboard that is not there.
+                if !textView.becomeFirstResponder() {
+                    setFocused(false)
+                }
+            } else if !parent.isFocused, textView.isFirstResponder {
+                textView.resignFirstResponder()
+            }
+        }
+
+        /// UIKit reports every responder change, including the ones the view
+        /// state itself asked for. Writing an unchanged value back still
+        /// invalidates the whole chat body.
+        private func setFocused(_ focused: Bool) {
+            guard parent.isFocused != focused else { return }
+            parent.isFocused = focused
+        }
+
         func textViewDidBeginEditing(_ textView: UITextView) {
-            parent.isFocused = true
+            setFocused(true)
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            parent.isFocused = false
+            setFocused(false)
         }
 
         func textViewDidChange(_ textView: UITextView) {
