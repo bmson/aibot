@@ -10,6 +10,8 @@ struct RelationshipGraphCanvas: UIViewRepresentable {
     /// Screen space the floating controls cover. A selected item is kept
     /// clear of them, and the camera frames the map inside what is left.
     var insets = UIEdgeInsets.zero
+    /// How the owner has tuned the map: sizes, names, arrows and forces.
+    var settings = GraphSettings()
     var select: (String?) -> Void = { _ in }
     /// Long-press one item and let go over another — or over open canvas,
     /// which passes nil for the second end: a new item.
@@ -25,6 +27,7 @@ struct RelationshipGraphCanvas: UIViewRepresentable {
         view.onSelect = select
         view.onConnect = connect
         view.insets = insets
+        view.settings = settings
         view.configure(snapshot: snapshot, selectedID: selectedID, dark: colorScheme == .dark, reduceMotion: reduceMotion)
         view.perform(command)
     }
@@ -45,10 +48,17 @@ struct GraphCanvasCommand: Equatable {
 ///
 /// It behaves the way Obsidian's graph does, because that is the model the
 /// owner already has in their hands: the map is alive and finds its own
-/// shape; a node can be picked up and its neighbours follow it; one finger
-/// pans with momentum, two pinch; names fade in as you zoom, hubs first, and
-/// closer still each item says what it is and each line says what it means.
-/// What it adds is connecting: long-press an item, drag to another, let go.
+/// shape; a dot's size is how connected it is; touching one lights it and its
+/// neighbours while the rest of the map recedes; a node can be picked up and
+/// its neighbours follow it; one finger pans with momentum, two pinch; names
+/// fade in as you zoom, hubs first, and closer still each item says what it
+/// is and each line says what it means. What it adds is connecting:
+/// long-press an item, drag to another, let go.
+///
+/// Nothing on it jumps. A dot that gains connections grows into its new size
+/// on a spring, a newcomer pops in where it joins the map, an item that
+/// leaves shrinks away, and highlighting crossfades — so an update reads as
+/// the map changing rather than being replaced.
 final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     /// Canvas labels are drawn into a CGContext, so they get none of SwiftUI's
     /// Dynamic Type scaling for free. Scaling them by hand is what keeps this
@@ -66,13 +76,17 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     static func importance(degree: Int) -> CGFloat { 1 + 0.55 * log2(1 + CGFloat(degree)) }
 
     /// 0 → hidden, 1 → fully drawn. Names fade rather than pop, so zooming
-    /// feels continuous instead of like a switch being flipped.
-    static func labelOpacity(scale: CGFloat, degree: Int) -> CGFloat {
-        min(1, max(0, (scale * importance(degree: degree) - 0.8) / 0.35))
+    /// feels continuous instead of like a switch being flipped. `fade` is the
+    /// owner's text-fade setting: each step up halves the zoom a name needs.
+    static func labelOpacity(scale: CGFloat, degree: Int, fade: CGFloat = 0) -> CGFloat {
+        let threshold = 0.8 * pow(2, -fade)
+        return min(1, max(0, (scale * importance(degree: degree) - threshold) / 0.35))
     }
 
     /// World-space radius: node size carries how connected an item is.
-    static func worldRadius(degree: Int) -> CGFloat { min(18, 5 + 2.2 * sqrt(CGFloat(degree))) }
+    static func worldRadius(degree: Int, size: CGFloat = 1) -> CGFloat {
+        RelationshipGraphLayout.radius(degree: degree, size: size)
+    }
 
     /// Zoom thresholds at which the map starts saying more.
     static let detailScale: CGFloat = 1.6
@@ -92,8 +106,8 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     private var nodeByID: [String: RelationshipGraphNode] = [:]
     private var links: [GraphLink] = []
     private var degrees: [String: Int] = [:]
+    private var adjacency: [String: Set<String>] = [:]
     private var unreviewed = Set<GraphLink>()
-    private var neighbors = Set<String>()
     private var dark = false
     private var reduceMotion = false
     private var previousSize = CGSize.zero
@@ -110,12 +124,23 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             else if let selectedID { keepVisible(selectedID) }
         }
     }
+    var settings = GraphSettings() {
+        didSet {
+            guard settings != oldValue else { return }
+            layout.apply(settings)
+            if reduceMotion { layout.settle() }
+            wake()
+        }
+    }
     private var cameraTouched = false
     var onSelect: ((String?) -> Void)?
     var onConnect: ((String, String?) -> Void)?
 
     // Gesture state.
     private(set) var dragID: String?
+    /// The item under a finger that has touched down but not yet become a
+    /// tap, a drag or a connection — the phone's stand-in for hovering.
+    private(set) var pressedID: String?
     private var dragStart: CGPoint?
     private var dragGrabOffset = CGPoint.zero
     private var originalNodePosition: CGPoint?
@@ -129,7 +154,36 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     private(set) var connectTargetID: String?
     private var connectPoint: CGPoint?
     private var lastLabelIDs: Set<String> = []
-    private var labelSizes: [String: CGSize] = [:]
+
+    // Animation state.
+    private struct Motion {
+        /// World radius as drawn, springing towards the layout's.
+        var radius: CGFloat
+        var radiusVelocity: CGFloat = 0
+        /// 0 → not yet on the map, 1 → arrived. Springs, so it overshoots a
+        /// little: a newcomer pops rather than fades.
+        var presence: CGFloat
+        var presenceVelocity: CGFloat = 0
+        /// How much this item belongs to what is being looked at.
+        var lit: CGFloat = 0
+    }
+    /// An item that has left the map, drawn shrinking away where it was.
+    private struct Ghost {
+        let point: CGPoint
+        let radius: CGFloat
+        let kind: String
+        let ends: [CGPoint]
+        var life: CGFloat = 1
+    }
+    private var motion: [String: Motion] = [:]
+    private var linkLit: [GraphLink: CGFloat] = [:]
+    private var ghosts: [Ghost] = []
+    /// How far everything outside the focus has receded.
+    private var dim: CGFloat = 0
+    /// The selection ring, drawing itself in.
+    private var ring: CGFloat = 0
+    private var animating = false
+    private var labelImages: [String: UIImage] = [:]
 
     // Frame loop.
     private var displayLink: CADisplayLink?
@@ -163,6 +217,12 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         contentMode = .redraw
         isMultipleTouchEnabled = true
         accessibilityIdentifier = "assistant.relationship.graph.canvas"
+        // Names are cached as pictures at one text size and screen scale.
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitDisplayScale.self]) {
+            (view: RelationshipGraphCanvasView, _: UITraitCollection) in
+            view.labelImages.removeAll()
+            view.setNeedsDisplay()
+        }
         guard interactive else {
             isUserInteractionEnabled = false
             isAccessibilityElement = false
@@ -202,6 +262,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         let newLinks = snapshot.links
         let changed = nodes != snapshot.nodes || links != newLinks
         let selectionChanged = self.selectedID != selectedID
+        if dark != self.dark { labelImages.removeAll() }
         self.dark = dark
         self.reduceMotion = reduceMotion
         edgeLabels = [:]; edgeDirections = [:]
@@ -215,33 +276,70 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         }
         unreviewed = Set(snapshot.edges.filter { $0.reviewStatus != "confirmed" }.map { GraphLink($0.subjectId, $0.objectId) })
         if changed {
+            let firstLayout = layout.ids.isEmpty
+            let membershipChanged = Set(nodes.map(\.id)) != Set(snapshot.nodes.map(\.id))
+            let leaving: Set<String> = firstLayout || reduceMotion ? [] : Set(nodes.map(\.id)).subtracting(snapshot.nodes.map(\.id))
+            if !leaving.isEmpty { letGo(leaving) }
             nodes = snapshot.nodes
             nodeByID = Dictionary(nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             links = newLinks
             degrees = snapshot.degrees
-            let firstLayout = layout.ids.isEmpty
+            adjacency = snapshot.adjacency
             layout.update(nodes: nodes, links: links)
             if firstLayout || reduceMotion {
                 // A cold start is run most of the way to rest before the
                 // first frame, so the map opens already recognisable and then
                 // eases into place, rather than exploding out of one point.
-                // Reduce Motion runs it all the way.
-                if reduceMotion { layout.settle() } else { for _ in 0..<150 where !layout.isSettled { layout.step() } }
+                // Reduce Motion runs it all the way — but only when items came
+                // or went. A line added or removed between items already
+                // placed is drawn where they stand: settling would jump the
+                // whole map at once, which is what Reduce Motion asks to avoid.
+                if !reduceMotion { for _ in 0..<150 where !layout.isSettled { layout.step() } }
+                else if firstLayout || membershipChanged { layout.settle() }
+                else { layout.cool() }
                 if firstLayout { needsInitialFit = true }
             }
+            syncMotion(arriving: !firstLayout && !reduceMotion)
             if needsInitialFit, !bounds.isEmpty { fit(animated: false); needsInitialFit = false }
         }
         self.selectedID = selectedID
-        neighbors = selectedID.map { snapshot.neighborhood(of: $0) } ?? []
-        if selectionChanged, let selectedID {
-            // A selection brings up the card; the camera stops reframing
-            // itself around the controls from here on.
-            cameraTouched = true
-            keepVisible(selectedID)
+        if selectionChanged {
+            ring = 0
+            if let selectedID {
+                // A selection brings up the card; the camera stops reframing
+                // itself around the controls from here on.
+                cameraTouched = true
+                keepVisible(selectedID)
+            }
         }
         refreshAccessibility()
-        setNeedsDisplay()
-        startLoopIfNeeded()
+        wake()
+    }
+
+    /// Carries each item's animation over an update. Items already on the
+    /// map keep their drawn size and spring to the new one; newcomers start
+    /// at nothing when they are joining a map that is already there.
+    private func syncMotion(arriving: Bool) {
+        var next: [String: Motion] = [:]
+        next.reserveCapacity(layout.ids.count)
+        for (i, id) in layout.ids.enumerated() {
+            next[id] = motion[id] ?? Motion(radius: layout.radii[i], presence: arriving ? 0 : 1)
+        }
+        motion = next
+        let current = Set(links)
+        linkLit = linkLit.filter { current.contains($0.key) }
+    }
+
+    /// Items leaving the map become ghosts that shrink away where they were,
+    /// taking their lines with them.
+    private func letGo(_ ids: Set<String>) {
+        for id in ids {
+            guard let point = layout.position(of: id) else { continue }
+            let ends = (adjacency[id] ?? []).compactMap { layout.position(of: $0) }
+            let radius = motion[id].map { $0.radius * max(0, $0.presence) } ?? layout.radius(of: id) ?? 6
+            ghosts.append(Ghost(point: point, radius: radius, kind: nodeByID[id]?.kind ?? "", ends: ends))
+        }
+        if ghosts.count > 80 { ghosts.removeFirst(ghosts.count - 80) }
     }
 
     override func layoutSubviews() {
@@ -305,7 +403,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     }
 
     private func reveal(_ id: String) {
-        guard let position = position(of: id) else { return }
+        guard let position = layout.position(of: id) else { return }
         var target = viewport
         target.scale = min(4, max(viewport.scale, 1.15))
         target.offset = CGPoint(x: focusCenter.x - bounds.midX - position.x * target.scale,
@@ -317,7 +415,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     /// keeping the zoom — the owner chose the scale, the canvas only makes
     /// room.
     private func keepVisible(_ id: String) {
-        guard !bounds.isEmpty, let position = position(of: id) else { return }
+        guard !bounds.isEmpty, let position = layout.position(of: id) else { return }
         let point = viewport.screen(position, size: bounds.size)
         let safe = bounds.inset(by: insets).insetBy(dx: 24, dy: 24)
         guard !safe.isEmpty, !safe.contains(point) else { return }
@@ -340,16 +438,18 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         startLoopIfNeeded()
     }
 
-    private func position(of id: String) -> CGPoint? {
-        guard let index = layout.ids.firstIndex(of: id) else { return nil }
-        return layout.positions[index]
-    }
-
     private func points() -> [String: CGPoint] { Dictionary(uniqueKeysWithValues: zip(layout.ids, layout.positions)) }
 
+    /// A dot's size on screen. It tracks the zoom one to one while it is
+    /// small, then grows more slowly, so zooming in on a hub gives room to
+    /// read around it instead of filling the screen with one circle.
+    private func screenRadius(world: CGFloat) -> CGFloat {
+        let linear = world * viewport.scale
+        return max(2.5, linear < 22 ? linear : 22 + (linear - 22) * 0.35)
+    }
+
     private func screenRadius(for id: String) -> CGFloat {
-        let world = Self.worldRadius(degree: degrees[id] ?? 0)
-        return min(26, max(2.5, world * viewport.scale))
+        screenRadius(world: layout.radius(of: id) ?? Self.worldRadius(degree: degrees[id] ?? 0, size: settings.nodeSize))
     }
 
     func hitNode(at point: CGPoint, slop: CGFloat = 20, excluding: String? = nil) -> String? {
@@ -363,17 +463,35 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         return closest?.0
     }
 
+    // MARK: - Focus
+
+    /// What the map is lighting up: a thread being drawn, a dot being
+    /// dragged or touched, else the selection.
+    private var focusID: String? { connectSourceID ?? dragID ?? pressedID ?? selectedID }
+
+    private func focusSet(_ focus: String?) -> Set<String> {
+        guard let focus else { return [] }
+        return (adjacency[focus] ?? []).union([focus])
+    }
+
     // MARK: - Frame loop
 
     private var needsFrames: Bool {
-        (!layout.isSettled && !reduceMotion) || camera != nil
+        (!layout.isSettled && !reduceMotion) || camera != nil || animating
             || hypot(momentum.x, momentum.y) > 4 || connectSourceID != nil
+    }
+
+    /// Something the drawing animates towards has changed.
+    private func wake() {
+        if reduceMotion { settleAnimations() } else { animating = true }
+        setNeedsDisplay()
+        startLoopIfNeeded()
     }
 
     private func startLoopIfNeeded() {
         guard displayLink == nil, window != nil, needsFrames else { return }
         let link = CADisplayLink(target: FrameTarget(self), selector: #selector(FrameTarget.tick(_:)))
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 60)
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         displayLink = link
         lastTick = CACurrentMediaTime()
@@ -409,12 +527,74 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             momentum.x *= friction; momentum.y *= friction
         }
         if let point = connectPoint, connectSourceID != nil { edgePan(toward: point, dt: dt) }
+        if animating { animate(CGFloat(dt)) }
         setNeedsDisplay()
         if !needsFrames {
             momentum = .zero
             stopLoop()
             refreshAccessibility()
         }
+    }
+
+    /// Semi-implicit spring step; stable at any frame time the loop allows.
+    private static func spring(_ value: inout CGFloat, _ velocity: inout CGFloat, to target: CGFloat,
+                               stiffness: CGFloat, damping: CGFloat, dt: CGFloat) {
+        velocity += (stiffness * (target - value) - damping * velocity) * dt
+        value += velocity * dt
+    }
+
+    /// One frame of every drawn transition. Clears `animating` once all of
+    /// them are at rest, which lets the frame loop stop.
+    private func animate(_ dt: CGFloat) {
+        let lit = focusSet(focusID)
+        // About 90ms to get most of the way: quick enough to feel attached
+        // to the finger, slow enough to read as a crossfade.
+        let ease = 1 - exp(-dt / 0.09)
+        var moving = false
+        for (i, id) in layout.ids.enumerated() {
+            guard var m = motion[id] else { continue }
+            let radius = layout.radii[i]
+            let litTarget: CGFloat = lit.contains(id) ? 1 : 0
+            Self.spring(&m.radius, &m.radiusVelocity, to: radius, stiffness: 120, damping: 14, dt: dt)
+            Self.spring(&m.presence, &m.presenceVelocity, to: 1, stiffness: 210, damping: 18, dt: dt)
+            m.lit += (litTarget - m.lit) * ease
+            if abs(m.radius - radius) < 0.02 && abs(m.radiusVelocity) < 0.05 { m.radius = radius; m.radiusVelocity = 0 } else { moving = true }
+            if abs(1 - m.presence) < 0.002 && abs(m.presenceVelocity) < 0.01 { m.presence = 1; m.presenceVelocity = 0 } else { moving = true }
+            if abs(litTarget - m.lit) < 0.004 { m.lit = litTarget } else { moving = true }
+            motion[id] = m
+        }
+        var focusLinks = Set<GraphLink>()
+        if let focus = focusID { for other in adjacency[focus] ?? [] { focusLinks.insert(GraphLink(focus, other)) } }
+        for link in focusLinks where linkLit[link] == nil { linkLit[link] = 0 }
+        for (link, value) in linkLit {
+            let target: CGFloat = focusLinks.contains(link) ? 1 : 0
+            let next = value + (target - value) * ease
+            if abs(target - next) < 0.004 { linkLit[link] = target == 0 ? nil : 1 } else { linkLit[link] = next; moving = true }
+        }
+        let dimTarget: CGFloat = focusID == nil ? 0 : 1
+        dim += (dimTarget - dim) * ease
+        if abs(dimTarget - dim) < 0.004 { dim = dimTarget } else { moving = true }
+        let ringTarget: CGFloat = selectedID == nil ? 0 : 1
+        ring += (ringTarget - ring) * (1 - exp(-dt / 0.14))
+        if abs(ringTarget - ring) < 0.004 { ring = ringTarget } else { moving = true }
+        for index in ghosts.indices { ghosts[index].life -= dt / 0.3 }
+        ghosts.removeAll { $0.life <= 0 }
+        animating = moving || !ghosts.isEmpty
+    }
+
+    /// Every transition at its end state, at once — Reduce Motion, and
+    /// anything drawn without a frame loop.
+    private func settleAnimations() {
+        let lit = focusSet(focusID)
+        for (i, id) in layout.ids.enumerated() {
+            motion[id] = Motion(radius: layout.radii[i], presence: 1, lit: lit.contains(id) ? 1 : 0)
+        }
+        linkLit = [:]
+        if let focus = focusID { for other in adjacency[focus] ?? [] { linkLit[GraphLink(focus, other)] = 1 } }
+        dim = focusID == nil ? 0 : 1
+        ring = selectedID == nil ? 0 : 1
+        ghosts = []
+        animating = false
     }
 
     /// While a connection is being drawn, holding the finger near an edge
@@ -434,6 +614,31 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
 
     // MARK: - Gestures
 
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        guard interactive, event?.allTouches?.count == 1, let touch = touches.first else { return press(nil) }
+        press(hitNode(at: touch.location(in: self), slop: 12))
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        press(nil)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        press(nil)
+    }
+
+    /// A finger resting on a dot lights it and its neighbours, the way
+    /// hovering does in Obsidian — before the finger has decided whether it
+    /// is a tap, a drag or a connection.
+    private func press(_ id: String?) {
+        guard id != pressedID else { return }
+        pressedID = id
+        wake()
+    }
+
     @objc private func tap(_ gesture: UITapGestureRecognizer) {
         momentum = .zero
         onSelect?(hitNode(at: gesture.location(in: self)))
@@ -444,7 +649,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         cameraTouched = true
         if let id = hitNode(at: point) {
             onSelect?(id)
-            guard let position = position(of: id) else { return }
+            guard let position = layout.position(of: id) else { return }
             var target = viewport
             target.scale = min(4, max(viewport.scale * 1.6, 1.3))
             target.offset = CGPoint(x: focusCenter.x - bounds.midX - position.x * target.scale,
@@ -462,14 +667,14 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         camera = nil; momentum = .zero
         dragStart = point; originalViewport = viewport
         dragID = hitNode(at: point, slop: 12)
-        originalNodePosition = dragID.flatMap { position(of: $0) }
+        originalNodePosition = dragID.flatMap { layout.position(of: $0) }
         if let origin = originalNodePosition {
             let world = viewport.world(point, size: bounds.size)
             dragGrabOffset = CGPoint(x: origin.x - world.x, y: origin.y - world.y)
             // Warm enough that neighbours follow the dragged node, cool enough
             // that the rest of the map does not churn.
             layout.hold(0.28)
-            startLoopIfNeeded()
+            wake()
         }
     }
 
@@ -487,6 +692,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
 
     func endDrag(cancelled: Bool, velocity: CGPoint = .zero) {
         guard dragStart != nil else { return }
+        let draggedNode = dragID != nil
         if let id = dragID {
             if cancelled, let point = originalNodePosition { layout.move(id: id, to: point) }
             layout.hold(0)
@@ -496,7 +702,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             momentum = velocity
         }
         dragID = nil; dragStart = nil; originalNodePosition = nil
-        startLoopIfNeeded()
+        if draggedNode { wake() } else { startLoopIfNeeded() }
         refreshAccessibility(); setNeedsDisplay()
     }
 
@@ -568,8 +774,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         connectTargetID = nil
         impactFeedback.impactOccurred()
         selectionFeedback.prepare()
-        startLoopIfNeeded()
-        setNeedsDisplay()
+        wake()
     }
 
     func moveConnect(to point: CGPoint) {
@@ -594,7 +799,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     /// a new item.
     var connectWouldCreate: Bool {
         guard connectTargetID == nil, let source = connectSourceID, let finger = connectPoint,
-              let position = position(of: source) else { return false }
+              let position = layout.position(of: source) else { return false }
         let from = viewport.screen(position, size: bounds.size)
         return hypot(finger.x - from.x, finger.y - from.y) >= Self.newItemPull
     }
@@ -603,7 +808,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         let source = connectSourceID, target = connectTargetID
         let create = connectWouldCreate
         connectSourceID = nil; connectTargetID = nil; connectPoint = nil
-        setNeedsDisplay()
+        wake()
         guard !cancelled, let source, target != nil || create else { return }
         impactFeedback.impactOccurred(intensity: 0.7)
         onConnect?(source, target)
@@ -611,85 +816,56 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
 
     // MARK: - Drawing
 
+    /// The map's colours for one appearance, resolved once per frame.
+    private struct Palette {
+        let canvas: UIColor, ink: UIColor, muted: UIColor, accent: UIColor, raised: UIColor
+        init(dark: Bool) {
+            let scheme: ColorScheme = dark ? .dark : .light
+            canvas = UIColor(AssistantTheme.canvas(for: scheme))
+            ink = UIColor(AssistantTheme.ink(for: scheme))
+            muted = UIColor(AssistantTheme.inkMuted(for: scheme))
+            accent = UIColor(AssistantTheme.accent(for: scheme))
+            raised = UIColor(AssistantTheme.raised(for: scheme))
+        }
+    }
+
     override func draw(_ rect: CGRect) {
         guard let context = UIGraphicsGetCurrentContext() else { return }
-        let scheme: ColorScheme = dark ? .dark : .light
-        let canvas = UIColor(AssistantTheme.canvas(for: scheme))
-        let ink = UIColor(AssistantTheme.ink(for: scheme))
-        let muted = UIColor(AssistantTheme.inkMuted(for: scheme))
-        let accent = UIColor(AssistantTheme.accent(for: scheme))
-        canvas.setFill(); context.fill(bounds)
-        let positions = points()
+        let palette = Palette(dark: dark)
+        palette.canvas.setFill(); context.fill(bounds)
+        let size = bounds.size
         let scale = viewport.scale
-        let hasSelection = selectedID != nil
+        let focus = focusID
+        let lit = focusSet(focus)
         let visibleArea = bounds.insetBy(dx: -60, dy: -40)
-        func screen(_ id: String) -> CGPoint? { positions[id].map { viewport.screen($0, size: bounds.size) } }
 
-        // Lines first, underneath everything.
-        context.setLineCap(.round)
-        var highlightedLinks: [GraphLink] = []
-        for link in links {
-            guard let start = screen(link.a), let end = screen(link.b) else { continue }
-            let lineBox = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
-                                 width: abs(start.x - end.x) + 1, height: abs(start.y - end.y) + 1)
-            guard lineBox.intersects(visibleArea) else { continue }
-            let highlighted = hasSelection && (link.a == selectedID || link.b == selectedID)
-            if highlighted { highlightedLinks.append(link) }
-            let alpha: CGFloat = highlighted ? 0.75 : hasSelection ? 0.06 : (dark ? 0.26 : 0.2)
-            context.setStrokeColor((highlighted ? accent : ink).withAlphaComponent(alpha).cgColor)
-            context.setLineWidth((highlighted ? 1.6 : 0.8) * min(1.5, max(0.8, sqrt(scale))))
-            context.setLineDash(phase: 0, lengths: unreviewed.contains(link) ? [3, 4] : [])
-            context.move(to: start); context.addLine(to: end); context.strokePath()
-            // Direction is carried by an arrowhead in the recorded direction —
-            // on the selection's lines once they can be told apart, and on
-            // every line once the map is close enough to read them.
-            if (highlighted && scale >= 0.55) || scale >= 1.4, let target = edgeDirections[link] {
-                let tip = target == link.b ? end : start, tail = target == link.b ? start : end
-                let angle = atan2(tip.y - tail.y, tip.x - tail.x)
-                let inset = screenRadius(for: target) + 3
-                let arrow = CGPoint(x: tip.x - cos(angle) * inset, y: tip.y - sin(angle) * inset)
-                let size: CGFloat = highlighted ? 7 : 5
-                context.setLineDash(phase: 0, lengths: [])
-                context.move(to: CGPoint(x: arrow.x - cos(angle - 0.5) * size, y: arrow.y - sin(angle - 0.5) * size))
-                context.addLine(to: arrow)
-                context.addLine(to: CGPoint(x: arrow.x - cos(angle + 0.5) * size, y: arrow.y - sin(angle + 0.5) * size))
-                context.strokePath()
-            }
+        // Where every dot is, and how big, once for the frame.
+        var place: [String: CGPoint] = [:], radius: [String: CGFloat] = [:], presence: [String: CGFloat] = [:]
+        place.reserveCapacity(layout.ids.count); radius.reserveCapacity(layout.ids.count)
+        for (i, id) in layout.ids.enumerated() {
+            place[id] = viewport.screen(layout.positions[i], size: size)
+            let m = motion[id]
+            let arrived = max(0, m?.presence ?? 1)
+            presence[id] = min(1, arrived)
+            radius[id] = screenRadius(world: m?.radius ?? layout.radii[i]) * arrived
         }
-        context.setLineDash(phase: 0, lengths: [])
+        /// How visible a dot is: everything outside the focus recedes
+        /// together, and a newcomer fades up as it pops in.
+        func opacity(_ id: String) -> CGFloat {
+            (1 - dim * (1 - (motion[id]?.lit ?? 0)) * 0.84) * (presence[id] ?? 1)
+        }
 
-        // The thread being drawn to make a new connection.
-        if let source = connectSourceID, let from = screen(source), let finger = connectPoint {
-            let to = connectTargetID.flatMap(screen) ?? finger
-            context.setStrokeColor(accent.cgColor)
-            context.setLineWidth(2.2)
-            context.setLineDash(phase: 0, lengths: connectTargetID == nil ? [6, 5] : [])
-            context.move(to: from); context.addLine(to: to); context.strokePath()
-            context.setLineDash(phase: 0, lengths: [])
-            if connectTargetID == nil {
-                // Out on open canvas the thread ends in a "+": letting go
-                // there makes a new item.
-                let creating = connectWouldCreate
-                let radius: CGFloat = creating ? 17 : 14
-                context.setFillColor(accent.withAlphaComponent(creating ? 0.9 : 0.25).cgColor)
-                context.fillEllipse(in: CGRect(x: finger.x - radius, y: finger.y - radius, width: radius * 2, height: radius * 2))
-                if creating {
-                    context.setStrokeColor(canvas.cgColor)
-                    context.setLineWidth(2.4)
-                    context.move(to: CGPoint(x: finger.x - 7, y: finger.y)); context.addLine(to: CGPoint(x: finger.x + 7, y: finger.y))
-                    context.move(to: CGPoint(x: finger.x, y: finger.y - 7)); context.addLine(to: CGPoint(x: finger.x, y: finger.y + 7))
-                    context.strokePath()
-                }
-            }
-        }
+        drawGhosts(context, palette: palette, size: size)
+        drawLinks(context, palette: palette, place: place, radius: radius, presence: presence, visibleArea: visibleArea)
+        drawThread(context, palette: palette, place: place)
 
         // Names are handed out in this order, and the canvas runs out of room
         // long before it runs out of nodes, so the order decides which names
-        // the owner gets: the selection, its neighbours, names already showing
+        // the owner gets: the focus, its neighbours, names already showing
         // (so they do not flicker as the map drifts), then the biggest hubs.
         let rank = { (id: String) -> Int in
-            if id == self.connectSourceID || id == self.connectTargetID || id == self.selectedID { return 0 }
-            if self.neighbors.contains(id) { return 1 }
+            if id == self.connectSourceID || id == self.connectTargetID || id == self.selectedID || id == focus { return 0 }
+            if lit.contains(id) { return 1 }
             if self.lastLabelIDs.contains(id) { return 2 }
             return 3
         }
@@ -700,23 +876,45 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             return d0 != d1 ? d0 > d1 : $0.id < $1.id
         }
 
-        // Every dot before any name, so no dot is ever painted over a name.
+        // Every dot before any name, so no dot is ever painted over a name;
+        // the least important first, so hubs and the focus sit on top.
         var nodeBounds: [CGRect] = []
         for node in ordered.reversed() {
-            guard let point = screen(node.id), visibleArea.contains(point) else { continue }
-            let radius = screenRadius(for: node.id)
+            guard let point = place[node.id], visibleArea.contains(point), let r = radius[node.id], r > 0.3 else { continue }
+            let alpha = opacity(node.id)
             let isSelected = node.id == selectedID
-            let isTarget = node.id == connectTargetID || node.id == connectSourceID
-            let relevant = !hasSelection || neighbors.contains(node.id) || isTarget
-            if isSelected || isTarget {
-                context.setFillColor(accent.withAlphaComponent(isTarget ? 0.28 : 0.16).cgColor)
-                let halo = radius + (isTarget ? 12 : 9)
+            let isConnectEnd = node.id == connectTargetID || node.id == connectSourceID
+            let tint = Self.tint(for: node.kind, dark: dark)
+            let body = CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2)
+            if isConnectEnd {
+                let halo = r + 12
+                context.setFillColor(palette.accent.withAlphaComponent(0.24).cgColor)
+                context.fillEllipse(in: CGRect(x: point.x - halo, y: point.y - halo, width: halo * 2, height: halo * 2))
+            } else if isSelected && ring > 0.01 {
+                // A soft glow in the item's own colour, then a ring that draws
+                // itself in around it.
+                let halo = r + 4 + 10 * ring
+                context.setFillColor(tint.withAlphaComponent(0.16 * ring).cgColor)
                 context.fillEllipse(in: CGRect(x: point.x - halo, y: point.y - halo, width: halo * 2, height: halo * 2))
             }
-            let tint = Self.tint(for: node.kind, accent: accent)
-            context.setFillColor(tint.withAlphaComponent(relevant ? 1 : 0.18).cgColor)
-            context.fillEllipse(in: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
-            nodeBounds.append(CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
+            context.setFillColor(tint.withAlphaComponent(alpha).cgColor)
+            context.fillEllipse(in: body)
+            if r > 3.5 {
+                // A hairline in the canvas colour cuts each dot out of the
+                // lines beneath it, so a busy hub still reads as one clean disc.
+                context.setStrokeColor(palette.canvas.withAlphaComponent(0.85 * alpha).cgColor)
+                context.setLineWidth(1.2)
+                context.strokeEllipse(in: body.insetBy(dx: -0.6, dy: -0.6))
+            }
+            if isSelected && ring > 0.01 {
+                let ringRadius = r + 4.5
+                context.setStrokeColor(palette.ink.withAlphaComponent(0.85 * ring).cgColor)
+                context.setLineWidth(1.75)
+                context.addArc(center: point, radius: ringRadius, startAngle: -.pi / 2,
+                               endAngle: -.pi / 2 + 2 * .pi * ring, clockwise: false)
+                context.strokePath()
+            }
+            nodeBounds.append(body)
         }
 
         var occupied: [CGRect] = []
@@ -725,50 +923,44 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         // two-hundred-item overview wear forty names, and nobody reads that.
         var looseNamesLeft = scale < 0.6 ? 18 : 60
         let showDetail = scale >= Self.detailScale
-        for (place, node) in ordered.enumerated() {
-            guard let point = screen(node.id), bounds.insetBy(dx: 2, dy: 2).contains(point) else { continue }
+        for (rankIndex, node) in ordered.enumerated() {
+            guard let point = place[node.id], bounds.insetBy(dx: 2, dy: 2).contains(point) else { continue }
             let degree = degrees[node.id] ?? 0
             let isSelected = node.id == selectedID
             let isConnectEnd = node.id == connectSourceID || node.id == connectTargetID
-            let isNeighbor = hasSelection && neighbors.contains(node.id)
-            let mustName = isSelected || isConnectEnd || isNeighbor || (!hasSelection && place < 3)
-            var opacity = mustName ? 1 : Self.labelOpacity(scale: scale, degree: degree)
-            if hasSelection && !isNeighbor && !isSelected && !isConnectEnd { opacity *= 0.35 }
-            guard opacity > 0.04 else { continue }
+            let isLit = focus != nil && lit.contains(node.id)
+            let mustName = isSelected || isConnectEnd || isLit || (focus == nil && rankIndex < 3)
+            var alpha = mustName ? 1 : Self.labelOpacity(scale: scale, degree: degree, fade: settings.textFade)
+            alpha *= 1 - dim * (1 - (motion[node.id]?.lit ?? 0)) * 0.65
+            alpha *= presence[node.id] ?? 1
+            guard alpha > 0.04 else { continue }
             guard mustName || looseNamesLeft > 0 else { continue }
 
-            let font = Self.scaledFont(isSelected || isConnectEnd ? 14 : 12, weight: isSelected || isConnectEnd ? .semibold : .medium)
-            let title = node.label as NSString
-            let titleAttributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ink.withAlphaComponent(opacity)]
-            let key = "\(node.id)|\(node.label)|\(font.pointSize)"
-            let measured = labelSizes[key] ?? title.size(withAttributes: titleAttributes)
-            labelSizes[key] = measured
-            let width = min(isSelected ? 200 : 150, ceil(measured.width))
-            var subtitle: NSString?
-            var subtitleAttributes: [NSAttributedString.Key: Any] = [:]
-            var height = ceil(measured.height)
+            let emphasized = isSelected || isConnectEnd
+            var subtitle: String?
             if showDetail {
-                let links = degree == 1 ? "1 link" : "\(degree) links"
-                subtitle = "\(node.kind.sentenceCaseIdentifier) · \(links)" as NSString
-                subtitleAttributes = [.font: Self.scaledFont(10), .foregroundColor: muted.withAlphaComponent(opacity)]
-                height += ceil(Self.scaledFont(10).lineHeight)
+                let count = degree == 1 ? "1 link" : "\(degree) links"
+                subtitle = "\(node.kind.sentenceCaseIdentifier) · \(count)"
             }
-            let boxWidth = max(width, subtitle.map { min(150, ceil($0.size(withAttributes: subtitleAttributes).width)) } ?? 0)
-            let radius = screenRadius(for: node.id)
+            let image = labelImage(node.label, subtitle: subtitle, emphasized: emphasized, palette: palette)
+            let r = radius[node.id] ?? screenRadius(for: node.id)
+            let w = image.size.width, h = image.size.height
             func inside(_ rect: CGRect) -> CGRect {
                 var shifted = rect
-                shifted.origin.x = min(max(4, rect.origin.x), max(4, bounds.width - rect.width - 4))
-                shifted.origin.y = min(max(2, rect.origin.y), max(2, bounds.height - rect.height - 2))
+                shifted.origin.x = min(max(2, rect.origin.x), max(2, bounds.width - rect.width - 2))
+                shifted.origin.y = min(max(0, rect.origin.y), max(0, bounds.height - rect.height))
                 return shifted
             }
+            // Below first, as Obsidian puts it; then above, right and left.
+            let gap: CGFloat = isSelected ? 7 : 2
             let candidates = [
-                CGRect(x: point.x - boxWidth / 2, y: point.y + radius + 4, width: boxWidth, height: height),
-                CGRect(x: point.x - boxWidth / 2, y: point.y - radius - 4 - height, width: boxWidth, height: height),
-                CGRect(x: point.x + radius + 6, y: point.y - height / 2, width: boxWidth, height: height),
-                CGRect(x: point.x - radius - 6 - boxWidth, y: point.y - height / 2, width: boxWidth, height: height),
+                CGRect(x: point.x - w / 2, y: point.y + r + gap, width: w, height: h),
+                CGRect(x: point.x - w / 2, y: point.y - r - gap - h, width: w, height: h),
+                CGRect(x: point.x + r + gap + 2, y: point.y - h / 2, width: w, height: h),
+                CGRect(x: point.x - r - gap - 2 - w, y: point.y - h / 2, width: w, height: h),
             ].map(inside)
             func crowding(_ candidate: CGRect) -> CGFloat {
-                let padded = candidate.insetBy(dx: -3, dy: -1)
+                let padded = candidate.insetBy(dx: -1, dy: 0)
                 var total: CGFloat = 0
                 for other in occupied {
                     let overlap = other.intersection(padded)
@@ -786,61 +978,278 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             if !mustName { looseNamesLeft -= 1 }
             named.insert(node.id)
             occupied.append(box)
-            // An opaque backing: the placement avoids dots and names but not
-            // lines, and a line through a word is what makes it unreadable.
-            canvas.withAlphaComponent(min(1, opacity + 0.1)).setFill()
-            context.addPath(UIBezierPath(roundedRect: box.insetBy(dx: -3, dy: -1), cornerRadius: 4).cgPath)
-            context.fillPath()
-            let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center; paragraph.lineBreakMode = .byTruncatingTail
-            var centered = titleAttributes; centered[.paragraphStyle] = paragraph
-            title.draw(with: CGRect(x: box.minX, y: box.minY, width: box.width, height: measured.height),
-                       options: [.truncatesLastVisibleLine, .usesLineFragmentOrigin], attributes: centered, context: nil)
-            if let subtitle {
-                subtitleAttributes[.paragraphStyle] = paragraph
-                subtitle.draw(with: CGRect(x: box.minX, y: box.minY + ceil(measured.height), width: box.width, height: height - ceil(measured.height)),
-                              options: [.truncatesLastVisibleLine, .usesLineFragmentOrigin], attributes: subtitleAttributes, context: nil)
-            }
+            // No plate behind the name: a halo in the canvas colour, baked
+            // into the picture, keeps it readable over lines without boxing
+            // the map into labels.
+            image.draw(in: box, blendMode: .normal, alpha: min(1, alpha))
         }
         namedNodeIDs = named
         lastLabelIDs = named
 
-        // What each line means: the selection's lines once they are long
-        // enough to carry words, every line once the map is close enough.
-        let phraseLinks: [GraphLink]
-        if scale >= Self.allEdgePhrasesScale { phraseLinks = highlightedLinks + links.filter { !highlightedLinks.contains($0) } }
-        else if scale >= 0.85 { phraseLinks = highlightedLinks }
-        else { phraseLinks = [] }
-        let phraseAttributes: [NSAttributedString.Key: Any] = [.font: Self.scaledFont(10, weight: .medium), .foregroundColor: muted]
-        for link in phraseLinks {
-            guard let label = edgeLabels[link], let start = screen(link.a), let end = screen(link.b) else { continue }
-            let length = hypot(end.x - start.x, end.y - start.y)
-            guard length > 70 else { continue }
-            let middle = CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
-            guard bounds.contains(middle) else { continue }
-            let text = label as NSString
-            let size = text.size(withAttributes: phraseAttributes)
-            let width = min(length - 30, min(120, ceil(size.width)))
-            guard width > 24 else { continue }
-            let box = CGRect(x: middle.x - width / 2, y: middle.y - size.height / 2, width: width, height: ceil(size.height))
-            let padded = box.insetBy(dx: -3, dy: -1)
-            guard !occupied.contains(where: { $0.intersects(padded) }),
-                  !nodeBounds.contains(where: { $0.intersects(padded) }) else { continue }
-            occupied.append(padded)
-            canvas.setFill()
-            context.addPath(UIBezierPath(roundedRect: padded, cornerRadius: 4).cgPath); context.fillPath()
-            text.draw(with: box, options: [.truncatesLastVisibleLine, .usesLineFragmentOrigin], attributes: phraseAttributes, context: nil)
+        drawPhrases(context, palette: palette, place: place, occupied: &occupied, nodeBounds: nodeBounds)
+    }
+
+    /// Lines are drawn from rim to rim, not centre to centre, so a dimmed,
+    /// translucent dot never shows a line running through it. Lines at rest
+    /// share one path per style — one stroke for hundreds of them — and only
+    /// the few that are lit or still arriving are drawn one by one.
+    private func drawLinks(_ context: CGContext, palette: Palette, place: [String: CGPoint], radius: [String: CGFloat],
+                           presence: [String: CGFloat], visibleArea: CGRect) {
+        let scale = viewport.scale
+        let restAlpha = (dark ? 0.26 : 0.2) * (1 - dim * 0.72)
+        let width = 0.9 * settings.linkThickness * min(1.6, max(0.7, sqrt(scale)))
+        let arrowsAtRest = settings.arrows && scale >= 1.4
+        let arrowsWhenLit = settings.arrows && scale >= 0.55
+        let solid = CGMutablePath(), dashed = CGMutablePath(), heads = CGMutablePath()
+        var special: [(link: GraphLink, start: CGPoint, end: CGPoint, lit: CGFloat, presence: CGFloat)] = []
+
+        for link in links {
+            guard let p = place[link.a], let q = place[link.b] else { continue }
+            let box = CGRect(x: min(p.x, q.x), y: min(p.y, q.y), width: abs(p.x - q.x) + 1, height: abs(p.y - q.y) + 1)
+            guard box.intersects(visibleArea) else { continue }
+            let dx = q.x - p.x, dy = q.y - p.y, length = hypot(dx, dy)
+            let ra = (radius[link.a] ?? 0) + 1, rb = (radius[link.b] ?? 0) + 1
+            guard length > ra + rb + 1 else { continue }
+            let ux = dx / length, uy = dy / length
+            let start = CGPoint(x: p.x + ux * ra, y: p.y + uy * ra), end = CGPoint(x: q.x - ux * rb, y: q.y - uy * rb)
+            let glow = linkLit[link] ?? 0
+            let arriving = min(presence[link.a] ?? 1, presence[link.b] ?? 1)
+            if glow > 0.01 || arriving < 0.999 {
+                special.append((link, start, end, glow, arriving))
+                continue
+            }
+            let path = unreviewed.contains(link) ? dashed : solid
+            path.move(to: start); path.addLine(to: end)
+            if arrowsAtRest { addArrowhead(to: heads, link: link, start: start, end: end, size: 5 * min(1.3, max(1, width))) }
+        }
+
+        context.setLineCap(.round)
+        context.setLineWidth(width)
+        context.setStrokeColor(palette.ink.withAlphaComponent(restAlpha).cgColor)
+        context.addPath(solid); context.strokePath()
+        context.setLineDash(phase: 0, lengths: [3, 4])
+        context.addPath(dashed); context.strokePath()
+        context.setLineDash(phase: 0, lengths: [])
+        context.setFillColor(palette.ink.withAlphaComponent(restAlpha * 1.4).cgColor)
+        context.addPath(heads); context.fillPath()
+
+        for line in special {
+            // Lit lines take the accent and thicken; the crossfade is the
+            // line's own colour moving, not a second line fading over it.
+            let color = Self.mix(palette.ink, palette.accent, line.lit)
+            let alpha = (restAlpha + (0.85 - restAlpha) * line.lit) * line.presence
+            context.setStrokeColor(color.withAlphaComponent(alpha).cgColor)
+            context.setLineWidth(width * (1 + 0.8 * line.lit))
+            context.setLineDash(phase: 0, lengths: unreviewed.contains(line.link) ? [3, 4] : [])
+            context.move(to: line.start); context.addLine(to: line.end); context.strokePath()
+            if (line.lit > 0.5 && arrowsWhenLit) || arrowsAtRest {
+                let head = CGMutablePath()
+                addArrowhead(to: head, link: line.link, start: line.start, end: line.end, size: line.lit > 0.5 ? 7 : 5)
+                context.setFillColor(color.withAlphaComponent(alpha).cgColor)
+                context.addPath(head); context.fillPath()
+            }
+        }
+        context.setLineDash(phase: 0, lengths: [])
+    }
+
+    /// A filled head at the recorded object's end of the line.
+    private func addArrowhead(to path: CGMutablePath, link: GraphLink, start: CGPoint, end: CGPoint, size: CGFloat) {
+        guard let target = edgeDirections[link] else { return }
+        let tip = target == link.b ? end : start, tail = target == link.b ? start : end
+        guard hypot(tip.x - tail.x, tip.y - tail.y) > size * 2.5 else { return }
+        let angle = atan2(tip.y - tail.y, tip.x - tail.x)
+        let back = CGPoint(x: tip.x - cos(angle) * size, y: tip.y - sin(angle) * size)
+        let spread = size * 0.5
+        path.move(to: tip)
+        path.addLine(to: CGPoint(x: back.x + sin(angle) * spread, y: back.y - cos(angle) * spread))
+        path.addLine(to: CGPoint(x: back.x - sin(angle) * spread, y: back.y + cos(angle) * spread))
+        path.closeSubpath()
+    }
+
+    private func drawGhosts(_ context: CGContext, palette: Palette, size: CGSize) {
+        for ghost in ghosts {
+            let life = max(0, min(1, ghost.life))
+            let point = viewport.screen(ghost.point, size: size)
+            context.setStrokeColor(palette.ink.withAlphaComponent((dark ? 0.26 : 0.2) * life).cgColor)
+            context.setLineWidth(0.9 * settings.linkThickness)
+            for end in ghost.ends {
+                context.move(to: point); context.addLine(to: viewport.screen(end, size: size))
+            }
+            context.strokePath()
+            let r = screenRadius(world: ghost.radius) * (0.4 + 0.6 * life)
+            context.setFillColor(Self.tint(for: ghost.kind, dark: dark).withAlphaComponent(life).cgColor)
+            context.fillEllipse(in: CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2))
         }
     }
 
-    static func tint(for kind: String, accent: UIColor) -> UIColor {
-        switch kind {
-        case "person": accent
-        case "place": .systemTeal
-        case "organization": .systemIndigo
-        case "project": .systemOrange
-        case "event": .systemPurple
-        default: .systemGray
+    /// The thread being drawn to make a new connection.
+    private func drawThread(_ context: CGContext, palette: Palette, place: [String: CGPoint]) {
+        guard let source = connectSourceID, let from = place[source], let finger = connectPoint else { return }
+        let to = connectTargetID.flatMap { place[$0] } ?? finger
+        context.setStrokeColor(palette.accent.cgColor)
+        context.setLineWidth(2.2)
+        context.setLineCap(.round)
+        context.setLineDash(phase: 0, lengths: connectTargetID == nil ? [6, 5] : [])
+        context.move(to: from); context.addLine(to: to); context.strokePath()
+        context.setLineDash(phase: 0, lengths: [])
+        guard connectTargetID == nil else { return }
+        // Out on open canvas the thread ends in a "+": letting go there makes
+        // a new item.
+        let creating = connectWouldCreate
+        let radius: CGFloat = creating ? 17 : 14
+        context.setFillColor(palette.accent.withAlphaComponent(creating ? 0.9 : 0.25).cgColor)
+        context.fillEllipse(in: CGRect(x: finger.x - radius, y: finger.y - radius, width: radius * 2, height: radius * 2))
+        if creating {
+            context.setStrokeColor(palette.canvas.cgColor)
+            context.setLineWidth(2.4)
+            context.move(to: CGPoint(x: finger.x - 7, y: finger.y)); context.addLine(to: CGPoint(x: finger.x + 7, y: finger.y))
+            context.move(to: CGPoint(x: finger.x, y: finger.y - 7)); context.addLine(to: CGPoint(x: finger.x, y: finger.y + 7))
+            context.strokePath()
         }
+    }
+
+    /// What each line means: the focus's lines once they are long enough to
+    /// carry words, every line once the map is close enough.
+    private func drawPhrases(_ context: CGContext, palette: Palette, place: [String: CGPoint],
+                             occupied: inout [CGRect], nodeBounds: [CGRect]) {
+        let scale = viewport.scale
+        let lit = linkLit.filter { $0.value > 0.5 }.map { $0.key }.sorted { $0.a == $1.a ? $0.b < $1.b : $0.a < $1.a }
+        let phraseLinks: [GraphLink]
+        if scale >= Self.allEdgePhrasesScale { phraseLinks = lit + links.filter { (linkLit[$0] ?? 0) <= 0.5 } }
+        else if scale >= 0.85 { phraseLinks = lit }
+        else { phraseLinks = [] }
+        // Rationed: a hub's forty meanings at once is a wall of pills, not a
+        // map. The focus's lines are offered first.
+        var phrasesLeft = 14
+        for link in phraseLinks where phrasesLeft > 0 {
+            guard let label = edgeLabels[link], let start = place[link.a], let end = place[link.b] else { continue }
+            let length = hypot(end.x - start.x, end.y - start.y)
+            guard length > 84 else { continue }
+            let middle = CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
+            guard bounds.contains(middle) else { continue }
+            let image = phraseImage(label, maxWidth: min(length - 30, 128), palette: palette)
+            guard image.size.width > 24 else { continue }
+            let box = CGRect(x: middle.x - image.size.width / 2, y: middle.y - image.size.height / 2,
+                             width: image.size.width, height: image.size.height)
+            guard !occupied.contains(where: { $0.intersects(box) }),
+                  !nodeBounds.contains(where: { $0.intersects(box) }) else { continue }
+            occupied.append(box)
+            image.draw(in: box)
+            phrasesLeft -= 1
+        }
+    }
+
+    // MARK: - Label pictures
+
+    /// A name, and at close zoom what it is, drawn once with a halo in the
+    /// canvas colour and reused every frame after. Setting text is the most
+    /// expensive thing a frame of this map does; blitting a picture is not.
+    private func labelImage(_ title: String, subtitle: String?, emphasized: Bool, palette: Palette) -> UIImage {
+        let key = "n|\(emphasized)|\(title)|\(subtitle ?? "")"
+        if let cached = labelImages[key] { return cached }
+        let font = Self.scaledFont(emphasized ? 14 : 12, weight: emphasized ? .semibold : .medium)
+        let detailFont = Self.scaledFont(10, weight: .regular)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byTruncatingTail
+        let maxWidth: CGFloat = emphasized ? 200 : 150
+        let titleSize = (title as NSString).size(withAttributes: [.font: font])
+        let detailSize = subtitle.map { ($0 as NSString).size(withAttributes: [.font: detailFont]) } ?? .zero
+        let pad: CGFloat = 3
+        let textWidth = min(maxWidth, ceil(max(titleSize.width, detailSize.width)))
+        let titleHeight = ceil(titleSize.height), detailHeight = subtitle == nil ? 0 : ceil(detailFont.lineHeight)
+        let size = CGSize(width: textWidth + pad * 2, height: titleHeight + detailHeight + pad * 2)
+        let image = renderer(size).image { rendererContext in
+            rendererContext.cgContext.setLineJoin(.round)
+            let titleRect = CGRect(x: pad, y: pad, width: textWidth, height: titleHeight)
+            let detailRect = CGRect(x: pad, y: pad + titleHeight, width: textWidth, height: detailHeight)
+            for halo in [true, false] {
+                var titleAttributes: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph,
+                                                                      .foregroundColor: halo ? palette.canvas : palette.ink]
+                var detailAttributes: [NSAttributedString.Key: Any] = [.font: detailFont, .paragraphStyle: paragraph,
+                                                                       .foregroundColor: halo ? palette.canvas : palette.muted]
+                if halo {
+                    // A positive stroke width outlines without filling: a
+                    // rim about two points wide around every letter.
+                    titleAttributes[.strokeColor] = palette.canvas; titleAttributes[.strokeWidth] = 32
+                    detailAttributes[.strokeColor] = palette.canvas; detailAttributes[.strokeWidth] = 36
+                }
+                (title as NSString).draw(with: titleRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                                         attributes: titleAttributes, context: nil)
+                if let subtitle {
+                    (subtitle as NSString).draw(with: detailRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                                                attributes: detailAttributes, context: nil)
+                }
+            }
+        }
+        store(image, key)
+        return image
+    }
+
+    /// A line's meaning, on a small pill that interrupts the line cleanly.
+    private func phraseImage(_ text: String, maxWidth: CGFloat, palette: Palette) -> UIImage {
+        let width = floor(max(0, maxWidth))
+        let key = "e|\(width)|\(text)"
+        if let cached = labelImages[key] { return cached }
+        let font = Self.scaledFont(10, weight: .medium)
+        let measured = (text as NSString).size(withAttributes: [.font: font])
+        let textWidth = min(width - 12, ceil(measured.width))
+        guard textWidth > 12 else { return UIImage() }
+        let size = CGSize(width: textWidth + 12, height: ceil(measured.height) + 4)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byTruncatingTail
+        let image = renderer(size).image { rendererContext in
+            let pill = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size).insetBy(dx: 0.5, dy: 0.5), cornerRadius: size.height / 2)
+            palette.raised.setFill(); pill.fill()
+            palette.ink.withAlphaComponent(dark ? 0.16 : 0.08).setStroke(); pill.lineWidth = 1; pill.stroke()
+            (text as NSString).draw(with: CGRect(x: 6, y: 2, width: textWidth, height: ceil(measured.height)),
+                                    options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                                    attributes: [.font: font, .foregroundColor: palette.muted, .paragraphStyle: paragraph],
+                                    context: nil)
+        }
+        store(image, key)
+        return image
+    }
+
+    private func renderer(_ size: CGSize) -> UIGraphicsImageRenderer {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: size, format: format)
+    }
+
+    private func store(_ image: UIImage, _ key: String) {
+        // Bounded: a long session of walking the map meets many names.
+        if labelImages.count > 700 { labelImages.removeAll(keepingCapacity: true) }
+        labelImages[key] = image
+    }
+
+    // MARK: - Colour
+
+    /// One colour per kind of item — the map's groups, as Obsidian colours
+    /// its groups. Tuned as a set: similar weight and lightness, so no kind
+    /// shouts over another, and distinct in hue, so each reads at a glance in
+    /// both appearances. People take the app's own green.
+    static func tint(for kind: String, dark: Bool) -> UIColor {
+        switch kind {
+        case "person": dark ? UIColor(rgb: 0x6FCB9C) : UIColor(rgb: 0x217A4B)
+        case "place": dark ? UIColor(rgb: 0x5DBFD4) : UIColor(rgb: 0x1C7589)
+        case "organization": dark ? UIColor(rgb: 0x9AA3F7) : UIColor(rgb: 0x4B55C8)
+        case "project": dark ? UIColor(rgb: 0xEBA564) : UIColor(rgb: 0xB35E14)
+        case "event": dark ? UIColor(rgb: 0xCD91E6) : UIColor(rgb: 0x8E44AD)
+        case "topic": dark ? UIColor(rgb: 0xEC8FB6) : UIColor(rgb: 0xB23F74)
+        default: dark ? UIColor(rgb: 0x95A69C) : UIColor(rgb: 0x6F8077)
+        }
+    }
+
+    private static func mix(_ from: UIColor, _ to: UIColor, _ amount: CGFloat) -> UIColor {
+        var r0: CGFloat = 0, g0: CGFloat = 0, b0: CGFloat = 0, a0: CGFloat = 0
+        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+        from.getRed(&r0, green: &g0, blue: &b0, alpha: &a0)
+        to.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+        let t = min(1, max(0, amount))
+        return UIColor(red: r0 + (r1 - r0) * t, green: g0 + (g1 - g0) * t, blue: b0 + (b1 - b0) * t, alpha: 1)
     }
 
     // MARK: - Accessibility
@@ -885,6 +1294,13 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             element.activate = { [weak self] in self?.onSelect?(node.id) }
             return element
         }
+    }
+}
+
+private extension UIColor {
+    convenience init(rgb: UInt32) {
+        self.init(red: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                  blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
     }
 }
 

@@ -18,6 +18,7 @@ struct RelationshipGraphScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @State private var graph = RelationshipGraphSnapshot.empty
     @State private var selectedID: String?
     @State private var loading = false
@@ -26,7 +27,7 @@ struct RelationshipGraphScreen: View {
     @State private var requestID = UUID()
     @State private var command = GraphCanvasCommand()
     @State private var listView = false
-    @State private var peopleOnly = false
+    @State private var showSettings = false
     @State private var showSearch = false
     @State private var showGroups = false
     @State private var showConnections = false
@@ -35,6 +36,7 @@ struct RelationshipGraphScreen: View {
     @State private var editingItem: RelationshipGraphNode?
     @State private var notice: String?
     @State private var cardHeight: CGFloat = 0
+    @State private var loadedAt: Date?
     /// Items recently looked at. They survive when the map is full and has to
     /// let something go, so walking back retraces familiar ground.
     @State private var trail: [String] = []
@@ -43,6 +45,9 @@ struct RelationshipGraphScreen: View {
     /// whole map into one star. Hidden by default, as Obsidian users tend to
     /// hide their own note; one toggle, or picking yourself, brings it back.
     @AppStorage("assistant.graph.showMe") private var showMe = false
+    /// Groups, filters, display and forces, tuned in the settings panel and
+    /// shared with the Memory home's preview.
+    @AppStorage(GraphSettings.defaultsKey) private var settingsData = Data()
 
     private var usesList: Bool { listView || dynamicTypeSize.isAccessibilitySize }
     private var selected: RelationshipGraphNode? { graph.nodes.first { $0.id == selectedID } }
@@ -51,10 +56,22 @@ struct RelationshipGraphScreen: View {
         guard let owner = model.workspace?.memory.ownerContactId else { return nil }
         return graph.nodes.first { $0.contactId == owner }?.id
     }
+    private var settings: GraphSettings { GraphSettings(data: settingsData) }
+    private var settingsBinding: Binding<GraphSettings> {
+        Binding(get: { GraphSettings(data: settingsData) }, set: { settingsData = $0.data })
+    }
     private var visible: RelationshipGraphSnapshot {
-        let hidden = showMe ? nil : ownerNodeID
-        guard peopleOnly || hidden != nil else { return graph }
-        return graph.showing(Set(graph.nodes.filter { ($0.kind == "person" || !peopleOnly) && $0.id != hidden }.map(\.id)))
+        graph.filtered(by: settings, hiding: showMe ? nil : ownerNodeID, keeping: selectedID)
+    }
+    /// Every kind on the loaded map, with how many of each, in a fixed order
+    /// so the legend does not reshuffle as the map grows.
+    private var kinds: [GraphKindCount] {
+        let counts = Dictionary(grouping: graph.nodes, by: \.kind).mapValues(\.count)
+        let order = ["person", "place", "organization", "project", "event", "topic"]
+        return counts.keys.sorted {
+            let a = order.firstIndex(of: $0) ?? order.count, b = order.firstIndex(of: $1) ?? order.count
+            return a != b ? a < b : $0 < $1
+        }.map { GraphKindCount(kind: $0, count: counts[$0] ?? 0) }
     }
     private var selectedEdges: [RelationshipGraphEdge] {
         guard let selectedID else { return [] }
@@ -67,14 +84,30 @@ struct RelationshipGraphScreen: View {
         }
         .tint(AssistantTheme.accent(for: colorScheme))
         .task { if !hasLoaded { await load() } }
-        .onChange(of: peopleOnly) { _, only in
-            if only, let selected, selected.kind != "person" { selectedID = nil }
+        .task(id: scenePhase) {
+            // While the map is open and the app is in front, what the
+            // assistant learns keeps arriving: a quiet re-read every so often
+            // blooms new items into place without moving the owner's view.
+            guard scenePhase == .active else { return }
+            if let loadedAt, Date().timeIntervalSince(loadedAt) > 60 { await refresh() }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(90)) } catch { return }
+                await refresh()
+            }
+        }
+        .onChange(of: settings.hiddenKinds) { _, hidden in
+            if let selected, hidden.contains(selected.kind) { selectedID = nil }
             send(.fit)
         }
+        .onChange(of: settings.showOrphans) { _, _ in send(.fit) }
         .onChange(of: showMe) { _, shown in
             if !shown, selectedID != nil, selectedID == ownerNodeID { selectedID = nil }
         }
         .sheet(isPresented: $showSearch) { itemBrowser }
+        .sheet(isPresented: $showSettings) {
+            GraphSettingsSheet(settings: settingsBinding, kinds: kinds,
+                               showMe: ownerNodeID == nil ? nil : $showMe)
+        }
         .sheet(item: $connecting) { node in
             NavigationStack {
                 GraphConnectSheet(source: node, graph: graph) { provisional in
@@ -141,6 +174,7 @@ struct RelationshipGraphScreen: View {
                     selectedID: selectedID,
                     command: command,
                     insets: UIEdgeInsets(top: top, left: 0, bottom: bottom, right: 0),
+                    settings: settings,
                     select: { id in select(id) },
                     connect: { first, second in beginQuickConnect(first, second) }
                 )
@@ -181,7 +215,7 @@ struct RelationshipGraphScreen: View {
                 .accessibilityIdentifier("assistant.relationship.search")
             Menu {
                 Button("Fit to screen", systemImage: "arrow.up.left.and.arrow.down.right") { send(.fit) }
-                Toggle(isOn: $peopleOnly) { Label("People only", systemImage: "person.2") }
+                Button("Graph settings", systemImage: "slider.horizontal.3") { showSettings = true }
                 if ownerNodeID != nil {
                     Toggle(isOn: $showMe) { Label("Show me", systemImage: "person.crop.circle") }
                 }
@@ -200,9 +234,10 @@ struct RelationshipGraphScreen: View {
 
     private var statusText: String {
         if loading && !hasLoaded { return "Loading" }
-        let count = visible.nodes.count
-        let noun = peopleOnly ? (count == 1 ? "person" : "people") : (count == 1 ? "item" : "items")
-        return "\(count) \(noun)" + (graph.truncated ? "+" : "")
+        let count = visible.nodes.count, total = graph.nodes.count
+        let noun = count == 1 && total == 1 ? "item" : "items"
+        let shown = count == total ? "\(count)" : "\(count) of \(total)"
+        return "\(shown) \(noun)" + (graph.truncated ? "+" : "")
     }
 
     @ViewBuilder
@@ -216,9 +251,24 @@ struct RelationshipGraphScreen: View {
             .padding(20)
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .padding(32)
+        } else if hasLoaded && visible.nodes.isEmpty && !graph.nodes.isEmpty {
+            VStack(spacing: 12) {
+                AssistantEmptyState(
+                    "Nothing to show",
+                    systemImage: "line.3.horizontal.decrease.circle",
+                    description: "Everything on the map is hidden by the graph settings."
+                )
+                Button("Show everything") {
+                    var next = settings
+                    next.hiddenKinds = []; next.showOrphans = true
+                    settingsData = next.data
+                }
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+            }
+            .padding(32)
         } else if hasLoaded && visible.nodes.isEmpty {
             AssistantEmptyState(
-                peopleOnly ? "No people on the map yet" : "Your map is empty",
+                "Your map is empty",
                 systemImage: "point.3.connected.trianglepath.dotted",
                 description: "People, places and projects appear here as the assistant learns how they connect."
             )
@@ -269,7 +319,7 @@ struct RelationshipGraphScreen: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 Text("Tap a dot to see its connections.").font(.subheadline.weight(.semibold))
-                Text("Pinch to zoom in for names and details. Hold a dot, then drag it onto another to connect them.")
+                Text("Bigger dots are more connected. Pinch to zoom in for names and details. Hold a dot, then drag it onto another to connect them.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -407,7 +457,7 @@ struct RelationshipGraphScreen: View {
 
     private func resultRow(_ label: String, kind: String) -> some View {
         HStack(spacing: 10) {
-            Circle().fill(Color(RelationshipGraphCanvasView.tint(for: kind, accent: UIColor(AssistantTheme.accent(for: colorScheme)))))
+            Circle().fill(Color(RelationshipGraphCanvasView.tint(for: kind, dark: colorScheme == .dark)))
                 .frame(width: 9, height: 9).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label).foregroundStyle(.primary)
@@ -487,9 +537,22 @@ struct RelationshipGraphScreen: View {
             failure = "Couldn’t load the map. Check your connection and try again."
             return
         }
-        graph = next; hasLoaded = true
+        graph = next; hasLoaded = true; loadedAt = .now
         if let selectedID, !graph.nodes.contains(where: { $0.id == selectedID }) { self.selectedID = nil }
         if let focus, graph.nodes.contains(where: { $0.id == focus }) { choose(focus) }
+    }
+
+    /// Re-reads the map in the background and lays it over what is on
+    /// screen. It never takes the owner's place: nothing they opened or
+    /// walked through is let go, and the camera stays where it is.
+    private func refresh() async {
+        guard hasLoaded, !loading, failure == nil else { return }
+        let token = requestID
+        guard let fresh = await model.relationshipGraph(), requestID == token, !Task.isCancelled else { return }
+        var keep = Set(trail)
+        if let selectedID { keep.insert(selectedID) }
+        graph = graph.refreshed(with: fresh, keep: keep)
+        loadedAt = .now
     }
 
     /// Pull one item's neighbourhood into the map, always. When the map is
@@ -556,7 +619,7 @@ private struct GraphPeekCard: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Circle()
-                    .fill(Color(RelationshipGraphCanvasView.tint(for: node.kind, accent: UIColor(AssistantTheme.accent(for: colorScheme)))))
+                    .fill(Color(RelationshipGraphCanvasView.tint(for: node.kind, dark: colorScheme == .dark)))
                     .frame(width: 10, height: 10)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
@@ -1089,4 +1152,145 @@ struct GraphConnectSheet: View {
             results = response ?? []; searchFailed = response == nil; searching = false
         }
     }
+}
+
+/// The map's settings, laid out the way Obsidian's graph panel is: what is
+/// shown, how it is drawn, and the forces that shape it. It opens at half
+/// height over a live map, so every change can be watched taking effect —
+/// that is how a slider called "repel force" becomes something a person can
+/// actually use.
+struct GraphSettingsSheet: View {
+    @Binding var settings: GraphSettings
+    let kinds: [GraphKindCount]
+    /// Present only when the owner's own item is on the map.
+    var showMe: Binding<Bool>?
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            AssistantForm {
+                Section {
+                    ForEach(kinds) { entry in
+                        Toggle(isOn: shows(entry.kind)) {
+                            HStack(spacing: 10) {
+                                Circle()
+                                    .fill(Color(RelationshipGraphCanvasView.tint(for: entry.kind, dark: colorScheme == .dark)))
+                                    .frame(width: 12, height: 12)
+                                    .accessibilityHidden(true)
+                                Text(entry.kind.sentenceCaseIdentifier)
+                                Spacer(minLength: 8)
+                                Text("\(entry.count)").foregroundStyle(.secondary).monospacedDigit()
+                            }
+                        }
+                        .accessibilityValue("\(entry.count) on the map")
+                    }
+                    if kinds.contains(where: { $0.kind == "person" }) && kinds.count > 1 {
+                        Button(peopleOnly ? "Show every kind" : "People only") {
+                            settings.hiddenKinds = peopleOnly ? [] : Set(kinds.map(\.kind)).subtracting(["person"])
+                        }
+                    }
+                } header: {
+                    Text("Groups")
+                } footer: {
+                    Text("Each kind of item has its own colour. Turn one off to take it off the map.")
+                }
+
+                Section("Filters") {
+                    if let showMe { Toggle("Show me", isOn: showMe) }
+                    Toggle("Unconnected items", isOn: $settings.showOrphans)
+                }
+
+                Section {
+                    Toggle("Arrows", isOn: $settings.arrows)
+                    slider("Names appear", value: $settings.textFade, in: -1.5...1.5,
+                           low: "Closer", high: "Further out", reading: fadeReading)
+                    slider("Node size", value: $settings.nodeSize, in: 0.5...2)
+                    slider("Link thickness", value: $settings.linkThickness, in: 0.4...3)
+                } header: {
+                    Text("Display")
+                } footer: {
+                    Text("A dot's size is how connected it is. Names appear hubs first as you zoom in.")
+                }
+
+                Section {
+                    slider("Center force", value: $settings.centerForce, in: GraphSettings.multiplierRange)
+                    slider("Repel force", value: $settings.repelForce, in: GraphSettings.multiplierRange)
+                    slider("Link force", value: $settings.linkForce, in: GraphSettings.multiplierRange)
+                    slider("Link distance", value: $settings.linkDistance, in: 0.4...2.5)
+                } header: {
+                    Text("Forces")
+                } footer: {
+                    Text("Center pulls loose groups in, repel spreads items apart, and links hold connected items together at their distance.")
+                }
+
+                Section {
+                    Button("Restore defaults") {
+                        var standard = GraphSettings()
+                        // Defaults are for how the map looks and moves; what
+                        // the owner chose to hide stays hidden.
+                        standard.hiddenKinds = settings.hiddenKinds
+                        standard.showOrphans = settings.showOrphans
+                        settings = standard
+                    }
+                    .disabled(settings.isDisplayStandard && settings.areForcesStandard)
+                }
+            }
+            .navigationTitle("Graph settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .tint(AssistantTheme.accent(for: colorScheme))
+        .presentationDetents([.medium, .large])
+        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+        .presentationContentInteraction(.scrolls)
+    }
+
+    private var peopleOnly: Bool {
+        let others = Set(kinds.map(\.kind)).subtracting(["person"])
+        return !others.isEmpty && others.isSubset(of: settings.hiddenKinds) && !settings.hiddenKinds.contains("person")
+    }
+
+    private func shows(_ kind: String) -> Binding<Bool> {
+        Binding(get: { !settings.hiddenKinds.contains(kind) }, set: { shown in
+            if shown { settings.hiddenKinds.remove(kind) } else { settings.hiddenKinds.insert(kind) }
+        })
+    }
+
+    private func fadeReading(_ value: CGFloat) -> String {
+        abs(value) < 0.05 ? "Default" : value > 0 ? "Earlier" : "Later"
+    }
+
+    private func slider(_ title: String, value: Binding<CGFloat>, in range: ClosedRange<CGFloat>,
+                        low: String? = nil, high: String? = nil,
+                        reading: ((CGFloat) -> String)? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(reading?(value.wrappedValue) ?? multiple(value.wrappedValue))
+                    .font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+            }
+            Slider(value: value, in: range) {
+                Text(title)
+            } minimumValueLabel: {
+                if let low { Text(low).font(.caption).foregroundStyle(.secondary) }
+            } maximumValueLabel: {
+                if let high { Text(high).font(.caption).foregroundStyle(.secondary) }
+            }
+            .accessibilityValue(reading?(value.wrappedValue) ?? multiple(value.wrappedValue))
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func multiple(_ value: CGFloat) -> String {
+        Double(value).formatted(.number.precision(.fractionLength(0...2))) + "×"
+    }
+}
+
+/// One kind of item on the map, and how many of it are loaded.
+struct GraphKindCount: Identifiable, Hashable {
+    let kind: String
+    let count: Int
+    var id: String { kind }
 }
