@@ -329,7 +329,7 @@ function fakeSocket() {
   };
 }
 
-function fakeVoice() {
+function fakeVoice(connectGate?: Promise<void>) {
   let events: RealtimeSessionEvents | undefined;
   let config: RealtimeSessionConfig | undefined;
   const session = {
@@ -354,6 +354,7 @@ function fakeVoice() {
       connect: async (c, e) => {
         config = c;
         events = e;
+        if (connectGate) await connectGate;
         return session;
       },
     },
@@ -361,13 +362,15 @@ function fakeVoice() {
   return { resolved, session, events: () => events as RealtimeSessionEvents, config: () => config };
 }
 
-async function connectedBridge() {
+async function connectedBridge(
+  options: { connectGate?: Promise<void>; openingWaitMs?: number } = {},
+) {
   const calls = memoryCalls();
   const dialer = fakeDialer();
   const placed = await startCall(dialDeps(calls, dialer), toolInput());
   const twiml = (dialer.placeCall.mock.calls[0]?.[0] as { twiml: string } | undefined)?.twiml ?? '';
   const token = /name="token" value="([0-9a-f]+)"/.exec(twiml)?.[1] ?? '';
-  const voice = fakeVoice();
+  const voice = fakeVoice(options.connectGate);
   const socket = fakeSocket();
   const notifyOwner = vi.fn(async (_input: { text: string; taskId?: string }) => {});
   handleMediaStream(socket as unknown as MediaSocket, {
@@ -383,7 +386,7 @@ async function connectedBridge() {
     timezone: 'America/Los_Angeles',
     pollMs: 20,
     checkinWaitMs: 2_000,
-    amdHoldMs: 5_000,
+    openingWaitMs: options.openingWaitMs ?? 5_000,
   });
   return { calls, dialer, voice, socket, notifyOwner, token, placed };
 }
@@ -400,7 +403,132 @@ describe('live call bridge', () => {
     await vi.waitFor(() => expect(socket.closed).toBe(true));
   });
 
-  it('runs a call: brief-only instructions, AMD hold, barge-in, check-in, hang-up and wake', async () => {
+  it('passes an opening screening prompt through after the voice model connects', async () => {
+    let connect = () => {};
+    const connectGate = new Promise<void>((resolve) => {
+      connect = resolve;
+    });
+    const { voice, socket, token } = await connectedBridge({ connectGate });
+    socket.emit('message', {
+      event: 'start',
+      start: { streamSid: 'MZ1', customParameters: { callId: CALL_ID, token } },
+    });
+    await vi.waitFor(() => expect(voice.config()).toBeDefined());
+    socket.emit('message', {
+      event: 'media',
+      media: { payload: Buffer.from([1, 2]).toString('base64') },
+    });
+    socket.emit('message', {
+      event: 'media',
+      media: { payload: Buffer.from([3, 4]).toString('base64') },
+    });
+    expect(voice.session.sendAudio).not.toHaveBeenCalled();
+    connect();
+    await vi.waitFor(() => expect(voice.session.sendAudio).toHaveBeenCalledTimes(2));
+    expect(voice.session.sendAudio).toHaveBeenNthCalledWith(1, Uint8Array.of(1, 2));
+    expect(voice.session.sendAudio).toHaveBeenNthCalledWith(2, Uint8Array.of(3, 4));
+    socket.emit('close');
+    await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled());
+  });
+
+  it('bounds caller audio while the voice model connects', async () => {
+    let connect = () => {};
+    const connectGate = new Promise<void>((resolve) => {
+      connect = resolve;
+    });
+    const { voice, socket, token } = await connectedBridge({ connectGate });
+    socket.emit('message', {
+      event: 'start',
+      start: { streamSid: 'MZ1', customParameters: { callId: CALL_ID, token } },
+    });
+    await vi.waitFor(() => expect(voice.config()).toBeDefined());
+    socket.emit('message', {
+      event: 'media',
+      media: { payload: Buffer.alloc(100_000, 1).toString('base64') },
+    });
+    connect();
+    await vi.waitFor(() => expect(voice.session.sendAudio).toHaveBeenCalledTimes(1));
+    expect(voice.session.sendAudio.mock.calls[0]?.[0]).toHaveLength(80_000);
+    socket.emit('close');
+    await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled());
+  });
+
+  it('finishes a call that disconnects before its session is claimed', async () => {
+    const { calls, voice, socket, token } = await connectedBridge();
+    let releaseClaim = () => {};
+    const claimGate = new Promise<void>((resolve) => {
+      releaseClaim = resolve;
+    });
+    const originalClaim = calls.claimStream.bind(calls);
+    vi.spyOn(calls, 'claimStream').mockImplementation(async (id, hash, at) => {
+      await claimGate;
+      return originalClaim(id, hash, at);
+    });
+    socket.emit('message', {
+      event: 'start',
+      start: { streamSid: 'MZ1', customParameters: { callId: CALL_ID, token } },
+    });
+    socket.emit('close');
+    releaseClaim();
+    await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled());
+    expect(calls.rows.get(CALL_ID)?.status).toBe('completed');
+    expect(voice.config()).toBeUndefined();
+  });
+
+  it('closes a voice model that connects after the phone disconnects', async () => {
+    let connect = () => {};
+    const connectGate = new Promise<void>((resolve) => {
+      connect = resolve;
+    });
+    const { voice, socket, token } = await connectedBridge({ connectGate });
+    socket.emit('message', {
+      event: 'start',
+      start: { streamSid: 'MZ1', customParameters: { callId: CALL_ID, token } },
+    });
+    await vi.waitFor(() => expect(voice.config()).toBeDefined());
+    socket.emit('message', {
+      event: 'media',
+      media: { payload: Buffer.from([1, 2]).toString('base64') },
+    });
+    socket.emit('close');
+    await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled());
+    connect();
+    await vi.waitFor(() => expect(voice.session.close).toHaveBeenCalledTimes(1));
+    expect(voice.session.sendAudio).not.toHaveBeenCalled();
+    expect(voice.session.respond).not.toHaveBeenCalled();
+  });
+
+  it('introduces the call when the line stays quiet', async () => {
+    const { voice, socket, token } = await connectedBridge({ openingWaitMs: 50 });
+    socket.emit('message', {
+      event: 'start',
+      start: { streamSid: 'MZ1', customParameters: { callId: CALL_ID, token } },
+    });
+    await vi.waitFor(() => expect(voice.config()).toBeDefined());
+    await vi.waitFor(() =>
+      expect(voice.session.respond).toHaveBeenCalledWith(
+        expect.stringContaining('introduce yourself'),
+      ),
+    );
+    socket.emit('close');
+    await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled());
+  });
+
+  it('does not interrupt a caller with the quiet-line introduction', async () => {
+    const { voice, socket, token } = await connectedBridge({ openingWaitMs: 50 });
+    socket.emit('message', {
+      event: 'start',
+      start: { streamSid: 'MZ1', customParameters: { callId: CALL_ID, token } },
+    });
+    await vi.waitFor(() => expect(voice.config()).toBeDefined());
+    voice.events().transcript('caller', 'Hello?');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(voice.session.respond).not.toHaveBeenCalled();
+    socket.emit('close');
+    await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled());
+  });
+
+  it('runs a call: brief-only instructions, screened audio, barge-in, check-in and wake', async () => {
     const { calls, dialer, voice, socket, notifyOwner, token } = await connectedBridge();
     socket.emit('message', {
       event: 'start',
@@ -419,14 +547,17 @@ describe('live call bridge', () => {
       'end_call',
     ]);
 
-    // Caller audio waits for the answering-machine verdict…
+    // Caller audio reaches the model before answering-machine detection finishes.
     socket.emit('message', {
       event: 'media',
       media: { payload: Buffer.from([1, 2]).toString('base64') },
     });
-    expect(voice.session.sendAudio).not.toHaveBeenCalled();
-    await calls.update(CALL_ID, { answeredBy: 'human' });
-    await vi.waitFor(() => expect(voice.session.sendAudio).toHaveBeenCalledTimes(1));
+    expect(voice.session.sendAudio).toHaveBeenCalledWith(Uint8Array.of(1, 2));
+    const get = vi.spyOn(calls, 'get');
+    get.mockClear();
+    await calls.update(CALL_ID, { answeredBy: 'machine_end_beep' });
+    await vi.waitFor(() => expect(get).toHaveBeenCalledWith(CALL_ID));
+    expect(dialer.hangup).not.toHaveBeenCalled();
 
     // Model speech goes out as 20 ms frames; the caller talking over it clears the line.
     voice.events().audio(new Uint8Array(320));
@@ -500,14 +631,23 @@ describe('live call bridge', () => {
     expect(voice.session.close).toHaveBeenCalled();
   });
 
-  it('hangs up on voicemail when the brief says so', async () => {
+  it('lets the model distinguish voicemail from screening before hanging up', async () => {
     const { calls, dialer, voice, socket, token } = await connectedBridge();
     socket.emit('message', {
       event: 'start',
       start: { streamSid: 'MZ1', customParameters: { callId: CALL_ID, token } },
     });
     await vi.waitFor(() => expect(voice.config()).toBeDefined());
+    const get = vi.spyOn(calls, 'get');
+    get.mockClear();
     await calls.update(CALL_ID, { answeredBy: 'machine_end_beep' });
+    await vi.waitFor(() => expect(get).toHaveBeenCalledWith(CALL_ID));
+    expect(dialer.hangup).not.toHaveBeenCalled();
+    voice.events().toolCall({
+      id: 'voicemail',
+      name: 'end_call',
+      args: { outcome: 'voicemail', summary: 'Reached voicemail; no message was left.' },
+    });
     await vi.waitFor(() => expect(dialer.hangup).toHaveBeenCalled());
     socket.emit('close');
     await vi.waitFor(() => expect(core.recordCallResult).toHaveBeenCalled(), { timeout: 3_000 });

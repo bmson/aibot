@@ -14,6 +14,7 @@ import {
   type RealtimeToolSpec,
   type ResolvedVoiceModel,
   realtimeCostUsd,
+  TELEPHONE_RATE,
 } from '@assistant/core/realtime-voice';
 import type {
   CallCheckin,
@@ -48,8 +49,8 @@ export interface BridgeDeps extends FinishDeps {
   now?: () => Date;
   pollMs?: number;
   checkinWaitMs?: number;
-  /** How long caller audio is held for the answering-machine verdict. */
-  amdHoldMs?: number;
+  /** How long to wait for the other party before introducing the call. */
+  openingWaitMs?: number;
 }
 
 const TOOLS: RealtimeToolSpec[] = [
@@ -103,7 +104,8 @@ const TOOLS: RealtimeToolSpec[] = [
   },
 ];
 
-const MACHINE = /^machine_end_|^fax$/;
+/** Keep at most ten seconds of caller audio while the voice model connects. */
+const MAX_BUFFERED_AUDIO_BYTES = TELEPHONE_RATE * 10;
 
 type TwilioStreamMessage = {
   event?: string;
@@ -121,19 +123,20 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
   const now = deps.now ?? (() => new Date());
   const pollMs = deps.pollMs ?? 1_000;
   const checkinWaitMs = deps.checkinWaitMs ?? 60_000;
-  const amdHoldMs = deps.amdHoldMs ?? 8_000;
+  const openingWaitMs = deps.openingWaitMs ?? 3_000;
 
   let streamSid = '';
   let session: CallSession | null = null;
+  let streamClaim: Promise<CallSession | null> | null = null;
   let voice: ResolvedVoiceModel | null = null;
   let live: RealtimeSession | null = null;
   let connectedAt = 0;
   let ended = false;
   let finishing: Promise<void> | null = null;
   let heldAudio: Uint8Array[] = [];
-  let released = false;
-  let voicemailHandled = false;
-  let reachedVoicemail = false;
+  let heldAudioBytes = 0;
+  let callerSpoke = false;
+  let assistantSpoke = false;
   let wrapUpSent = false;
   let endResult: { outcome: CallResult['outcome']; summary: string } | null = null;
   let hangupTimer: NodeJS.Timeout | null = null;
@@ -146,7 +149,7 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
   const timers: NodeJS.Timeout[] = [];
 
   const sendAudio = (mulaw: Uint8Array) => {
-    if (!streamSid) return;
+    if (ended || !streamSid) return;
     for (const frame of mulawFrames(mulaw)) {
       socket.send(
         JSON.stringify({
@@ -177,34 +180,31 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
     });
   };
 
-  const release = () => {
-    if (released || !live) return;
-    released = true;
-    for (const chunk of heldAudio) live.sendAudio(chunk);
-    heldAudio = [];
+  const bufferAudio = (chunk: Uint8Array) => {
+    if (chunk.length >= MAX_BUFFERED_AUDIO_BYTES) {
+      heldAudio = [chunk.slice(chunk.length - MAX_BUFFERED_AUDIO_BYTES)];
+      heldAudioBytes = MAX_BUFFERED_AUDIO_BYTES;
+      return;
+    }
+    heldAudio.push(chunk);
+    heldAudioBytes += chunk.length;
+    while (heldAudioBytes > MAX_BUFFERED_AUDIO_BYTES) {
+      const oldest = heldAudio.shift();
+      if (!oldest) break;
+      heldAudioBytes -= oldest.length;
+    }
   };
 
-  const handleVoicemail = (brief: CallBrief) => {
-    if (voicemailHandled || !live) return;
-    voicemailHandled = true;
-    reachedVoicemail = true;
-    if (brief.onVoicemail === 'leave_message' && brief.voicemailMessage) {
-      released = true;
-      heldAudio = [];
-      live.respond(
-        `You reached voicemail and the beep has sounded. Say exactly this message, then call end_call with outcome "voicemail": ${brief.voicemailMessage}`,
-      );
-    } else {
-      endResult = {
-        outcome: 'voicemail',
-        summary: 'Reached voicemail; hung up without leaving a message.',
-      };
-      hangup();
-    }
+  const flushHeldAudio = () => {
+    if (!live) return;
+    for (const chunk of heldAudio) live.sendAudio(chunk);
+    heldAudio = [];
+    heldAudioBytes = 0;
   };
 
   const onToolCall = async (call: RealtimeToolCall) => {
     if (!live || !session) return;
+    assistantSpoke = true;
     const args = (call.args ?? {}) as Record<string, unknown>;
     switch (call.name) {
       case 'ask_owner': {
@@ -296,9 +296,6 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
       endResult = { outcome: 'not_achieved', summary: 'The owner ended the call.' };
       hangup();
     }
-    const brief = current.brief as CallBrief;
-    if (current.answeredBy && MACHINE.test(current.answeredBy)) handleVoicemail(brief);
-    else if (current.answeredBy) release();
     for (const checkin of (current.checkins as CallCheckin[]) ?? []) {
       if (checkin.answer === null) continue;
       const resolve = waiters.get(checkin.id);
@@ -329,6 +326,7 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
       waiters.clear();
       const usage = live?.usage();
       await live?.close().catch(() => {});
+      if (!session && streamClaim) session = await streamClaim.catch(() => null);
       if (!session) return;
       await flushTranscript();
       let durationSeconds: number | null = connectedAt
@@ -348,7 +346,7 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
       const notes = ((await deps.calls.get(session.id))?.notes as string[] | undefined) ?? [];
       const result: FinishInput = {
         status: 'completed',
-        outcome: endResult?.outcome ?? (reachedVoicemail ? 'voicemail' : 'not_achieved'),
+        outcome: endResult?.outcome ?? 'not_achieved',
         summary:
           endResult?.summary ||
           (notes.length
@@ -363,22 +361,26 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
   };
 
   const start = async (message: TwilioStreamMessage) => {
+    if (ended) return;
     streamSid = message.start?.streamSid ?? message.streamSid ?? '';
     const params = message.start?.customParameters ?? {};
-    const claimed =
+    streamClaim =
       params.callId && params.token
-        ? await deps.calls.claimStream(params.callId, hashCallbackToken(params.token), now())
-        : null;
+        ? deps.calls.claimStream(params.callId, hashCallbackToken(params.token), now())
+        : Promise.resolve(null);
+    const claimed = await streamClaim;
     if (!claimed) {
       socket.close();
       return;
     }
     session = claimed;
     connectedAt = Date.now();
+    if (ended) return;
     const brief = claimed.brief as CallBrief;
     try {
       voice = await deps.resolveVoice(claimed);
-      live = await voice.provider.connect(
+      if (ended) return;
+      const connectedLive = await voice.provider.connect(
         {
           model: voice.model,
           voice: voice.voice,
@@ -393,11 +395,13 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
         },
         {
           audio: (mulaw) => {
+            assistantSpoke = true;
             if (!replyStartedAt) replyStartedAt = Date.now();
             replyQueuedMs += mulaw.length / 8;
             sendAudio(mulaw);
           },
           speechStarted: () => {
+            callerSpoke = true;
             if (!streamSid) return;
             socket.send(JSON.stringify({ event: 'clear', streamSid }));
             const playedMs = replyStartedAt
@@ -409,9 +413,10 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
           },
           transcript: (role, text) => {
             if (role === 'assistant') {
+              assistantSpoke = true;
               replyStartedAt = 0;
               replyQueuedMs = 0;
-            }
+            } else callerSpoke = true;
             transcriptBuffer.push({ role, text, at: now().toISOString() });
           },
           toolCall: (call) => {
@@ -423,7 +428,13 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
           },
         },
       );
+      if (ended) {
+        await connectedLive.close().catch(() => {});
+        return;
+      }
+      live = connectedLive;
     } catch (error) {
+      if (ended) return;
       console.error('call could not start its voice model', error);
       endResult = {
         outcome: 'failed',
@@ -432,13 +443,17 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
       hangup();
       return;
     }
+    // A screening prompt can arrive while the model connects. Let it hear
+    // those frames before deciding whether it needs to introduce the call.
+    flushHeldAudio();
     timers.push(setInterval(() => void poll(), pollMs));
-    // Hold the caller's audio for the answering-machine verdict, then let the
-    // conversation begin even without one.
     timers.push(
       setTimeout(() => {
-        if (!voicemailHandled) release();
-      }, amdHoldMs),
+        if (ended || !live || callerSpoke || assistantSpoke) return;
+        live.respond(
+          'If someone is speaking, listen and answer them. Otherwise, introduce yourself by name as an AI assistant calling for the owner, say the call is transcribed, and briefly state the approved reason for calling. If this is a call screener, wait for it to connect the person.',
+        );
+      }, openingWaitMs),
     );
   };
 
@@ -458,10 +473,10 @@ export function handleMediaStream(socket: MediaSocket, deps: BridgeDeps): void {
       });
       return;
     }
-    if (message.event === 'media' && message.media?.payload && live && !ended) {
+    if (message.event === 'media' && message.media?.payload && streamSid && !ended) {
       const chunk = new Uint8Array(Buffer.from(message.media.payload, 'base64'));
-      if (released) live.sendAudio(chunk);
-      else if (!voicemailHandled) heldAudio.push(chunk);
+      if (live) live.sendAudio(chunk);
+      else bufferAudio(chunk);
       return;
     }
     if (message.event === 'stop') void finalize();

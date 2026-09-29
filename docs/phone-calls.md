@@ -26,6 +26,12 @@ book a table, ask opening hours, chase an order — then report back in chat.
 - When answered, the phone network first plays a fixed line: *"Hi, this is an
   AI assistant calling on behalf of …. This call is transcribed."* The model
   cannot skip or reword it.
+- If an unknown-caller screener answers, the assistant gives its name and
+  reason for calling, then stays on the line for a person. It repeats the AI
+  and transcription disclosure when a person joins. A screener is not treated
+  as voicemail just because an automated voice answered.
+- On actual voicemail, the assistant follows the approved choice to leave the
+  specified message after the beep or end the call without a message.
 - The live model sees only the approved brief — not your memory or mail — and
   treats everything the other person says as information, never instructions.
 - If they need a decision outside the brief, the assistant puts them on hold
@@ -57,9 +63,13 @@ the call.
 like a browser or code job. Twilio dials with inline TwiML: the disclosure
 `<Say>`, then `<Connect><Stream>` to `wss://<agent>/voice/stream` carrying a
 one-shot token. The agent bridges Twilio's μ-law media to the realtime model
-(`@assistant/core/realtime-voice`), holding the caller's audio for up to eight
-seconds while answering-machine detection decides. State shared across agent
-instances — check-in answers, hang-up requests, the machine verdict — lives on
-the call session (`call_sessions` / `callSessions`). Whichever of the bridge or
-the status webhook sees the call end first settles cost and wakes the task;
+(`@assistant/core/realtime-voice`). It buffers up to ten seconds of incoming
+audio only while the model connects, then forwards audio immediately. The
+asynchronous answering-machine verdict is stored for diagnostics; it never
+ends a live call by itself. If no caller speech is detected shortly after the
+connection, the assistant introduces itself and states the approved reason for
+calling. State shared across agent instances — check-in answers, hang-up
+requests, the machine verdict — lives on the call session (`call_sessions` /
+`callSessions`). The bridge or status webhook, whichever sees the call end
+first, settles cost and wakes the task;
 the sweep closes calls orphaned by a crash.
