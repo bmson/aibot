@@ -5,27 +5,32 @@ import { createGeminiLiveProvider } from './gemini.js';
 import type { RealtimeSessionEvents } from './types.js';
 
 function fakeClient() {
-  const session = {
+  const makeSession = () => ({
     sendRealtimeInput: vi.fn(),
     sendToolResponse: vi.fn(),
     sendClientContent: vi.fn(),
     close: vi.fn(),
-  };
-  let params: LiveConnectParameters | undefined;
+  });
+  // One session per connection, so a resumed call can be told apart.
+  const sessions = [makeSession()];
+  const connections: LiveConnectParameters[] = [];
   const client = {
     live: {
       connect: vi.fn(async (input: LiveConnectParameters) => {
-        params = input;
-        return session;
+        connections.push(input);
+        if (connections.length > sessions.length) sessions.push(makeSession());
+        return sessions[connections.length - 1];
       }),
     },
   } as unknown as Pick<GoogleGenAI, 'live'>;
   return {
     client,
-    session,
-    params: () => params as LiveConnectParameters,
-    emit: (message: Partial<LiveServerMessage>) =>
-      params?.callbacks.onmessage(message as LiveServerMessage),
+    session: sessions[0] as ReturnType<typeof makeSession>,
+    sessions,
+    connections,
+    params: () => connections.at(-1) as LiveConnectParameters,
+    emit: (message: Partial<LiveServerMessage>, connection = connections.length - 1) =>
+      connections[connection]?.callbacks.onmessage(message as LiveServerMessage),
   };
 }
 
@@ -150,5 +155,62 @@ describe('Gemini Live adapter', () => {
     await session.close();
     fake.params().callbacks.onclose?.({} as CloseEvent);
     expect(events.log.at(-1)).toEqual(['toolCall', expect.anything()]);
+  });
+
+  it('hands the conversation to a new connection when the server says GoAway', async () => {
+    const fake = fakeClient();
+    const events = recorder();
+    const session = await createGeminiLiveProvider({
+      project: 'p',
+      location: 'us-central1',
+      client: fake.client,
+    }).connect({ model: 'gemini-live', instructions: '', tools: [] }, events);
+    expect(fake.params().config?.sessionResumption).toEqual({});
+    expect(fake.params().config?.contextWindowCompression).toEqual({ slidingWindow: {} });
+
+    fake.emit({ sessionResumptionUpdate: { resumable: true, newHandle: 'handle-1' } });
+    fake.emit({ goAway: { timeLeft: '10s' } });
+    await vi.waitFor(() => expect(fake.connections).toHaveLength(2));
+    expect(fake.connections[1]?.config?.sessionResumption).toEqual({ handle: 'handle-1' });
+    await vi.waitFor(() => expect(fake.session.close).toHaveBeenCalled());
+
+    session.sendAudio(new Uint8Array(160));
+    expect(fake.sessions[1]?.sendRealtimeInput).toHaveBeenCalledTimes(1);
+    expect(fake.session.sendRealtimeInput).not.toHaveBeenCalled();
+    // The retired connection's close is expected, not the call ending.
+    fake.connections[0]?.callbacks.onclose?.({} as CloseEvent);
+    expect(events.log).not.toContainEqual(['closed']);
+    await session.close();
+  });
+
+  it('resumes a dropped connection, and reports the end only when it cannot', async () => {
+    const fake = fakeClient();
+    const events = recorder();
+    const session = await createGeminiLiveProvider({
+      project: 'p',
+      location: 'us-central1',
+      client: fake.client,
+    }).connect({ model: 'gemini-live', instructions: '', tools: [] }, events);
+
+    fake.emit({ sessionResumptionUpdate: { resumable: true, newHandle: 'handle-1' } });
+    fake.connections[0]?.callbacks.onclose?.({} as CloseEvent);
+    // Speech in the gap is held and replayed on the new connection.
+    session.sendAudio(new Uint8Array(160));
+    await vi.waitFor(() => expect(fake.connections).toHaveLength(2));
+    await vi.waitFor(() => expect(fake.sessions[1]?.sendRealtimeInput).toHaveBeenCalledTimes(1));
+    expect(events.log).not.toContainEqual(['closed']);
+
+    // No handle to resume from: the call has lost its model.
+    const fresh = fakeClient();
+    const freshEvents = recorder();
+    await createGeminiLiveProvider({
+      project: 'p',
+      location: 'us-central1',
+      client: fresh.client,
+    }).connect({ model: 'gemini-live', instructions: '', tools: [] }, freshEvents);
+    fresh.params().callbacks.onclose?.({} as CloseEvent);
+    await vi.waitFor(() => expect(freshEvents.log).toContainEqual(['closed']));
+    expect(fresh.connections).toHaveLength(1);
+    await session.close();
   });
 });

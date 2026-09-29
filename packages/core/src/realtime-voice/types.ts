@@ -60,19 +60,31 @@ export interface RealtimeSessionEvents {
   closed(): void;
 }
 
+/**
+ * Whether answering a tool call should make the model speak again.
+ *
+ * - `respond`: the result is news the model must act on (an owner's answer).
+ * - `if_silent`: bookkeeping made alongside speech (a noted fact). Speak only
+ *   when the turn that made the call said nothing, so the caller is never
+ *   left waiting — and never hears the same sentence twice.
+ * - `none`: the line itself answers next (keys pressed into a phone menu), or
+ *   the call is ending.
+ */
+export type ToolFollowUp = 'respond' | 'if_silent' | 'none';
+
 export interface RealtimeSession {
   /** Caller audio from the phone line, μ-law 8 kHz. */
   sendAudio(mulaw: Uint8Array): void;
-  /** Answer a tool call; the model then continues speaking. */
-  sendToolResult(call: RealtimeToolCall, result: unknown): void;
+  /** Answer a tool call. `followUp` defaults to `respond`. */
+  sendToolResult(call: RealtimeToolCall, result: unknown, followUp?: ToolFollowUp): void;
   /** Ask the model to speak now, optionally steering this one turn. */
   respond(instructions?: string): void;
   /**
-   * The caller interrupted. `playedMs` is how much of the current reply
-   * actually reached the line, so the model's memory of what it said matches
+   * The caller interrupted. `unplayedMs` is how much already-sent speech had
+   * not reached the line yet, so the model's memory of what it said matches
    * what the caller heard.
    */
-  interrupt(playedMs: number): void;
+  interrupt(unplayedMs: number): void;
   usage(): RealtimeUsage;
   close(): Promise<void>;
 }

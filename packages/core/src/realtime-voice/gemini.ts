@@ -1,4 +1,10 @@
-import { GoogleGenAI, type LiveServerMessage, Modality, type Session } from '@google/genai';
+import {
+  GoogleGenAI,
+  type LiveConnectConfig,
+  type LiveServerMessage,
+  Modality,
+  type Session,
+} from '@google/genai';
 import { pcmToTelephone, telephoneToPcm } from './audio-codec.js';
 import {
   emptyRealtimeUsage,
@@ -58,11 +64,11 @@ export function createGeminiLiveProvider(options: GeminiLiveOptions): RealtimeVo
 
 async function connectGeminiLive(
   client: Pick<GoogleGenAI, 'live'>,
-  config: RealtimeSessionConfig,
+  request: RealtimeSessionConfig,
   events: RealtimeSessionEvents,
 ): Promise<RealtimeSession> {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._@-]*$/.test(config.model))
-    throw new Error(`Not a Vertex live model name: ${config.model}`);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._@-]*$/.test(request.model))
+    throw new Error(`Not a Vertex live model name: ${request.model}`);
   const usage: RealtimeUsage = emptyRealtimeUsage();
   let callerText = '';
   let assistantText = '';
@@ -112,60 +118,158 @@ async function connectGeminiLive(
     }
   };
 
-  const session: Session = await client.live.connect({
-    model: config.model,
-    config: {
-      responseModalities: [Modality.AUDIO],
-      systemInstruction: config.instructions,
-      inputAudioTranscription: {},
-      outputAudioTranscription: {},
-      ...(config.voice
-        ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: config.voice } } } }
-        : {}),
-      ...(config.tools.length
-        ? {
-            tools: [
-              {
-                functionDeclarations: config.tools.map((tool) => ({
-                  name: tool.name,
-                  description: tool.description,
-                  parametersJsonSchema: tool.parameters,
-                })),
-              },
-            ],
-          }
-        : {}),
-    },
-    callbacks: {
-      onmessage: onMessage,
-      onerror: (event) =>
-        events.error(new Error(`Gemini Live error: ${String(event.message ?? event)}`)),
-      onclose: () => {
-        flush();
-        if (!closedByUs) events.closed();
+  const liveConfig: LiveConnectConfig = {
+    responseModalities: [Modality.AUDIO],
+    systemInstruction: request.instructions,
+    inputAudioTranscription: {},
+    outputAudioTranscription: {},
+    // Audio sessions otherwise stop at fifteen minutes of context; a sliding
+    // window keeps a long call going on its most recent turns.
+    contextWindowCompression: { slidingWindow: {} },
+    ...(request.voice
+      ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: request.voice } } } }
+      : {}),
+    ...(request.tools.length
+      ? {
+          tools: [
+            {
+              functionDeclarations: request.tools.map((tool) => ({
+                name: tool.name,
+                description: tool.description,
+                parametersJsonSchema: tool.parameters,
+              })),
+            },
+          ],
+        }
+      : {}),
+  };
+
+  // A Live connection has a bounded lifetime: the server sends GoAway and
+  // then drops it, around ten minutes in. That used to end the phone call.
+  // Resumption hands the same conversation to a fresh connection instead.
+  let resumeHandle: string | undefined;
+  let resuming: Promise<void> | null = null;
+  // Caller audio that arrives while no connection can take it, replayed on
+  // the next one so words said during the handover are not lost.
+  let heldAudio: string[] = [];
+
+  type Connection = { session: Session; retired: boolean };
+  let active: Connection;
+
+  const open = async (handle?: string): Promise<Connection> => {
+    const connection = { retired: false } as Connection;
+    connection.session = await client.live.connect({
+      model: request.model,
+      config: { ...liveConfig, sessionResumption: handle ? { handle } : {} },
+      callbacks: {
+        onmessage: (message: LiveServerMessage) => {
+          if (connection.retired) return;
+          const update = message.sessionResumptionUpdate;
+          if (update?.resumable && update.newHandle) resumeHandle = update.newHandle;
+          if (message.goAway) void resume(false);
+          onMessage(message);
+        },
+        onerror: (event) =>
+          events.error(new Error(`Gemini Live error: ${String(event.message ?? event)}`)),
+        onclose: () => {
+          if (connection.retired || closedByUs) return;
+          connection.retired = true;
+          // A GoAway handover may still be in flight; if it lands, this
+          // connection is no longer the active one and there is nothing to do.
+          void Promise.resolve(resuming).then(() =>
+            active === connection ? resume(true) : undefined,
+          );
+        },
       },
-    },
-  });
+    });
+    return connection;
+  };
+
+  const sendPcm = (data: string) => {
+    if (active.retired) {
+      heldAudio.push(data);
+      // Five seconds of 16 kHz audio at 20 ms a chunk.
+      if (heldAudio.length > 250) heldAudio.shift();
+      return;
+    }
+    send((session) =>
+      session.sendRealtimeInput({ audio: { data, mimeType: `audio/pcm;rate=${INPUT_RATE}` } }),
+    );
+  };
+
+  /**
+   * Writing to a connection that has just closed throws, and the bridge
+   * calls in from timers where a throw would take the process down. During
+   * a handover the message is dropped; the resumed session carries on.
+   */
+  const send = (write: (session: Session) => void) => {
+    if (active.retired) return;
+    try {
+      write(active.session);
+    } catch (error) {
+      events.error(error instanceof Error ? error : new Error(String(error)));
+    }
+  };
+
+  /** Move to a new connection. `lost`: the current one has already closed. */
+  const resume = (lost: boolean): Promise<void> => {
+    resuming ??= (async () => {
+      for (let attempt = 0; attempt < 2 && resumeHandle && !closedByUs; attempt++) {
+        try {
+          const next = await open(resumeHandle);
+          if (closedByUs) {
+            next.retired = true;
+            next.session.close();
+            return;
+          }
+          const previous = active;
+          previous.retired = true;
+          active = next;
+          if (!lost) previous.session.close();
+          const held = heldAudio;
+          heldAudio = [];
+          for (const data of held) sendPcm(data);
+          return;
+        } catch (error) {
+          events.error(
+            new Error(
+              `Gemini Live could not resume: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          );
+        }
+      }
+      // After a GoAway the old connection still works until it closes, and
+      // its close tries again. A lost connection with no way back is the end.
+      if (lost && !closedByUs) {
+        flush();
+        events.closed();
+      }
+    })().finally(() => {
+      resuming = null;
+    });
+    return resuming;
+  };
+
+  active = await open();
 
   return {
     sendAudio(mulaw) {
-      session.sendRealtimeInput({
-        audio: {
-          data: Buffer.from(telephoneToPcm(mulaw, INPUT_RATE)).toString('base64'),
-          mimeType: `audio/pcm;rate=${INPUT_RATE}`,
-        },
-      });
+      sendPcm(Buffer.from(telephoneToPcm(mulaw, INPUT_RATE)).toString('base64'));
     },
     sendToolResult(call: RealtimeToolCall, result: unknown) {
-      session.sendToolResponse({
-        functionResponses: [{ id: call.id, name: call.name, response: { output: result } }],
-      });
+      send((session) =>
+        session.sendToolResponse({
+          functionResponses: [{ id: call.id, name: call.name, response: { output: result } }],
+        }),
+      );
     },
     respond(instructions) {
-      session.sendClientContent({
-        turns: [{ role: 'user', parts: [{ text: instructions ?? 'Continue.' }] }],
-        turnComplete: true,
-      });
+      send((session) =>
+        session.sendClientContent({
+          turns: [{ role: 'user', parts: [{ text: instructions ?? 'Continue.' }] }],
+          turnComplete: true,
+        }),
+      );
     },
     // Gemini stops its own reply server-side when it hears the caller.
     interrupt() {},
@@ -173,7 +277,8 @@ async function connectGeminiLive(
     async close() {
       closedByUs = true;
       flush();
-      session.close();
+      active.retired = true;
+      active.session.close();
     },
   };
 }
