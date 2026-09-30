@@ -453,12 +453,10 @@ struct ChatView: View {
                 }
             }
             .background {
-                // This remains behind every app surface. When the keyboard is
-                // present, the stage above respects its safe area and pockets of
-                // this backing show around the keyboard's rounded corners — keep
-                // it the conversation's green so those pockets read as the stage
-                // continuing, not a gray seam.
-                AssistantTheme.stage(for: colorScheme)
+                // The keyboard's rounded corners expose this backing below the
+                // chat viewport. Continue the stage gradient's bottom shade;
+                // the plain stage green leaves a visible seam at that boundary.
+                stageBottomBackdrop
                     .ignoresSafeArea()
             }
             // The conversation surface is visually above the revealed submenu.
@@ -529,6 +527,17 @@ struct ChatView: View {
         )
     }
 
+    private var stageBottomDepthOpacity: Double {
+        colorScheme == .dark ? 0.16 : 0.1
+    }
+
+    private var stageBottomBackdrop: some View {
+        ZStack {
+            AssistantTheme.stage(for: colorScheme)
+            AssistantTheme.stageDepth.opacity(stageBottomDepthOpacity)
+        }
+    }
+
     private var stageBackdrop: some View {
         ZStack {
             AssistantTheme.stage(for: colorScheme)
@@ -537,7 +546,7 @@ struct ChatView: View {
                 stops: [
                     .init(color: .white.opacity(colorScheme == .dark ? 0.035 : 0.07), location: 0),
                     .init(color: .clear, location: 0.38),
-                    .init(color: AssistantTheme.stageDepth.opacity(colorScheme == .dark ? 0.16 : 0.1), location: 1),
+                    .init(color: AssistantTheme.stageDepth.opacity(stageBottomDepthOpacity), location: 1),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
