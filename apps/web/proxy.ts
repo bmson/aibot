@@ -66,6 +66,8 @@ export function proxy(request: NextRequest) {
     /^\/api\/mobile\/v1\/approvals\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const improvementIdPath =
     /^\/api\/mobile\/v1\/improvements\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const repairIdPath =
+    /^\/api\/mobile\/v1\/repairs\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const cardIdPath =
     /^\/api\/mobile\/v1\/cards\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const chatMessagePath =
@@ -181,6 +183,9 @@ export function proxy(request: NextRequest) {
     (path === '/api/mobile/v1/costs' && request.method === 'PATCH') ||
     (approvalIdPath.test(path) && request.method === 'POST') ||
     (improvementIdPath.test(path) && request.method === 'POST') ||
+    // Repair handlers authenticate the owner and use the portable task repository.
+    (path === '/api/mobile/v1/repairs' && ['GET', 'POST'].includes(request.method)) ||
+    (repairIdPath.test(path) && request.method === 'POST') ||
     (path === '/api/mobile/v1/memory/profile' && ['GET', 'POST'].includes(request.method)) ||
     (path === '/api/mobile/v1/memory/people' && request.method === 'POST') ||
     (memoryPersonPath.test(path) && ['GET', 'PATCH', 'POST', 'DELETE'].includes(request.method)) ||
