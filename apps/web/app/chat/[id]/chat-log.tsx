@@ -32,7 +32,7 @@ import {
   retractionNoticeOf,
   turnFailedReason,
 } from '@/lib/chat-notices';
-import { focusRing } from '@/lib/ui';
+import { chip } from '@/lib/ui';
 import { recordRecallFeedbackAction } from '../actions';
 import { ActionChips } from './action-chips';
 import { ApprovalGroup } from './approval-group';
@@ -204,10 +204,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             noticeKind === 'turn-failed' ? (
               <>
                 {failedReason === 'budget' ? (
-                  <Link
-                    href="/costs"
-                    className={`inline-flex h-8 items-center rounded-full border border-accent/30 px-3.5 text-xs font-medium text-accent motion-safe:transition-colors hover:bg-accent/10 ${focusRing}`}
-                  >
+                  <Link href="/costs" className={chip.accent}>
                     Open Costs
                   </Link>
                 ) : null}
@@ -216,7 +213,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                     type="button"
                     disabled={busy}
                     onClick={() => onSend(precedingUserText)}
-                    className={`inline-flex h-8 items-center rounded-full border border-accent/30 px-3.5 text-xs font-medium text-accent motion-safe:transition-colors hover:bg-accent/10 active:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-50 ${focusRing}`}
+                    className={chip.accent}
                   >
                     Try again
                   </button>

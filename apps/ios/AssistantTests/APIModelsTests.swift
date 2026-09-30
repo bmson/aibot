@@ -2764,6 +2764,111 @@ extension APIModelsTests {
         XCTAssertTrue(layout.isSettled, "Letting go lets the map cool and stop")
     }
 
+    func testANewLineBetweenPlacedItemsPullsThemTogether() {
+        // The map used to draw a new connection and leave its ends where they
+        // were, because only a change of items woke the simulation.
+        let graph = RelationshipGraphFixture.snapshot()
+        var layout = RelationshipGraphLayout(); layout.update(nodes: graph.nodes, links: graph.links)
+        layout.settle(maxSteps: 2000)
+        func gap() -> CGFloat {
+            let a = layout.position(of: "node-7")!, b = layout.position(of: "node-15")!
+            return hypot(a.x - b.x, a.y - b.y)
+        }
+        let before = gap()
+        layout.update(nodes: graph.nodes, links: graph.links + [GraphLink("node-7", "node-15")])
+        XCTAssertFalse(layout.isSettled, "A new line wakes the map")
+        layout.settle(maxSteps: 2000)
+        XCTAssertLessThan(gap(), before, "Its ends are drawn together")
+    }
+
+    func testBubblesGrowWithConnectionsAndKeepTheirRoom() {
+        XCTAssertLessThan(RelationshipGraphLayout.radius(degree: 0), RelationshipGraphLayout.radius(degree: 1))
+        XCTAssertLessThan(RelationshipGraphLayout.radius(degree: 4), RelationshipGraphLayout.radius(degree: 16))
+        XCTAssertEqual(RelationshipGraphLayout.radius(degree: 10_000), 28, "A star's centre is capped")
+        XCTAssertEqual(RelationshipGraphLayout.radius(degree: 4, size: 2), RelationshipGraphLayout.radius(degree: 4) * 2)
+        let graph = RelationshipGraphFixture.snapshot(count: 60)
+        var layout = RelationshipGraphLayout(); layout.update(nodes: graph.nodes, links: graph.links)
+        layout.settle(maxSteps: 1000)
+        let hub = layout.index(of: "node-4")!
+        XCTAssertGreaterThan(layout.radii[hub], layout.radii[layout.index(of: "node-40")!])
+        for i in layout.ids.indices where i != hub {
+            let distance = hypot(layout.positions[i].x - layout.positions[hub].x, layout.positions[i].y - layout.positions[hub].y)
+            XCTAssertGreaterThan(distance, layout.radii[i] + layout.radii[hub], "No dot sits inside the hub's bubble")
+        }
+    }
+
+    func testGraphSettingsRetuneTheLayoutAndDecodeLeniently() throws {
+        var layout = RelationshipGraphLayout()
+        let graph = RelationshipGraphFixture.snapshot()
+        layout.update(nodes: graph.nodes, links: graph.links); layout.settle(maxSteps: 2000)
+        var settings = GraphSettings()
+        settings.arrows = false
+        layout.apply(settings)
+        XCTAssertTrue(layout.isSettled, "A display-only change does not move the map")
+        settings.repelForce = 2
+        layout.apply(settings)
+        XCTAssertFalse(layout.isSettled, "A force change is watched taking effect")
+        settings.nodeSize = 1.5
+        layout.apply(settings)
+        XCTAssertEqual(layout.radius(of: "node-0")!, RelationshipGraphLayout.radius(degree: graph.degrees["node-0"]!, size: 1.5), accuracy: 0.001)
+
+        XCTAssertEqual(GraphSettings(data: Data()), GraphSettings())
+        let partial = try XCTUnwrap(#"{"nodeSize":1.4,"hiddenKinds":["place"]}"#.data(using: .utf8))
+        let decoded = GraphSettings(data: partial)
+        XCTAssertEqual(decoded.nodeSize, 1.4)
+        XCTAssertEqual(decoded.hiddenKinds, ["place"])
+        XCTAssertTrue(decoded.arrows, "A missing setting reads as its default")
+        XCTAssertEqual(GraphSettings(data: decoded.data), decoded)
+    }
+
+    func testFilteringHidesKindsAndOrphansButKeepsTheSelection() {
+        let graph = RelationshipGraphFixture.snapshot()
+        var settings = GraphSettings()
+        settings.hiddenKinds = ["place"]
+        let noPlaces = graph.filtered(by: settings)
+        XCTAssertFalse(noPlaces.nodes.contains { $0.kind == "place" })
+        XCTAssertTrue(noPlaces.edges.allSatisfy { edge in noPlaces.nodes.contains { $0.id == edge.subjectId } && noPlaces.nodes.contains { $0.id == edge.objectId } })
+        settings = GraphSettings(); settings.showOrphans = false
+        // Hiding the hub node-0 strands its leaves 1, 3 and 5; node-1 keeps a
+        // line to node-6, and a selected orphan stays on screen.
+        let strands = graph.filtered(by: settings, hiding: "node-0", keeping: "node-3")
+        let ids = Set(strands.nodes.map(\.id))
+        XCTAssertFalse(ids.contains("node-0"))
+        XCTAssertFalse(ids.contains("node-5"), "An item left with no lines is an orphan")
+        XCTAssertTrue(ids.contains("node-1"))
+        XCTAssertTrue(ids.contains("node-3"), "The selection never vanishes from under the finger")
+        XCTAssertEqual(graph.filtered(by: GraphSettings()).nodes.count, graph.nodes.count)
+    }
+
+    func testBackgroundRefreshAddsAndUpdatesWithoutLosingOpenedItems() {
+        var map = RelationshipGraphFixture.snapshot()
+        let opened = RelationshipGraphNode(id: "opened", label: "Opened by hand", kind: "person")
+        map.nodes.append(opened)
+        map.edges.append(RelationshipGraphFixture.edge("opened-edge", from: "node-0", to: "opened"))
+        var confirmedLater = RelationshipGraphFixture.edge("edge-3", from: "node-0", to: "node-3")
+        confirmedLater = RelationshipGraphEdge(id: confirmedLater.id, subjectId: confirmedLater.subjectId, objectId: confirmedLater.objectId,
+                                               predicate: "works_with", reviewStatus: "confirmed", sourceContent: "Updated.",
+                                               presentation: confirmedLater.presentation, validFrom: nil, validUntil: nil)
+        let newcomer = RelationshipGraphNode(id: "new", label: "Learned since", kind: "place")
+        let fresh = RelationshipGraphSnapshot(
+            nodes: Array(map.nodes.prefix(6)) + [newcomer],
+            edges: [confirmedLater, RelationshipGraphFixture.edge("fresh", from: "node-2", to: "new")],
+            totalEdges: 2, truncated: true, focusId: nil)
+        let refreshed = map.refreshed(with: fresh)
+        XCTAssertTrue(refreshed.nodes.contains { $0.id == "new" }, "What the assistant learned blooms in")
+        XCTAssertTrue(refreshed.edges.contains { $0.id == "fresh" })
+        XCTAssertTrue(refreshed.nodes.contains { $0.id == "opened" }, "A neighbourhood opened by hand stays")
+        XCTAssertTrue(refreshed.edges.contains { $0.id == "opened-edge" })
+        XCTAssertEqual(refreshed.edges.first { $0.id == "edge-3" }?.predicate, "works_with", "Known claims are brought up to date")
+        XCTAssertEqual(refreshed.edges.filter { $0.id == "edge-3" }.count, 1)
+        XCTAssertTrue(refreshed.edges.contains { $0.id == "cross" }, "Claims the refresh did not mention are kept")
+        let capped = map.refreshed(with: fresh, keep: ["opened"], nodeCap: 12)
+        XCTAssertEqual(capped.nodes.count, 12, "The window holds its size")
+        XCTAssertTrue(capped.nodes.contains { $0.id == "opened" }, "What the owner is looking at is never let go")
+        XCTAssertTrue(capped.nodes.contains { $0.id == "new" }, "Nor is what the refresh just brought")
+        XCTAssertTrue(capped.truncated)
+    }
+
     func testGraphViewportZoomKeepsPinchAnchorAndClampsScale() {
         var viewport = GraphViewport(scale: 1.2, offset: CGPoint(x: 30, y: -22))
         let size = CGSize(width: 390, height: 640), anchor = CGPoint(x: 63, y: 97)

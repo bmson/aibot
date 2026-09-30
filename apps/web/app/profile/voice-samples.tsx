@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useTransition } from 'react';
 import { purgeVoiceSamplesAction } from '@/app/profile/actions';
 import { VoiceProfileForm } from '@/app/profile/voice-profile-form';
 import {
@@ -15,6 +15,7 @@ import {
   MetaLine,
   selectClass,
 } from '@/lib/ui';
+import { ConfirmButton } from '@/lib/ui-client';
 
 /** Plain-serializable view built in page.tsx. */
 export interface VoiceImportView {
@@ -67,7 +68,6 @@ export function VoiceSamplesPanel({
   uploadable?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
-  const [confirming, setConfirming] = useState(false);
   const purgeable = auto + uploaded;
 
   return (
@@ -197,30 +197,15 @@ export function VoiceSamplesPanel({
       {/* Purge */}
       {!readOnly && purgeable > 0 ? (
         <footer className={cardFooterClass}>
-          {confirming ? (
-            <>
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => startTransition(() => purgeVoiceSamplesAction())}
-                className={btn.danger}
-              >
-                Clear {purgeable} {purgeable === 1 ? 'sample' : 'samples'}
-              </button>
-              <button type="button" onClick={() => setConfirming(false)} className={btn.outline}>
-                Cancel
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setConfirming(true)}
-              className={btn.dangerOutline}
-              title="Delete the auto-learned and uploaded samples; the distilled voice profile is kept"
-            >
-              Clear learned & uploaded samples
-            </button>
-          )}
+          <ConfirmButton
+            pending={pending}
+            pendingLabel="Clearing…"
+            confirmLabel={`Clear ${purgeable} ${purgeable === 1 ? 'sample' : 'samples'}?`}
+            onConfirm={() => startTransition(() => purgeVoiceSamplesAction())}
+            title="Delete the auto-learned and uploaded samples; the distilled voice profile is kept"
+          >
+            Clear learned & uploaded samples
+          </ConfirmButton>
         </footer>
       ) : null}
     </section>

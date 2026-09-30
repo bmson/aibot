@@ -17,6 +17,8 @@ struct MemoryView: View {
     @State private var forgetting: WorkspaceMemoryFact?
     @State private var graph: RelationshipGraphSnapshot?
     @State private var graphFailed = false
+    /// The map's own settings, so the preview looks like the map it opens.
+    @AppStorage(GraphSettings.defaultsKey) private var graphSettingsData = Data()
     @State private var showsMap = false
 
     /// Enough to recognise the memory, not so many that the page becomes the
@@ -159,8 +161,11 @@ struct MemoryView: View {
         Button { showsMap = true } label: {
             ZStack(alignment: .bottomLeading) {
                 if let graph, !graph.nodes.isEmpty {
-                    RelationshipGraphCanvas(snapshot: graph, selectedID: nil, interactive: false,
-                                            insets: UIEdgeInsets(top: 8, left: 0, bottom: 56, right: 0))
+                    let settings = GraphSettings(data: graphSettingsData)
+                    let shown = graph.filtered(by: settings)
+                    RelationshipGraphCanvas(snapshot: shown.nodes.isEmpty ? graph : shown, selectedID: nil, interactive: false,
+                                            insets: UIEdgeInsets(top: 8, left: 0, bottom: 56, right: 0),
+                                            settings: settings)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 } else {
@@ -666,20 +671,21 @@ struct PersonDetailsView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 AssistantFlowLayout(spacing: 8) {
-                                    Button("Edit") { editingOccasion = occasion }
                                     if occasion.quarantined {
-                                        Button("Approve") {
+                                        Button("Approve", systemImage: "checkmark") {
                                             review(occasion, verdict: "approve")
                                         }
-                                        AssistantConfirmationButton("Reject", systemImage: "xmark") {
+                                        .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
+                                        AssistantConfirmationButton("Reject", systemImage: "xmark", compact: true) {
                                             review(occasion, verdict: "reject")
                                         }
                                     }
-                                    AssistantConfirmationButton("Delete") {
+                                    Button("Edit", systemImage: "pencil") { editingOccasion = occasion }
+                                        .buttonStyle(AssistantActionButtonStyle(kind: .neutral, compact: true))
+                                    AssistantConfirmationButton("Delete", compact: true) {
                                         delete(occasion)
                                     }
                                 }
-                                .font(.caption)
                                 .disabled(isWorking)
                             }
                         }

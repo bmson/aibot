@@ -45,14 +45,98 @@ export function SubmitButton({
       title={title}
       className={`${btnScale[size][variant]} ${className}`}
     >
-      {pending ? (
-        <>
-          <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
-          {pendingLabel}
-        </>
-      ) : (
-        children
-      )}
+      <StableLabel pending={pending} pendingLabel={pendingLabel}>
+        {children}
+      </StableLabel>
+    </button>
+  );
+}
+
+/**
+ * The resting label and the pending label share one grid cell, so the button
+ * is always as wide as the longer of the two and never resizes — or shoves its
+ * neighbours sideways — while an action is in flight.
+ */
+function StableLabel({
+  children,
+  pending,
+  pendingLabel,
+}: {
+  children: ReactNode;
+  pending: boolean;
+  pendingLabel: ReactNode;
+}) {
+  return (
+    <span className="grid items-center justify-items-center">
+      <span
+        className="invisible col-start-1 row-start-1 inline-flex items-center gap-2"
+        aria-hidden="true"
+      >
+        {children}
+      </span>
+      <span
+        className="invisible col-start-1 row-start-1 inline-flex items-center gap-2"
+        aria-hidden="true"
+      >
+        <LoaderCircle />
+        {pendingLabel}
+      </span>
+      <span className="col-start-1 row-start-1 inline-flex items-center gap-2">
+        {pending ? (
+          <>
+            <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" />
+            {pendingLabel}
+          </>
+        ) : (
+          children
+        )}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A click-handler button with the app's one in-flight treatment: disabled,
+ * `aria-busy`, a spinner, and a present-participle label ("Approving…"). Use it
+ * wherever a button runs a transition or a server call directly; inside a
+ * `<form action>` use <SubmitButton>, which reads the form's own status.
+ */
+export function ActionButton({
+  children,
+  pending = false,
+  pendingLabel = 'Working…',
+  variant = 'outline',
+  size = 'md',
+  className = '',
+  title,
+  disabled = false,
+  onClick,
+  'aria-label': ariaLabel,
+}: {
+  children: ReactNode;
+  pending?: boolean;
+  pendingLabel?: ReactNode;
+  variant?: BtnVariant;
+  size?: 'md' | 'sm';
+  className?: string;
+  title?: string;
+  disabled?: boolean;
+  onClick: () => void;
+  'aria-label'?: string;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={pending || disabled}
+      aria-busy={pending}
+      aria-label={ariaLabel}
+      title={title}
+      onClick={onClick}
+      className={`${btnScale[size][variant]} ${className}`}
+    >
+      <StableLabel pending={pending} pendingLabel={pendingLabel}>
+        {children}
+      </StableLabel>
     </button>
   );
 }
@@ -168,34 +252,58 @@ export function ActionMenu({
   );
 }
 
-/** Two activations of the same control, with a visible, expiring confirmation. */
+/** How long an armed confirmation waits for its second tap — the iOS app's
+ *  `AssistantConfirmationState.lifetime` is the same eight seconds. */
+const CONFIRM_WINDOW_MS = 8000;
+
+/**
+ * Two activations of the same control, with a visible, expiring confirmation.
+ *
+ * This is the app's one "are you sure?" — every decision that acts on the
+ * owner's behalf (Approve, Deny) and every destructive action (Reject, Forget,
+ * Delete, Stop task) goes through it, so asking twice looks and times out the
+ * same everywhere. It used to be joined by a 3-second hook in the budget card
+ * and by hand-rolled "Really reject" + "Cancel" pairs that swapped the button
+ * row out from under the pointer.
+ *
+ * Arming never moves anything: every label the button can show reserves the
+ * same cell. A destructive variant fills red while armed; any other variant
+ * picks up an accent ring, so the second tap is always visibly different.
+ */
 export function ConfirmButton({
   children,
   confirmLabel = 'Confirm?',
   pendingLabel = 'Working…',
+  pending: pendingProp = false,
   variant = 'dangerOutline',
   size = 'md',
   className = '',
   title,
   disabled = false,
   onConfirm,
+  'aria-label': ariaLabel,
 }: {
   children: ReactNode;
   confirmLabel?: string;
   pendingLabel?: string;
+  /** In-flight state for `onConfirm` callers; form callers get it from the form. */
+  pending?: boolean;
   variant?: BtnVariant;
   size?: 'md' | 'sm';
   className?: string;
   title?: string;
   disabled?: boolean;
   onConfirm?: () => void;
+  'aria-label'?: string;
 }) {
-  const { pending } = useFormStatus();
+  const formStatus = useFormStatus();
+  const pending = formStatus.pending || pendingProp;
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const armed = expiresAt !== null;
   const unavailable = pending || disabled;
   const danger = variant === 'dangerOutline' || variant === 'danger';
-  const base = `${btnScale[size][armed && danger ? 'danger' : variant]} ${className}`;
+  const armedRing = armed && !danger ? 'ring-2 ring-accent/40' : '';
+  const base = `${btnScale[size][armed && danger ? 'danger' : variant]} ${armedRing} ${className}`;
 
   useEffect(() => {
     if (!expiresAt) return;
@@ -213,11 +321,13 @@ export function ConfirmButton({
     if (unavailable) setExpiresAt(null);
   }, [unavailable]);
 
+  const reserve = 'invisible col-start-1 row-start-1 inline-flex items-center gap-2';
   return (
     <button
       type="button"
       disabled={unavailable}
       aria-busy={pending}
+      aria-label={ariaLabel && !armed && !pending ? ariaLabel : undefined}
       title={title}
       onBlur={() => setExpiresAt(null)}
       onKeyDown={(event) => {
@@ -226,7 +336,7 @@ export function ConfirmButton({
       onClick={(event) => {
         if (!expiresAt || Date.now() >= expiresAt) {
           event.preventDefault();
-          setExpiresAt(Date.now() + 8000);
+          setExpiresAt(Date.now() + CONFIRM_WINDOW_MS);
           return;
         }
         setExpiresAt(null);
@@ -235,33 +345,28 @@ export function ConfirmButton({
       }}
       className={base}
     >
-      {/* Reserve both labels so the confirmation stays under the pointer. */}
+      {/* Reserve every label so the confirmation stays under the pointer. */}
       <span className="grid items-center justify-items-center">
-        <span
-          className="invisible col-start-1 row-start-1 inline-flex items-center gap-1.5"
-          aria-hidden="true"
-        >
+        <span className={reserve} aria-hidden="true">
           {children}
         </span>
-        <span
-          className="invisible col-start-1 row-start-1 inline-flex items-center gap-1.5"
-          aria-hidden="true"
-        >
-          <Check className="size-4" />
+        <span className={reserve} aria-hidden="true">
+          <Check />
           {confirmLabel}
         </span>
-        <span
-          className="col-start-1 row-start-1 inline-flex items-center gap-1.5"
-          aria-live="polite"
-        >
+        <span className={reserve} aria-hidden="true">
+          <LoaderCircle />
+          {pendingLabel}
+        </span>
+        <span className="col-start-1 row-start-1 inline-flex items-center gap-2" aria-live="polite">
           {pending ? (
             <>
-              <LoaderCircle className="size-4 motion-safe:animate-spin" aria-hidden="true" />
+              <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" />
               {pendingLabel}
             </>
           ) : armed ? (
             <>
-              <Check className="size-4" aria-hidden="true" />
+              <Check aria-hidden="true" />
               {confirmLabel}
             </>
           ) : (

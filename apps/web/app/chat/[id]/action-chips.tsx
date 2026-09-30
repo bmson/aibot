@@ -1,6 +1,6 @@
 'use client';
 
-import { focusRing } from '@/lib/ui';
+import { chip } from '@/lib/ui';
 
 /**
  * Quick-reply pills under an assistant reply, from its `data-chips` cue part
@@ -21,9 +21,9 @@ export function ActionChips({
 }) {
   if (labels.length === 0) return null;
   return (
-    <div
-      className={`flex flex-wrap gap-2 motion-safe:transition-opacity ${active ? '' : 'opacity-50'}`}
-    >
+    // Each chip fades itself when disabled (the shared chip style), so the
+    // row needs no opacity of its own.
+    <div className="flex flex-wrap gap-2">
       {labels.map((label, index) => (
         <button
           key={label}
@@ -31,7 +31,7 @@ export function ActionChips({
           disabled={!active}
           onClick={() => onSend(label)}
           style={{ animationDelay: `${index * 50}ms` }}
-          className={`chip-quick-reply inline-flex h-8 items-center rounded-full border border-accent/30 px-3.5 text-xs font-medium text-accent motion-safe:animate-[presence-arrive_320ms_ease-out_both] motion-safe:transition-colors hover:bg-accent/10 active:bg-accent/15 disabled:cursor-not-allowed ${focusRing}`}
+          className={`chip-quick-reply ${chip.accent} motion-safe:animate-[presence-arrive_320ms_ease-out_both]`}
         >
           {label}
         </button>

@@ -21,6 +21,7 @@ import {
   SectionHeading,
   inputClass as sharedInputClass,
 } from '@/lib/ui';
+import { ConfirmButton } from '@/lib/ui-client';
 
 export interface SkillView {
   id: string;
@@ -108,7 +109,7 @@ export function SkillsPanel({
   const [error, setError] = useState<string | null>(null);
   // A skill is owner-authored prose; deleting it is not recoverable. Two-step
   // like every other destructive control (documents, memory, stop goal).
-  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fields = (fd: FormData) => ({
     name: String(fd.get('name') ?? ''),
@@ -266,40 +267,24 @@ export function SkillsPanel({
                       >
                         {s.deprecated ? 'Restore' : 'Retire'}
                       </button>
-                      {confirmingDeleteId === s.id ? (
-                        <>
-                          <button
-                            type="button"
-                            disabled={pending}
-                            onClick={() =>
-                              startTransition(async () => {
-                                await deleteSkillAction(s.id);
-                                setConfirmingDeleteId(null);
-                              })
+                      <ConfirmButton
+                        disabled={pending && deletingId !== s.id}
+                        pending={pending && deletingId === s.id}
+                        pendingLabel="Deleting…"
+                        confirmLabel="Delete?"
+                        onConfirm={() => {
+                          setDeletingId(s.id);
+                          startTransition(async () => {
+                            try {
+                              await deleteSkillAction(s.id);
+                            } finally {
+                              setDeletingId(null);
                             }
-                            className={btn.danger}
-                          >
-                            {pending ? 'Deleting…' : 'Confirm delete'}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={pending}
-                            onClick={() => setConfirmingDeleteId(null)}
-                            className={btn.outline}
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={pending}
-                          onClick={() => setConfirmingDeleteId(s.id)}
-                          className={btn.dangerOutline}
-                        >
-                          Delete
-                        </button>
-                      )}
+                          });
+                        }}
+                      >
+                        Delete
+                      </ConfirmButton>
                     </footer>
                   ) : null}
                 </>
