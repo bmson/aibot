@@ -3,6 +3,7 @@ export { createPostgresApplicationChatPersistence } from './application-chat-rep
 export { createPostgresApplicationConfirmationRepository } from './application-confirmation-repository.js';
 export { createPostgresApprovalPolicyRepository } from './approval-policy-repository.js';
 export { createPostgresApprovalRepository } from './approval-repository.js';
+export { createPostgresAuditInvestigationRepository } from './audit-investigation-repository.js';
 export { createPostgresCallSessionRepository } from './call-session-repository.js';
 export { createPostgresCardRefreshRepository } from './card-refresh-repository.js';
 export * from './client.js';

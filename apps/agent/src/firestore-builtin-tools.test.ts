@@ -3,6 +3,7 @@ import { GRAPH_EXTRACTION_VERSION } from '@assistant/core/memory/knowledge-graph
 import type { Db } from '@assistant/db';
 import {
   embeddingSpaceKey,
+  FirestoreAuditInvestigationRepository,
   FirestoreContactLookupRepository,
   FirestoreConversationSearchRepository,
   FirestoreGraphRecallRepository,
@@ -13,6 +14,7 @@ import {
 } from '@assistant/firestore';
 import type { EmbeddingSpace, Records } from '@assistant/persistence';
 import {
+  registerAuditTools,
   registerPortableContactLookupTool,
   registerPortableConversationSearchTool,
   registerPortableGraphSnapshotTool,
@@ -82,6 +84,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       sqlAccesses = [];
       const embed = async (texts: string[]) => texts.map(() => vector);
       registry = new ToolRegistry();
+      registerAuditTools(registry, new FirestoreAuditInvestigationRepository(store));
       registerPortableGraphSnapshotTool(registry, {
         embed,
         graph: new FirestoreGraphRecallRepository(store, space),
@@ -105,6 +108,51 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
     afterEach(async () => {
       expect(sqlAccesses).toEqual([]);
       await disposeStore(store);
+    });
+
+    it('reads a failed task and the rest of its model input through the bot audit tools without SQL', async () => {
+      const taskId = randomUUID();
+      const entryId = randomUUID();
+      await store
+        .doc('tasks', taskId)
+        .set({
+          id: taskId,
+          agentId: AGENT,
+          createdAt: now,
+          title: 'Failed send',
+          attempt: 3,
+          state: { callbackToken: 'private-token' },
+        });
+      await store
+        .doc('modelCallAudit', entryId)
+        .set({
+          id: entryId,
+          taskId,
+          createdAt: now,
+          input: 'x'.repeat(14000),
+          output: '[audit:provider-error] Invalid request',
+          capture: 'redacted',
+        });
+      const report = await run('audit.read', { taskId, section: 'modelCallAudit' });
+      expect(JSON.stringify(report)).toContain('Invalid request');
+      expect(JSON.stringify(report)).not.toContain('private-token');
+      const field = await run('audit.read_field', {
+        taskId,
+        section: 'modelCallAudit',
+        entryId,
+        field: 'input',
+        offset: 12000,
+      });
+      expect(field).toMatchObject({
+        offset: 12000,
+        totalChars: 14000,
+        text: 'x'.repeat(2000),
+        hasMore: false,
+      });
+      expect(await run('audit.read', { taskId }, { agentId: 'another-owner' })).toEqual({
+        error: 'Audit record not found.',
+      });
+      expect(registry.toolsForTask('unknown').map((tool) => tool.name)).not.toContain('audit.read');
     });
 
     async function contact(

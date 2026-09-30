@@ -7,6 +7,11 @@ export function proxy(request: NextRequest) {
   // Browser access is an owner administration console. Native APIs retain
   // their existing persistence and authentication boundaries below.
   const adminPage = ['/settings', '/security', '/signin', '/setup'].includes(path);
+  const auditApi = /^\/api\/audit\/[0-9a-f-]{36}$/i.test(path);
+  if (auditApi)
+    return ['GET', 'HEAD'].includes(request.method)
+      ? NextResponse.next()
+      : Response.json({ error: 'Audit trail is read-only.' }, { status: 405 });
   const auditPage = path === '/audit' || /^\/audit\/[0-9a-f-]{36}$/i.test(path);
   const asset = [
     '/icon.svg',

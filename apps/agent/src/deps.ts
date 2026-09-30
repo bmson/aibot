@@ -22,6 +22,7 @@ import { supersedeContradictedFacts } from '@assistant/core/memory/supersede';
 import { evaluateOutOfBandPing } from '@assistant/core/proactive/nudge-policy';
 import {
   createDb,
+  createPostgresAuditInvestigationRepository,
   createPostgresExecutionPersistence,
   createPostgresModelConnectionRepository,
   type Db,
@@ -29,6 +30,7 @@ import {
 import {
   createFirestoreExecutionPersistence,
   createInstallationStore,
+  FirestoreAuditInvestigationRepository,
   FirestoreContactLookupRepository,
   FirestoreConversationSearchRepository,
   FirestoreDocumentExtractionRepository,
@@ -74,6 +76,7 @@ import {
 } from '@assistant/persistence';
 import type { BrowserJobLauncher } from '@assistant/tools/browser';
 import {
+  registerAuditTools,
   registerBuiltinTools,
   registerPortableContactLookupTool,
   registerPortableConversationSearchTool,
@@ -553,6 +556,7 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
     graph: new FirestoreGraphRecallRepository(store, embeddingSpace),
   });
   registerPortableReadResultTool(registry, { toolExecution: persistence.toolExecution });
+  registerAuditTools(registry, new FirestoreAuditInvestigationRepository(store));
   registerPortableOccasionTools(
     registry,
     new FirestoreOccasionToolRepository(store, config.FIRESTORE_AGENT_ID),
@@ -569,6 +573,7 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
     registry,
     new FirestoreSituationToolRepository(store, config.FIRESTORE_AGENT_ID),
   );
+
   const modules = installModules(composition.modules, {
     config,
     db,
@@ -676,6 +681,7 @@ export function buildDeps(): AgentDeps {
         ),
     }),
   );
+  registerAuditTools(registry, createPostgresAuditInvestigationRepository(db));
   const modules = installModules(composition.modules, {
     config,
     db,

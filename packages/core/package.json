@@ -61,7 +61,8 @@
     "./workflow/response-contract": "./src/workflow/response-contract.ts",
     "./workflow/saved-work": "./src/workflow/saved-work.ts",
     "./workflow/schedules": "./src/workflow/schedules.ts",
-    "./workflow/watch-suggest": "./src/workflow/watch-suggest.ts"
+    "./workflow/watch-suggest": "./src/workflow/watch-suggest.ts",
+    "./audit-investigation": "./src/audit-investigation.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

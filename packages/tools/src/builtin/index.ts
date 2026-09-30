@@ -766,3 +766,5 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
 
   return registry;
 }
+
+export { registerAuditTools } from './audit.js';

@@ -9,6 +9,8 @@ vi.mock('@/lib/task-activity', () => ({
   getTaskActivityDetail: state.detail,
 }));
 
+vi.mock('@/lib/audit-investigation', () => ({ getAuditInvestigation: state.detail }));
+
 import AuditDetailPage from './[id]/page';
 import AuditPage from './page';
 
@@ -57,38 +59,46 @@ describe('owner audit console', () => {
     expect(state.list).not.toHaveBeenCalled();
     expect(state.detail).not.toHaveBeenCalled();
   });
-  it('shows recorded errors and a cursor for older entries without action controls', async () => {
+  it('shows failure context, investigation request, and section-specific pagination', async () => {
     const id = randomUUID();
-    const at = new Date('2026-09-29T12:00:00Z');
     state.detail.mockResolvedValue({
-      timezone: 'UTC',
-      task: { title: 'Failed send', status: 'failed', progress: 'Check provider' },
-      toolCalls: [
+      task: {
+        title: 'Failed send',
+        status: 'failed',
+        progress: 'Check provider',
+        attempt: 2,
+        spentUsd: '0.03',
+      },
+      investigationPrompt: `Investigate audit record ${id}`,
+      evidenceNotes: ['Missing capture is not proof of no call.'],
+      sections: [
         {
-          id: 'tool',
-          createdAt: at,
-          toolName: 'gmail.send',
-          status: 'failed',
-          args: null,
-          result: null,
-          error: { text: 'Provider unavailable', totalChars: 20, truncated: false },
+          name: 'toolCalls',
+          entries: [
+            {
+              id: randomUUID(),
+              at: '2026-09-30T01:00:00Z',
+              fields: {
+                toolName: { text: 'gmail.send', hasMore: false },
+                error: { text: 'Provider unavailable', hasMore: false },
+              },
+            },
+          ],
+          nextCursor: 'stable-cursor',
         },
       ],
-      modelCalls: [],
-      approvals: [],
-      messages: [],
-      hasMoreTimeline: true,
     });
     const html = renderToStaticMarkup(
       await AuditDetailPage({
         params: Promise.resolve({ id }),
-        searchParams: Promise.resolve({ before: 'invalid' }),
+        searchParams: Promise.resolve({ section: 'toolCalls' }),
       }),
     );
-    expect(state.detail).toHaveBeenCalledWith(id, {});
     expect(html).toContain('Provider unavailable');
-    expect(html).toContain('Older entries');
-    expect(html).toContain(encodeURIComponent(at.toISOString()));
-    expect(html).not.toContain('<form');
+    expect(html).toContain('Investigate with the bot');
+    expect(html).toContain('Attempt 2');
+    expect(html).toContain('cursor=stable-cursor');
+    expect(html).toContain('Download records');
+    expect(html).not.toContain('Retry task');
   });
 });

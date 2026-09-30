@@ -43,6 +43,9 @@ describe.each(['firestore', 'postgres'])('mobile administration in %s mode', (dr
         proxy(new NextRequest(`https://assistant.test${path}`, { method: 'POST' })).status,
       ).toBe(410);
     }
+    const auditApi = `https://assistant.test/api/audit/${randomUUID()}`;
+    expect(proxy(new NextRequest(auditApi)).status).toBe(200);
+    expect(proxy(new NextRequest(auditApi, { method: 'POST' })).status).toBe(405);
     for (const path of [
       '/settings',
       '/audit',

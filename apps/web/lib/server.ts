@@ -79,6 +79,7 @@ import {
   uploadImport,
   waitForChatUpdates,
 } from '@assistant/application';
+import { readAuditInvestigation } from '@assistant/application/audit-investigation';
 import type { CallsPorts } from '@assistant/application/calls';
 import type { GoalInput } from '@assistant/application/goals';
 import type { ModelProviderPorts } from '@assistant/application/model-providers';
@@ -110,6 +111,7 @@ import {
 } from '@assistant/core/workflow/schedules';
 import {
   createDb,
+  createPostgresAuditInvestigationRepository,
   createPostgresCallSessionRepository,
   createPostgresCardRefreshRepository,
   createPostgresGeneratedCardRepository,
@@ -125,6 +127,7 @@ import {
   createInstallationStore,
   FirestoreActiveJobLookup,
   FirestoreApplicationChatPersistence,
+  FirestoreAuditInvestigationRepository,
   FirestoreCallSessionRepository,
   FirestoreCommitmentMutationRepository,
   FirestoreDeviceTokenRepository,
@@ -921,4 +924,27 @@ export function getImportCommands() {
     reviewImport: application.reviewImport,
     uploadImport: application.uploadImport,
   };
+}
+
+/** The administration console and bot use the same owner-scoped evidence projection. */
+export async function getOwnerAuditInvestigation(
+  taskId: string,
+  options: Parameters<typeof readAuditInvestigation>[3] = {},
+) {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore')
+    return readAuditInvestigation(
+      new FirestoreAuditInvestigationRepository(getFirestoreInstallationStore()),
+      config.FIRESTORE_AGENT_ID,
+      taskId,
+      options,
+    );
+  const db = getDb();
+  const agent = await getAgent(db);
+  return readAuditInvestigation(
+    createPostgresAuditInvestigationRepository(db),
+    agent.id,
+    taskId,
+    options,
+  );
 }

@@ -995,7 +995,7 @@ export class ModelRouter {
    * the provider call that already happened.
    */
   private async recordForAudit(
-    input: MeterInput,
+    input: Pick<MeterInput, 'taskId' | 'role' | 'modelId' | 'latencyMs' | 'event' | 'audit'>,
     usage: { callId?: string; inputTokens: number; outputTokens: number },
   ): Promise<void> {
     const { audit } = input;
@@ -1026,6 +1026,35 @@ export class ModelRouter {
     } catch (err) {
       console.error('model audit capture failed', err);
     }
+  }
+
+  /** Failed provider attempts need input context too, even when no billable call was returned. */
+  private async recordFailureForAudit(
+    role: ModelRole,
+    modelId: string,
+    method: AuditPayload['method'],
+    opts: CallOptions,
+    started: number,
+    error: unknown,
+  ): Promise<void> {
+    const detail = error instanceof Error ? error : new Error(String(error));
+    const metadata = detail as Error & { statusCode?: number; isRetryable?: boolean };
+    await this.recordForAudit(
+      {
+        taskId: opts.taskId,
+        role,
+        modelId,
+        latencyMs: Date.now() - started,
+        event: { finishReason: 'error' },
+        audit: {
+          method,
+          system: opts.system,
+          input: captureInput(opts),
+          output: `[audit:provider-error] ${safeJson({ name: detail.name, message: detail.message, statusCode: metadata.statusCode, retryable: metadata.isRetryable })}`,
+        },
+      },
+      { inputTokens: 0, outputTokens: 0 },
+    );
   }
 
   private async meterWithoutRepeatingProviderWork(input: MeterInput): Promise<void> {
@@ -1093,6 +1122,7 @@ export class ModelRouter {
         };
       });
     } catch (err) {
+      await this.recordFailureForAudit(role, route.modelId, 'generate', opts, started, err);
       await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
       throw err;
     }
@@ -1169,6 +1199,7 @@ export class ModelRouter {
         },
         onError: async ({ error }: { error: unknown }) => {
           await terminalOnce(async () => {
+            await this.recordFailureForAudit(role, route.modelId, 'stream', opts, started, error);
             await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
             if (opts.onError) {
               await opts.onError(error).catch((callbackError) => {
@@ -1180,6 +1211,7 @@ export class ModelRouter {
         onAbort: async () => {
           await terminalOnce(async () => {
             const error = new Error('model stream aborted');
+            await this.recordFailureForAudit(role, route.modelId, 'stream', opts, started, error);
             await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
             if (opts.onError) {
               await opts.onError(error).catch((callbackError) => {
@@ -1190,6 +1222,7 @@ export class ModelRouter {
         },
       });
     } catch (err) {
+      await this.recordFailureForAudit(role, route.modelId, 'stream', opts, started, err);
       await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
       throw err;
     }
@@ -1411,6 +1444,7 @@ export class ModelRouter {
         };
       });
     } catch (err) {
+      await this.recordFailureForAudit(role, route.modelId, 'step', opts, started, err);
       await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
       throw err;
     }
@@ -1495,6 +1529,7 @@ export class ModelRouter {
             },
           });
         } else {
+          await this.recordFailureForAudit(role, route.modelId, 'object', opts, started, err);
           await releaseReservation(this.persistence.costs, reservationId).catch(() => {});
         }
         throw err;

@@ -34,7 +34,8 @@
     "./shell": "./src/shell.ts",
     "./suggestions": "./src/suggestions.ts",
     "./tasks": "./src/tasks.ts",
-    "./provider-billing": "./src/provider-billing.ts"
+    "./provider-billing": "./src/provider-billing.ts",
+    "./audit-investigation": "./src/audit-investigation.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

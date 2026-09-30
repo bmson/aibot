@@ -6,6 +6,7 @@ export { FirestoreApplicationConfirmationRepository } from './application-confir
 export { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 export { FirestoreApprovalRepository } from './approvals.js';
 export { FirestoreAssistantHealthRepository } from './assistant-health.js';
+export { FirestoreAuditInvestigationRepository } from './audit-investigation.js';
 export { FirestoreBriefingRepository } from './briefing.js';
 export { FirestoreBudgetCapsRepository } from './budget-caps.js';
 export { FirestoreCallSessionRepository } from './call-sessions.js';
