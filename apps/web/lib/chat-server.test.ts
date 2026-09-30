@@ -266,21 +266,10 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
     });
 
     const { default: RootLayout } = await import('../app/layout.js');
-    const { NotchCompanion } = await import('../app/notch-companion.js');
-    const layout = await RootLayout({ children: null });
-    const [head, body] = (layout.props as { children: unknown[] }).children as [
-      unknown,
-      { props: { children: unknown[] } },
-    ];
-    void head;
-    const notch = body.props.children.find(
-      (child): child is { type: typeof NotchCompanion; props: { pollShellStatus?: boolean } } =>
-        typeof child === 'object' &&
-        child !== null &&
-        'type' in child &&
-        child.type === NotchCompanion,
-    );
-    expect(notch?.props.pollShellStatus).toBe(false);
+    const layoutMarkup = renderToStaticMarkup(await RootLayout({ children: null }));
+    expect(layoutMarkup).toContain('Audit trail');
+    expect(layoutMarkup).toContain('href="/settings"');
+    expect(layoutMarkup).not.toContain('notch-companion');
 
     const ChatIndexPage = (await import('../app/chat/page.js')).default;
     const index = await ChatIndexPage({ searchParams: Promise.resolve({}) });
