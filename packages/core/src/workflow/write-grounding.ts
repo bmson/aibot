@@ -53,6 +53,17 @@ const TIME_ZONE_OFFSETS: Record<string, number> = {
 };
 const NOT_AIRPORT_CODE = new Set([
   'AM',
+  'API',
+  'CEO',
+  'CFO',
+  'COO',
+  'CTO',
+  'CSV',
+  'ETA',
+  'ETD',
+  'PDF',
+  'TBA',
+  'TBD',
   'ARR',
   'CET',
   'CEST',

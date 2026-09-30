@@ -181,10 +181,15 @@ function normalizedFacts(source: string, item: ActionEvidence): FlightFacts {
     Number.isNaN(reference.getTime()) ? new Date(0) : reference,
   );
 
-  const summary = `${String(args.summary ?? '')} ${String(args.description ?? '')} ${source}`;
+  // An outbound description can mention a missing return without being a return leg.
+  const returnLabel =
+    item.toolName === 'calendar.create_event' ? String(args.summary ?? '') : source;
   const isReturn =
-    /\breturn(?:\s+flight)?\b/i.test(summary) ||
-    /\breturn\b/i.test(JSON.stringify(args.rows ?? []));
+    /\breturn(?:\s+flight)?\b/i.test(returnLabel) &&
+    !MISSING_RETURN.test(returnLabel) &&
+    !/\breturn\b[^.!?\n]{0,70}\b(?:not\s+(?:booked|scheduled|confirmed)|pending|unbooked)\b/i.test(
+      returnLabel,
+    );
   const hasArrival =
     item.toolName === 'calendar.create_event'
       ? typeof args.end === 'string' && args.end.length > 0

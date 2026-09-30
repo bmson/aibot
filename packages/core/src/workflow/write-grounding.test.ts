@@ -180,6 +180,26 @@ describe('workspace write grounding', () => {
     ).toMatchObject({ allowed: false, reason: expect.stringContaining('airline') });
   });
 
+  it('does not treat common itinerary acronyms as airport codes', () => {
+    const ownerText = 'Create a sheet for my United flight from SFO to BER.';
+    expect(
+      groundWorkspaceWrite(
+        'sheets.create',
+        {
+          title: 'Flight itinerary',
+          headerRow: true,
+          rows: [
+            ['Airline', 'From', 'To', 'CEO', 'ETA'],
+            ['United', 'SFO', 'BER', 'Passenger', 'TBD'],
+          ],
+        },
+        ownerText,
+        ownerText,
+        createdAt,
+      ),
+    ).toEqual({ allowed: true });
+  });
+
   it('builds grounding context from successful reads, excluding failed and assistant prose', () => {
     const window = [
       { role: 'assistant', content: [{ type: 'text', text: 'It is probably a United flight.' }] },

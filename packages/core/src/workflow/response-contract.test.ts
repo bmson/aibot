@@ -1913,6 +1913,22 @@ describe('flight write response grounding', () => {
     expect(result).toMatchObject({ blocked: false, text });
   });
 
+  it('does not infer a return from an outbound description about missing return details', () => {
+    const text = 'The return time is unavailable.';
+    const evidence = {
+      ...outboundWrite,
+      args: {
+        ...outboundWrite.args,
+        description: 'Return flight not booked; return time unavailable.',
+      },
+    };
+    expect(
+      enforceResponseContract(text, [evidence], {
+        requestText: 'Add my United flight from SFO to BER to the calendar.',
+      }),
+    ).toMatchObject({ blocked: false, text });
+  });
+
   it('corrects a different explicitly zoned flight time while preserving the valid arrival', () => {
     const result = enforceResponseContract(
       'Your United flight departs at 10:15 AM PDT and arrives at 5:15 AM CEST.',
