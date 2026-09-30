@@ -147,8 +147,8 @@ service's existing secret binding.
 In **More → MCP connections**, add a public Streamable HTTP MCP endpoint and give it a name.
 Assistant discovers the server's tool list before enabling it. Tool descriptions and results are
 treated as untrusted. Calls initially stop for approval. On an approval card, choose
-**Approve and always allow [tool] on [server], with any arguments** to permit future calls to that
-one named tool from owner tasks, including calls that use outside information. Other tools still
+**Always approve**, review the permission, then **Approve and save** to permit future calls to that
+one named tool with any arguments from owner tasks, including calls that use outside information. Other tools still
 ask. Changing the endpoint, credentials, or cached tool definition requires fresh approval.
 Pause or delete the permission under **Standing approvals**. An optional bearer token is encrypted on the server with `MCP_ENC_KEY`, decrypted only at the network
 boundary, and never returned to the phone or shown again. OAuth authorization is not yet available.

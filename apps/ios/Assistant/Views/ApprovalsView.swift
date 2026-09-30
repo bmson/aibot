@@ -220,10 +220,8 @@ struct ApprovalsView: View {
         }
     }
 
-    /// Same pair, same order, same ask-twice as the approval row in chat:
-    /// the affirmative answer leads, and both answers take two taps. This
-    /// screen used to put Deny first and approve on a single tap, so the one
-    /// decision that sends something out was the easier one to hit by mistake.
+    /// One-time decisions keep their two-tap confirmation. Saved permissions
+    /// open a review that describes exactly which future actions they cover.
     @ViewBuilder
     private func approvalActions(_ item: PendingApproval) -> some View {
         approvalActionButton(
@@ -246,6 +244,19 @@ struct ApprovalsView: View {
             item: item
         )
 
+        if let scope = item.rememberLabel {
+            AssistantAlwaysApproveButton(scope: scope) {
+                guard decisionInFlightID == nil else { return }
+                decisionInFlightID = item.id
+                let succeeded = await model.approveAndRemember(item)
+                decisionInFlightID = nil
+                if succeeded { decisionSuccessFeedback += 1 }
+                else { decisionErrorFeedback += 1 }
+            }
+            .disabled(decisionInFlightID != nil)
+            .accessibilityIdentifier("assistant.approvals.\(item.id).alwaysApprove")
+        }
+
         Menu {
             Button("Edit request", systemImage: "pencil") {
                 editingApproval = item
@@ -257,18 +268,6 @@ struct ApprovalsView: View {
         .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
         .controlSize(.small)
         .disabled(decisionInFlightID != nil)
-        if let label = item.rememberLabel {
-            AssistantConfirmationButton(label, confirmationTitle: "Save standing approval?",
-                systemImage: "checkmark.shield", kind: .neutral,
-                hint: "Approves this action and saves the permission described above.", compact: true) {
-                decisionInFlightID = item.id
-                let succeeded = await model.approveAndRemember(item)
-                decisionInFlightID = nil
-                if succeeded { decisionSuccessFeedback += 1 }
-                else { decisionErrorFeedback += 1 }
-            }
-            .disabled(decisionInFlightID != nil)
-        }
     }
 
     private func approvalActionButton(

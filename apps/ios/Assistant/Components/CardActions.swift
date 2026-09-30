@@ -2,6 +2,57 @@ import EventKit
 import EventKitUI
 import SwiftUI
 
+/// A saved permission deserves its own review, rather than a paragraph-sized button.
+struct AssistantAlwaysApproveButton: View {
+    let scope: String
+    var fillsWidth = false
+    let action: () async -> Void
+
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var reviewing = false
+    @State private var working = false
+
+    var body: some View {
+        Button {
+            reviewing = true
+        } label: {
+            HStack(spacing: 8) {
+                ZStack {
+                    Image(systemName: "checkmark.shield").opacity(working ? 0 : 1)
+                    if working { ProgressView().controlSize(.small) }
+                }
+                .frame(width: 16)
+                Text("Always approve")
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .buttonStyle(AssistantActionButtonStyle(kind: .neutral, compact: true, fillsWidth: fillsWidth))
+        .disabled(working)
+        .accessibilityLabel(working ? "Saving approval rule" : "Always approve")
+        .accessibilityHint("Reviews the permission before approving this request and saving it for future matching actions.")
+        .confirmationDialog("Always approve matching actions?", isPresented: $reviewing, titleVisibility: .visible) {
+            Button("Approve and save") {
+                guard !working, isEnabled else { return }
+                working = true
+                Task {
+                    await action()
+                    working = false
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(scope)\n\nThis approves the current request and saves this permission for future matching actions. You can pause or remove it in More → Standing approvals.")
+        }
+        .onChange(of: isEnabled) { _, enabled in
+            if !enabled { reviewing = false }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { reviewing = false }
+        }
+    }
+}
+
 /// A calendar entry a card proposes: the owner sees it in the system sheet,
 /// can change anything, and nothing is written unless they tap Add. The
 /// sheet runs outside the app, so no calendar permission is asked for.

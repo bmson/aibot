@@ -2,6 +2,7 @@
 
 import type { InlineApprovalDetail, InlineApprovalStatus } from '@assistant/application/chat';
 import { Check, CircleHelp, X } from 'lucide-react';
+import { AlwaysApproveButton } from '@/app/approvals/always-approve-button';
 import { ConfirmButton } from '@/lib/ui-client';
 import { DecisionActions, DecisionReceipt } from './decision-card';
 
@@ -132,17 +133,13 @@ export function ApprovalRow({
           Deny
         </ConfirmButton>
         {part.rememberLabel ? (
-          <ConfirmButton
-            variant="outline"
+          <AlwaysApproveButton
+            scope={part.rememberLabel}
             size="sm"
             disabled={disabled}
             pending={busy && busyDecision === 'approved'}
-            pendingLabel="Saving…"
-            confirmLabel="Confirm standing rule"
             onConfirm={() => onResolve(part.approvalId, 'approved', true)}
-          >
-            {part.rememberLabel}
-          </ConfirmButton>
+          />
         ) : null}
       </DecisionActions>
     </div>
