@@ -431,7 +431,7 @@ struct MoreView: View {
     private func policyRow(_ policy: WorkspacePolicy) -> some View {
         let detail = VStack(alignment: .leading, spacing: 3) {
             Text(policy.displayName)
-            Text(policy.toolName.sentenceCaseIdentifier)
+            Text(policy.scope ?? policy.toolName.sentenceCaseIdentifier)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

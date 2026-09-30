@@ -12,6 +12,7 @@ export interface InlineApprovalPart {
   summary: string;
   status?: InlineApprovalStatus;
   details?: InlineApprovalDetail[];
+  rememberLabel?: string | null;
 }
 
 /** What the group decided about a row in this session, layered over the server status. */
@@ -37,7 +38,7 @@ export function ApprovalRow({
   busyDecision: 'approved' | 'denied' | null;
   disabled: boolean;
   detailsOpenByDefault: boolean;
-  onResolve: (approvalId: string, decision: 'approved' | 'denied') => void;
+  onResolve: (approvalId: string, decision: 'approved' | 'denied', remember?: boolean) => void;
 }) {
   const status: InlineApprovalStatus = resolution ?? part.status ?? 'pending';
 
@@ -130,6 +131,19 @@ export function ApprovalRow({
           <X aria-hidden="true" />
           Deny
         </ConfirmButton>
+        {part.rememberLabel ? (
+          <ConfirmButton
+            variant="outline"
+            size="sm"
+            disabled={disabled}
+            pending={busy && busyDecision === 'approved'}
+            pendingLabel="Saving…"
+            confirmLabel="Confirm standing rule"
+            onConfirm={() => onResolve(part.approvalId, 'approved', true)}
+          >
+            {part.rememberLabel}
+          </ConfirmButton>
+        ) : null}
       </DecisionActions>
     </div>
   );

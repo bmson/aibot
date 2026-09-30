@@ -1949,9 +1949,13 @@ final class AppModel: ObservableObject {
     }
 
     func approveAndRemember(_ item: PendingApproval) async -> Bool {
+        await approveAndRemember(id: item.id)
+    }
+
+    func approveAndRemember(id: String) async -> Bool {
         guard let client else { return false }
-        return await performApprovalMutation(id: item.id, status: "approved") {
-            try await client.approveAndRemember(id: item.id)
+        return await performApprovalMutation(id: id, status: "approved") {
+            try await client.approveAndRemember(id: id)
         }
     }
 

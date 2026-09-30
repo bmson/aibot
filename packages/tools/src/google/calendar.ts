@@ -797,7 +797,8 @@ export function registerCalendarTools(
         "Answer an invitation: accept, decline, or mark tentative on an event the assistant or owner was invited to. Use this for an event someone ELSE organized — calendar.update_event edits the assistant's own events and cannot set an RSVP. Pass the calendarId the event was found on (list_events and search_events return it); the default is the assistant's own calendar. The organizer is notified.",
       inputSchema: respondSchema,
       /**
-       * Always approval. An RSVP is a message to whoever called the meeting —
+       * Approval by default; the owner can save a calendar-scoped response rule.
+       * An RSVP is a message to whoever called the meeting —
        * declining is a social act with consequences the assistant is in no
        * position to weigh — so there is no owner-only tier here the way there
        * is for editing a private appointment. The risk callback is a constant

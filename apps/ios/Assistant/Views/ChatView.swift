@@ -859,6 +859,7 @@ struct ChatView: View {
             runForReal: model.isSending ? nil : { text in model.send(text, force: true) },
             retry: model.isSending ? nil : { text in model.send(text) },
             decideApproval: { id, decision in await model.decideApproval(id: id, decision: decision) },
+            rememberApproval: { id in await model.approveAndRemember(id: id) },
             decideSuggestion: { id, decision in await model.decideSuggestion(id: id, decision: decision) },
             openActivity: { openRoute(.activity) },
             refreshCard: { id in await model.refreshSavedCard(id: id) },

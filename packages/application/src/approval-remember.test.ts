@@ -85,21 +85,16 @@ describe('approveAndRememberApproval', () => {
     });
   });
 
-  it('approves without a policy when the current payload is ambiguous', async () => {
+  it('refuses to approve or save a rule when the current payload contains malformed recipients', async () => {
     const fixture = repository({
-      approval: approval({ to: ['one@example.com', 'two@example.com'] }),
+      approval: approval({ to: ['one@example.com', null] }),
       toolName: 'gmail.send',
     });
 
     await expect(
       approveAndRememberApproval({ agentId: 'agent-1', approvals: fixture.repo }, 'approval-1'),
-    ).resolves.toMatchObject({ ok: true });
-    expect(fixture.resolve).toHaveBeenCalledWith({
-      approvalId: 'approval-1',
-      decision: 'approved',
-      via: 'web',
-      expectedAgentId: 'agent-1',
-    });
+    ).resolves.toMatchObject({ ok: false });
+    expect(fixture.resolve).not.toHaveBeenCalled();
   });
 
   it('returns the repository miss without attempting resolution', async () => {

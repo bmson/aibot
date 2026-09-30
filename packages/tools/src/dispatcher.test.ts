@@ -1,4 +1,5 @@
 import { resetConfigForTest } from '@assistant/config';
+import { approvalRule } from '@assistant/core/approval-rule';
 import {
   agents,
   approvalPolicies,
@@ -6,6 +7,7 @@ import {
   costEvents,
   costReservations,
   createDb,
+  createPostgresApprovalRepository,
   createPostgresTaskRepository,
   type Db,
   goals,
@@ -21,6 +23,7 @@ import { z } from 'zod';
 import { approvalFallbackSummary } from './approval-summaries.js';
 import { ToolDispatcher } from './dispatcher.js';
 import { registerCalendarTools } from './google/calendar.js';
+import { type McpToolConnectionRecord, registerMcpTools } from './mcp.js';
 import { ToolRegistry } from './registry.js';
 import { AmbiguousTwilioDeliveryError } from './twilio/client.js';
 import type { AssistantTool, ToolContext } from './types.js';
@@ -1101,6 +1104,222 @@ describe('ToolDispatcher (integration)', () => {
     expect(outcome.kind).toBe('awaiting_approval'); // NOT executed
     expect(executions['test.egress-ineligible']).toBeUndefined();
     if (policy) await db.delete(approvalPolicies).where(eq(approvalPolicies.id, policy.id));
+  });
+
+  for (const { tainted, attachments, expected } of [
+    { tainted: false, attachments: [], expected: 'executed' },
+    { tainted: true, attachments: [], expected: 'awaiting_approval' },
+    {
+      tainted: false,
+      attachments: [{ workspacePath: 'private.pdf' }],
+      expected: 'awaiting_approval',
+    },
+  ]) {
+    it(`email scope: tainted=${tainted}, attachments=${attachments.length} yields ${expected}`, async (ctx) => {
+      if (!dbUp) return ctx.skip();
+      const registry = new ToolRegistry().register(
+        makeTool('gmail.send', {
+          risk: 'approval',
+          inputSchema: z.object({
+            to: z.array(z.string()),
+            attachments: z.array(z.object({ workspacePath: z.string() })),
+          }),
+        }),
+        {
+          networkEgress: true,
+          blanketAllowIneligible: true,
+          scopedAllowTemplates: ['gmail.send.to_recipient'],
+        },
+      );
+      const task = await makeTask('owner');
+      const [policy] = await db
+        .insert(approvalPolicies)
+        .values({
+          agentId,
+          toolName: 'gmail.send',
+          templateKey: 'gmail.send.to_recipient',
+          match: { recipient: 'friend@example.com' },
+          effect: 'allow',
+          createdVia: 'approval_dialog',
+        })
+        .returning();
+      try {
+        const outcome = await new ToolDispatcher(db, registry).dispatch({
+          task,
+          step: 1,
+          toolName: 'gmail.send',
+          args: { to: ['friend@example.com'], attachments },
+          ctx: { ...ctxFor(task), tainted },
+          provenance,
+        });
+        expect(outcome.kind).toBe(expected);
+      } finally {
+        if (policy) await db.delete(approvalPolicies).where(eq(approvalPolicies.id, policy.id));
+      }
+    });
+  }
+
+  for (const scenario of [
+    {
+      toolName: 'docs.share',
+      templateKey: 'docs.share.to_recipient',
+      allowed: { documentId: 'document-123456', email: 'friend@example.com', role: 'reader' },
+      refused: { documentId: 'another-document-123', email: 'friend@example.com', role: 'writer' },
+    },
+    {
+      toolName: 'phone.call',
+      templateKey: 'phone.call.same_brief',
+      allowed: { brief: { to: '+14155550199', goal: 'Ask opening hours', maxMinutes: 5 } },
+      refused: { brief: { to: '+14155550199', goal: 'Ask opening hours', maxMinutes: 6 } },
+    },
+  ]) {
+    it(`${scenario.toolName}: saved scope works, but changed permissions and taint still require approval`, async (ctx) => {
+      if (!dbUp) return ctx.skip();
+      const rule = approvalRule(scenario.toolName, scenario.allowed);
+      if (!rule) throw new Error('Expected a saveable approval');
+      const registry = new ToolRegistry().register(
+        makeTool(scenario.toolName, {
+          risk: 'approval',
+          inputSchema: z.record(z.string(), z.unknown()),
+        }),
+        {
+          networkEgress: true,
+          blanketAllowIneligible: true,
+          scopedAllowTemplates: [scenario.templateKey],
+        },
+      );
+      const dispatcher = new ToolDispatcher(db, registry);
+      const [policy] = await db
+        .insert(approvalPolicies)
+        .values({
+          agentId,
+          toolName: scenario.toolName,
+          templateKey: rule.templateKey,
+          match: rule.match,
+          effect: 'allow',
+          createdVia: 'approval_dialog',
+        })
+        .returning();
+      try {
+        for (const { args, tainted, expected } of [
+          { args: scenario.allowed, tainted: false, expected: 'executed' },
+          { args: scenario.refused, tainted: false, expected: 'awaiting_approval' },
+          { args: scenario.allowed, tainted: true, expected: 'awaiting_approval' },
+        ]) {
+          const task = await makeTask('owner');
+          const outcome = await dispatcher.dispatch({
+            task,
+            step: 1,
+            toolName: scenario.toolName,
+            args,
+            ctx: { ...ctxFor(task), tainted },
+            provenance,
+          });
+          expect(outcome.kind).toBe(expected);
+        }
+      } finally {
+        if (policy) await db.delete(approvalPolicies).where(eq(approvalPolicies.id, policy.id));
+      }
+    });
+  }
+
+  it('saves one MCP-tool grant explicitly, then permits changed arguments and taint only on that bound tool', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    let connection: McpToolConnectionRecord = {
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'Projects',
+      enabled: true,
+      status: 'ready',
+      serverName: 'Projects',
+      endpoint: 'https://example.com/mcp',
+      bearerTokenEncrypted: null,
+      tools: ['projects.list', 'projects.delete'].map((name) => ({
+        name,
+        description: name,
+        inputSchema: {},
+      })),
+    };
+    const production = registerMcpTools(new ToolRegistry(), {
+      get: async () => connection,
+      list: async () => [connection],
+    }).get('mcp.call');
+    if (!production) throw new Error('MCP tool missing');
+    // Use production schema, preparation, flags, and risk; mock only the external request.
+    let invoked = 0;
+    const registry = new ToolRegistry().register(
+      {
+        ...production.tool,
+        execute: async () => {
+          invoked++;
+          return { ok: true };
+        },
+      },
+      production.flags,
+    );
+    const dispatcher = new ToolDispatcher(db, registry);
+    const first = await makeTask('owner');
+    const args = { connectionId: connection.id, toolName: 'projects.list', arguments: {} };
+    const pending = await dispatcher.dispatch({
+      task: first,
+      step: 1,
+      toolName: 'mcp.call',
+      args,
+      ctx: { ...ctxFor(first), tainted: true },
+      provenance,
+    });
+    expect(pending.kind).toBe('awaiting_approval');
+    if (pending.kind !== 'awaiting_approval') throw new Error('Expected initial owner consent');
+    const repository = createPostgresApprovalRepository(db);
+    const saved = await repository.getRememberable(agentId, pending.approvalId);
+    const savedRule = saved && approvalRule(saved.toolName, saved.approval.payload);
+    if (!savedRule) throw new Error('Missing owner-scoped approval offer');
+    const result = await repository.resolve({
+      approvalId: pending.approvalId,
+      decision: 'approved',
+      via: 'web',
+      expectedAgentId: agentId,
+      policy: {
+        agentId,
+        toolName: 'mcp.call',
+        templateKey: savedRule.templateKey,
+        match: savedRule.match,
+        effect: 'allow',
+      },
+    });
+    expect(result.ok).toBe(true);
+    const [approved] = await db
+      .select()
+      .from(approvals)
+      .where(eq(approvals.id, pending.approvalId));
+    const policyId = approved?.createdPolicyId;
+    if (!policyId) throw new Error('Saved policy missing');
+    try {
+      const run = async (inputArgs: Record<string, unknown>) => {
+        const task = await makeTask('owner');
+        return dispatcher.dispatch({
+          task,
+          step: 1,
+          toolName: 'mcp.call',
+          args: inputArgs,
+          ctx: { ...ctxFor(task), tainted: true },
+          provenance,
+        });
+      };
+      expect((await run({ ...args, arguments: { query: 'new input' } })).kind).toBe('executed');
+      expect(invoked).toBe(1);
+      expect((await run({ ...args, toolName: 'projects.delete' })).kind).toBe('awaiting_approval');
+      connection = { ...connection, endpoint: 'https://changed.example.com/mcp' };
+      expect((await run(args)).kind).toBe('awaiting_approval');
+      connection = { ...connection, endpoint: 'https://example.com/mcp' };
+      await db
+        .update(approvalPolicies)
+        .set({ enabled: false })
+        .where(eq(approvalPolicies.id, policyId));
+      expect((await run(args)).kind).toBe('awaiting_approval');
+      expect(invoked).toBe(1);
+    } finally {
+      await db.delete(approvalPolicies).where(eq(approvalPolicies.id, policyId));
+    }
   });
 
   it('an ownerVisibleOnly tool stays autonomous under taint (D6)', async (ctx) => {

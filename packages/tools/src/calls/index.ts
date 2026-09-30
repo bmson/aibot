@@ -38,7 +38,7 @@ export function registerCallTools(registry: ToolRegistry, deps: CallToolDeps): T
   const tool: AssistantTool<typeof InputSchema, CallPendingResult> = {
     name: 'phone.call',
     description:
-      "Place a phone call from the assistant's own number and hold the conversation live, on the owner's behalf, to achieve one goal (book a table, ask opening hours, chase an order). Every call needs the owner's approval of the brief. The other party always hears that you are an AI assistant. Put in `context` only the facts you may share, in `mayAgreeTo` exactly what you may accept, and in `mustNot` the hard limits. During the call you can check with the owner. The result (outcome, summary, facts noted, transcript) arrives in the next turn — call ONCE and wait.",
+      "Place a phone call from the assistant's own number and hold the conversation live, on the owner's behalf, to achieve one goal (book a table, ask opening hours, chase an order). Every call needs the owner's approval of the brief unless a saved rule permits the same brief within its time limit. The other party always hears that you are an AI assistant. Put in `context` only the facts you may share, in `mayAgreeTo` exactly what you may accept, and in `mustNot` the hard limits. During the call you can check with the owner. The result (outcome, summary, facts noted, transcript) arrives in the next turn — call ONCE and wait.",
     inputSchema: InputSchema,
     risk: 'approval',
     acceptsUntrustedInput: false,
@@ -120,6 +120,7 @@ export function registerCallTools(registry: ToolRegistry, deps: CallToolDeps): T
   registry.register(tool as unknown as AssistantTool, {
     outwardFacing: true,
     blanketAllowIneligible: true,
+    scopedAllowTemplates: ['phone.call.same_brief'],
     autonomyFloor: true,
     // The other party's words come back in the transcript.
     returnsUntrustedContent: true,

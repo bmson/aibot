@@ -1,4 +1,5 @@
 import { suggestionExpiresAt } from '@assistant/core';
+import { approvalRule } from '@assistant/core/approval-rule';
 import { decodeMessageCursor, encodeMessageCursor } from '@assistant/core/chat';
 import { compactChatMessageParts, stripBackgroundNoticeEcho } from '@assistant/core/chat-card';
 import { truncateAtBoundary } from '@assistant/core/owner-text';
@@ -580,6 +581,10 @@ export async function hydrateChatApprovals(
               approval.status === 'pending' && approval.expiresAt <= now
                 ? 'expired'
                 : approval.status,
+            rememberLabel:
+              settled(approval) === 'pending'
+                ? (approvalRule(approval.toolName ?? '', approval.payload)?.label ?? null)
+                : null,
             details:
               approval.payload &&
               typeof approval.payload === 'object' &&
@@ -590,7 +595,7 @@ export async function hydrateChatApprovals(
                   }))
                 : [{ label: 'Value', value: detailValue(approval.payload) }],
           }
-        : { ...part, status: 'missing' };
+        : { ...part, status: 'missing', rememberLabel: null };
     }) as UIMessage['parts'],
   }));
 }

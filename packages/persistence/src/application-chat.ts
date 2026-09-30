@@ -36,6 +36,7 @@ export interface ApplicationChatMessagePage {
 }
 
 export interface ApplicationChatApproval {
+  toolName?: string;
   id: string;
   taskId: string;
   summary: string;

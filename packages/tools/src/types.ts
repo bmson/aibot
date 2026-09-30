@@ -108,6 +108,10 @@ export interface ToolFlags {
   networkEgress?: boolean;
   /** Never eligible for a blanket "always allow" policy. */
   blanketAllowIneligible?: boolean;
+  /** Explicit bounded templates that may allow this tool; taint still requires approval. */
+  scopedAllowTemplates?: readonly string[];
+  /** Explicit owner consent to any arguments for an identity-bound remote tool. */
+  scopedAllowUnderTaintTemplates?: readonly string[];
   /**
    * Part of the free-range hard floor: even an owner-armed autonomy grant never
    * downgrades this tool's approval to autonomous. Set on the highest-consequence

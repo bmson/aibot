@@ -21,7 +21,7 @@ import {
 import { FirestoreSkillLibraryRepository } from '@assistant/firestore/skill-library';
 import { assistantModuleMetas } from '@assistant/modules/meta';
 import type { AgentReadinessSource } from '@assistant/persistence';
-import { policyLabels, scheduleLabels } from '@/app/settings/labels';
+import { policyLabels, policyScope, scheduleLabels } from '@/app/settings/labels';
 import {
   getBillingOverview,
   getChatApplication,
@@ -113,6 +113,7 @@ export async function getFirestoreMobileWorkspace(readinessSource: AgentReadines
         toolName: policy.toolName,
         templateKey: policy.templateKey,
         label: policyLabels[policy.templateKey] ?? null,
+        scope: policyScope(policy.templateKey, policy.match),
         effect: policy.effect,
         enabled: policy.enabled,
         createdVia: policy.createdVia,

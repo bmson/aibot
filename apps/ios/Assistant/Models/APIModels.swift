@@ -132,6 +132,7 @@ struct MessagePart: Codable, Hashable, Sendable {
     var text: String?
     var data: JSONValue?
     var notice: String?
+    var rememberLabel: String? = nil
     var approvalId: String?
     var taskId: String?
     var suggestionId: String?
@@ -928,6 +929,7 @@ struct PendingApproval: Codable, Identifiable, Sendable {
     let taskTrust: String
     let toolName: String
     let decision: JSONValue
+    var rememberLabel: String? = nil
 }
 
 /// A settled approval as the history list reads it. The server deliberately
@@ -1717,6 +1719,8 @@ struct WorkspacePolicy: Codable, Identifiable, Sendable {
     let effect: String
     let enabled: Bool
     let createdVia: String
+
+    var scope: String? = nil
 
     var displayName: String { label ?? templateKey.sentenceCaseIdentifier }
 }

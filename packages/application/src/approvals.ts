@@ -1,3 +1,5 @@
+import { approvalRule } from '@assistant/core/approval-rule';
+
 import { getAgent } from '@assistant/core/chat';
 import {
   type ApprovalInbox,
@@ -7,6 +9,8 @@ import {
   resolveApproval,
 } from '@assistant/core/workflow/approvals';
 import { createPostgresApprovalRepository, type Db } from '@assistant/db';
+
+export { approvalRule } from '@assistant/core/approval-rule';
 
 export type ApprovalDecision = 'approved' | 'denied';
 
@@ -50,17 +54,26 @@ export async function listApprovalInbox(
   recentLimit = 20,
   now = new Date(),
 ): Promise<ApprovalInbox> {
-  if ('approvals' in store) {
-    return listApprovalInboxWorkflow(store.approvals, store.agentId, {
+  const inbox = await (async () => {
+    if ('approvals' in store) {
+      return listApprovalInboxWorkflow(store.approvals, store.agentId, {
+        recentLimit,
+        now,
+      });
+    }
+    const agent = await getAgent(store);
+    return listApprovalInboxWorkflow(store, agent.id, {
       recentLimit,
       now,
     });
-  }
-  const agent = await getAgent(store);
-  return listApprovalInboxWorkflow(store, agent.id, {
-    recentLimit,
-    now,
-  });
+  })();
+  return {
+    ...inbox,
+    pending: inbox.pending.map((item) => ({
+      ...item,
+      rememberLabel: approvalRule(item.toolName, item.approval.payload)?.label ?? null,
+    })),
+  };
 }
 
 /** Resolve one owner decision through the durable approval workflow. */
@@ -99,36 +112,25 @@ export async function decideApprovals(
 
 export interface RememberedApprovalPolicy {
   agentId: string;
-  toolName: 'gmail.send';
-  templateKey: 'gmail.send.to_recipient';
-  match: { recipient: string };
+  toolName: string;
+  templateKey: string;
+  match: Record<string, unknown>;
   effect: 'allow';
 }
 
-/**
- * Derive the deliberately narrow standing rule supported by the approvals UI.
- * Ambiguous/multiple recipients never produce a reusable policy.
- */
+/** Derive a bounded rule from the current, owner-scoped approval payload. */
 export function rememberedApprovalPolicy(
   agentId: string,
   toolName: string,
   payload: unknown,
 ): RememberedApprovalPolicy | null {
-  if (toolName !== 'gmail.send' || !payload || typeof payload !== 'object') return null;
-  const to = (payload as { to?: unknown }).to;
-  if (!Array.isArray(to) || to.length !== 1 || typeof to[0] !== 'string') return null;
-  const recipient = to[0].trim().toLowerCase();
-  if (!recipient) return null;
-  return {
-    agentId,
-    toolName: 'gmail.send',
-    templateKey: 'gmail.send.to_recipient',
-    match: { recipient },
-    effect: 'allow',
-  };
+  const rule = approvalRule(toolName, payload);
+  if (!rule) return null;
+  const { label: _label, ...policy } = rule;
+  return { agentId, ...policy };
 }
 
-/** Approve once, optionally remembering the one safe recipient-scoped rule. */
+/** Approve once, remembering its supported scoped rule. */
 export async function approveAndRememberApproval(
   store: Db | ApprovalRememberStore,
   approvalId: string,
@@ -142,6 +144,11 @@ export async function approveAndRememberApproval(
   }
 
   const policy = rememberedApprovalPolicy(agentId, row.toolName, row.approval.payload);
+  if (!policy)
+    return {
+      ok: false,
+      reason: 'This action does not support a standing approval. Approve it once instead.',
+    };
   return resolveApproval(repository, {
     approvalId,
     decision: 'approved',

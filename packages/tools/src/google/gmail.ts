@@ -244,7 +244,7 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
     {
       name: 'gmail.send',
       description:
-        'Send an email from the assistant’s own address. ALWAYS requires owner approval of the exact recipient, subject, and body — prefer gmail.create_draft unless sending was explicitly requested.',
+        'Send an email from the assistant’s own address. Requires owner approval unless a saved recipient or recipient-group rule permits this email without attachments — prefer gmail.create_draft unless sending was explicitly requested.',
       inputSchema: outboundSchema,
       risk: 'approval',
       // Owner-led research and reply workflows may legitimately quote web or
@@ -283,7 +283,12 @@ export function registerGmailTools(registry: ToolRegistry, deps: GmailToolDeps):
         return { messageId: sent.id, threadId: sent.threadId, to: args.to };
       },
     },
-    { outwardFacing: true, networkEgress: true, blanketAllowIneligible: true },
+    {
+      outwardFacing: true,
+      networkEgress: true,
+      blanketAllowIneligible: true,
+      scopedAllowTemplates: ['gmail.send.to_recipient', 'gmail.send.to_recipients'],
+    },
   );
 
   const modifySchema = z

@@ -1,6 +1,7 @@
 // Server-side mappers turning DB rows into plain serializable view props for
 // client components (approval cards) and shared status-chip styling.
 import type { ApprovalSnapshot } from '@assistant/application/approvals';
+import { approvalRule } from '@assistant/core/approval-rule';
 import { moduleToolLabels } from '@assistant/modules/ui';
 import { formatFriendlyDateTime, prettyJson, relativeTime } from './format';
 import { Badge, type BadgeTone } from './ui';
@@ -110,20 +111,6 @@ function approvalActionKind(toolName: string): PendingApprovalView['actionKind']
   if (toolName.startsWith('docs.') || toolName.startsWith('drive.')) return 'document';
   if (toolName.startsWith('browser.')) return 'browser';
   return 'action';
-}
-
-function rememberLabel(toolName: string, payload: unknown): string | null {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
-  if (toolName === 'gmail.send') {
-    const to = (payload as { to?: unknown }).to;
-    const recipients = Array.isArray(to)
-      ? to.filter((item): item is string => typeof item === 'string')
-      : [];
-    if (recipients.length === 1) {
-      return `Approve and allow future direct email to ${recipients[0]}`;
-    }
-  }
-  return null;
 }
 
 /** Internal workflow names are useful to engineers, not to the person using the assistant. */
@@ -270,7 +257,7 @@ export function toPendingApprovalView(
     expiresExact: formatFriendlyDateTime(approval.expiresAt, timeZone, now),
     provenance: `${taskTypeLabel(task.type)} · requested by ${trustLabel(task.trust)}`,
     reason: approvalReason(toolCall.decision),
-    rememberLabel: rememberLabel(toolCall.toolName, approval.payload),
+    rememberLabel: approvalRule(toolCall.toolName, approval.payload)?.label ?? null,
     taskId: approval.taskId,
     voiceFlag: extractVoiceFlag(approval.payload),
     actionKind: approvalActionKind(toolCall.toolName),

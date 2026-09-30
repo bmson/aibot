@@ -1,4 +1,11 @@
 import {
+  approvalCallBrief,
+  approvalRule,
+  noAttachments,
+  normalizedApprovalAttendees,
+  sameApprovalScope,
+} from '@assistant/core/approval-rule';
+import {
   type ApprovalPolicy as ApprovalPolicyRow,
   type ApprovalPolicyStore,
   listApprovalPolicies,
@@ -17,7 +24,40 @@ export type PolicyTemplate = (
   ctx: ToolContext,
 ) => boolean;
 
+/** New rules use the same derivation as the UI, so offered and enforced scopes agree. */
+function scopedRule(toolName: string, templateKey: string): PolicyTemplate {
+  return (match, args, ctx) => {
+    if (ctx.trust !== 'owner') return false;
+    const rule = approvalRule(toolName, args);
+    return rule?.templateKey === templateKey && sameApprovalScope(match, rule.match);
+  };
+}
+
 export const policyTemplates: Record<string, PolicyTemplate> = {
+  'mcp.call.named_tool': scopedRule('mcp.call', 'mcp.call.named_tool'),
+  'gmail.send.to_recipients': scopedRule('gmail.send', 'gmail.send.to_recipients'),
+  'gmail.modify.archive': scopedRule('gmail.modify', 'gmail.modify.archive'),
+  'calendar.respond_to_event.response': scopedRule(
+    'calendar.respond_to_event',
+    'calendar.respond_to_event.response',
+  ),
+  'calendar.update_event.with_guests': scopedRule(
+    'calendar.update_event',
+    'calendar.update_event.with_guests',
+  ),
+  'docs.share.to_recipient': scopedRule('docs.share', 'docs.share.to_recipient'),
+  'phone.call.same_brief': (match, args, ctx) => {
+    const approved = approvalCallBrief(match.brief);
+    const actual = approvalCallBrief(args.brief);
+    if (
+      ctx.trust !== 'owner' ||
+      !approved ||
+      !actual ||
+      Number(actual.maxMinutes) > Number(approved.maxMinutes)
+    )
+      return false;
+    return sameApprovalScope(approved, { ...actual, maxMinutes: approved.maxMinutes });
+  },
   /** SMS replies from an owner task to the configured owner number only. */
   'sms.reply_to_owner': (match, args, ctx) => {
     const ownerPhone = String(match.phone ?? '');
@@ -48,12 +88,43 @@ export const policyTemplates: Record<string, PolicyTemplate> = {
     );
   },
 
-  /** Email to a specific, owner-approved recipient. */
-  'gmail.send.to_recipient': (match, args) => {
+  'sms.send.to_recipient': (match, args, ctx) =>
+    ctx.trust === 'owner' &&
+    typeof match.phone === 'string' &&
+    /^\+\d{7,15}$/.test(match.phone) &&
+    args.to === match.phone,
+
+  'calendar.create_event.same_attendees': (match, args, ctx) => {
+    const allowed = normalizedApprovalAttendees(match.attendees);
+    const actual = normalizedApprovalAttendees(args.attendees);
+    return (
+      ctx.trust === 'owner' &&
+      !!allowed?.length &&
+      actual !== null &&
+      allowed.length === actual.length &&
+      allowed.every((email, index) => email === actual[index])
+    );
+  },
+
+  'calendar.update_event.same_event': (match, args, ctx) => {
+    const added = normalizedApprovalAttendees(args.addAttendees);
+    return (
+      ctx.trust === 'owner' &&
+      typeof match.eventId === 'string' &&
+      match.eventId.length >= 3 &&
+      args.eventId === match.eventId &&
+      added !== null &&
+      added.length === 0
+    );
+  },
+
+  /** Email without attachments to a specific, owner-approved recipient. */
+  'gmail.send.to_recipient': (match, args, ctx) => {
+    if (ctx.trust !== 'owner' || !noAttachments(args)) return false;
     const allowed = String(match.recipient ?? '').toLowerCase();
     if (!allowed) return false;
     const to = args.to;
-    const recipients = (Array.isArray(to) ? to : [to]).map((r) => String(r).toLowerCase());
+    const recipients = (Array.isArray(to) ? to : [to]).map((r) => String(r).trim().toLowerCase());
     return recipients.length > 0 && recipients.every((r) => r === allowed);
   },
 };
