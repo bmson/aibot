@@ -414,16 +414,16 @@ struct ChatView: View {
                     // the transcript by 96pt while the composer kept moving.
                     .frame(width: viewport.size.width, height: viewport.size.height)
                     // Keep the stage edge-to-edge inside the currently available
-                    // chat region. Respecting the keyboard safe area lets the
-                    // green window backing show through its rounded corners.
+                    // chat region while respecting the keyboard safe area.
                     .background(stageBackdrop.ignoresSafeArea(.container))
-                    // Resolve the device's corner geometry before offsetting
-                    // the sheet. Its silhouette stays rounded through opening,
-                    // closing, and reversals instead of tweening from a square.
+                    // Use the input's curve rather than inheriting the larger
+                    // device corners. The radius follows the live reveal and
+                    // goes square above the keyboard so the menu cannot show
+                    // through the bottom corners while typing.
                     .clipShape(
-                        ConcentricRectangle(
-                            corners: .concentric(minimum: .fixed(menuSheetCornerRadius)),
-                            isUniform: true
+                        RoundedRectangle(
+                            cornerRadius: menuSheetCornerRadius,
+                            style: .continuous
                         )
                     )
                     .shadow(
@@ -904,8 +904,22 @@ struct ChatView: View {
         )
     }
 
-    /// Minimum curve for the lifted sheet; device concentricity can increase it.
-    private var menuSheetCornerRadius: CGFloat { 34 }
+    private var composerSurfaceInset: CGFloat { AssistantTheme.compactGutter }
+
+    private var menuSheetCornerRadius: CGFloat {
+        // Focus removes the curve before the keyboard arrives; the live inset
+        // keeps it square until the keyboard has finished leaving. This also
+        // covers an interactive keyboard dismissal after focus has changed.
+        guard !composerFocused,
+              safeAreaBottomInset <= deviceBottomSafeAreaInset + 1
+        else { return 0 }
+
+        let restingRadius: CGFloat = 17
+        // The input has the same inset at the sides and bottom. Expanding its
+        // radius by that inset gives the open surface the same corner centers.
+        let openRadius = AssistantTheme.conversationCornerRadius + composerSurfaceInset
+        return restingRadius + (openRadius - restingRadius) * menuSurfaceProgress
+    }
 
     private var menuSurfaceProgress: CGFloat {
         PullMenuMotion.smoothStep(menuRevealProgress)
@@ -1755,9 +1769,11 @@ struct ChatView: View {
         // cue moves, so the mood glides here rather than behind the transcript.
         // 0.6s matches the web client's scoped --accent transition.
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.6), value: model.latestMood)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, composerSurfaceInset)
         .padding(.top, 14)
-        .padding(.bottom, 10)
+        // The column already contributes 12pt below the composer. Together
+        // these paddings must equal the side inset for concentric corners.
+        .padding(.bottom, composerSurfaceInset - PullMenuMotion.composerSurfaceBottomSpacing)
         .background {
             LinearGradient(
                 colors: [
