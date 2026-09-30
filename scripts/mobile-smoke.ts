@@ -52,8 +52,12 @@ try {
   }
   for (const path of ['/chat/all', '/people', '/profile', '/tasks', '/documents']) {
     const result = await context.request.get(`${baseUrl}${path}`, { maxRedirects: 0 });
-    if (result.status() !== 307 || result.headers().location !== `${baseUrl}/settings`)
-      throw new Error(`Retired route ${path} did not redirect to Settings`);
+    const location = result.headers().location;
+    const destination = location ? new URL(location, baseUrl).href : '';
+    if (result.status() !== 307 || destination !== `${baseUrl}/settings`)
+      throw new Error(
+        `Retired route ${path} returned ${result.status()} with location ${location ?? 'missing'}`,
+      );
   }
   const health = await context.request.get(`${baseUrl}/api/health`);
   if (!health.ok()) throw new Error('Backend health check failed');
