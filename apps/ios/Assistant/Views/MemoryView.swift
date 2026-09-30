@@ -14,6 +14,10 @@ struct MemoryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingCreateMemory = false
     @State private var openFact: WorkspaceMemoryFact?
+    @State private var reviewInFlightID: String?
+    @State private var reviewInFlightAction: String?
+    @State private var reviewErrorID: String?
+    @State private var reviewedIDs: Set<String> = []
     @State private var forgetting: WorkspaceMemoryFact?
     @State private var graph: RelationshipGraphSnapshot?
     @State private var graphFailed = false
@@ -61,8 +65,8 @@ struct MemoryView: View {
                 NavigationStack { MemoryEditor(ownerContactId: ownerContactId, fact: nil) }
             }
         }
-        .sheet(item: $openFact) { fact in
-            NavigationStack { MemoryFactSheet(fact: fact) }
+        .sheet(item: $openFact, onDismiss: { Task { await model.refreshWorkspace(reportFailure: false) } }) { fact in
+            NavigationStack { MemoryFactSheet(fact: fact, onReviewCompleted: { reviewedIDs.insert(fact.id); openFact = nil }) }
                 .presentationDetents([.medium, .large])
         }
         .confirmationDialog(
@@ -85,15 +89,16 @@ struct MemoryView: View {
                 .listRowBackground(Color.clear)
         }
 
-        if !memory.awaitingReview.isEmpty {
+        let toReview = memory.awaitingReview.filter { !reviewedIDs.contains($0.id) }
+        if !toReview.isEmpty {
             Section {
-                ForEach(memory.awaitingReview) { fact in
-                    factRow(fact, review: true)
+                ForEach(toReview) { fact in
+                    reviewRow(fact)
                 }
             } header: {
-                Text("Waiting for your OK")
+                Text("Review memories")
             } footer: {
-                Text("From sources the assistant can’t vouch for, so they aren’t used until you approve them. Swipe right to approve.")
+                Text("Choose what the assistant should remember. These aren’t used until you decide.")
             }
         }
 
@@ -227,6 +232,79 @@ struct MemoryView: View {
 
     // MARK: - Facts
 
+    /// Decide from the list; reading the full text is optional.
+    private func reviewRow(_ fact: WorkspaceMemoryFact) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button { openFact = fact } label: {
+                Text(fact.content)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens the full memory review")
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { reviewButtons(fact) }
+                VStack(spacing: 10) { reviewButtons(fact) }
+            }
+
+            if reviewErrorID == fact.id {
+                Text("Couldn’t save your choice. Try again.")
+                    .font(.footnote)
+                    .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
+            }
+        }
+        .padding(.vertical, 6)
+        .disabled(reviewInFlightID != nil)
+        .listRowBackground(rowBackground)
+    }
+
+    @ViewBuilder
+    private func reviewButtons(_ fact: WorkspaceMemoryFact) -> some View {
+        Button {
+            performReview(fact, action: "approve")
+        } label: {
+            reviewButtonLabel("Remember", fact: fact, action: "approve")
+        }
+        .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: false, fillsWidth: true))
+        .accessibilityIdentifier("assistant.memory.remember.\(fact.id)")
+
+        Button {
+            performReview(fact, action: "reject")
+        } label: {
+            reviewButtonLabel("Don’t remember", fact: fact, action: "reject")
+        }
+        .buttonStyle(AssistantActionButtonStyle(kind: .neutral, compact: false, fillsWidth: true))
+        .accessibilityIdentifier("assistant.memory.dontRemember.\(fact.id)")
+    }
+
+    private func reviewButtonLabel(_ title: String, fact: WorkspaceMemoryFact, action: String) -> some View {
+        HStack(spacing: 8) {
+            if reviewInFlightID == fact.id && reviewInFlightAction == action {
+                ProgressView().tint(action == "approve" ? .white : AssistantTheme.ink(for: colorScheme))
+            }
+            Text(title).fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private func performReview(_ fact: WorkspaceMemoryFact, action: String) {
+        guard reviewInFlightID == nil else { return }
+        reviewInFlightID = fact.id
+        reviewInFlightAction = action
+        reviewErrorID = nil
+        Task {
+            let saved = await model.updateMemory(id: fact.id, action: action, refreshAfterSave: false)
+            if saved { reviewedIDs.insert(fact.id) }
+            reviewErrorID = saved ? nil : fact.id
+            reviewInFlightID = nil
+            reviewInFlightAction = nil
+            if saved { await model.refreshWorkspace(reportFailure: false) }
+        }
+    }
+
     private func factRow(_ fact: WorkspaceMemoryFact, review: Bool) -> some View {
         Button { openFact = fact } label: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -254,7 +332,7 @@ struct MemoryView: View {
         .listRowBackground(review ? AssistantTheme.warningSurface(for: colorScheme) : rowBackground)
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
             if review {
-                Button("Approve", systemImage: "checkmark") { perform(fact, action: "approve") }
+                Button("Remember", systemImage: "checkmark") { perform(fact, action: "approve") }
                     .tint(AssistantTheme.accent(for: colorScheme))
             } else if !fact.ownerConfirmed {
                 Button("Confirm", systemImage: "checkmark.seal") { perform(fact, action: "confirm") }
@@ -263,15 +341,15 @@ struct MemoryView: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if review {
-                Button("Reject", systemImage: "xmark", role: .destructive) { perform(fact, action: "reject") }
+                Button("Don’t remember", systemImage: "xmark", role: .destructive) { perform(fact, action: "reject") }
             } else {
                 Button("Forget", systemImage: "trash", role: .destructive) { forgetting = fact }
             }
         }
         .contextMenu {
             if review {
-                Button("Approve", systemImage: "checkmark") { perform(fact, action: "approve") }
-                Button("Reject", systemImage: "xmark", role: .destructive) { perform(fact, action: "reject") }
+                Button("Remember", systemImage: "checkmark") { perform(fact, action: "approve") }
+                Button("Don’t remember", systemImage: "xmark", role: .destructive) { perform(fact, action: "reject") }
             } else {
                 if !fact.ownerConfirmed {
                     Button("Confirm it’s right", systemImage: "checkmark.seal") { perform(fact, action: "confirm") }
@@ -299,11 +377,14 @@ struct MemoryView: View {
 /// One fact, read in full, with everything that can be done to it.
 struct MemoryFactSheet: View {
     let fact: WorkspaceMemoryFact
+    var onReviewCompleted: (() -> Void)? = nil
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @State private var working = false
     @State private var correcting = false
+    @State private var reviewAction: String?
+    @State private var reviewFailed = false
 
     /// The live copy, so a change made here shows here.
     private var current: WorkspaceMemoryFact {
@@ -315,6 +396,7 @@ struct MemoryFactSheet: View {
 
     private var inReview: Bool {
         (model.workspace?.memory.awaitingReview ?? []).contains { $0.id == fact.id }
+            || reviewAction != nil
     }
 
     private var prominence: Binding<String> {
@@ -325,54 +407,54 @@ struct MemoryFactSheet: View {
     }
 
     var body: some View {
-        AssistantForm {
-            Section {
-                Text(current.content)
-                    .font(.body)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                LabeledContent("Topic", value: current.domain?.sentenceCaseIdentifier ?? "General")
-                LabeledContent("Saved", value: relative(current.createdAt))
-                if !inReview {
-                    LabeledContent("Confirmed by you", value: current.ownerConfirmed ? "Yes" : "Not yet")
-                }
-            }
+        Group {
             if inReview {
-                Section {
-                    Button("Approve", systemImage: "checkmark") { run(action: "approve") }
-                    Button("Reject", systemImage: "xmark", role: .destructive) { run(action: "reject") }
-                } footer: {
-                    Text("This came from a source the assistant can’t vouch for. It isn’t used until you approve it.")
-                }
+                reviewContent
             } else {
-                Section {
-                    if !current.ownerConfirmed {
-                        Button("Yes, this is right", systemImage: "checkmark.seal") { run(action: "confirm", closes: false) }
+                AssistantForm {
+                    Section {
+                        Text(current.content)
+                            .font(.body)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        LabeledContent("Topic", value: current.domain?.sentenceCaseIdentifier ?? "General")
+                        LabeledContent("Saved", value: relative(current.createdAt))
+                        LabeledContent("Confirmed by you", value: current.ownerConfirmed ? "Yes" : "Not yet")
                     }
-                    Picker("Use it", selection: prominence) {
-                        Text("Always").tag("always")
-                        Text("When relevant").tag("auto")
-                        Text("Rarely").tag("minor")
+                    Section {
+                        if !current.ownerConfirmed {
+                            Button("Yes, this is right", systemImage: "checkmark.seal") { run(action: "confirm", closes: false) }
+                        }
+                        Picker("Use it", selection: prominence) {
+                            Text("Always").tag("always")
+                            Text("When relevant").tag("auto")
+                            Text("Rarely").tag("minor")
+                        }
+                        Button("Correct it", systemImage: "pencil") { correcting = true }
                     }
-                    Button("Correct it", systemImage: "pencil") { correcting = true }
-                }
-                Section {
-                    AssistantConfirmationButton(
-                        "Forget this", confirmationTitle: "Forget for good",
-                        hint: "Removes it and stops the assistant learning it again from the same source.",
-                        fillsWidth: true
-                    ) {
-                        working = true
-                        if await model.updateMemory(id: fact.id, action: "forget") { dismiss() }
-                        working = false
+                    Section {
+                        AssistantConfirmationButton(
+                            "Forget this", confirmationTitle: "Forget for good",
+                            hint: "Removes it and stops the assistant learning it again from the same source.",
+                            fillsWidth: true
+                        ) {
+                            working = true
+                            if await model.updateMemory(id: fact.id, action: "forget") { dismiss() }
+                            working = false
+                        }
                     }
                 }
             }
         }
         .disabled(working)
-        .navigationTitle(inReview ? "Waiting for your OK" : "Memory")
+        .navigationTitle(inReview ? "Remember this?" : "Memory")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button(inReview ? "Later" : "Done") { dismiss() }
+            }
+        }
+        .interactiveDismissDisabled(working)
         .sheet(isPresented: $correcting) {
             NavigationStack {
                 MemoryEditor(ownerContactId: model.workspace?.memory.ownerContactId ?? "", fact: current)
@@ -380,12 +462,67 @@ struct MemoryFactSheet: View {
         }
     }
 
+    private var reviewContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text(current.content)
+                    .font(.title3)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .assistantCard(in: colorScheme)
+
+                Text("The assistant won’t use this unless you choose Remember.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(spacing: 12) {
+                    Button(reviewAction == "approve" && working ? "Remembering…" : "Remember") {
+                        run(action: "approve")
+                    }
+                    .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: false, fillsWidth: true))
+                    .accessibilityIdentifier("assistant.memory.remember")
+                    .accessibilityHint("Adds this memory for the assistant to use")
+
+                    Button(reviewAction == "reject" && working ? "Removing…" : "Don’t remember") {
+                        run(action: "reject")
+                    }
+                    .buttonStyle(AssistantActionButtonStyle(kind: .neutral, compact: false, fillsWidth: true))
+                    .accessibilityIdentifier("assistant.memory.dontRemember")
+                    .accessibilityHint("Removes this suggestion from review")
+                }
+
+                if reviewFailed {
+                    Text("Couldn’t save your choice. Try again.")
+                        .font(.subheadline)
+                        .foregroundStyle(AssistantTheme.errorInk(for: colorScheme))
+                        .accessibilityIdentifier("assistant.memory.reviewError")
+                }
+            }
+            .padding(24)
+        }
+        .background(AssistantTheme.canvas(for: colorScheme))
+    }
+
     private func run(action: String, prominence: String? = nil, closes: Bool = true) {
+        guard !working else { return }
+        reviewAction = inReview ? action : nil
+        reviewFailed = false
         working = true
         Task {
-            let done = await model.updateMemory(id: fact.id, action: action, prominence: prominence)
+            // Close on the saved decision; the presenting view refreshes afterward.
+            let isReviewDecision = action == "approve" || action == "reject"
+            let done = await model.updateMemory(
+                id: fact.id, action: action, prominence: prominence,
+                refreshAfterSave: !isReviewDecision
+            )
+            if done && closes {
+                if isReviewDecision, let onReviewCompleted { onReviewCompleted() }
+                else { dismiss() }
+            }
+            reviewFailed = !done && reviewAction != nil
             working = false
-            if done && closes { dismiss() }
         }
     }
 }
