@@ -1,7 +1,8 @@
 // Server-side mappers turning DB rows into plain serializable view props for
 // client components (approval cards) and shared status-chip styling.
+
+import { approvalRule } from '@assistant/application/approval-rule';
 import type { ApprovalSnapshot } from '@assistant/application/approvals';
-import { approvalRule } from '@assistant/core/approval-rule';
 import { moduleToolLabels } from '@assistant/modules/ui';
 import { formatFriendlyDateTime, prettyJson, relativeTime } from './format';
 import { Badge, type BadgeTone } from './ui';
