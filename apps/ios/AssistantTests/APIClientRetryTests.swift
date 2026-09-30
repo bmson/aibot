@@ -102,6 +102,49 @@ final class StubURLProtocol: URLProtocol {
 
 final class APIClientRetryTests: XCTestCase {
     @MainActor
+    func testKnowledgeConnectionSaveAcceptsCommittedIDsAndRefreshesGraph() async throws {
+        let graph = RelationshipGraphFixture.snapshot()
+        StubURLProtocol.prime([
+            .success(status: 201, body: Data(#"{"memoryId":"memory-1","relationId":"relation-1"}"#.utf8)),
+            .success(status: 200, body: try JSONEncoder().encode(graph))
+        ])
+        let model = AppModel(apiClient: makeClient())
+        let mutation = KnowledgeConnectionMutation(subjectLabel: "Ada", subjectKind: "person", subjectId: "node-0",
+            predicate: "works_at", objectLabel: "Acme", objectKind: "organization", objectId: "node-6", note: "")
+        let saved = await model.createKnowledgeConnection(mutation)
+        XCTAssertTrue(saved, "The accepted save must reach the form's dismissal and graph refresh callback")
+        XCTAssertNil(model.errorMessage)
+        let refreshed = saved ? await model.relationshipGraph(entityID: "node-0") : nil
+        XCTAssertEqual(refreshed?.edges, graph.edges)
+        XCTAssertEqual(StubURLProtocol.attempts, ["POST", "GET"])
+    }
+
+    @MainActor
+    func testKnowledgeConnectionCorrectionAcceptsCommittedIDs() async throws {
+        StubURLProtocol.prime([
+            .success(status: 201, body: Data(#"{"memoryId":"replacement-memory","relationId":"replacement-relation"}"#.utf8))
+        ])
+        let model = AppModel(apiClient: makeClient())
+        let mutation = KnowledgeConnectionMutation(subjectLabel: "Ada", subjectKind: "person", subjectId: "node-0",
+            predicate: "works_at", objectLabel: "Acme", objectKind: "organization", objectId: "node-6", note: "")
+        let saved = await model.correctKnowledgeRelation(id: "old-relation", mutation: mutation)
+        XCTAssertTrue(saved)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(StubURLProtocol.attempts, ["POST"])
+    }
+
+    @MainActor
+    func testKnowledgeConnectionRejectedSaveRemainsAFailure() async {
+        StubURLProtocol.prime([.success(status: 400, body: Data(#"{"error":"Choose a different item."}"#.utf8))])
+        let model = AppModel(apiClient: makeClient())
+        let mutation = KnowledgeConnectionMutation(subjectLabel: "Ada", subjectKind: "person", subjectId: "node-0",
+            predicate: "knows", objectLabel: "Ada", objectKind: "person", objectId: "node-0", note: "")
+        let saved = await model.createKnowledgeConnection(mutation)
+        XCTAssertFalse(saved)
+        XCTAssertEqual(StubURLProtocol.attempts, ["POST"])
+    }
+
+    @MainActor
     func testSavedCardRefreshPostsSourceRefreshWithoutPretendingContentIsNew() async throws {
         let original = ChatMessage(id: "card-message", role: .assistant, parts: [RichMessageFixture.generated(stale: true)])
         StubURLProtocol.prime([.success(status: 202, body: Data(#"{"ok":true,"taskId":"refresh-2","refreshState":"refreshing"}"#.utf8))])
@@ -428,7 +471,7 @@ final class APIClientRetryTests: XCTestCase {
     }
 
     @MainActor
-    func testGraphCanvasDragsNodesPansCanvasAndCancelsCleanly() throws {
+    func testGraphCanvasPansFromDotsAndBackgroundAndCancelsCleanly() throws {
         let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
         let graph = RelationshipGraphFixture.snapshot()
         view.configure(snapshot: graph, selectedID: nil, dark: false, reduceMotion: true)
@@ -438,14 +481,14 @@ final class APIClientRetryTests: XCTestCase {
         view.configure(snapshot: graph, selectedID: view.layout.ids[0], dark: false, reduceMotion: true)
         XCTAssertEqual(view.viewport, viewport, "Selecting an item already in view leaves the camera alone")
         view.beginDrag(at: screen)
-        XCTAssertEqual(view.dragID, view.layout.ids[0], "A drag that starts on a dot picks that dot up")
         view.drag(to: CGPoint(x: screen.x + 60, y: screen.y + 30))
-        XCTAssertEqual(view.layout.positions[0].x, point.x + 60 / viewport.scale, accuracy: 0.001)
-        XCTAssertEqual(view.viewport, viewport, "Dragging a node must not pan the canvas")
+        XCTAssertEqual(view.layout.positions[0], point, "Panning from a dot must not rearrange the graph")
+        XCTAssertEqual(view.viewport.offset.x, viewport.offset.x + 60, accuracy: 0.001)
+        XCTAssertEqual(view.viewport.offset.y, viewport.offset.y + 30, accuracy: 0.001)
         view.endDrag(cancelled: true)
         XCTAssertEqual(view.layout.positions[0], point)
+        XCTAssertEqual(view.viewport, viewport)
         view.beginDrag(at: CGPoint(x: -100, y: -100))
-        XCTAssertNil(view.dragID)
         view.drag(to: CGPoint(x: -50, y: -60))
         XCTAssertEqual(view.viewport.offset.x, viewport.offset.x + 50, accuracy: 0.001)
         view.endDrag(cancelled: true)
@@ -454,6 +497,142 @@ final class APIClientRetryTests: XCTestCase {
         let zoomed = view.viewport
         view.endDrag(cancelled: true)
         XCTAssertEqual(view.viewport, zoomed, "Starting a pinch without a pan must preserve the current viewport")
+    }
+
+    @MainActor
+    func testGraphPanToPinchAndBackKeepsTheFingerAnchor() {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
+        view.configure(snapshot: RelationshipGraphFixture.snapshot(), selectedID: nil, dark: false, reduceMotion: true)
+        view.beginDrag(at: CGPoint(x: 20, y: 50))
+        view.drag(to: CGPoint(x: 60, y: 70))
+        let midpoint = CGPoint(x: 130, y: 200)
+        let anchor = view.viewport.world(midpoint, size: view.bounds.size)
+        view.beginPinch(at: midpoint)
+        let movedMidpoint = CGPoint(x: 150, y: 220)
+        view.changePinch(scale: 1.4, at: movedMidpoint)
+        let pinched = view.viewport
+        view.endDrag(cancelled: true, velocity: CGPoint(x: 800, y: 900))
+        XCTAssertEqual(view.viewport, pinched, "Cancelling the one-finger pan cannot undo the pinch")
+        let anchored = view.viewport.screen(anchor, size: view.bounds.size)
+        XCTAssertEqual(anchored.x, movedMidpoint.x, accuracy: 0.001)
+        XCTAssertEqual(anchored.y, movedMidpoint.y, accuracy: 0.001)
+        let remainingFinger = CGPoint(x: 220, y: 250)
+        view.endPinch(continuingPanAt: remainingFinger)
+        view.drag(to: CGPoint(x: 230, y: 265))
+        XCTAssertEqual(view.viewport.offset.x, pinched.offset.x + 10, accuracy: 0.001)
+        XCTAssertEqual(view.viewport.offset.y, pinched.offset.y + 15, accuracy: 0.001)
+        view.endDrag(cancelled: true)
+        XCTAssertEqual(view.viewport, pinched)
+    }
+
+    @MainActor
+    func testSecondFingerCannotPanBeforePinchRecognizes() {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
+        view.configure(snapshot: RelationshipGraphFixture.snapshot(), selectedID: nil, dark: false, reduceMotion: true)
+        view.handlePan(state: .began, at: CGPoint(x: 60, y: 100), touchCount: 1)
+        view.handlePan(state: .changed, at: CGPoint(x: 70, y: 110), touchCount: 1)
+        let panned = view.viewport
+        let midpoint = CGPoint(x: 170, y: 220)
+        view.handlePan(state: .changed, at: midpoint, touchCount: 2)
+        XCTAssertEqual(view.viewport, panned, "A second finger cannot pan by its distance from the first")
+        let anchor = panned.world(midpoint, size: view.bounds.size)
+        view.beginPinch(at: midpoint, recognizerScale: 1.08)
+        view.changePinch(scale: 1.08, at: midpoint)
+        XCTAssertEqual(view.viewport.scale, panned.scale, accuracy: 0.001,
+                       "Recognizing a pinch must not apply its threshold movement a second time")
+        let moved = CGPoint(x: 175, y: 225)
+        view.changePinch(scale: 1.62, at: moved)
+        XCTAssertEqual(view.viewport.scale, panned.scale * 1.5, accuracy: 0.001)
+        let screen = view.viewport.screen(anchor, size: view.bounds.size)
+        XCTAssertEqual(screen.x, moved.x, accuracy: 0.001)
+        XCTAssertEqual(screen.y, moved.y, accuracy: 0.001)
+        view.endPinch(continuingPanAt: CGPoint(x: 260, y: 310))
+        let pinched = view.viewport
+        view.handlePan(state: .changed, at: CGPoint(x: 264, y: 316), touchCount: 1)
+        XCTAssertEqual(view.viewport.offset.x, pinched.offset.x + 4, accuracy: 0.001)
+        XCTAssertEqual(view.viewport.offset.y, pinched.offset.y + 6, accuracy: 0.001)
+        view.handlePan(state: .ended, at: .zero, touchCount: 0)
+    }
+
+    @MainActor
+    func testUnrecognizedPinchDoesNotInterruptPanAndTouchCountChangesReanchor() {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
+        view.configure(snapshot: RelationshipGraphFixture.snapshot(), selectedID: nil, dark: false, reduceMotion: true)
+        view.handlePan(state: .began, at: CGPoint(x: 20, y: 50), touchCount: 1)
+        view.endPinch() // UIKit sends .failed even when no pinch began.
+        let start = view.viewport
+        view.handlePan(state: .changed, at: CGPoint(x: 30, y: 70), touchCount: 1)
+        XCTAssertEqual(view.viewport.offset.x, start.offset.x + 10, accuracy: 0.001)
+        XCTAssertEqual(view.viewport.offset.y, start.offset.y + 20, accuracy: 0.001)
+        let panned = view.viewport
+        view.handlePan(state: .changed, at: CGPoint(x: 130, y: 170), touchCount: 2)
+        view.handlePan(state: .changed, at: CGPoint(x: 230, y: 270), touchCount: 1)
+        XCTAssertEqual(view.viewport, panned, "Lifting a finger changes the midpoint without moving the map")
+        view.handlePan(state: .changed, at: CGPoint(x: 235, y: 275), touchCount: 1)
+        XCTAssertEqual(view.viewport.offset.x, panned.offset.x + 5, accuracy: 0.001)
+        XCTAssertEqual(view.viewport.offset.y, panned.offset.y + 5, accuracy: 0.001)
+        view.handlePan(state: .ended, at: .zero, touchCount: 0)
+    }
+
+    @MainActor
+    func testOffCenterPinchKeepsItsAnchorAtBothZoomLimits() {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
+        view.configure(snapshot: RelationshipGraphFixture.snapshot(), selectedID: nil, dark: false, reduceMotion: true)
+        let midpoint = CGPoint(x: 67, y: 493)
+        let anchor = view.viewport.world(midpoint, size: view.bounds.size)
+        view.beginPinch(at: midpoint)
+        for scale: CGFloat in [100, 0.001, 1.2, 0.8] {
+            view.changePinch(scale: scale, at: midpoint)
+            let screen = view.viewport.screen(anchor, size: view.bounds.size)
+            XCTAssertEqual(screen.x, midpoint.x, accuracy: 0.001)
+            XCTAssertEqual(screen.y, midpoint.y, accuracy: 0.001)
+        }
+        view.endPinch()
+    }
+
+    @MainActor
+    func testGraphControlsAndSelectionCannotMoveCameraDuringPan() {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
+        let graph = RelationshipGraphFixture.snapshot()
+        view.configure(snapshot: graph, selectedID: nil, dark: false, reduceMotion: true)
+        let positions = view.layout.positions
+        view.beginDrag(at: CGPoint(x: 10, y: 10))
+        view.drag(to: CGPoint(x: 80, y: 90))
+        let panned = view.viewport
+        view.insets = UIEdgeInsets(top: 200, left: 0, bottom: 300, right: 0)
+        view.configure(snapshot: graph, selectedID: "node-0", dark: false, reduceMotion: true)
+        XCTAssertEqual(view.viewport, panned)
+        XCTAssertEqual(view.layout.positions, positions)
+        view.drag(to: CGPoint(x: 90, y: 95))
+        XCTAssertEqual(view.viewport.offset.x, panned.offset.x + 10, accuracy: 0.001)
+        XCTAssertEqual(view.viewport.offset.y, panned.offset.y + 5, accuracy: 0.001)
+        view.endDrag(cancelled: false)
+    }
+
+    @MainActor
+    func testGraphPhysicsPauseDuringPanAndPinchAfterTopologyRefresh() async throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 640))
+        let controller = UIViewController()
+        window.rootViewController = controller
+        let view = RelationshipGraphCanvasView(frame: window.bounds)
+        controller.view.addSubview(view)
+        window.isHidden = false
+        defer { window.isHidden = true; view.removeFromSuperview() }
+        var graph = RelationshipGraphFixture.snapshot()
+        view.configure(snapshot: graph, selectedID: nil, dark: false, reduceMotion: false)
+        view.beginDrag(at: CGPoint(x: 20, y: 50))
+        graph.edges.append(RelationshipGraphFixture.edge("new-link", from: "node-7", to: "node-15"))
+        view.configure(snapshot: graph, selectedID: nil, dark: false, reduceMotion: false)
+        let positions = view.layout.positions
+        XCTAssertFalse(view.layout.isSettled, "A new connection wakes the layout")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(view.layout.positions, positions, "Layout forces cannot compete with a finger pan")
+        view.beginPinch(at: CGPoint(x: 130, y: 200))
+        view.endDrag(cancelled: true)
+        view.changePinch(scale: 1.3, at: CGPoint(x: 140, y: 210))
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(view.layout.positions, positions, "Layout forces cannot move the pinch anchor")
+        view.endPinch()
     }
 
     @MainActor

@@ -397,7 +397,7 @@ struct APIClient: Sendable {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONEncoder().encode(mutation)
-        _ = try await perform(request, as: OkPayload.self)
+        _ = try await perform(request, as: KnowledgeConnectionSavedPayload.self)
     }
 
     func reviewKnowledgeRelation(id: String, approve: Bool) async throws {
@@ -429,7 +429,7 @@ struct APIClient: Sendable {
                 note: mutation.note
             )
         )
-        _ = try await perform(request, as: OkPayload.self)
+        _ = try await perform(request, as: KnowledgeConnectionSavedPayload.self)
     }
 
     func updateKnowledgeItem(id: String, action: String, value: String) async throws {
@@ -1244,6 +1244,10 @@ struct APIClient: Sendable {
 private struct ErrorBody: Decodable { let error: String }
 
 private struct OkPayload: Decodable { let ok: Bool }
+private struct KnowledgeConnectionSavedPayload: Decodable {
+    let memoryId: String
+    let relationId: String
+}
 private struct EmptyPayload: Decodable {}
 
 private struct ProviderActionBody: Encodable {

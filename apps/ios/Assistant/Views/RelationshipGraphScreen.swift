@@ -111,8 +111,8 @@ struct RelationshipGraphScreen: View {
         .sheet(item: $connecting) { node in
             NavigationStack {
                 GraphConnectSheet(source: node, graph: graph) { provisional in
-                    await didConnect(node.id, provisional: provisional)
                     connecting = nil
+                    await didConnect(node.id, provisional: provisional)
                 }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { connecting = nil } } }
             }
@@ -120,8 +120,8 @@ struct RelationshipGraphScreen: View {
         .sheet(item: $quickConnect) { draft in
             NavigationStack {
                 GraphQuickConnectSheet(draft: draft) { provisional in
-                    await didConnect(draft.first.id, provisional: provisional)
                     quickConnect = nil
+                    await didConnect(draft.first.id, provisional: provisional)
                 }
             }
             .presentationDetents([.medium, .large])
@@ -131,8 +131,8 @@ struct RelationshipGraphScreen: View {
                 GraphGroupsSheet(graph: graph, focus: { node in
                     showGroups = false; choose(node.id)
                 }, saved: { id in
-                    await didConnect(id)
                     showGroups = false
+                    await didConnect(id)
                 })
             }
         }
@@ -695,8 +695,8 @@ private struct GraphPeekCard: View {
 /// how they relate, a name when one end is new, and an optional note.
 struct GraphQuickConnectSheet: View {
     let draft: GraphConnectionDraft
-    /// Called after the server accepts it, with a line the map can draw at
-    /// once while the real one is fetched (nil when an end is new).
+    /// The presenting screen closes the sheet after the server accepts it,
+    /// draws this line at once, then fetches the real one (nil for a new end).
     let saved: (RelationshipGraphEdge?) async -> Void
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -842,7 +842,6 @@ struct GraphQuickConnectSheet: View {
         Task {
             if await model.createKnowledgeConnection(mutation) {
                 await saved(provisional)
-                dismiss()
             } else {
                 failure = model.errorMessage ?? "Couldn’t save this connection. Try again."
             }
