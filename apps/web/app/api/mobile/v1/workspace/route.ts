@@ -1,4 +1,8 @@
-import { getCostsDashboard, getProfileOverview } from '@assistant/application';
+import {
+  getCostsDashboard,
+  getProfileOverview,
+  visibleWorkspaceCapabilityModules,
+} from '@assistant/application';
 import { loadConfig } from '@assistant/config';
 import { assistantModuleMetas } from '@assistant/modules/meta';
 import { policyLabels, policyScope, scheduleLabels } from '@/app/settings/labels';
@@ -120,7 +124,10 @@ export async function GET(request: Request): Promise<Response> {
       failureCount: skill.failureCount,
       updatedAt: skill.updatedAt,
     })),
-    capabilities: assistantModuleMetas.map((meta) => {
+    capabilities: visibleWorkspaceCapabilityModules(
+      assistantModuleMetas,
+      capabilityDiagnostics.diagnostics,
+    ).map((meta) => {
       const diagnostic = diagnosticsByModule.get(meta.name);
       const enabled = diagnostic?.enabled ?? false;
       const ready = diagnostic?.ready ?? false;

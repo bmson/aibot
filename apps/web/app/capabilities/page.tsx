@@ -1,3 +1,4 @@
+import { visibleWorkspaceCapabilityModules } from '@assistant/application';
 import { assistantModuleMetas } from '@assistant/modules/meta';
 import { requireOwner } from '@/auth';
 import {
@@ -24,7 +25,10 @@ export default async function CapabilitiesPage() {
       />
 
       <section className={`mt-8 ${cardGridClass}`}>
-        {assistantModuleMetas.map((capability) => {
+        {visibleWorkspaceCapabilityModules(
+          assistantModuleMetas,
+          capabilityDiagnostics.diagnostics,
+        ).map((capability) => {
           const diagnostic = diagnostics.get(capability.name);
           const enabled = diagnostic?.enabled ?? false;
           const ready = diagnostic?.ready ?? false;

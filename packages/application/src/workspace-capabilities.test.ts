@@ -1,6 +1,9 @@
 import type { WorkspaceCapabilityRepository } from '@assistant/persistence';
 import { describe, expect, it, vi } from 'vitest';
-import { listMobileWorkspaceCapabilities } from './workspace-capabilities.js';
+import {
+  listMobileWorkspaceCapabilities,
+  visibleWorkspaceCapabilityModules,
+} from './workspace-capabilities.js';
 
 const modules = [
   { name: 'google', title: 'Google', summary: 'Mail and calendar' },
@@ -9,6 +12,91 @@ const modules = [
 ] as const;
 
 describe('mobile workspace capability projection', () => {
+  const overlappingModules = [
+    { name: 'calendar', title: 'Google Calendar', summary: 'Calendar reads' },
+    { name: 'google', title: 'Google Workspace', summary: 'Mail and calendar' },
+    { name: 'maps', title: 'Apple Maps', summary: 'Directions' },
+  ];
+
+  it('removes duplicate Calendar using live agent enablement and keeps Maps visible', async () => {
+    const repository: WorkspaceCapabilityRepository = {
+      kind: 'workspace-capability-repository',
+      load: vi.fn().mockResolvedValue({
+        statusAvailable: true,
+        diagnostics: overlappingModules.map(({ name }) => ({
+          module: name,
+          enabled: name === 'google',
+          ready: name === 'google',
+          detail: name === 'google' ? 'ready' : 'disabled',
+        })),
+      }),
+    };
+    // The web service's config must not override the agent's live enablement.
+    const projected = await listMobileWorkspaceCapabilities(
+      repository,
+      'owner',
+      overlappingModules,
+      ['calendar', 'maps'],
+    );
+    expect(projected.map((row) => [row.id, row.status])).toEqual([
+      ['google', 'ready'],
+      ['maps', 'off'],
+    ]);
+  });
+
+  it('keeps standalone Calendar and enabled Maps with their actual readiness', async () => {
+    const repository: WorkspaceCapabilityRepository = {
+      kind: 'workspace-capability-repository',
+      load: vi.fn().mockResolvedValue({
+        statusAvailable: true,
+        diagnostics: [
+          { module: 'calendar', enabled: true, ready: true, detail: 'ready' },
+          { module: 'google', enabled: false, ready: false, detail: 'disabled' },
+          { module: 'maps', enabled: true, ready: false, detail: 'missing MapKit key' },
+        ],
+      }),
+    };
+    const projected = await listMobileWorkspaceCapabilities(
+      repository,
+      'owner',
+      overlappingModules,
+      [],
+    );
+    expect(projected.map((row) => [row.id, row.status])).toEqual([
+      ['calendar', 'ready'],
+      ['google', 'off'],
+      ['maps', 'setup_needed'],
+    ]);
+    expect(projected.find((row) => row.id === 'maps')?.detail).toBe('missing MapKit key');
+  });
+
+  it('retains ready Maps and does not hide integrations with unknown enablement', () => {
+    expect(
+      visibleWorkspaceCapabilityModules(overlappingModules, [
+        { module: 'google', enabled: true },
+        { module: 'maps', enabled: true },
+      ]).map((row) => row.name),
+    ).toEqual(['google', 'maps']);
+    expect(visibleWorkspaceCapabilityModules(overlappingModules, [])).toEqual(overlappingModules);
+  });
+
+  it('uses configured enablement when readiness is unavailable without inventing Ready', async () => {
+    const repository: WorkspaceCapabilityRepository = {
+      kind: 'workspace-capability-repository',
+      load: vi.fn().mockResolvedValue({ statusAvailable: false, diagnostics: [] }),
+    };
+    const projected = await listMobileWorkspaceCapabilities(
+      repository,
+      'owner',
+      overlappingModules,
+      ['google', 'maps'],
+    );
+    expect(projected.map((row) => [row.id, row.status])).toEqual([
+      ['google', 'unavailable'],
+      ['maps', 'unavailable'],
+    ]);
+  });
+
   it('uses live agent diagnostics for exact fields and status labels', async () => {
     const load = vi.fn<WorkspaceCapabilityRepository['load']>().mockResolvedValue({
       statusAvailable: true,
