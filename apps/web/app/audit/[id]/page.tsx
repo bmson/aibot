@@ -18,6 +18,35 @@ const labels: Record<AuditSection, string> = {
   responseChecks: 'Response quality checks',
   recallMetrics: 'Recall diagnostics',
 };
+const payloadFields = new Set([
+  'args',
+  'result',
+  'error',
+  'decision',
+  'payload',
+  'resolutionPayload',
+  'systemPrompt',
+  'input',
+  'output',
+  'text',
+]);
+function fieldLabel(key: string) {
+  const names: Record<string, string> = {
+    args: 'Arguments',
+    result: 'Result',
+    error: 'Error',
+    decision: 'Policy decision',
+    payload: 'Approval request',
+    resolutionPayload: 'Approval response',
+    systemPrompt: 'System instructions',
+    input: 'Model input',
+    output: 'Model output',
+    text: 'Message',
+  };
+  return (
+    names[key] ?? key.replace(/([A-Z])/g, ' $1').replace(/^./, (letter) => letter.toUpperCase())
+  );
+}
 export default async function AuditDetailPage({
   params,
   searchParams,
@@ -68,20 +97,22 @@ export default async function AuditDetailPage({
         <p className="whitespace-pre-wrap text-sm">{String(task.progress || '')}</p>
       </div>
       <InvestigationBrief prompt={report.investigationPrompt} />
-      <details className="rounded-xl border border-edge p-4" open>
+      <details className="rounded-xl border border-edge p-4">
         <summary className="cursor-pointer font-semibold">Task setup and diagnostics</summary>
         <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs">
           {JSON.stringify(report.task, null, 2)}
         </pre>
       </details>
-      <div className="rounded-xl bg-sunken p-4 text-sm">
-        <p className="font-semibold">Evidence coverage</p>
+      <details className="rounded-xl bg-sunken p-4 text-sm">
+        <summary className="cursor-pointer font-semibold">
+          Evidence coverage and limitations
+        </summary>
         <ul className="mt-2 grid list-disc gap-2 pl-5">
           {report.evidenceNotes.map((note) => (
             <li key={note}>{note}</li>
           ))}
         </ul>
-      </div>
+      </details>
       <nav aria-label="Audit sections" className="flex flex-wrap gap-2">
         <Link className={btn.outline} href={`/audit/${id}`}>
           Overview
@@ -101,7 +132,11 @@ export default async function AuditDetailPage({
         <section key={group.name} className="grid gap-3" aria-label={labels[group.name]}>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-semibold">{labels[group.name]}</h2>
-            <a className={btn.outline} href={`/api/audit/${id}?section=${group.name}`} download>
+            <a
+              className={btn.outline}
+              href={`/api/audit/${id}?${new URLSearchParams({ section: group.name, ...(query.cursor && section === group.name ? { cursor: query.cursor } : {}), ...(query.entry && section === group.name ? { entry: query.entry } : {}), ...(query.field && section === group.name ? { field: query.field, offset: query.offset ?? '0' } : {}) }).toString()}`}
+              download
+            >
               Download records
             </a>
           </div>
@@ -122,12 +157,34 @@ export default async function AuditDetailPage({
               <p className="mt-1 break-all text-xs text-muted">
                 {entry.at} · {entry.id}
               </p>
+              <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-3">
+                {Object.entries(entry.fields)
+                  .filter(
+                    ([key, field]) =>
+                      !payloadFields.has(key) &&
+                      !['id', 'createdAt', 'requestedAt'].includes(key) &&
+                      field.text &&
+                      field.text !== 'null',
+                  )
+                  .map(([key, field]) => (
+                    <div key={key} className="min-w-0">
+                      <dt className="text-muted">{fieldLabel(key)}</dt>
+                      <dd className="break-words">{field.text}</dd>
+                    </div>
+                  ))}
+              </dl>
               {Object.entries(entry.fields)
-                .filter(([key]) => !['id', 'createdAt', 'requestedAt'].includes(key))
+                .filter(
+                  ([key, field]) => payloadFields.has(key) && field.text && field.text !== 'null',
+                )
                 .map(([key, field]) => (
-                  <details key={key} className="mt-3" open={query.field === key}>
+                  <details
+                    key={key}
+                    className="mt-3"
+                    open={query.field === key || ['error', 'text', 'output'].includes(key)}
+                  >
                     <summary className="cursor-pointer text-sm">
-                      {key}
+                      {fieldLabel(key)}
                       {field.hasMore ? ' · more available' : ''}
                     </summary>
                     <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-sunken p-3 text-xs">
