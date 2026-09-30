@@ -69,6 +69,8 @@ struct WorkspaceView: View {
     @State private var expandedSkillIDs: Set<String> = []
     @State private var skillPendingDeletion: WorkspaceSkill?
     @State private var showingCostEditor = false
+    @State private var showingIssueReporter = false
+    @State private var issueReported = false
     @State private var workspaceActionInFlight: String?
 
     var body: some View {
@@ -142,6 +144,13 @@ struct WorkspaceView: View {
         }
         .sheet(isPresented: $showingSkillCreator) {
             NavigationStack { SkillEditor(skill: nil) }
+        }
+        .sheet(isPresented: $showingIssueReporter) {
+            NavigationStack {
+                IssueReportForm {
+                    issueReported = true
+                }
+            }
         }
         .sheet(item: $editingSkill) { skill in
             NavigationStack { SkillEditor(skill: skill) }
@@ -671,6 +680,18 @@ struct WorkspaceView: View {
         let advisory = improvements.filter { !$0.applyable }
 
         return VStack(alignment: .leading, spacing: 16) {
+            Button("Report an issue", systemImage: "plus.bubble") {
+                issueReported = false
+                showingIssueReporter = true
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .primary))
+
+            if issueReported {
+                Label("Issue reported. Follow its progress under Code fixes.", systemImage: "checkmark.circle")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("issue-report-success")
+            }
             if let repairs {
                 repairIssues(repairs)
             }
@@ -2043,6 +2064,105 @@ private struct CostLimitsEditor: View {
             )
             isSaving = false
             if saved { dismiss() }
+        }
+    }
+}
+
+private struct IssueReportForm: View {
+    let onReported: () -> Void
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var happened = ""
+    @State private var expected = ""
+    @State private var submitting = false
+    @State private var submissionError: String?
+
+    private var cleanTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var cleanHappened: String { happened.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var cleanExpected: String { expected.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var summary: String {
+        "What happened:\n\(cleanHappened)\n\nWhat I expected:\n\(cleanExpected)"
+    }
+    private var canSubmit: Bool {
+        (3...200).contains(cleanTitle.count) && cleanHappened.count >= 5 &&
+        cleanExpected.count >= 5 && summary.count <= 3000 && !submitting
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Short title", text: $title)
+                    .accessibilityIdentifier("issue-report-title")
+                Text("\(cleanTitle.count)/200 characters")
+                    .font(.caption).foregroundStyle(.secondary)
+            } header: {
+                Text("Issue")
+            }
+            Section {
+                TextField("Describe the steps and what went wrong", text: $happened, axis: .vertical)
+                    .lineLimit(4...8)
+                    .accessibilityLabel("What happened")
+                    .accessibilityIdentifier("issue-report-happened")
+            } header: {
+                Text("What happened?")
+            }
+            Section {
+                TextField("Describe what should have happened", text: $expected, axis: .vertical)
+                    .lineLimit(3...6)
+                    .accessibilityLabel("What you expected")
+                    .accessibilityIdentifier("issue-report-expected")
+            } header: {
+                Text("What did you expect?")
+            } footer: {
+                Text("Include steps we can reproduce. Avoid passwords, API keys, and private information. Details must fit within 3,000 characters.")
+            }
+            Section {
+                Text("The assistant will investigate. If it finds a code defect, it can prepare a fix for you to review.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                if summary.count > 3000 {
+                    Text("Please shorten the details to 3,000 characters.").foregroundStyle(.red)
+                }
+                if let submissionError {
+                    Text(submissionError).foregroundStyle(.red)
+                        .accessibilityIdentifier("issue-report-error")
+                }
+                Button {
+                    submit()
+                } label: {
+                    HStack {
+                        if submitting { ProgressView() }
+                        Text(submitting ? "Submitting…" : "Submit issue")
+                    }
+                }
+                .disabled(!canSubmit)
+                .accessibilityIdentifier("issue-report-submit")
+            }
+        }
+        .disabled(submitting)
+        .navigationTitle("Report an issue")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }.disabled(submitting)
+            }
+        }
+        .interactiveDismissDisabled(submitting)
+    }
+
+    private func submit() {
+        guard canSubmit else { return }
+        submitting = true
+        submissionError = nil
+        Task {
+            let saved = await model.reportRepair(title: cleanTitle, summary: summary)
+            submitting = false
+            if saved {
+                onReported()
+                dismiss()
+            } else {
+                submissionError = model.errorMessage ?? "Could not submit the issue. Please try again."
+            }
         }
     }
 }
