@@ -157,19 +157,30 @@ describe('mailMoment', () => {
   it('does not claim actionable automated mail needs a reply', () => {
     const moment = mailMoment(mail);
     expect(moment.card).toMatchObject({
-      urgencyLabel: 'Needs attention',
+      urgencyLabel: 'Still open',
       title: mail.subject,
       details: [{ label: 'From', value: mail.fromName }],
     });
     expect(moment.card.summary).toBeUndefined();
-    expect(moment.text).not.toContain('unanswered');
-    expect(moment.suggestion?.summary).toBe(
-      'Review “We noticed a new login” and suggest next steps?',
-    );
+    expect(moment.text).toBe('Still open: “We noticed a new login” from Account security');
+    expect(moment.suggestion?.summary).toBe('Check what “We noticed a new login” needs from you?');
     expect(moment.suggestion?.proposedAction).toContain('gmail:security-1');
     expect(moment.suggestion?.proposedAction).toContain(
       'Do not send messages, create reminders or calendar events',
     );
+  });
+
+  it('offers a reply draft when a person is waiting on the owner', () => {
+    const moment = mailMoment({
+      ...mail,
+      fromName: 'Sam Recruiter',
+      subject: 'Re: Interview availability',
+      category: 'personal',
+    });
+    expect(moment.suggestion?.summary).toBe('Draft a reply to Sam Recruiter?');
+    expect(moment.suggestion?.proposedAction).toContain('prepare a reply draft');
+    expect(moment.suggestion?.proposedAction).toContain('Do not send messages');
+    expect(moment.suggestion?.proposedAction).toMatch(/If a reply is no longer needed, say so\.$/);
   });
 
   it('keeps unbounded or multiline source fields out of card layout without losing the source identity', () => {
@@ -241,6 +252,8 @@ describe('runPulse', () => {
       importance: 5,
       actionable: true,
       reason: 'asks you to confirm by Friday',
+      // Old enough that the arrival alert is no longer the latest word on it.
+      createdAt: new Date(NOW.getTime() - 4 * 3600_000),
     });
   }
 
@@ -282,7 +295,7 @@ describe('runPulse', () => {
           data: expect.objectContaining({
             kind: 'proactive-alert',
             category: 'email',
-            urgencyLabel: 'Needs attention',
+            urgencyLabel: 'Still open',
           }),
         }),
       ]),

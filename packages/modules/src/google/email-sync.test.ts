@@ -305,17 +305,18 @@ describe('Gmail sender authentication', () => {
 });
 
 describe('forwarded-ingest owner alerts', () => {
-  it('composes an SMS-safe three-line heads-up', () => {
-    const text = importantEmailNotice('alice@example.com', 'Q3 invoice', {
+  it('composes an SMS-safe heads-up that leads with what to do', () => {
+    const text = importantEmailNotice('Alice Example', 'Q3 invoice', {
       category: 'financial',
       importance: 5,
       reason: 'Payment due Friday.',
+      nextStep: 'Pay the invoice by Friday',
       dates: [{ iso: '2026-08-28', what: 'payment due' }],
     });
-    expect(text).toContain('Important email from alice@example.com');
-    expect(text).toContain('Q3 invoice');
+    expect(text).toBe(
+      'Email from Alice Example: “Q3 invoice”\nNext: Pay the invoice by Friday\nDates: payment due (2026-08-28)',
+    );
     expect(text).not.toContain('Payment due Friday.');
-    expect(text).toContain('payment due (2026-08-28)');
   });
 
   it('does not expose internal scoring rationale or source newlines', () => {
@@ -325,7 +326,7 @@ describe('forwarded-ingest owner alerts', () => {
       reason: 'The owner should verify; deserves attention but is not urgent.',
       dates: [],
     });
-    expect(text).toBe('Important email from Account security\n“Login notice”');
+    expect(text).toBe('Email from Account security: “Login notice”');
     expect(
       importantEmailNotice(' ', ' ', {
         category: 'other',
@@ -333,7 +334,7 @@ describe('forwarded-ingest owner alerts', () => {
         reason: 'internal',
         dates: [],
       }),
-    ).toBe('Important email from Unknown sender\n“(no subject)”');
+    ).toBe('Email from Unknown sender: “(no subject)”');
   });
 
   it('pings the owner at or above the notify threshold, stays quiet below it', async (ctx) => {
@@ -341,7 +342,7 @@ describe('forwarded-ingest owner alerts', () => {
 
     const stamp = `${Date.now()}`;
     const conversationIds: string[] = [];
-    const run = async (importance: number) => {
+    const run = async (importance: number, from = 'alice@example.com', notifyFails = false) => {
       const notified: string[] = [];
       const deps = {
         config: {
@@ -367,16 +368,18 @@ describe('forwarded-ingest owner alerts', () => {
         workspace: {},
         googleClient: { configured: () => false, api: async () => ({}) },
         notifyOwner: async ({ text }: { text: string }) => {
+          if (notifyFails) throw new Error('notifier down');
           notified.push(text);
         },
         observeInboundEmail: async () => {},
       } as unknown as EmailSyncDeps;
 
-      const channelMessageId = `gmail:xtest-notify-${stamp}-${importance}`;
+      const key = `${stamp}-${importance}-${from}-${notifyFails}`;
+      const channelMessageId = `gmail:xtest-notify-${key}`;
       const outcome = await processForwardedIngest(deps, {
         agentId,
-        message: { id: `m-${stamp}-${importance}`, threadId: `t-${stamp}-${importance}` },
-        from: 'alice@example.com',
+        message: { id: `m-${key}`, threadId: `t-${key}` },
+        from,
         subject: `Invoice ${importance}`,
         text: 'Please pay the attached invoice by Friday.',
         rfcMessageId: '',
@@ -401,6 +404,16 @@ describe('forwarded-ingest owner alerts', () => {
       const low = await run(2);
       expect(low.outcome).toBe('skipped');
       expect(low.notified).toHaveLength(0);
+
+      // A burst from one sender is one thing to the owner: the second message
+      // still triages, but does not buzz again.
+      const burst = await run(4);
+      expect(burst.outcome).toBe('triaged');
+      expect(burst.notified).toHaveLength(0);
+
+      // A failed alert is not remembered, so it cannot silence the next one.
+      await run(5, `bob-${stamp}@example.com`, true);
+      expect((await run(4, `bob-${stamp}@example.com`)).notified).toHaveLength(1);
     } finally {
       if (conversationIds.length > 0) {
         await db.delete(tasks).where(inArray(tasks.conversationId, conversationIds));

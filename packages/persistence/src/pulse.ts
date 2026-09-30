@@ -17,6 +17,8 @@ export interface PulseMail {
   fromEmail: string;
   fromName: string | null;
   subject: string;
+  /** The scorer's category, which decides what the follow-up offers to do. */
+  category: string;
   importance: number;
 }
 
@@ -52,12 +54,12 @@ export interface PulseRepository {
     },
   ): Promise<void>;
   /**
-   * Actionable mail at or above `minImportance` ingested since `since` that no
-   * finished task has picked up, most important first.
+   * Actionable mail at or above `minImportance` ingested inside
+   * `[since, until]` that no finished task has picked up, most important first.
    */
   actionableMail(
     agentId: string,
-    input: { since: Date; minImportance: number; limit: number },
+    input: { since: Date; until: Date; minImportance: number; limit: number },
   ): Promise<PulseMail[]>;
   /** Open commitments due inside `[now, until]` that are not snoozed past `now`. */
   dueCommitments(

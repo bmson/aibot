@@ -1,6 +1,12 @@
 import type { ModelRouter } from '@assistant/core';
 import { describe, expect, it, vi } from 'vitest';
-import { bulkByHeaders, fallbackImportance, scoreEmailImportance } from './email-importance.js';
+import {
+  bulkByHeaders,
+  calibrateImportance,
+  type EmailImportance,
+  fallbackImportance,
+  scoreEmailImportance,
+} from './email-importance.js';
 
 const payload = (headers: Record<string, string>) => ({
   headers: Object.entries(headers).map(([name, value]) => ({ name, value })),
@@ -81,7 +87,9 @@ describe('scoreEmailImportance', () => {
 
     expect(router.object).toHaveBeenCalled();
     expect(score.category).toBe('travel');
-    expect(score.importance).toBe(4);
+    // Read and kept, with its dates — but a confirmation asks nothing of the
+    // owner, so it lands below the interrupt tier.
+    expect(score.importance).toBe(3);
     expect(score.dates).toHaveLength(1);
   });
 
@@ -133,6 +141,62 @@ describe('scoreEmailImportance', () => {
       authenticated: false,
     });
     expect(score.importance).toBe(2);
+  });
+});
+
+describe('calibrateImportance', () => {
+  const scored = (overrides: Partial<EmailImportance> = {}): EmailImportance => ({
+    category: 'security',
+    importance: 5,
+    actionable: true,
+    nextStep: 'Check the new sign-in',
+    dates: [],
+    reason: 'internal',
+    ...overrides,
+  });
+
+  // The reported pattern: linking one app produced a burst of "you connected",
+  // "you asked us to share" and "new app linked" notices from several senders,
+  // each scored as a security alert and each buzzing the phone.
+  it('holds a notice that says no action is needed below the interrupt tier', () => {
+    const score = calibrateImportance(
+      scored(),
+      "ChatGPT connected to your account. If this was you, you're all set and no further action is required.",
+    );
+    expect(score.importance).toBe(3);
+    expect(score.actionable).toBe(false);
+    expect(score.nextStep).toBeUndefined();
+  });
+
+  it('holds non-actionable mail at 3 however the model scored it', () => {
+    expect(
+      calibrateImportance(scored({ actionable: false, importance: 5 }), 'Payment received.')
+        .importance,
+    ).toBe(3);
+  });
+
+  it('leaves actionable mail and lower scores alone', () => {
+    const body = 'Could you send over your availability for next week?';
+    expect(calibrateImportance(scored({ category: 'personal' }), body)).toMatchObject({
+      importance: 5,
+      actionable: true,
+      nextStep: 'Check the new sign-in',
+    });
+    expect(calibrateImportance(scored({ actionable: false, importance: 2 }), body).importance).toBe(
+      2,
+    );
+  });
+
+  it('keeps the owner-facing next step short and on one line', () => {
+    const score = calibrateImportance(
+      scored({ nextStep: `Reply\nwith ${'several words '.repeat(12)}.` }),
+      'Please reply.',
+    );
+    expect(score.nextStep?.length).toBeLessThanOrEqual(80);
+    expect(score.nextStep).not.toContain('\n');
+    expect(calibrateImportance(scored({ nextStep: '  ' }), 'Please reply.').nextStep).toBe(
+      undefined,
+    );
   });
 });
 

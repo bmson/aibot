@@ -106,8 +106,8 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore pulse job', () 
       dates: [],
       triaged: true,
       extractedAt: null,
-      createdAt: at(-2),
-      updatedAt: at(-2),
+      createdAt: at(-4),
+      updatedAt: at(-4),
       ...extra,
     });
   }
@@ -151,10 +151,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore pulse job', () 
     await mail('mail-open', 4);
     await mail('mail-unimportant', 2);
     await mail('mail-not-actionable', 5, { actionable: false });
+    // Just arrived: the arrival alert is still the latest word on it.
+    await mail('mail-fresh', 5, { createdAt: at(-1), updatedAt: at(-1) });
 
     expect(await runJob()).toBe('pulse: mail-action delivered with a suggestion, 2 candidate(s)');
     const [notice] = await notices();
-    expect(notice?.text).toBe('Email needs attention from Landlord: “Lease question mail-open”');
+    expect(notice?.text).toBe('Still open: “Lease question mail-open” from Landlord');
     const suggestion = await store
       .collection('suggestions')
       .where('sourceRef', '==', 'pulse:mail-open')

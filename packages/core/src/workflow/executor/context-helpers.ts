@@ -67,9 +67,11 @@ export function channelContext(task: TaskRow): string {
           "Do the useful work now, with tools: put dated commitments on the calendar (calendar.create_event, no attendees — it is the owner's own calendar), file details worth keeping (workspace.write, docs.append), and tell the owner what matters with owner.notify.",
           ingest?.ownerAlerted === true
             ? 'The owner has ALREADY been alerted to this message with a summary. Call owner.notify again only if your closer read turns up something the summary missed — a hidden date, a wrong charge, a conflict with their calendar — never to repeat it.'
-            : 'Call owner.notify ONLY when this genuinely deserves their attention — something is due, something changed, something needs a decision, or something looks wrong. Routine mail needs no ping; it is already stored and searchable.',
+            : 'Call owner.notify ONLY when the owner has to do something they would otherwise miss — something is due, something changed, a person is waiting on them, or something looks wrong. Routine mail needs no ping; it is already stored and searchable.',
+          'Never notify about confirmations of something the owner just did (a payment received, a transfer submitted, an app or account connected, an order shipped), receipts, sign-in notices that say no action is needed, or reminders for events already on their calendar.',
+          'When you do notify: one or two plain sentences, leading with what they need to do and by when. Do not restate the subject line, do not list what you filed, and do not ask a question you could answer from the email, their calendar or memory.',
           'Never reply to the sender, and never draft a reply unless the owner has asked for one.',
-          'Your final text is a note to the owner, not an email: no greeting, no sign-off.',
+          'Your final text is a note to the owner, not an email: no greeting, no sign-off. If nothing needed doing, say so in one short line.',
         ].join('\n');
       }
       return [
