@@ -113,26 +113,22 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
     it('reads a failed task and the rest of its model input through the bot audit tools without SQL', async () => {
       const taskId = randomUUID();
       const entryId = randomUUID();
-      await store
-        .doc('tasks', taskId)
-        .set({
-          id: taskId,
-          agentId: AGENT,
-          createdAt: now,
-          title: 'Failed send',
-          attempt: 3,
-          state: { callbackToken: 'private-token' },
-        });
-      await store
-        .doc('modelCallAudit', entryId)
-        .set({
-          id: entryId,
-          taskId,
-          createdAt: now,
-          input: 'x'.repeat(14000),
-          output: '[audit:provider-error] Invalid request',
-          capture: 'redacted',
-        });
+      await store.doc('tasks', taskId).set({
+        id: taskId,
+        agentId: AGENT,
+        createdAt: now,
+        title: 'Failed send',
+        attempt: 3,
+        state: { callbackToken: 'private-token' },
+      });
+      await store.doc('modelCallAudit', entryId).set({
+        id: entryId,
+        taskId,
+        createdAt: now,
+        input: 'x'.repeat(14000),
+        output: '[audit:provider-error] Invalid request',
+        capture: 'redacted',
+      });
       const report = await run('audit.read', { taskId, section: 'modelCallAudit' });
       expect(JSON.stringify(report)).toContain('Invalid request');
       expect(JSON.stringify(report)).not.toContain('private-token');
