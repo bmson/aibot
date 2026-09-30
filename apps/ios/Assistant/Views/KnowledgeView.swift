@@ -8,46 +8,90 @@ struct KnowledgeCleanupScreen: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var cleanup: KnowledgeCleanupResponse?
-    @State private var pendingID: String?
+    @State private var pendingIDs: Set<String> = []
+    @State private var loadFailed = false
+    @State private var forgettingFinding: KnowledgeCleanupFinding?
+    @State private var clearingFinding: KnowledgeCleanupFinding?
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Nothing here is removed until you say so.")
+            VStack(alignment: .leading, spacing: AssistantTheme.cardStackSpacing) {
+                Text("Review new connections and clear outdated information.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 8)
                 if let cleanup, cleanup.findings.isEmpty {
                     AssistantEmptyState("All tidy", systemImage: "checkmark.seal",
                                         description: "Nothing on your map needs a decision right now.")
                 } else if let cleanup {
                     ForEach(cleanup.findings) { finding in cleanupCard(finding) }
+                } else if loadFailed {
+                    VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
+                        Text("Your map couldn’t be checked.").font(.subheadline)
+                        Button("Try again") { Task { await refresh() } }
+                            .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                    }
+                    .assistantPanel(in: colorScheme)
                 } else {
                     AssistantLoadingState(title: "Checking your map")
                 }
             }
-            .padding(16)
+            .padding(AssistantTheme.compactGutter)
             .padding(.bottom, 28)
         }
         .navigationTitle("Tidy up")
         .assistantSubmenuChrome()
+        .toolbarBackground(.visible, for: .navigationBar)
+        .sheet(item: $forgettingFinding) { finding in
+            if let memoryId = finding.memoryId {
+                NavigationStack {
+                    KnowledgeForgetReview(memoryId: memoryId) { await refresh() }
+                }
+            }
+        }
+        .confirmationDialog(
+            "Clear disconnected items?",
+            isPresented: Binding(
+                get: { clearingFinding != nil },
+                set: { if !$0 { clearingFinding = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: clearingFinding
+        ) { finding in
+            Button("Clear items", role: .destructive) {
+                Task { await resolve(action: "remove-orphans", finding: finding) }
+            }
+        } message: { finding in
+            Text(finding.detail)
+        }
         .task { await refresh() }
         .refreshable { await refresh() }
     }
 
     private func cleanupCard(_ finding: KnowledgeCleanupFinding) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(finding.title).font(.subheadline.weight(.semibold))
+        VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
+            Text(finding.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(finding.detail).font(.footnote).foregroundStyle(.secondary)
+            Text(finding.detail).font(.subheadline)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(alignment: .top, spacing: 8) {
+            Divider()
+            HStack(spacing: AssistantTheme.actionSpacing) {
                 primaryAction(finding)
-                if let memoryId = finding.memoryId {
-                    KnowledgeForgetButton(memoryId: memoryId) { await refresh() }
-                        .id(memoryId)
+                Spacer(minLength: 0)
+                if finding.memoryId != nil {
+                    Menu {
+                        Button("Forget source", systemImage: "trash", role: .destructive) {
+                            forgettingFinding = finding
+                        }
+                    } label: {
+                        AssistantActionMenuLabel(isUpdating: pendingIDs.contains(finding.id))
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Actions for \(finding.title)")
                 }
             }
-            .disabled(pendingID == finding.id)
+            .disabled(pendingIDs.contains(finding.id))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .assistantCard(in: colorScheme)
@@ -57,20 +101,20 @@ struct KnowledgeCleanupScreen: View {
     private func primaryAction(_ finding: KnowledgeCleanupFinding) -> some View {
         switch finding.kind {
         case "projection_orphan":
-            AssistantConfirmationButton("Clear", systemImage: "trash", compact: true) {
-                await resolve(action: "remove-orphans", finding: finding)
-            }
+            Button("Clear items", systemImage: "trash") { clearingFinding = finding }
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
         case "projection_failed":
             Button("Retry", systemImage: "arrow.clockwise") { Task { await resolve(action: "retry", finding: finding) } }
                 .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
         case "unreviewed_connection":
             if let relationId = finding.relationId {
                 Button("Confirm", systemImage: "checkmark") {
-                    pendingID = finding.id
+                    guard pendingIDs.insert(finding.id).inserted else { return }
                     Task {
-                        _ = await model.reviewKnowledgeRelation(id: relationId, approve: true)
-                        pendingID = nil
-                        await refresh()
+                        defer { pendingIDs.remove(finding.id) }
+                        if await model.reviewKnowledgeRelation(id: relationId, approve: true) {
+                            await refresh()
+                        }
                     }
                 }
                 .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
@@ -89,14 +133,17 @@ struct KnowledgeCleanupScreen: View {
     }
 
     private func refresh() async {
+        loadFailed = false
         if let result = await model.knowledgeCleanup() { cleanup = result }
+        else { loadFailed = true }
     }
 
     private func resolve(action: String, finding: KnowledgeCleanupFinding) async {
-        pendingID = finding.id
-        _ = await model.resolveKnowledgeCleanup(action: action, memoryId: finding.memoryId)
-        pendingID = nil
-        await refresh()
+        guard pendingIDs.insert(finding.id).inserted else { return }
+        defer { pendingIDs.remove(finding.id) }
+        if await model.resolveKnowledgeCleanup(action: action, memoryId: finding.memoryId) {
+            await refresh()
+        }
     }
 }
 
@@ -557,47 +604,86 @@ struct KnowledgeItemEditor: View {
     }
 }
 
-/// Show the affected knowledge inline before the second tap can forget a source.
-private struct KnowledgeForgetButton: View {
+/// Preview the exact source and affected knowledge before removal.
+private struct KnowledgeForgetReview: View {
     let memoryId: String
-    let refresh: () async -> Void
+    let didForget: () async -> Void
     @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
     @State private var impact: KnowledgeSourceImpact?
+    @State private var loading = true
+    @State private var working = false
     @State private var failure: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            AssistantConfirmationButton("Forget", compact: true, prepare: {
-                failure = nil
-                impact = await model.knowledgeSourceImpact(id: memoryId)
-                if impact == nil { failure = "Couldn’t check the affected knowledge. Try again." }
-                return impact != nil
-            }) {
-                guard let impact else { return }
-                if await model.forgetKnowledgeSource(id: impact.memoryId) {
-                    self.impact = nil
-                    await refresh()
+        AssistantForm {
+            if loading {
+                Section { ProgressView("Checking affected information…") }
+            } else if let impact {
+                Section("Source to forget") {
+                    Text(impact.content).font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Section {
+                    LabeledContent("Active connections", value: "\(impact.activeConnections)")
+                    LabeledContent("Disconnected items", value: "\(impact.orphanedItems.count)")
+                    if impact.retiredProjections > 0 {
+                        LabeledContent("Older map entries", value: "\(impact.retiredProjections)")
+                    }
+                    if !impact.orphanedItems.isEmpty {
+                        DisclosureGroup("Affected items") {
+                            ForEach(impact.orphanedItems) { item in
+                                Text(item.label).font(.subheadline)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("This will remove")
+                } footer: {
+                    Text("The assistant won’t learn this source again from the same text.")
+                }
+                Section {
+                    Button("Forget source", systemImage: "trash", role: .destructive) {
+                        working = true
+                        failure = nil
+                        Task {
+                            if await model.forgetKnowledgeSource(id: impact.memoryId) {
+                                await didForget()
+                                dismiss()
+                            } else {
+                                failure = "The source could not be removed. Please try again."
+                            }
+                            working = false
+                        }
+                    }
+                    .disabled(working)
+                }
+            } else {
+                Section {
+                    Text("Couldn’t check the affected information.")
+                        .foregroundStyle(.secondary)
+                    Button("Try again") { Task { await load() } }
                 }
             }
-            if let impact {
-                Text(forgetImpactMessage(impact))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            if let failure {
+                Section { Text(failure).font(.footnote).foregroundStyle(.red) }
             }
-            if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
         }
+        .navigationTitle("Forget source")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }.disabled(working)
+            }
+        }
+        .interactiveDismissDisabled(working)
+        .task { await load() }
     }
 
-    private func forgetImpactMessage(_ impact: KnowledgeSourceImpact) -> String {
-        let retired =
-            impact.retiredProjections > 0
-            ? " It also clears \(impact.retiredProjections) retired derived projections."
-            : ""
-        return
-            "This removes \(impact.activeConnections) active connections and \(impact.orphanedItems.count) items that would no longer be connected.\(retired) The source is tombstoned so it is not learned again verbatim."
+    private func load() async {
+        loading = true
+        impact = await model.knowledgeSourceImpact(id: memoryId)
+        loading = false
     }
-
 }
 
 /// A dismissal stores only the proposal's stable entity IDs, never the names

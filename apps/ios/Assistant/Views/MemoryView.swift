@@ -459,63 +459,73 @@ struct MemoryProfileScreen: View {
 struct WritingVoiceScreen: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var register = "email_casual"
     @State private var importing = false
     @State private var editing = false
     @State private var inFlight = false
+    @State private var confirmingClear = false
+    @State private var response: VoiceProfileResponse?
+    @State private var loaded = false
+
+    private var stats: WorkspaceVoiceStats? {
+        response?.voiceStats ?? model.workspace?.memory.voiceStats
+    }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Drafts sound like you when the assistant has seen how you write. Upload messages you’ve sent, or let it learn from the ones you approve.")
+            VStack(alignment: .leading, spacing: AssistantTheme.cardStackSpacing) {
+                Text("Help the assistant draft in your own words.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let voice = model.workspace?.memory.voiceStats {
-                    HStack(spacing: 10) {
-                        stat("Samples", voice.total)
-                        stat("Learned", voice.auto)
-                        stat("Uploaded", voice.uploaded)
-                    }
-                    VStack(alignment: .leading, spacing: 12) {
-                        Picker("These samples are", selection: $register) {
-                            Text("Casual email").tag("email_casual")
-                            Text("Professional email").tag("email_professional")
-                            Text("Text messages").tag("sms")
-                            Text("Chat").tag("chat")
-                        }
-                        Button {
-                            importing = true
-                        } label: {
-                            HStack(spacing: 7) {
-                                if inFlight { ProgressView().controlSize(.small) } else { Image(systemName: "square.and.arrow.up") }
-                                Text(inFlight ? "Uploading…" : "Upload sent messages")
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(AssistantActionButtonStyle(kind: .primary, fillsWidth: true))
-                        .disabled(inFlight)
-                    }
-                    .assistantCard(in: colorScheme)
-                    Button("Edit the voice profile", systemImage: "pencil") { editing = true }
-                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                    if voice.auto + voice.uploaded > 0 {
-                        AssistantConfirmationButton("Clear all samples", confirmationTitle: "Clear for good",
-                                                    hint: "Deletes every writing sample and the learned voice.") {
-                            _ = await model.updateMemoryProfile(action: "purge-voice")
-                        }
-                    }
+                    .padding(.vertical, 8)
+
+                if let stats {
+                    voiceCard
+                    samplesCard(stats)
+                } else if !loaded {
+                    AssistantLoadingState(title: "Loading writing voice…")
                 } else {
-                    AssistantEmptyState("Not available", systemImage: "text.quote",
-                                        description: "This server doesn’t report writing samples yet.")
+                    AssistantEmptyState("Writing voice unavailable", systemImage: "text.quote",
+                        description: "This server doesn’t report writing samples yet.")
                 }
             }
-            .padding(16)
+            .padding(AssistantTheme.compactGutter)
             .padding(.bottom, 28)
         }
         .navigationTitle("Writing voice")
         .assistantSubmenuChrome()
-        .refreshable { await model.refreshWorkspace() }
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            if let stats, stats.total > 0 {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Clear all samples", systemImage: "trash", role: .destructive) {
+                            confirmingClear = true
+                        }
+                    } label: {
+                        Label("Writing voice actions", systemImage: "ellipsis")
+                    }
+                    .disabled(inFlight)
+                }
+            }
+        }
+        .confirmationDialog("Clear all writing samples?", isPresented: $confirmingClear, titleVisibility: .visible) {
+            Button("Clear all samples", role: .destructive) {
+                inFlight = true
+                Task {
+                    if await model.updateMemoryProfile(action: "purge-voice") {
+                        response = nil
+                        await refresh()
+                    }
+                    inFlight = false
+                }
+            }
+        } message: {
+            Text("This deletes every writing sample and the learned voice profile.")
+        }
+        .refreshable { await refresh() }
+        .task { if !loaded { await refresh() } }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.plainText, .json, .data], allowsMultipleSelection: false) { result in
             guard case let .success(urls) = result, let url = urls.first else {
                 if case let .failure(error) = result { model.reportError(error) }
@@ -523,16 +533,119 @@ struct WritingVoiceScreen: View {
             }
             upload(url)
         }
-        .sheet(isPresented: $editing) { NavigationStack { VoiceProfileEditor() } }
+        .sheet(isPresented: $editing, onDismiss: { Task { await refresh() } }) {
+            NavigationStack { VoiceProfileEditor() }
+        }
     }
 
-    private func stat(_ title: String, _ value: Int) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(value, format: .number).font(.title3.monospacedDigit().weight(.semibold))
-            Text(title).font(.caption).foregroundStyle(.secondary)
+    private var voiceCard: some View {
+        VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
+            Text("Your voice").font(.headline)
+            if !loaded && response == nil {
+                ProgressView("Loading your voice…")
+                    .font(.subheadline)
+            } else if let profile = response?.voiceProfile {
+                Text(profile.description.isEmpty
+                    ? "Describe your tone, or add sent messages to help the assistant learn it."
+                    : profile.description)
+                    .font(.subheadline)
+                    .foregroundStyle(profile.description.isEmpty
+                        ? AssistantTheme.inkMuted(for: colorScheme) : AssistantTheme.ink(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                if !profile.dos.isEmpty || !profile.donts.isEmpty || !profile.signature.isEmpty {
+                    DisclosureGroup("Writing preferences") {
+                        VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
+                            voiceGuidelines("Always", lines: profile.dos)
+                            voiceGuidelines("Never", lines: profile.donts)
+                            if !profile.signature.isEmpty {
+                                voiceGuidelines("Sign-off", lines: [profile.signature])
+                            }
+                        }
+                    }
+                    .font(.subheadline)
+                }
+            } else {
+                Text("Your voice profile couldn’t be loaded.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Button("Try again") { Task { await refresh() } }
+                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                    .disabled(inFlight)
+            }
+            Divider()
+            Button("Edit voice", systemImage: "pencil") { editing = true }
+                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                .disabled(inFlight)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .assistantPanel(in: colorScheme)
+        .assistantCard(in: colorScheme)
+    }
+
+    @ViewBuilder
+    private func voiceGuidelines(_ title: String, lines: [String]) -> some View {
+        if !lines.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func samplesCard(_ stats: WorkspaceVoiceStats) -> some View {
+        VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
+            Text("Writing samples").font(.headline)
+            Text("Add messages you’ve sent. The assistant also learns from drafts you approve.")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            AssistantFlowLayout(spacing: 14) {
+                Text("\(stats.total) samples")
+                Text("\(stats.auto) learned")
+                Text("\(stats.uploaded) uploaded")
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            Divider()
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: AssistantTheme.actionSpacing) {
+                        Text("Message type").font(.subheadline)
+                        sampleTypePicker
+                    }
+                } else {
+                    HStack(spacing: AssistantTheme.actionSpacing) {
+                        Text("Message type").font(.subheadline)
+                        Spacer(minLength: 0)
+                        sampleTypePicker
+                    }
+                }
+            }
+            .disabled(inFlight)
+            Button { importing = true } label: {
+                Label(inFlight ? "Updating…" : "Add sent messages", systemImage: "plus")
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .primary))
+            .disabled(inFlight)
+            Text("Text or JSON files, up to 25 MB.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .assistantCard(in: colorScheme)
+    }
+
+    private var sampleTypePicker: some View {
+        Picker("Message type", selection: $register) {
+            Text("Casual email").tag("email_casual")
+            Text("Professional email").tag("email_professional")
+            Text("Text messages").tag("sms")
+            Text("Chat").tag("chat")
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+    }
+
+    private func refresh() async {
+        await model.refreshWorkspace()
+        if let updated = await model.voiceProfile() { response = updated }
+        loaded = true
     }
 
     private func upload(_ url: URL) {
@@ -547,7 +660,9 @@ struct WritingVoiceScreen: View {
                     inFlight = false
                     return
                 }
-                _ = await model.uploadImport(data: data, name: url.lastPathComponent, voice: true, register: register)
+                if await model.uploadImport(data: data, name: url.lastPathComponent, voice: true, register: register) {
+                    await refresh()
+                }
             } catch {
                 model.reportError(error)
             }

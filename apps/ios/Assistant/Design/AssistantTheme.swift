@@ -43,6 +43,8 @@ enum AssistantTheme {
     static let responseCardMinHeight: CGFloat = 56
     static let compactGutter: CGFloat = 16
     static let cardStackSpacing: CGFloat = 12
+    static let cardContentSpacing: CGFloat = 12
+    static let actionSpacing: CGFloat = 8
     static let canvas = Color(hex: 0xEEF5F0)
     static let canvasDark = Color(hex: 0x101712)
     static let raised = Color.white
@@ -637,6 +639,26 @@ struct AssistantEmptyState: View {
     }
 }
 
+/// Quiet overflow affordance shared by cards and settings rows.
+struct AssistantActionMenuLabel: View {
+    var isUpdating = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Group {
+            if isUpdating {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "ellipsis")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+            }
+        }
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+    }
+}
+
 struct AssistantTactileButtonStyle: ButtonStyle {
     let reduceMotion: Bool
     var pressedScale: CGFloat = 0.98
@@ -662,10 +684,10 @@ enum AssistantActionButtonKind {
 
 /// The action language for assistant submenu pages. These controls use the
 /// same recessed paper and rounded geometry as the cards they sit inside,
-/// while keeping every target at least 44 points tall.
+/// with compact padding by default and every target at least 44 points tall.
 struct AssistantActionButtonStyle: ButtonStyle {
     let kind: AssistantActionButtonKind
-    var compact = false
+    var compact = true
     var fillsWidth = false
     var confirming = false
 
@@ -768,7 +790,7 @@ struct AssistantConfirmationButton: View {
     var systemImage: String = "trash"
     var kind: AssistantActionButtonKind = .destructive
     var hint: String = ""
-    var compact = false
+    var compact = true
     var fillsWidth = false
     var prepare: (() async -> Bool)?
     let action: () async -> Void
@@ -781,7 +803,7 @@ struct AssistantConfirmationButton: View {
 
     init(_ title: String, confirmationTitle: String? = nil, systemImage: String = "trash",
          kind: AssistantActionButtonKind = .destructive, hint: String = "",
-         compact: Bool = false, fillsWidth: Bool = false,
+         compact: Bool = true, fillsWidth: Bool = false,
          prepare: (() async -> Bool)? = nil,
          action: @escaping () async -> Void) {
         self.title = title

@@ -15,6 +15,7 @@ struct MoreView: View {
     @ObservedObject private var locations = LocationManager.shared
     @State private var showingAgentSettings = false
     @State private var settingsActionInFlight: String?
+    @State private var policyPendingDeletion: WorkspacePolicy?
     /// The voices installed for this language, best first. Read once the screen
     /// appears rather than on every redraw — the answer only changes when the
     /// owner leaves for Settings and downloads one.
@@ -225,7 +226,7 @@ struct MoreView: View {
                     }
                 }
 
-                Section("Standing approvals") {
+                Section {
                     if settings.policies.isEmpty {
                         Label("No standing rules", systemImage: "checkmark.shield")
                             .foregroundStyle(.secondary)
@@ -234,6 +235,10 @@ struct MoreView: View {
                             policyRow(policy)
                         }
                     }
+                } header: {
+                    Text("Standing approvals")
+                } footer: {
+                    Text("Enabled rules let the assistant take these actions without asking each time.")
                 }
             }
         }
@@ -241,6 +246,7 @@ struct MoreView: View {
         .scrollContentBackground(.hidden)
         .navigationTitle("More")
         .assistantSubmenuChrome()
+        .toolbarBackground(.visible, for: .navigationBar)
         .refreshable {
             async let overviewRefresh: Void = model.refreshAll()
             async let workspaceRefresh: Void = model.refreshWorkspace()
@@ -258,6 +264,25 @@ struct MoreView: View {
             guard phase == .active else { return }
             refreshVoiceChoices()
             SpeechPlayer.shared.voicePreferenceChanged()
+        }
+        .confirmationDialog(
+            "Delete standing approval?",
+            isPresented: Binding(
+                get: { policyPendingDeletion != nil },
+                set: { if !$0 { policyPendingDeletion = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: policyPendingDeletion
+        ) { policy in
+            Button("Delete rule", role: .destructive) {
+                settingsActionInFlight = policy.id
+                Task {
+                    _ = await model.deletePolicy(policy)
+                    settingsActionInFlight = nil
+                }
+            }
+        } message: { policy in
+            Text("This removes “\(policy.displayName)”.")
         }
         .sheet(isPresented: $showingAgentSettings) {
             if let settings = model.workspace?.settings.agent {
@@ -429,38 +454,61 @@ struct MoreView: View {
 
     @ViewBuilder
     private func policyRow(_ policy: WorkspacePolicy) -> some View {
-        let detail = VStack(alignment: .leading, spacing: 3) {
+        let detail = VStack(alignment: .leading, spacing: 4) {
             Text(policy.displayName)
+                .fixedSize(horizontal: false, vertical: true)
             Text(policy.scope ?? policy.toolName.sentenceCaseIdentifier)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
 
-        VStack(alignment: .leading, spacing: 10) {
-            Toggle(
-                isOn: Binding(
-                    get: { policy.enabled },
-                    set: { enabled in
-                        settingsActionInFlight = policy.id
-                        Task {
-                            _ = await model.setPolicy(policy, enabled: enabled)
-                            settingsActionInFlight = nil
-                        }
-                    }
-                )
-            ) { detail }
-            .disabled(settingsActionInFlight != nil)
-            // Trailing-aligned so the control hugs "Delete" instead of
-            // claiming the full row width the toggle above uses; compact
-            // keeps it reading as a secondary action under the toggle.
-            AssistantConfirmationButton("Delete", hint: "Deletes this standing approval rule.", compact: true) {
-                settingsActionInFlight = policy.id
-                _ = await model.deletePolicy(policy)
-                settingsActionInFlight = nil
+        if usesAccessibilityLayout {
+            VStack(alignment: .leading, spacing: 8) {
+                detail
+                HStack(spacing: 8) {
+                    policyToggle(policy) { Text("Allow automatically") }
+                    policyActions(policy)
+                }
             }
-            .disabled(settingsActionInFlight != nil)
-            .frame(maxWidth: .infinity, alignment: .trailing)
+        } else {
+            HStack(alignment: .center, spacing: 8) {
+                policyToggle(policy) { detail }
+                policyActions(policy)
+            }
         }
+    }
+
+    private func policyToggle<Label: View>(
+        _ policy: WorkspacePolicy,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        Toggle(isOn: Binding(
+            get: { policy.enabled },
+            set: { enabled in
+                settingsActionInFlight = policy.id
+                Task {
+                    _ = await model.setPolicy(policy, enabled: enabled)
+                    settingsActionInFlight = nil
+                }
+            }
+        ), label: label)
+        .accessibilityLabel(policy.displayName)
+        .accessibilityHint(policy.scope ?? policy.toolName.sentenceCaseIdentifier)
+        .disabled(settingsActionInFlight != nil)
+    }
+
+    private func policyActions(_ policy: WorkspacePolicy) -> some View {
+        Menu {
+            Button("Delete rule", systemImage: "trash", role: .destructive) {
+                policyPendingDeletion = policy
+            }
+        } label: {
+            AssistantActionMenuLabel(isUpdating: settingsActionInFlight == policy.id)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Actions for \(policy.displayName)")
+        .disabled(settingsActionInFlight != nil)
     }
 
 }

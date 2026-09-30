@@ -1,35 +1,36 @@
 import SwiftUI
 
-/// Open loops — promises, questions and follow-ups the assistant is tracking.
-/// The memory desk has always shown these on the web; until now the phone had
-/// no way to reach them, so a loop raised in conversation could only ever be
-/// closed from a browser. The three verbs match the web hub exactly: Done
-/// resolves, Later snoozes a day, Not relevant dismisses.
-///
-/// Built on the same ScrollView + VStack + `.assistantCard(in:)` structure as
-/// every other screen (Goals, Approvals, the memory library, People) rather
-/// than a List of Sections. `AssistantFlowLayout`, which lays out the action
-/// row, is only ever proposed a concrete width inside a ScrollView — inside a
-/// List it sizes itself against an unspecified width and then wraps its
-/// buttons into rows it never accounted for, which is what made this one
-/// screen's buttons clip and overlap.
+/// Open follow-ups, with one primary action and shared overflow controls.
 struct CommitmentsScreen: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var rows: [Commitment] = []
     @State private var loaded = false
-    @State private var loading = false
-    /// Names the loop being acted on, so one row's action never disables the
-    /// others — the mistake this app has made in four other lists.
-    @State private var pendingID: String?
+    @State private var loadFailed = false
+    @State private var pendingIDs: Set<String> = []
     @State private var correcting: Commitment?
+    @State private var showingGuide = false
+    @State private var dismissingLoop: Commitment?
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                introCard
-                if !loaded && loading {
-                    AssistantLoadingState(title: "Loading open loops")
+            VStack(alignment: .leading, spacing: AssistantTheme.cardStackSpacing) {
+                Text("Follow-ups, questions, and promises still waiting to be closed.")
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 8)
+                if !loaded {
+                    if loadFailed {
+                        VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
+                            Text("Open loops couldn’t be loaded.").font(.subheadline)
+                            Button("Try again") { Task { await load() } }
+                                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+                        }
+                        .assistantPanel(in: colorScheme)
+                    } else {
+                        AssistantLoadingState(title: "Loading open loops")
+                    }
                 } else if rows.isEmpty {
                     AssistantEmptyState(
                         "Nothing is waiting for your attention",
@@ -39,11 +40,44 @@ struct CommitmentsScreen: View {
                     ForEach(rows) { row in loopCard(row) }
                 }
             }
-            .padding(16)
+            .padding(AssistantTheme.compactGutter)
             .padding(.bottom, 28)
         }
         .navigationTitle("Open loops")
         .assistantSubmenuChrome()
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("About open loops", systemImage: "questionmark.circle") { showingGuide = true }
+            }
+        }
+        .sheet(isPresented: $showingGuide) {
+            NavigationStack {
+                ScrollView {
+                    loopGuide.padding(AssistantTheme.compactGutter)
+                }
+                .navigationTitle("About open loops")
+                .assistantEditorChrome()
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingGuide = false }
+                    }
+                }
+            }
+        }
+        .confirmationDialog(
+            "Dismiss this loop?",
+            isPresented: Binding(
+                get: { dismissingLoop != nil },
+                set: { if !$0 { dismissingLoop = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: dismissingLoop
+        ) { row in
+            Button("Not relevant", role: .destructive) { act(row, action: "dismiss") }
+        } message: { row in
+            Text("This removes “\(row.title)” from your open loops.")
+        }
         .refreshable { await load() }
         .task { if !loaded { await load() } }
         .sheet(item: $correcting) { row in
@@ -51,10 +85,8 @@ struct CommitmentsScreen: View {
         }
     }
 
-    /// Always visible, including in the empty state — a first-time visitor
-    /// needs to know what a "loop" is before an empty list can mean anything
-    /// to them. The legend is the part worth hiding once that's learned.
-    private var introCard: some View {
+    /// Detailed guidance stays available without preceding every follow-up.
+    private var loopGuide: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Loops are the threads the assistant is still holding from your conversations — something you decided, asked, promised, or are waiting on. They stay here until you close them: **Done** resolves a loop, **Later** hides it for a day, **Correct** fixes what the assistant misheard, and **Not relevant** drops it for good. A loop you never touch retires itself eventually, and how long that takes depends on the kind.")
                 .font(.subheadline)
@@ -86,7 +118,7 @@ struct CommitmentsScreen: View {
             }
             .font(.subheadline.weight(.semibold))
         }
-        .assistantCard(in: colorScheme)
+        .assistantPanel(in: colorScheme)
     }
 
     /// The retirement window is part of what the label means — a kind the
@@ -106,38 +138,47 @@ struct CommitmentsScreen: View {
     }
 
     private func loopCard(_ row: Commitment) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(kindLabel(row.kind))
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-            Text(row.title).font(.subheadline.weight(.medium))
-            if !row.nextAction.isEmpty {
-                Text("Next: \(row.nextAction)")
-                    .font(.caption)
-                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-            }
-            if let due = dueLabel(row) {
-                Text(due)
-                    .font(.caption)
-                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-            }
-            AssistantFlowLayout(spacing: 8) {
-                Button("Done", systemImage: "checkmark") { act(row, action: "resolve") }
-                    .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
-                Button("Later", systemImage: "clock") { act(row, action: "snooze") }
-                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
-                Button("Correct", systemImage: "pencil") { correcting = row }
-                    .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
-                AssistantConfirmationButton(
-                    "Not relevant",
-                    systemImage: "xmark",
-                    hint: "Stops the assistant bringing this loop back."
-                ) {
-                    await perform(row, action: "dismiss")
+        VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
+            AssistantFlowLayout(spacing: AssistantTheme.actionSpacing) {
+                Text(kindLabel(row.kind))
+                    .font(.caption.weight(.semibold))
+                if let due = dueLabel(row) {
+                    Label(due, systemImage: "calendar")
+                        .font(.caption)
                 }
             }
-            .font(.caption)
-            .disabled(pendingID == row.id)
+            .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+
+            Text(row.title)
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            if !row.nextAction.isEmpty {
+                Text("Next: \(row.nextAction)")
+                    .font(.subheadline)
+                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+            HStack(spacing: AssistantTheme.actionSpacing) {
+                Button("Done", systemImage: "checkmark") { act(row, action: "resolve") }
+                    .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
+                Spacer(minLength: 0)
+                Menu {
+                    Button("Later (1 day)", systemImage: "clock") { act(row, action: "snooze") }
+                    Button("Correct", systemImage: "pencil") { correcting = row }
+                    Divider()
+                    Button("Not relevant", systemImage: "xmark", role: .destructive) {
+                        dismissingLoop = row
+                    }
+                } label: {
+                    AssistantActionMenuLabel(isUpdating: pendingIDs.contains(row.id))
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Actions for \(row.title)")
+            }
+            .disabled(pendingIDs.contains(row.id))
         }
         .assistantCard(in: colorScheme)
     }
@@ -160,17 +201,21 @@ struct CommitmentsScreen: View {
     }
 
     private func perform(_ row: Commitment, action: String) async {
-        pendingID = row.id
-        let ok = await model.updateCommitment(CommitmentMutation(action: action, id: row.id))
-        pendingID = nil
-        if ok { await load() }
+        guard pendingIDs.insert(row.id).inserted else { return }
+        defer { pendingIDs.remove(row.id) }
+        if await model.updateCommitment(CommitmentMutation(action: action, id: row.id)) {
+            await load()
+        }
     }
 
     private func load() async {
-        loading = true
-        if let result = await model.commitments() { rows = result }
-        loading = false
-        loaded = true
+        loadFailed = false
+        if let result = await model.commitments() {
+            rows = result
+            loaded = true
+        } else {
+            loadFailed = true
+        }
     }
 }
 
