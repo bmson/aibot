@@ -64,10 +64,26 @@ pnpm audit:llm --json report.json
 pnpm audit:llm --show unclosed-code-fence   # the records behind a column
 ```
 
+For a Firestore deployment, there is no PostgreSQL URL or `database-url` secret
+to fetch. Supply the deployed project, named database, and workspace explicitly:
+
+```sh
+GCP_PROJECT=bmson-assistant \
+FIRESTORE_DATABASE_ID=assistant-production \
+ASSISTANT_WORKSPACE_ID=assistant \
+  pnpm audit:llm --prod --firestore --gcloud-auth --days 7
+```
+
+Use your own deployment's values for other installations. `--gcloud-auth` uses
+the active `gcloud` login; omit it to use Application Default Credentials.
+`PERSISTENCE_DRIVER=firestore` also selects the Firestore reader. The reader
+only queries the selected installation's captured calls, makes no writes, and
+rejects a production run when `FIRESTORE_EMULATOR_HOST` is set.
+
 The report groups by `role/method` and gives call volume, p50/p95 latency,
 output tokens, and a defect count per surface. It runs in a read-only
-transaction, needs no model credential, and costs nothing — safe against a
-production replica.
+transaction on PostgreSQL and uses only reads on Firestore. It needs no model
+credential or model calls; Firestore reads incur the ordinary database charges.
 
 ## What the graders check
 
@@ -83,8 +99,22 @@ Deterministic checks over the text alone (`packages/core/src/model-router/audit-
 | `fabricated-interface-element` | `[Set alert] | [Check timing]` — a fake button row nothing renders |
 | `empty-output` | A call that produced no text |
 | `truncated-output` | The provider stopped at the token limit |
+| `schema-parse-failure` | Structured output returned provider text that could not be parsed against its schema |
+| `repetitive-output` | An obvious generation loop or repeated replacement-character corruption |
+| `malformed-output` | A corrupted C/F temperature unit such as `12°Chare` |
 | `emoji` | An emoji, which is a defect unless the owner asked for one |
 | `wall-of-text` | A plain paragraph over 400 characters or four sentences — a block on a phone. Review signal only: both clients also split such paragraphs at render time (`apps/web/lib/paragraph-reflow.ts`, `ParagraphReflow.swift`) |
+
+Tool-calling `step` rows retain the selected tool names and arguments for
+diagnosis, but prose graders remove those serialized `→ tool(JSON)` lines
+before checking formatting, emojis, and repetitions. A `tool-calls` finish with
+no prose is a valid tool decision, not an empty answer. Failed structured
+responses retain provider text when the SDK exposes it, marked as a schema
+parse failure so malformed JSON is not reported as a clean structured result.
+The live output guard also reads the current owner request and allows deliberate
+repetition requests through. The standalone audit report does not currently
+infer that intent, so an explicitly requested repeated phrase may still appear
+as a review signal.
 
 Several of these previously existed **only** inside the question-regression
 harness, so the suite graded properties the runtime never enforced. They live in

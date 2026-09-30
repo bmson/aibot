@@ -565,7 +565,7 @@ describe('golden tasks', () => {
       },
     });
     createdTaskIds.push(result.taskId);
-    expect(result.status).toBe('needs_attention');
+    expect(result.status, result.finalText).toBe('needs_attention');
     expect(result.finalText).toContain('Not completed: remind me');
     const [row] = await db
       .select({ state: tasks.state })
@@ -837,6 +837,77 @@ describe('golden tasks', () => {
       .from(responseChecks)
       .where(eq(responseChecks.taskId, result.taskId));
     expect(check?.blocked).toBe(false);
+  });
+
+  it('blocks an invented flight return time before the calendar tool executes', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    let executed = false;
+    const result = await runGoldenTask(db, agentId, {
+      name: 'calendar-flight-write-rejects-invented-return-time',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: {
+          text: 'Add my United flight from SFO to BER to my calendar. It leaves Oct 9 at 9:15 AM PDT and arrives Oct 11 at 5:15 AM CEST.',
+        },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [
+        {
+          toolCalls: [
+            {
+              toolName: 'calendar.create_event',
+              input: {
+                summary: 'United flight SFO to BER',
+                start: '2026-10-09T09:15:00-07:00',
+                end: '2026-10-11T13:15:00+02:00',
+                description: '',
+                location: 'SFO to BER',
+                attendees: [],
+              },
+            },
+          ],
+        },
+        { text: 'I need to confirm the arrival time before I add this.' },
+      ],
+      tools: {
+        'calendar.create_event': {
+          schema: z.object({}).passthrough(),
+          execute: async () => {
+            executed = true;
+            return { eventId: 'should-not-exist' };
+          },
+        },
+      },
+    });
+    createdTaskIds.push(result.taskId);
+
+    expect(executed).toBe(false);
+    expect(result.toolNames).toEqual([]);
+    expect(result.finalText).toContain('confirm');
+  });
+
+  it('stages a quality-failure response as needs attention before a malformed finish can retry', async (ctx) => {
+    if (!dbUp) return ctx.skip();
+    const safeText = "I couldn't produce a reliable answer just now. Please try again.";
+    const result = await runGoldenTask(db, agentId, {
+      name: 'quality-failure-is-terminal',
+      event: {
+        source: 'chat',
+        trust: 'owner',
+        payload: { text: 'Tell me a short greeting.' },
+      },
+      taskType: 'chat_turn',
+      plan: workflowPlan,
+      script: [{ text: safeText, qualityFailure: true, finishReason: 'error' }],
+      tools: {},
+    });
+    createdTaskIds.push(result.taskId);
+
+    expect(result.status, result.finalText).toBe('needs_attention');
+    expect(result.finalText).toBe(safeText);
+    expect(result.toolNames).toEqual([]);
   });
 
   it('falls back to the verified list when the agenda invents an event', async (ctx) => {

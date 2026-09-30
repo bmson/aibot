@@ -27,8 +27,11 @@ export type AuditDefectKind =
   | 'fabricated-interface-element'
   | 'empty-output'
   | 'truncated-output'
+  | 'schema-parse-failure'
   | 'emoji'
-  | 'wall-of-text';
+  | 'wall-of-text'
+  | 'repetitive-output'
+  | 'malformed-output';
 
 export interface AuditDefect {
   kind: AuditDefectKind;
@@ -86,6 +89,64 @@ function excerpt(text: string, around: number, span = 60): string {
   return text
     .slice(start, start + span)
     .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Detect obvious generation loops without trying to spell-check prose. A
+ * repeated byte run is a strong corruption signal, while repeated ordinary
+ * sentences remain allowed. The same check protects live step output and the
+ * historical audit report.
+ */
+function repetitiveOutput(text: string): AuditDefect | undefined {
+  const replacementChars = (text.match(/\uFFFD/g) ?? []).length;
+  if (replacementChars >= 3) {
+    return { kind: 'repetitive-output', detail: `${replacementChars} replacement characters` };
+  }
+  const body = prose(text).replace(/\s+/g, ' ').trim();
+  if (body.length < 80) return undefined;
+  for (let size = 1; size <= Math.min(16, Math.floor(body.length / 8)); size += 1) {
+    for (let start = 0; start + size * 4 <= body.length; start += 1) {
+      const unit = body.slice(start, start + size);
+      if (unit.length < 2 || /^[\s\-=_*~.#|]+$/.test(unit)) continue;
+      let repeats = 1;
+      while (body.slice(start + size * repeats, start + size * (repeats + 1)) === unit) {
+        repeats += 1;
+      }
+      const hasWhitespace = /\s/.test(unit);
+      const hasPunctuation = /[^\p{L}\p{N}\s]/u.test(unit);
+      const minimumRepeats = hasWhitespace ? 32 : hasPunctuation ? 8 : 16;
+      const minimumSpan = hasWhitespace ? 256 : hasPunctuation ? 80 : 128;
+      if (repeats >= minimumRepeats && size * repeats >= minimumSpan) {
+        return {
+          kind: 'repetitive-output',
+          detail: `${repeats} repetitions of ${JSON.stringify(unit.slice(0, 24))}`,
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+/** A degree marker followed by a nonstandard unit is a common text-corruption seam. */
+function malformedOutput(text: string): AuditDefect | undefined {
+  const match = /\b\d{1,3}°[CF](?!elsius\b|ahrenheit\b)[A-Za-z]{2,}\b/i.exec(prose(text));
+  return match
+    ? { kind: 'malformed-output', detail: `suspicious unit token ${match[0]}` }
+    : undefined;
+}
+
+/** Strip the legacy audit encoding of tool choices before grading prose. */
+function proseOnlyAuditOutput(text: string, toolCallsSerialized = false): string {
+  return text
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim();
+      return toolCallsSerialized
+        ? !/^→\s+[\w.-]+\(/.test(trimmed)
+        : !/^→\s+[\w.-]+\([\s\S]*\)$/.test(trimmed);
+    })
+    .join('\n')
     .trim();
 }
 
@@ -163,15 +224,29 @@ const SENTENCE_END =
  */
 function wallOfText(text: string): AuditDefect | undefined {
   for (const block of prose(text).split(/\n\s*\n/)) {
-    const paragraph = block.trim();
-    if (!paragraph || STRUCTURED_BLOCK.test(paragraph)) continue;
-    const sentences = (paragraph.match(SENTENCE_END)?.length ?? 0) + 1;
-    if (paragraph.length > WALL_CHARACTERS || sentences > WALL_SENTENCES) {
-      return {
-        kind: 'wall-of-text',
-        detail: `${paragraph.length} characters, ${sentences} sentences: ${excerpt(paragraph, 0)}`,
-      };
+    let plainLines: string[] = [];
+    const checkPlainParagraph = (): AuditDefect | undefined => {
+      const paragraph = plainLines.join(' ').replace(/\s+/g, ' ').trim();
+      plainLines = [];
+      if (!paragraph) return undefined;
+      const sentences = (paragraph.match(SENTENCE_END)?.length ?? 0) + 1;
+      return paragraph.length > WALL_CHARACTERS || sentences > WALL_SENTENCES
+        ? {
+            kind: 'wall-of-text',
+            detail: `${paragraph.length} characters, ${sentences} sentences: ${excerpt(paragraph, 0)}`,
+          }
+        : undefined;
+    };
+    for (const line of block.split('\n')) {
+      if (STRUCTURED_BLOCK.test(line)) {
+        const defect = checkPlainParagraph();
+        if (defect) return defect;
+      } else {
+        plainLines.push(line);
+      }
     }
+    const defect = checkPlainParagraph();
+    if (defect) return defect;
   }
   return undefined;
 }
@@ -192,6 +267,27 @@ export interface GradeOptions {
   emojiRequested?: boolean;
   /** Structured output is JSON and none of the prose checks apply to it. */
   structured?: boolean;
+  /** Known owner request for exact or repeated wording suppresses this signal. */
+  repetitionRequested?: boolean;
+  /** Audit step rows append serialized tool calls after any prose. */
+  toolCallsSerialized?: boolean;
+}
+
+/** Reserved prefix used when generateObject returned provider text it could not parse. */
+export const OBJECT_PARSE_FAILURE_PREFIX = '[audit:object-schema-parse-failure]';
+
+const EXPLICIT_REPETITION_REQUEST =
+  /^\s*(?:please\s+)?(?:repeat|reproduce|copy)\b|\b(?:repeat|reproduce|copy|write|say|print)\b[^.!?\n]{0,100}\b(?:verbatim|exactly|again|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+times)\b/i;
+
+/** Keep an owner's deliberate repetition request from tripping the live guard. */
+export function explicitlyRequestsRepetition(request: string | undefined): boolean {
+  if (
+    !request ||
+    /\b(?:do not|don['’]t|never|avoid)\s+(?:repeat|reproduce|copy)\b/i.test(request)
+  ) {
+    return false;
+  }
+  return EXPLICIT_REPETITION_REQUEST.test(request);
 }
 
 /**
@@ -208,24 +304,48 @@ export function gradeAuditedOutput(
   if (options.finishReason === 'length') {
     defects.push({ kind: 'truncated-output', detail: 'provider stopped at the token limit' });
   }
-  if (text === null || text === undefined || text.trim() === '') {
+  const candidate =
+    text === null || text === undefined
+      ? text
+      : proseOnlyAuditOutput(text, options.toolCallsSerialized);
+  if (candidate === null || candidate === undefined || candidate.trim() === '') {
+    // An empty textual payload is expected when the provider returned a tool
+    // call. Older audit rows also encoded tool-call JSON as output; once those
+    // lines are removed, this finish reason identifies the valid empty prose.
+    if (options.finishReason === 'tool-calls') return defects;
     defects.push({ kind: 'empty-output', detail: 'no text was produced' });
+    return defects;
+  }
+  if (candidate.startsWith(OBJECT_PARSE_FAILURE_PREFIX)) {
+    defects.push({
+      kind: 'schema-parse-failure',
+      detail:
+        candidate.slice(OBJECT_PARSE_FAILURE_PREFIX.length).trim().slice(0, 180) ||
+        'provider text unavailable',
+    });
     return defects;
   }
   if (options.structured) return defects;
 
+  const malformed = malformedOutput(candidate);
+  if (malformed) defects.push(malformed);
+  if (!options.repetitionRequested) {
+    const repeated = repetitiveOutput(candidate);
+    if (repeated) defects.push(repeated);
+  }
+
   const found = [
-    unclosedCodeFence(text),
-    backgroundNoticeEcho(text),
-    forbiddenThemeTag(text),
-    leakedMarkup(text),
-    fabricatedInterfaceElement(text),
-    wallOfText(text),
+    unclosedCodeFence(candidate),
+    backgroundNoticeEcho(candidate),
+    forbiddenThemeTag(candidate),
+    leakedMarkup(candidate),
+    fabricatedInterfaceElement(candidate),
+    wallOfText(candidate),
   ];
   for (const defect of found) if (defect) defects.push(defect);
-  defects.push(...cueOveruse(text));
+  defects.push(...cueOveruse(candidate));
   if (!options.emojiRequested) {
-    const match = EMOJI.exec(text);
+    const match = EMOJI.exec(candidate);
     if (match) defects.push({ kind: 'emoji', detail: `contains ${match[0]}` });
   }
   return defects;

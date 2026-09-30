@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   type AuditDefectKind,
+  explicitlyRequestsRepetition,
   gradeAuditedOutput,
   repairPresentationDefects,
 } from './audit-graders.js';
@@ -80,6 +81,15 @@ describe('gradeAuditedOutput', () => {
 
   it('still reports an empty structured answer', () => {
     expect(kinds('', { structured: true })).toEqual(['empty-output']);
+  });
+
+  it('reports provider text that failed structured schema parsing', () => {
+    expect(
+      kinds(
+        '[audit:object-schema-parse-failure] (AI_NoObjectGeneratedError)\n{"date": "not finished',
+        { structured: true },
+      ),
+    ).toEqual(['schema-parse-failure']);
   });
 
   it('carries a detail a reviewer can act on', () => {
@@ -167,5 +177,68 @@ describe('wall-of-text', () => {
     expect(kinds(`| a | b |\n|---|---|\n| ${long} | x |`)).toEqual([]);
     expect(kinds(`> ${long}`)).toEqual([]);
     expect(kinds(`\`\`\`\n${long}\n\`\`\``)).toEqual([]);
+  });
+
+  it('measures the prose introduction separately from a long structured list', () => {
+    const items = Array.from(
+      { length: 8 },
+      (_, index) => `- **Category ${index + 1}** — ${sentence.repeat(2)}`,
+    ).join('\n');
+    expect(kinds(`47 items across 8 categories:\n${items}`)).toEqual([]);
+    expect(kinds(`The plan changed because ${sentence.repeat(8)}\n${items}`)).toContain(
+      'wall-of-text',
+    );
+  });
+
+  it('grades serialized tool decisions separately from prose, including old audit rows', () => {
+    const args = JSON.stringify({ emoji: '🎉', payload: 'x'.repeat(900) });
+    expect(
+      kinds(`→ calendar.create_event(${args})`, {
+        finishReason: 'tool-calls',
+        toolCallsSerialized: true,
+      }),
+    ).toEqual([]);
+    expect(
+      kinds(`Checking the calendar now.\n→ calendar.create_event(${args})`, {
+        toolCallsSerialized: true,
+      }),
+    ).toEqual([]);
+    expect(
+      kinds(`Checking the calendar now.\n→ calendar.create_event(${args.slice(0, 300)}`, {
+        toolCallsSerialized: true,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe('repetitive-output', () => {
+  it('flags a long repeated fragment', () => {
+    expect(kinds('bad-token-'.repeat(30))).toContain('repetitive-output');
+    expect(kinds(']">'.repeat(1200))).toContain('repetitive-output');
+    expect(kinds('�'.repeat(4))).toContain('repetitive-output');
+  });
+
+  it('does not flag ordinary prose or repetitions inside fenced code', () => {
+    expect(kinds('The quarterly review moved because the finance team needs more time.')).toEqual(
+      [],
+    );
+    expect(kinds('Very very very very very very very very very very.')).toEqual([]);
+    expect(kinds(`\`\`\`text\n${'bad-token-'.repeat(30)}\n\`\`\``)).toEqual([]);
+    expect(kinds('bad-token-'.repeat(30), { repetitionRequested: true })).toEqual([]);
+  });
+
+  it('flags a malformed C/F unit while accepting other units and directions', () => {
+    expect(kinds('The temperature is 12°Chare.')).toContain('malformed-output');
+    expect(
+      kinds(
+        'The temperature is 12°C, 12°Celsius, 54°F, 54°Fahrenheit, 40°North, 40°South, 12°Rankine, and 12°Réaumur.',
+      ),
+    ).toEqual([]);
+  });
+
+  it('recognizes direct owner requests for repeated wording', () => {
+    expect(explicitlyRequestsRepetition('Repeat this exactly: ha ha ha')).toBe(true);
+    expect(explicitlyRequestsRepetition('Write the word hello 20 times')).toBe(true);
+    expect(explicitlyRequestsRepetition('Do not repeat the typo')).toBe(false);
   });
 });

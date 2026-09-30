@@ -103,7 +103,7 @@ export class FirestoreSelfImprovementRepository implements SelfImprovementReposi
             .collection('toolCalls')
             .where('status', '==', 'failed')
             .where('createdAt', '>=', since)
-            .select('taskId', 'toolName', 'error')
+            .select('taskId', 'toolName', 'error', 'createdAt')
             .orderBy('createdAt'),
         ),
         this.scan(
@@ -112,14 +112,14 @@ export class FirestoreSelfImprovementRepository implements SelfImprovementReposi
             .where('agentId', '==', agentId)
             .where('status', 'in', ['needs_attention', 'failed'])
             .where('updatedAt', '>=', since)
-            .select('attempt')
+            .select('attempt', 'updatedAt')
             .orderBy('updatedAt'),
         ),
         this.scan(
           this.store
             .collection('modelCalls')
             .where('createdAt', '>=', since)
-            .select('taskId', 'role', 'costUsd')
+            .select('taskId', 'role', 'costUsd', 'createdAt')
             .orderBy('createdAt'),
         ),
         this.scan(

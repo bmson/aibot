@@ -64,6 +64,12 @@ describe('self-reflective output verification', () => {
     expect(OUTPUT_VERIFICATION_SYSTEM).toMatch(/complete emoji-free replacement/i);
   });
 
+  it('asks the verifier to reject obvious repeated or corrupted fragments', () => {
+    expect(OUTPUT_VERIFICATION_SYSTEM).toMatch(/generation loops/i);
+    expect(OUTPUT_VERIFICATION_SYSTEM).toMatch(/replacement-character corruption/i);
+    expect(OUTPUT_VERIFICATION_SYSTEM).toMatch(/do not guess at damaged words or numbers/i);
+  });
+
   it('uses a complete verifier revision and leaves final safety enforcement to its caller', async () => {
     const router = {
       object: async () => ({

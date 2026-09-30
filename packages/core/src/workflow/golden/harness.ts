@@ -33,6 +33,8 @@ export interface GoldenFixture {
   script: Array<{
     text?: string;
     toolCalls?: Array<{ toolName: string; input: Record<string, unknown> }>;
+    qualityFailure?: boolean;
+    finishReason?: string;
   }>;
   /** Optional self-review result after the final scripted model step. */
   verification?: GoldenVerification;
@@ -89,7 +91,8 @@ class ScriptedRouter {
         toolName: call.toolName,
         input: call.input,
       })),
-      finishReason: 'stop' as const,
+      finishReason: entry.finishReason ?? 'stop',
+      ...(entry.qualityFailure ? { qualityFailure: true as const } : {}),
     };
   }
 

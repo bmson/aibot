@@ -41,7 +41,7 @@ function capabilityError(message: string) {
 
 function makeRouter() {
   const router = new ModelRouter({} as Db, 'test-key');
-  const route = vi.spyOn(router, 'route').mockResolvedValue({
+  const primary = {
     ok: true,
     model: {} as LanguageModel,
     modelId: 'test/model',
@@ -51,7 +51,11 @@ function makeRouter() {
     params: {},
     promptCostPerMTok: 1,
     completionCostPerMTok: 1,
-  });
+  } as const;
+  const fallback = { ...primary, modelId: 'test/fallback', degraded: true };
+  const route = vi
+    .spyOn(router, 'route')
+    .mockImplementation(async (_role, options) => (options?.forceFallback ? fallback : primary));
   const meter = vi.fn(async () => {});
   (
     router as unknown as { meterWithoutRepeatingProviderWork: typeof meter }
@@ -81,6 +85,14 @@ describe('isProviderCapabilityError', () => {
     expect(isProviderCapabilityError(capabilityError('No allowed providers are available'))).toBe(
       true,
     );
+    expect(isProviderCapabilityError(capabilityError('A payment method is required'))).toBe(true);
+    const paymentStatus = capabilityError('Request denied');
+    Object.assign(paymentStatus, { statusCode: 402 });
+    expect(isProviderCapabilityError(paymentStatus)).toBe(true);
+    const retryError = new Error('provider retry attempts failed');
+    retryError.name = 'AI_RetryError';
+    Object.assign(retryError, { lastError: capabilityError('A payment method is required') });
+    expect(isProviderCapabilityError(retryError)).toBe(true);
   });
 
   it('leaves transient and unrelated errors to the task-level retry', () => {
@@ -144,12 +156,89 @@ describe('ModelRouter timeout retry', () => {
     expect(stubs.generateText).toHaveBeenCalledTimes(2);
   });
 
+  it('step() uses one configured fallback for a wrapped payment-required error', async () => {
+    const { router, route } = makeRouter();
+    const retryError = new Error('provider retry attempts failed');
+    retryError.name = 'AI_RetryError';
+    Object.assign(retryError, { lastError: capabilityError('A payment method is required') });
+    stubs.generateText
+      .mockRejectedValueOnce(retryError)
+      .mockResolvedValueOnce({ ...stepResult(), text: 'Fallback answer.', finishReason: 'stop' });
+
+    const outcome = await router.step('reason', { prompt: 'go', tools: {} });
+
+    expect(outcome.ok && outcome.modelId).toBe('test/fallback');
+    expect(stubs.generateText).toHaveBeenCalledTimes(2);
+    expect(route.mock.calls.some((call) => call[1]?.forceFallback)).toBe(true);
+  });
+
+  it('step() preserves the original payment error when its distinct fallback fails', async () => {
+    const { router } = makeRouter();
+    const paymentError = capabilityError('A payment method is required');
+    stubs.generateText
+      .mockRejectedValueOnce(paymentError)
+      .mockRejectedValueOnce(new Error('fallback unavailable'));
+
+    await expect(router.step('reason', { prompt: 'go', tools: {} })).rejects.toBe(paymentError);
+    expect(stubs.generateText).toHaveBeenCalledTimes(2);
+  });
+
+  it('step() does not retry a payment error when fallback resolves to the same model', async () => {
+    const { router, route } = makeRouter();
+    const primary = await route.getMockImplementation()?.('reason', {});
+    if (!primary?.ok) throw new Error('missing mock route');
+    route.mockResolvedValue(primary);
+    const paymentError = capabilityError('A payment method is required');
+    stubs.generateText.mockRejectedValue(paymentError);
+
+    await expect(router.step('reason', { prompt: 'go', tools: {} })).rejects.toBe(paymentError);
+    expect(stubs.generateText).toHaveBeenCalledOnce();
+  });
+
   it('step() does not retry non-timeout errors', async () => {
     const { router } = makeRouter();
     stubs.generateText.mockRejectedValue(capabilityError('Rate limit exceeded'));
 
     await expect(router.step('reason', { prompt: 'go', tools: {} })).rejects.toThrow('Rate limit');
     expect(stubs.generateText).toHaveBeenCalledTimes(1);
+  });
+
+  it('step() retries an obvious repeated fragment once on a distinct role fallback', async () => {
+    const { router, route } = makeRouter();
+    const primary = await route.getMockImplementation()?.('reason', {});
+    if (!primary?.ok) throw new Error('missing mock route');
+    const fallback = { ...primary, modelId: 'test/fallback', degraded: true };
+    route
+      .mockResolvedValueOnce(primary)
+      .mockResolvedValueOnce(fallback)
+      .mockResolvedValueOnce(fallback);
+    stubs.generateText
+      .mockResolvedValueOnce({ ...stepResult(), text: ']">'.repeat(1_200) })
+      .mockResolvedValueOnce({
+        ...stepResult(),
+        text: 'The answer is ready.',
+        finishReason: 'stop',
+      });
+
+    const outcome = await router.step('reason', { prompt: 'go', tools: {} });
+
+    expect(outcome).toMatchObject({ text: 'The answer is ready.', modelId: 'test/fallback' });
+    expect(stubs.generateText).toHaveBeenCalledTimes(2);
+    expect(route.mock.calls.map((call) => call[1]?.forceFallback)).toEqual([false, true, true]);
+  });
+
+  it('does not run the repetition guard when the owner explicitly requested repetition', async () => {
+    const { router } = makeRouter();
+    const repeated = 'bad-token-'.repeat(30);
+    stubs.generateText.mockResolvedValue({ ...stepResult(), text: repeated, finishReason: 'stop' });
+
+    const outcome = await router.step('reason', {
+      prompt: 'Repeat this exactly: bad-token-',
+      tools: {},
+    });
+
+    expect(outcome.ok && outcome.text).toBe(repeated);
+    expect(stubs.generateText).toHaveBeenCalledOnce();
   });
 
   it("step() does not retry when the caller's own signal already aborted", async () => {
@@ -196,7 +285,7 @@ describe('ModelRouter.object provider-capability fallback', () => {
     expect(stubs.generateObject).toHaveBeenCalledTimes(2);
     // Second routing decision must ask for the role's fallback model.
     expect(route.mock.calls[0]?.[1]?.forceFallback).toBeFalsy();
-    expect(route.mock.calls[1]?.[1]?.forceFallback).toBe(true);
+    expect(route.mock.calls[2]?.[1]?.forceFallback).toBe(true);
   });
 
   it('object() still surfaces transient errors without a model switch', async () => {
@@ -205,6 +294,18 @@ describe('ModelRouter.object provider-capability fallback', () => {
 
     await expect(router.object('extract', { prompt: 'go', schema })).rejects.toThrow('Rate limit');
     expect(stubs.generateObject).toHaveBeenCalledTimes(1);
+  });
+
+  it('object() does not retry a provider error when the role fallback is the same model', async () => {
+    const { router, route } = makeRouter();
+    const primary = await route.getMockImplementation()?.('extract', {});
+    if (!primary?.ok) throw new Error('missing mock route');
+    route.mockResolvedValue(primary);
+    const paymentError = capabilityError('A payment method is required');
+    stubs.generateObject.mockRejectedValue(paymentError);
+
+    await expect(router.object('extract', { prompt: 'go', schema })).rejects.toBe(paymentError);
+    expect(stubs.generateObject).toHaveBeenCalledOnce();
   });
 
   it('object() combines timeout retry with the capability fallback', async () => {
@@ -219,6 +320,6 @@ describe('ModelRouter.object provider-capability fallback', () => {
 
     expect(outcome.ok && outcome.object).toEqual({ answer: 'ok' });
     expect(stubs.generateObject).toHaveBeenCalledTimes(3);
-    expect(route.mock.calls[2]?.[1]?.forceFallback).toBe(true);
+    expect(route.mock.calls[4]?.[1]?.forceFallback).toBe(true);
   });
 });

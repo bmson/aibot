@@ -12,7 +12,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createChatTask, ensureChatConversation, getAgent } from '../chat.js';
 import { BudgetReservationError, releaseReservation } from '../cost.js';
-import { isUnparseableObjectError, ModelRouter } from './router.js';
+import { isUnparseableObjectError, ModelRouter, objectFailureAuditOutput } from './router.js';
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? 'postgres://assistant:assistant@localhost:5432/assistant';
@@ -52,6 +52,21 @@ describe('isUnparseableObjectError', () => {
     );
     expect(isUnparseableObjectError('AI_NoObjectGeneratedError')).toBe(false);
     expect(isUnparseableObjectError(null)).toBe(false);
+  });
+});
+
+describe('objectFailureAuditOutput', () => {
+  it('retains raw provider text with an explicit parse-failure marker', () => {
+    const error = new Error('No object generated');
+    error.name = 'AI_NoObjectGeneratedError';
+    Object.assign(error, { text: '{"date":"unfinished' });
+    expect(objectFailureAuditOutput(error)).toBe(
+      '[audit:object-schema-parse-failure] (AI_NoObjectGeneratedError)\n{"date":"unfinished',
+    );
+  });
+
+  it('does not label unrelated provider errors as schema failures', () => {
+    expect(objectFailureAuditOutput(new Error('fetch failed'))).toBeUndefined();
   });
 });
 

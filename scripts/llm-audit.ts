@@ -16,14 +16,14 @@
  *   pnpm audit:llm --days 30
  *   pnpm audit:llm --role draft    # one role
  *   pnpm audit:llm --prod          # PROD_DATABASE_URL, read-only transaction
+ *   pnpm audit:llm --prod --firestore --gcloud-auth # explicit Firestore target env
  *   pnpm audit:llm --json out.json
  *   pnpm audit:llm --show unclosed-code-fence   # print offending records
  */
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { type AuditDefectKind, gradeAuditedOutput } from '@assistant/core';
-import { createDb, modelCallAudit } from '@assistant/db';
-import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { readAuditRows } from './llm-audit-source.js';
 
 try {
   process.loadEnvFile('.env');
@@ -43,15 +43,6 @@ const role = flag('role');
 const jsonOut = flag('json');
 const show = flag('show') as AuditDefectKind | undefined;
 
-const url = has('prod') ? process.env.PROD_DATABASE_URL : process.env.DATABASE_URL;
-if (!url) {
-  throw new Error(
-    has('prod')
-      ? 'PROD_DATABASE_URL is required with --prod.'
-      : 'DATABASE_URL is required. Start the database, or pass --prod to read the deployed one.',
-  );
-}
-
 interface SurfaceStats {
   calls: number;
   latencies: number[];
@@ -64,34 +55,13 @@ const pct = (sorted: number[], p: number): number =>
     ? 0
     : (sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] ?? 0);
 
-const db = createDb(url, { max: 1 });
-try {
-  const rows = await db.transaction(async (tx) => {
-    // Read-only: this tool never writes, and saying so keeps an accidental
-    // --prod run from being able to.
-    await tx.execute(sql`SET TRANSACTION READ ONLY`);
-    return tx
-      .select({
-        id: modelCallAudit.id,
-        createdAt: modelCallAudit.createdAt,
-        role: modelCallAudit.role,
-        model: modelCallAudit.model,
-        method: modelCallAudit.method,
-        capture: modelCallAudit.capture,
-        output: modelCallAudit.output,
-        finishReason: modelCallAudit.finishReason,
-        latencyMs: modelCallAudit.latencyMs,
-        outputTokens: modelCallAudit.outputTokens,
-        taskId: modelCallAudit.taskId,
-      })
-      .from(modelCallAudit)
-      .where(
-        and(
-          gte(modelCallAudit.createdAt, sql`now() - make_interval(days => ${days})`),
-          ...(role ? [eq(modelCallAudit.role, role)] : []),
-        ),
-      )
-      .orderBy(desc(modelCallAudit.createdAt));
+async function main() {
+  const rows = await readAuditRows({
+    days,
+    role,
+    production: has('prod'),
+    firestore: has('firestore') || process.env.PERSISTENCE_DRIVER === 'firestore',
+    gcloudAuth: has('gcloud-auth'),
   });
 
   if (rows.length === 0) {
@@ -99,7 +69,7 @@ try {
     console.log(
       'Capture is off by default. Set LLM_AUDIT_CAPTURE=redacted (or full) and let it collect.',
     );
-    process.exit(0);
+    return;
   }
 
   const surfaces = new Map<string, SurfaceStats>();
@@ -123,6 +93,9 @@ try {
       finishReason: row.finishReason,
       // `object` calls return JSON; the prose checks do not apply to them.
       structured: row.method === 'object',
+      // Step captures retain tool-call arguments; remove even capped lines
+      // before evaluating the human-facing prose.
+      toolCallsSerialized: row.method === 'step',
     });
     for (const defect of defects) {
       stats.defects.set(defect.kind, (stats.defects.get(defect.kind) ?? 0) + 1);
@@ -210,6 +183,9 @@ try {
     console.log(`\nWrote ${jsonOut}`);
   }
   console.log();
-} finally {
-  await (db as unknown as { $client: { end: () => Promise<void> } }).$client?.end?.();
 }
+
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : 'LLM audit failed');
+  process.exitCode = 1;
+});

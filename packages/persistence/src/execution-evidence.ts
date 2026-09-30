@@ -21,6 +21,7 @@ export type ResponseCheckInput = {
 
 export type ExecutionEvidenceRepository = {
   kind: 'execution-evidence-repository';
+  /** Complete task evidence, paged to maxRows (default 10,000); overflow fails closed. */
   taskEvidence(input: {
     agentId: string;
     taskId: string;
@@ -57,6 +58,15 @@ export type ExecutionEvidenceRepository = {
 };
 
 export const DEFAULT_EXECUTION_EVIDENCE_LIMIT = 500;
+export const MAX_TASK_EXECUTION_EVIDENCE_ROWS = 10_000;
+
+/** Full task evidence is paged up to a separate safety ceiling. */
+export function taskEvidenceLimit(maxRows: number | undefined): number {
+  const value = maxRows ?? MAX_TASK_EXECUTION_EVIDENCE_ROWS;
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_TASK_EXECUTION_EVIDENCE_ROWS)
+    throw new Error('Task execution evidence limit is invalid');
+  return value;
+}
 
 export function evidenceLimit(maxRows: number | undefined): number {
   const value = maxRows ?? DEFAULT_EXECUTION_EVIDENCE_LIMIT;

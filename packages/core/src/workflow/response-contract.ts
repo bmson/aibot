@@ -1,5 +1,10 @@
 import { stripBackgroundNoticeEcho } from '../chat-card.js';
-import { repairPresentationDefects } from '../model-router/audit-graders.js';
+import {
+  explicitlyRequestsRepetition,
+  gradeAuditedOutput,
+  repairPresentationDefects,
+} from '../model-router/audit-graders.js';
+import { correctFlightWriteClaims } from './flight-write-contract.js';
 import { gmailThreadIdsToRead, type PersonalReadRequest } from './read-intent.js';
 import { isDurableSave, isMemoryWriteRequest, savedWorkSummary } from './saved-work.js';
 
@@ -49,6 +54,8 @@ export interface ResponseContractResult {
   text: string;
   blocked: boolean;
   unsupported: ActionKind[];
+  /** The draft was replaced because it contained an obvious generation loop. */
+  qualityFallback?: boolean;
   /**
    * Why a lookup answer was rendered from the ledger instead of published as
    * the model wrote it. Absent on a published draft and on every non-read
@@ -1979,6 +1986,18 @@ export function enforceResponseContract(
   opts?: ResponseContractOptions,
 ): ResponseContractResult {
   text = stripBackgroundNoticeEcho(text);
+  if (
+    gradeAuditedOutput(text, {
+      repetitionRequested: explicitlyRequestsRepetition(opts?.requestText),
+    }).some((defect) => defect.kind === 'repetitive-output' || defect.kind === 'malformed-output')
+  ) {
+    return {
+      text: "I couldn't produce a reliable answer just now. Please try again.",
+      blocked: true,
+      unsupported: [],
+      qualityFallback: true,
+    };
+  }
   const completedEvent =
     /^(?:the|my)\s+(interview|meeting|appointment|event)\s+(?:(?:has\s+)?already\s+happened|happened\s+already|is\s+over)[.!]?$/i.exec(
       opts?.requestText?.trim() ?? '',
@@ -2032,8 +2051,27 @@ export function enforceResponseContract(
       unsupported: ['background'],
     };
   }
+  const flightCorrection = correctFlightWriteClaims(
+    text,
+    evidence,
+    opts?.requestText ?? '',
+    explicitlyRequestsRepetition(opts?.requestText ?? ''),
+  );
+  text = flightCorrection.text;
   const readGrounding = enforcePersonalReadGrounding(text, evidence, opts);
-  if (readGrounding) return readGrounding;
+  if (readGrounding) {
+    // Some private-read paths render directly from the ledger and return early.
+    // Run the same narrow flight-write check on that deterministic reply too.
+    const correctedRead = correctFlightWriteClaims(
+      readGrounding.text,
+      evidence,
+      opts?.requestText ?? '',
+      explicitlyRequestsRepetition(opts?.requestText ?? ''),
+    );
+    return correctedRead.changed
+      ? { ...readGrounding, text: correctedRead.text, blocked: true }
+      : readGrounding;
+  }
   const claimed = claimedKinds(text);
   const memoryRequest = isMemoryWriteRequest(opts?.requestText ?? '');
   if (
@@ -2089,7 +2127,7 @@ export function enforceResponseContract(
     if (repairs.length > 0) {
       console.warn('repaired presentation defects in final answer', { repairs });
     }
-    return { text: repairedText, blocked: false, unsupported: [] };
+    return { text: repairedText, blocked: flightCorrection.changed, unsupported: [] };
   }
   if (unsupported.includes('approval')) {
     return {

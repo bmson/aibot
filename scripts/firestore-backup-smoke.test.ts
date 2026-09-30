@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   ManagedBackupManifest,
   ManagedFirestoreDataClient,
 } from '../packages/firestore/src/managed-backup.js';
 import { type BackupSmokeDependencies, firestoreBackupSmoke } from './firestore-backup-smoke.js';
+
+// These tests inject every cloud operation; don't let the full emulator suite's
+// process-wide host variable trip the production-only routing guard.
+beforeEach(() => vi.stubEnv('FIRESTORE_EMULATOR_HOST', ''));
+afterEach(() => vi.unstubAllEnvs());
 
 const tuple = <T>(value: T): [T] => [value];
 const input = {
@@ -193,6 +198,20 @@ describe('synthetic managed backup smoke', () => {
       'restoring',
       'cleanup',
     ]);
+  });
+
+  it('still refuses emulator routing before invoking any cloud dependency', async () => {
+    vi.stubEnv('FIRESTORE_EMULATOR_HOST', '127.0.0.1:8789');
+    const state = fixture();
+
+    await expect(firestoreBackupSmoke(input, state.dependencies)).rejects.toThrow(
+      'Managed backup smoke refuses emulator routing',
+    );
+    expect(state.admin.createDatabase).not.toHaveBeenCalled();
+    expect(state.backup).not.toHaveBeenCalled();
+    expect(state.restore).not.toHaveBeenCalled();
+    expect(state.writes).toEqual([]);
+    expect(state.deleted).toEqual([]);
   });
 
   it('does not delete a restore database when its exclusive create is rejected', async () => {
