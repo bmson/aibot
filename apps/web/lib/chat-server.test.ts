@@ -206,12 +206,12 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
     expect(proxy(request('/api/mobile/v1/bootstrap')).status).toBe(200);
     expect(proxy(request('/api/mobile/v1/bootstrap', 'POST')).status).toBe(503);
     expect(proxy(request('/api/shell/status')).status).toBe(200);
-    expect(proxy(request('/cards')).status).toBe(200);
-    expect(proxy(request('/cards', 'POST')).status).toBe(200);
-    expect(proxy(request('/chat')).status).toBe(200);
-    expect(proxy(request(`/chat/${randomUUID()}`)).status).toBe(200);
-    expect(proxy(request('/chat/all')).status).toBe(200);
-    expect(proxy(request('/tasks')).status).toBe(200);
+    expect(proxy(request('/cards')).status).toBe(307);
+    expect(proxy(request('/cards', 'POST')).status).toBe(410);
+    expect(proxy(request('/chat')).status).toBe(307);
+    expect(proxy(request(`/chat/${randomUUID()}`)).status).toBe(307);
+    expect(proxy(request('/chat/all')).status).toBe(307);
+    expect(proxy(request('/tasks')).status).toBe(307);
     expect(proxy(request('/api/mobile/v1/chats', 'POST')).status).toBe(200);
     expect(proxy(request('/api/chat', 'POST')).status).toBe(200);
     expect(proxy(request('/api/mobile/v1/chat/status')).status).toBe(200);

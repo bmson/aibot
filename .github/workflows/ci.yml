@@ -236,14 +236,13 @@ jobs:
       # it. The standalone server pins NODE_ENV=production, so the dev bypass
       # would (correctly) throw; the loopback bypass is the production-shaped
       # path — and it now also exercises the request-level loopback guard.
-      - name: Exercise the mobile UI in a real browser
+      - name: Exercise mobile administration in a real browser
         env:
           AUTH_LOCALHOST_BYPASS: 'true'
           AUTH_URL: http://127.0.0.1:3000
           QUEUE_DRIVER: local
           SMOKE_BASE_URL: http://127.0.0.1:3000
           SMOKE_BROWSER_CHANNEL: chrome
-          SMOKE_CREATE_FIXTURE: 'true'
           PORT: '3000'
           HOSTNAME: 127.0.0.1
         run: |

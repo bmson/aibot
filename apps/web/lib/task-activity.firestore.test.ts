@@ -145,13 +145,13 @@ describe.skipIf(!emulator)('web task Activity in Firestore mode with PostgreSQL 
     const { proxy } = await import('../proxy.js');
     const status = (path: string, method = 'GET') =>
       proxy(new NextRequest(`http://localhost${path}`, { method })).status;
-    expect(status('/tasks')).toBe(200);
-    expect(status('/tasks', 'POST')).toBe(200);
-    expect(status(`/tasks/${taskId}`)).toBe(200);
-    expect(status(`/tasks/${taskId}`, 'POST')).toBe(200);
-    expect(status(`/tasks/${taskId}`, 'DELETE')).toBe(503);
-    expect(status('/tasks/not-a-uuid')).toBe(503);
-    expect(status(`/tasks/${taskId}/nested`)).toBe(503);
+    expect(status('/tasks')).toBe(307);
+    expect(status('/tasks', 'POST')).toBe(410);
+    expect(status(`/tasks/${taskId}`)).toBe(307);
+    expect(status(`/tasks/${taskId}`, 'POST')).toBe(410);
+    expect(status(`/tasks/${taskId}`, 'DELETE')).toBe(410);
+    expect(status('/tasks/not-a-uuid')).toBe(307);
+    expect(status(`/tasks/${taskId}/nested`)).toBe(307);
   });
 
   it('archives, lists, restores, and bulk-archives through the owner activity commands', async () => {

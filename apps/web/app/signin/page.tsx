@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function SignInPage() {
   if (authMode !== 'passkey') notFound();
-  if (await isAuthed()) redirect('/chat');
+  if (await isAuthed()) redirect('/settings');
   return (
     <PageShell size="reading" className="grid gap-6">
       <PageHeader title="Sign in" intro="This assistant is private. Use the owner passkey." />

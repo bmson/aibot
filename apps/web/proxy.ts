@@ -3,8 +3,28 @@ import { type NextRequest, NextResponse } from 'next/server';
 
 /** Firestore preview exposes migrated read surfaces and the supported owner mutations. */
 export function proxy(request: NextRequest) {
-  if (loadConfig().PERSISTENCE_DRIVER !== 'firestore') return NextResponse.next();
   const path = request.nextUrl.pathname;
+  // Browser access is an owner administration console. Native APIs retain
+  // their existing persistence and authentication boundaries below.
+  const adminPage = ['/settings', '/security', '/signin', '/setup'].includes(path);
+  const auditPage = path === '/audit' || /^\/audit\/[0-9a-f-]{36}$/i.test(path);
+  const asset = ['/icon.svg', '/apple-icon.png', '/favicon.ico', '/manifest.webmanifest'].includes(
+    path,
+  );
+  if (!path.startsWith('/api/') && !path.startsWith('/_next/') && !asset) {
+    if (path === '/' || (!adminPage && !auditPage)) {
+      if (request.method === 'GET' || request.method === 'HEAD') {
+        return NextResponse.redirect(new URL('/settings', request.url));
+      }
+      return Response.json({ error: 'Use the mobile app for this action.' }, { status: 410 });
+    }
+    if (auditPage) {
+      return ['GET', 'HEAD'].includes(request.method)
+        ? NextResponse.next()
+        : Response.json({ error: 'Audit trail is read-only.' }, { status: 405 });
+    }
+  }
+  if (loadConfig().PERSISTENCE_DRIVER !== 'firestore') return NextResponse.next();
   const chatPage =
     path === '/chat' ||
     path === '/chat/all' ||

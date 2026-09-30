@@ -107,11 +107,11 @@ describe.skipIf(!localEmulator)('Firestore owner Memory hub page with PostgreSQL
     const { proxy } = await import('../../../proxy.js');
     const request = (path: string, method = 'GET') =>
       new NextRequest(`http://localhost${path}`, { method });
-    expect(proxy(request('/profile/memories')).status).toBe(200);
-    expect(proxy(request('/profile/memories', 'POST')).status).toBe(503);
-    expect(proxy(request('/profile/knowledge')).status).toBe(200);
-    expect(proxy(request('/profile')).status).toBe(200);
-    expect(proxy(request('/profile/about')).status).toBe(200);
+    expect(proxy(request('/profile/memories')).status).toBe(307);
+    expect(proxy(request('/profile/memories', 'POST')).status).toBe(410);
+    expect(proxy(request('/profile/knowledge')).status).toBe(307);
+    expect(proxy(request('/profile')).status).toBe(307);
+    expect(proxy(request('/profile/about')).status).toBe(307);
   });
 
   it('renders only configured-owner memory and feedback through the page', async () => {

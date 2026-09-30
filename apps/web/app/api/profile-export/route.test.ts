@@ -64,9 +64,9 @@ describe.skipIf(!localEmulator)('Firestore profile export with PostgreSQL offlin
     const { proxy } = await import('../../../proxy.js');
     const request = (path: string, method = 'GET') =>
       new NextRequest(`http://localhost${path}`, { method });
-    expect(proxy(request('/profile/data')).status).toBe(200);
-    expect(proxy(request('/profile/data', 'POST')).status).toBe(200);
-    expect(proxy(request('/profile/data', 'PUT')).status).toBe(503);
+    expect(proxy(request('/profile/data')).status).toBe(307);
+    expect(proxy(request('/profile/data', 'POST')).status).toBe(410);
+    expect(proxy(request('/profile/data', 'PUT')).status).toBe(410);
     expect(proxy(request('/api/profile-export')).status).toBe(200);
     expect(proxy(request('/api/profile-export', 'POST')).status).toBe(503);
   });

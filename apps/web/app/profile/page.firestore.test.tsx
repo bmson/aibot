@@ -96,7 +96,9 @@ describe.skipIf(!localEmulator)('Firestore memory hub page with PostgreSQL offli
   it('renders review items and open loops from Firestore', async () => {
     const { proxy } = await import('@/proxy');
     for (const method of ['GET', 'POST'])
-      expect(proxy(new NextRequest('http://localhost/profile', { method })).status).toBe(200);
+      expect(proxy(new NextRequest('http://localhost/profile', { method })).status).toBe(
+        method === 'GET' ? 307 : 410,
+      );
     const { getDb } = await import('@/lib/server');
     expect(() => getDb()).toThrow('PostgreSQL-backed web surface is unavailable');
 

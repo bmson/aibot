@@ -219,7 +219,9 @@ describe.skipIf(!emulator)('Firestore mobile Documents with PostgreSQL offline',
       ['/api/documents/upload', 'POST'],
       [`/api/mobile/v1/documents/${documentId}`, 'DELETE'],
     ])
-      expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(200);
+      expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(
+        path.startsWith('/api/') ? 200 : method === 'GET' ? 307 : 410,
+      );
     auth.mobile.mockResolvedValueOnce(false);
     expect((await GET(new Request(url))).status).toBe(401);
     expect((await POST(new Request(url, { method: 'POST' }))).status).toBe(400);

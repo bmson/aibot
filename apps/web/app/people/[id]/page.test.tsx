@@ -203,11 +203,11 @@ describe.skipIf(!localEmulator)('Firestore person detail with PostgreSQL offline
     const { proxy } = await import('../../../proxy.js');
     const request = (path: string, method = 'GET') =>
       new NextRequest(`http://localhost${path}`, { method });
-    expect(proxy(request(`/people/${contactId}`)).status).toBe(200);
-    expect(proxy(request(`/people/${contactId}`, 'POST')).status).toBe(200);
-    expect(proxy(request(`/people/${contactId}`, 'DELETE')).status).toBe(503);
-    expect(proxy(request('/people/not-a-uuid')).status).toBe(503);
-    expect(proxy(request('/people/not-a-uuid', 'POST')).status).toBe(503);
+    expect(proxy(request(`/people/${contactId}`)).status).toBe(307);
+    expect(proxy(request(`/people/${contactId}`, 'POST')).status).toBe(410);
+    expect(proxy(request(`/people/${contactId}`, 'DELETE')).status).toBe(410);
+    expect(proxy(request('/people/not-a-uuid')).status).toBe(307);
+    expect(proxy(request('/people/not-a-uuid', 'POST')).status).toBe(410);
   });
 
   it('renders the full dossier and every editing control without PostgreSQL', async () => {

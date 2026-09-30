@@ -171,10 +171,10 @@ describe.skipIf(!localEmulator)('Firestore people directory with PostgreSQL offl
     const { proxy } = await import('../../proxy.js');
     const request = (path: string, method = 'GET') =>
       new NextRequest(`http://localhost${path}`, { method });
-    expect(proxy(request('/people')).status).toBe(200);
-    expect(proxy(request('/people', 'POST')).status).toBe(200);
-    expect(proxy(request('/people', 'DELETE')).status).toBe(503);
-    expect(proxy(request('/people/anna')).status).toBe(503);
+    expect(proxy(request('/people')).status).toBe(307);
+    expect(proxy(request('/people', 'POST')).status).toBe(410);
+    expect(proxy(request('/people', 'DELETE')).status).toBe(410);
+    expect(proxy(request('/people/anna')).status).toBe(307);
   });
 
   it('renders the full directory and the add-person control without PostgreSQL', async () => {

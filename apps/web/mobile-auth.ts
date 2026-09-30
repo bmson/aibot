@@ -1,5 +1,6 @@
 import { loadConfig } from '@assistant/config';
 import { isAuthed } from './auth';
+import { getMobileAccessToken } from './lib/mobile-access-token';
 import { secureTokenMatches } from './mobile-token';
 
 function bearerToken(request: Request): string {
@@ -17,7 +18,22 @@ function bearerToken(request: Request): string {
 export async function isMobileAuthed(request: Request): Promise<boolean> {
   const config = loadConfig();
   const token = bearerToken(request);
-  if (secureTokenMatches(config.MOBILE_API_TOKEN, token)) return true;
+  if (token && !token.startsWith('asd1_')) {
+    try {
+      if (secureTokenMatches(await getMobileAccessToken(), token)) return true;
+      // A freshly rotated token must work even on an instance with a warm cache.
+      if (
+        process.env.K_SERVICE &&
+        config.GCP_PROJECT &&
+        secureTokenMatches(await getMobileAccessToken(true), token)
+      )
+        return true;
+    } catch {
+      // Do not accept the stale startup secret when the current secret cannot
+      // be checked. Owner sessions and independent device keys remain usable.
+      console.error('[mobile-auth] could not verify mobile access token');
+    }
+  }
   // Passkey installations issue revocable per-device credentials from /security.
   if (config.OWNER_AUTH_MODE === 'passkey' && token.startsWith('asd1_')) {
     const { verifyOwnerDeviceToken } = await import('./lib/owner-auth/runtime');

@@ -12,6 +12,7 @@ import { FirestoreMcpConnectionMutationRepository } from '@assistant/firestore';
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
 import { runFirestoreSettingsMutation } from '@/lib/firestore-settings-mutation';
+import { clearMobileAccessTokenCache } from '@/lib/mobile-access-token';
 import {
   discoverFirestoreMcpConnection,
   encryptMcpConnectionBearerToken,
@@ -240,7 +241,7 @@ async function metadataAccessToken(): Promise<string> {
 /**
  * Publish a new mobile-api-token version in Secret Manager, then make the
  * running instance use it. Only the versions become available — the service
- * reads `mobile-api-token:latest`, so adding a version is what rolls it out.
+ * refreshes `mobile-api-token:latest` across instances after rotation.
  */
 async function publishToSecretManager(project: string, token: string): Promise<string | null> {
   const accessToken = await metadataAccessToken();
@@ -290,6 +291,7 @@ export async function rotateMobileToken(): Promise<{ token?: string; error?: str
   // is dropped — otherwise reloadConfig() would re-parse the stale one.
   process.env.MOBILE_API_TOKEN = token;
   reloadConfig();
+  clearMobileAccessTokenCache();
   revalidateSettings();
   return { token };
 }

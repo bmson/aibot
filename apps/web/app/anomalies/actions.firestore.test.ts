@@ -92,7 +92,9 @@ describe.skipIf(!localEmulator)('Firestore web anomalies and improvements', () =
     expect(() => getDb()).toThrow('PostgreSQL-backed web surface is unavailable');
     for (const path of ['/anomalies', '/improvements'])
       for (const method of ['GET', 'POST'])
-        expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(200);
+        expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(
+          path.startsWith('/api/') ? 200 : method === 'GET' ? 307 : 410,
+        );
   });
 
   it('lists and resolves only the owner anomalies', async () => {

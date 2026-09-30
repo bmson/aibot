@@ -72,7 +72,7 @@ describe.skipIf(!localEmulator)('Firestore web task actions with PostgreSQL offl
   it('reaches the task Server Actions through the proxy while PostgreSQL stays fenced', () => {
     expect(() => getDb()).toThrow('PostgreSQL-backed web surface is unavailable');
     const path = `/tasks/${randomUUID()}`;
-    expect(proxy(new NextRequest(`http://localhost${path}`, { method: 'POST' })).status).toBe(200);
+    expect(proxy(new NextRequest(`http://localhost${path}`, { method: 'POST' })).status).toBe(410);
   });
 
   it('retries a stalled task by publishing the next queue generation', async () => {

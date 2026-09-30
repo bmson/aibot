@@ -186,7 +186,9 @@ describe.skipIf(!localEmulator)('Firestore owner memory commands with PostgreSQL
       [`/api/mobile/v1/knowledge/sources/${id}`, 'GET'],
     ];
     for (const [path, method] of allowed)
-      expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(200);
+      expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(
+        path.startsWith('/api/') ? 200 : method === 'GET' ? 307 : 410,
+      );
   });
 
   it('renders the interactive About page from Firestore', async () => {
