@@ -33,6 +33,7 @@ final class SpeechListener: ObservableObject {
     @Published private(set) var transcript = ""
 
     private let engine = AVAudioEngine()
+    private let requestRecordPermission: () async -> Bool
     private var analyzer: SpeechAnalyzer?
     private var transcriber: SpeechTranscriber?
     private var input: AsyncStream<AnalyzerInput>.Continuation?
@@ -46,6 +47,12 @@ final class SpeechListener: ObservableObject {
     private var generation = 0
 
     var isListening: Bool { state == .listening }
+
+    init(requestRecordPermission: @escaping () async -> Bool = {
+        await AVAudioApplication.requestRecordPermission()
+    }) {
+        self.requestRecordPermission = requestRecordPermission
+    }
 
     // MARK: - Listening
 
@@ -69,28 +76,32 @@ final class SpeechListener: ObservableObject {
         transcript = ""
         state = .preparing
 
-        guard await AVAudioApplication.requestRecordPermission() else {
+        let permissionGranted = await requestRecordPermission()
+        guard generation == self.generation else { return }
+        guard permissionGranted else {
             state = .unavailable("Microphone access is off for Assistant. Settings › Assistant › Microphone.")
             return
         }
 
         do {
             let transcriber = try await makeTranscriber()
-            guard generation == self.generation else { return await teardown() }
+            guard generation == self.generation else { return }
             self.transcriber = transcriber
 
             let analyzer = SpeechAnalyzer(modules: [transcriber])
             self.analyzer = analyzer
 
-            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+            let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+            guard generation == self.generation else { return }
+            guard let format else {
                 state = .unavailable("This iPhone has no audio format the transcriber can take.")
                 return
             }
 
-            guard generation == self.generation else { return await teardown() }
             let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
             input = continuation
             try await analyzer.start(inputSequence: stream)
+            guard generation == self.generation else { return }
 
             results = Task { [weak self] in
                 guard let self else { return }
@@ -99,6 +110,7 @@ final class SpeechListener: ObservableObject {
             try startEngine(writingTo: continuation, format: format)
             state = .listening
         } catch {
+            guard generation == self.generation else { return }
             await teardown()
             state = .unavailable(error.localizedDescription)
         }
