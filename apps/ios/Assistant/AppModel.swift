@@ -1218,6 +1218,22 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func reportRepair(title: String, summary: String) async -> Bool {
+        guard let client else {
+            errorMessage = "Connect to your assistant before reporting an issue."
+            return false
+        }
+        errorMessage = nil
+        do {
+            try await client.reportRepair(title: title, summary: summary)
+            await refreshWorkspace(reportFailure: false)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
     func updateRepair(_ issue: WorkspaceRepairIssue, action: String) async -> Bool {
         guard let client else { return false }
         errorMessage = nil

@@ -101,6 +101,31 @@ final class StubURLProtocol: URLProtocol {
 }
 
 final class APIClientRetryTests: XCTestCase {
+    func testIssueReportSendsDetailsToRepairEndpoint() async throws {
+        StubURLProtocol.prime([
+            .success(status: 200, body: Data(#"{"ok":true,"issueId":"repair-1"}"#.utf8))
+        ])
+        try await makeClient().reportRepair(title: "Calendar event missing", summary: "What happened:\nNo event appeared.\n\nWhat I expected:\nThe saved event should appear.")
+        XCTAssertEqual(StubURLProtocol.attempts, ["POST"])
+        XCTAssertEqual(StubURLProtocol.urls.first?.path, "/api/mobile/v1/repairs")
+        let body = try XCTUnwrap(StubURLProtocol.bodies.first)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(payload["title"], "Calendar event missing")
+        XCTAssertEqual(payload["summary"], "What happened:\nNo event appeared.\n\nWhat I expected:\nThe saved event should appear.")
+    }
+
+    @MainActor
+    func testRejectedIssueReportDoesNotClaimSuccessOrRefresh() async {
+        StubURLProtocol.prime([
+            .success(status: 409, body: Data(#"{"error":"Could not report issue"}"#.utf8))
+        ])
+        let model = AppModel(apiClient: makeClient())
+        let saved = await model.reportRepair(title: "Calendar event missing", summary: "The saved event did not appear.")
+        XCTAssertFalse(saved)
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertEqual(StubURLProtocol.attempts, ["POST"])
+    }
+
     @MainActor
     func testKnowledgeConnectionSaveAcceptsCommittedIDsAndRefreshesGraph() async throws {
         let graph = RelationshipGraphFixture.snapshot()
