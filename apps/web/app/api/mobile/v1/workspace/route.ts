@@ -1,7 +1,7 @@
 import { getCostsDashboard, getProfileOverview } from '@assistant/application';
 import { loadConfig } from '@assistant/config';
 import { assistantModuleMetas } from '@assistant/modules/meta';
-import { policyLabels, scheduleLabels } from '@/app/settings/labels';
+import { policyLabels, policyScope, scheduleLabels } from '@/app/settings/labels';
 import { getAgentReadinessSource } from '@/lib/agent-readiness-source';
 import { capabilityStatus, getCapabilityDiagnostics } from '@/lib/capabilities';
 import { getFirestoreMobileWorkspace } from '@/lib/firestore-mobile-workspace';
@@ -160,6 +160,7 @@ export async function GET(request: Request): Promise<Response> {
         toolName: policy.toolName,
         templateKey: policy.templateKey,
         label: policyLabels[policy.templateKey] ?? null,
+        scope: policyScope(policy.templateKey, policy.match),
         effect: policy.effect,
         enabled: policy.enabled,
         createdVia: policy.createdVia,

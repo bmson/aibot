@@ -294,7 +294,7 @@ export function registerDocsTools(registry: ToolRegistry, deps: DocsToolDeps): T
     {
       name: 'docs.share',
       description:
-        'Share a Google Doc with someone other than the owner. This emails that person a link, so it ALWAYS requires owner approval.',
+        'Share a Google Doc with someone other than the owner. This emails that person a link, so it requires owner approval unless a saved rule allows sharing with that recipient at that access level.',
       inputSchema: shareSchema,
       risk: 'approval',
       acceptsUntrustedInput: false,
@@ -321,7 +321,11 @@ export function registerDocsTools(registry: ToolRegistry, deps: DocsToolDeps): T
         };
       },
     },
-    { outwardFacing: true, blanketAllowIneligible: true },
+    {
+      outwardFacing: true,
+      blanketAllowIneligible: true,
+      scopedAllowTemplates: ['docs.share.to_recipient'],
+    },
   );
 
   return registry;

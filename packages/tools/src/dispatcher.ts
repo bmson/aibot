@@ -259,6 +259,15 @@ export class ToolDispatcher {
       return { kind: 'failed', error: 'approved args failed validation' };
     }
 
+    // The model-facing schema strips internal binding metadata. Restore only
+    // the original dispatcher snapshot, never one supplied in edited arguments.
+    if (call.toolName === 'mcp.call') {
+      const original = call.args as Record<string, unknown> | null;
+      if (original?._approvalMcpScope) {
+        (parsed.data as Record<string, unknown>)._approvalMcpScope = original._approvalMcpScope;
+      }
+    }
+
     // Approved calls reserve too — approval grants permission, not budget.
     const reserved = await this.reserveForTool(
       registered,
@@ -609,7 +618,9 @@ export class ToolDispatcher {
     // tools visible under privileged taint (see toolsForTask): this gate is what
     // makes that safe, and without it such a tool could run autonomously on
     // arguments lifted straight out of a forwarded email.
-    // Policy allow rules deliberately cannot override this provenance boundary.
+    // Ordinary policy allow rules cannot override this provenance boundary.
+    // An explicit any-arguments grant for one identity-bound MCP tool is the
+    // only exception, checked against that tool's prepared binding below.
     // outwardFacing is listed explicitly so a future outward tool that accepts
     // untrusted input but is NOT marked networkEgress still cannot act
     // autonomously under taint (today every such tool also carries networkEgress,
@@ -623,8 +634,24 @@ export class ToolDispatcher {
     // and explicit policy denies still apply in their existing layers.
     const sourceRead =
       privilegedTaint && (await authorizedPublicSourceRead(this.executionRepository, input, args));
+    // A tool flagged blanketAllowIneligible may never be downgraded to
+    // autonomous by a standing "always allow" policy, except for explicitly
+    // registered bounded templates. Otherwise its risk must always be
+    // decided per-call. Enforced here at match time (not just at policy
+    // creation) so a hand-inserted or legacy allow row for such a tool still
+    // fails closed. The taint gate below still overrides ordinary policy allow.
+    const policyAllows =
+      policyMatch?.effect === 'allow' &&
+      (registered.flags.blanketAllowIneligible !== true ||
+        registered.flags.scopedAllowTemplates?.includes(policyMatch.policy.templateKey) === true);
+    const explicitlyAllowedUnderTaint =
+      policyAllows &&
+      input.ctx.trust === 'owner' &&
+      registered.flags.scopedAllowUnderTaintTemplates?.includes(policyMatch.policy.templateKey) ===
+        true;
     const taintNeedsApproval =
       privilegedTaint &&
+      !explicitlyAllowedUnderTaint &&
       !sourceRead &&
       // A tool whose only sink is the owner's own dashboard cannot exfiltrate or
       // reach a third party, so it stays autonomous under taint (D6). Every
@@ -636,14 +663,6 @@ export class ToolDispatcher {
         registered.flags.writesMemory === true ||
         registered.flags.networkEgress === true ||
         registered.flags.outwardFacing === true);
-    // A tool flagged blanketAllowIneligible may never be downgraded to
-    // autonomous by a standing "always allow" policy — its risk must always be
-    // decided per-call. Enforced here at match time (not just at policy
-    // creation) so a hand-inserted or legacy allow row for such a tool still
-    // fails closed. The taint gate above already overrides policy allow; this
-    // extends the same closed-fail to the untainted path.
-    const policyAllows =
-      policyMatch?.effect === 'allow' && registered.flags.blanketAllowIneligible !== true;
     // Provenance guard: a send to a recipient the owner/thread never provided
     // (and that is not a saved contact) is held for owner confirmation, so the
     // model cannot autonomously email or text a fabricated address. A matching

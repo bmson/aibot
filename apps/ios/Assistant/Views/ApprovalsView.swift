@@ -250,17 +250,6 @@ struct ApprovalsView: View {
             Button("Edit request", systemImage: "pencil") {
                 editingApproval = item
             }
-            if canRemember(item) {
-                Button("Approve and remember recipient", systemImage: "checkmark.shield") {
-                    decisionInFlightID = item.id
-                    Task {
-                        let succeeded = await model.approveAndRemember(item)
-                        decisionInFlightID = nil
-                        if succeeded { decisionSuccessFeedback += 1 }
-                        else { decisionErrorFeedback += 1 }
-                    }
-                }
-            }
         } label: {
             Label("More", systemImage: "ellipsis.circle")
                 .font(.subheadline.weight(.medium))
@@ -268,6 +257,18 @@ struct ApprovalsView: View {
         .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
         .controlSize(.small)
         .disabled(decisionInFlightID != nil)
+        if let label = item.rememberLabel {
+            AssistantConfirmationButton(label, confirmationTitle: "Save standing approval?",
+                systemImage: "checkmark.shield", kind: .neutral,
+                hint: "Approves this action and saves the permission described above.", compact: true) {
+                decisionInFlightID = item.id
+                let succeeded = await model.approveAndRemember(item)
+                decisionInFlightID = nil
+                if succeeded { decisionSuccessFeedback += 1 }
+                else { decisionErrorFeedback += 1 }
+            }
+            .disabled(decisionInFlightID != nil)
+        }
     }
 
     private func approvalActionButton(
@@ -328,13 +329,6 @@ struct ApprovalsView: View {
 
     private var usesAccessibilityLayout: Bool { dynamicTypeSize.isAccessibilitySize }
     private var isLandscape: Bool { verticalSizeClass == .compact }
-
-    private func canRemember(_ item: PendingApproval) -> Bool {
-        guard item.toolName == "gmail.send",
-              case let .object(payload) = item.approval.payload,
-              case let .array(recipients)? = payload["to"] else { return false }
-        return recipients.compactMap(\.string).filter { !$0.isEmpty }.count == 1
-    }
 }
 
 private struct ApprovalPayloadEditor: View {

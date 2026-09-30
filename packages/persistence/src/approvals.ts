@@ -40,6 +40,7 @@ export interface ApprovalInboxQuery {
 }
 
 export interface PendingApprovalItem {
+  rememberLabel?: string | null;
   approval: Records['approvals'];
   taskType: string;
   taskTrust: string;

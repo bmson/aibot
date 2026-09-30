@@ -43,3 +43,51 @@ describe('policy templates', () => {
     expect(t({ emails: [] }, { attendees: ['bmson@bmson.com'] }, ctx)).toBe(false);
   });
 });
+
+describe('owner-approved scoped actions', () => {
+  it('texts match only the approved phone and owner trust', () => {
+    const t = policyTemplates['sms.send.to_recipient'] as NonNullable<
+      (typeof policyTemplates)[string]
+    >;
+    expect(t({ phone: '+14155550199' }, { to: '+14155550199' }, ctx)).toBe(true);
+    expect(t({ phone: '+14155550199' }, { to: '+14155550200' }, ctx)).toBe(false);
+    expect(t({ phone: '+14155550199' }, { to: '+14155550199' }, { ...ctx, trust: 'unknown' })).toBe(
+      false,
+    );
+  });
+  it('invitations match an exact normalized guest set, never a subset or added guest', () => {
+    const t = policyTemplates['calendar.create_event.same_attendees'] as NonNullable<
+      (typeof policyTemplates)[string]
+    >;
+    const match = { attendees: ['a@example.com', 'b@example.com'] };
+    expect(t(match, { attendees: ['B@example.com', 'a@example.com'] }, ctx)).toBe(true);
+    expect(t(match, { attendees: ['a@example.com'] }, ctx)).toBe(false);
+    expect(t(match, { attendees: ['a@example.com', 'b@example.com', 'c@example.com'] }, ctx)).toBe(
+      false,
+    );
+    expect(t({}, { attendees: [] }, ctx)).toBe(false);
+    expect(t(match, { attendees: ['a@example.com', null] }, ctx)).toBe(false);
+  });
+  it('event edits stay on one event and never add guests', () => {
+    const t = policyTemplates['calendar.update_event.same_event'] as NonNullable<
+      (typeof policyTemplates)[string]
+    >;
+    const match = { eventId: 'event-123' };
+    expect(t(match, { eventId: 'event-123', start: 'later' }, ctx)).toBe(true);
+    expect(t(match, { eventId: 'event-456' }, ctx)).toBe(false);
+    expect(t(match, { eventId: 'event-123', addAttendees: ['c@example.com'] }, ctx)).toBe(false);
+    expect(t(match, { eventId: 'event-123', addAttendees: null }, ctx)).toBe(false);
+  });
+  it('email permission excludes attachments, other recipients and non-owner tasks', () => {
+    const t = policyTemplates['gmail.send.to_recipient'] as NonNullable<
+      (typeof policyTemplates)[string]
+    >;
+    const match = { recipient: 'a@example.com' };
+    expect(t(match, { to: ['a@example.com'] }, ctx)).toBe(true);
+    expect(
+      t(match, { to: ['a@example.com'], attachments: [{ workspacePath: 'private.pdf' }] }, ctx),
+    ).toBe(false);
+    expect(t(match, { to: ['a@example.com', 'b@example.com'] }, ctx)).toBe(false);
+    expect(t(match, { to: ['a@example.com'] }, { ...ctx, trust: 'unknown' })).toBe(false);
+  });
+});

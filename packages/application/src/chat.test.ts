@@ -464,3 +464,43 @@ describe('collapseRuntimeMessageDuplicates', () => {
     expect(collapseRuntimeMessageDuplicates([first, second])).toHaveLength(2);
   });
 });
+
+describe('standing approval offers in chat', () => {
+  it.each(['pending', 'approved', 'expired'])(
+    'derives the offer from current tool data only while %s',
+    async (status) => {
+      const id = '11111111-1111-4111-8111-111111111111';
+      const fixture = hydrationStore({
+        approvals: [
+          {
+            id,
+            taskId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            summary: 'Send text',
+            status,
+            toolName: 'sms.send',
+            payload: { to: '+14155550199' },
+            expiresAt: new Date('2099-01-01T00:00:00Z'),
+          },
+        ],
+      });
+      const messages = [
+        {
+          id: 'm1',
+          role: 'assistant',
+          parts: [
+            {
+              type: 'approval',
+              approvalId: id,
+              rememberLabel: 'stale or fabricated offer',
+            },
+          ],
+        },
+      ] as unknown as UIMessage[];
+      const hydrated = await hydrateChatApprovals(fixture.store, messages);
+      expect(hydrated[0]?.parts[0]).toMatchObject({
+        rememberLabel:
+          status === 'pending' ? 'Approve and allow future texts to +14155550199' : null,
+      });
+    },
+  );
+});

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { Agent as HttpAgent, request as httpRequest } from 'node:http';
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https';
@@ -50,6 +51,37 @@ export interface McpToolConnectionRecord extends McpToolConnectionSummary {
 export interface McpToolConnectionReadPort {
   list(agentId: string): Promise<McpToolConnectionSummary[]>;
   get(agentId: string, connectionId: string): Promise<McpToolConnectionRecord | null>;
+}
+
+/** Bind approval to the connection identity, credentials, and cached tool definition. */
+export function mcpToolApprovalFingerprint(
+  connection: McpToolConnectionRecord,
+  toolName: string,
+): string | null {
+  const tool = sanitizedTools(connection.tools).find((candidate) => candidate.name === toolName);
+  if (!tool || !connection.enabled || connection.status !== 'ready') return null;
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === 'object')
+      return Object.fromEntries(
+        Object.entries(value)
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([key, item]) => [key, canonical(item)]),
+      );
+    return value;
+  };
+  return createHash('sha256')
+    .update(
+      JSON.stringify(
+        canonical({
+          connectionId: connection.id,
+          endpoint: connection.endpoint,
+          credentials: connection.bearerTokenEncrypted,
+          tool,
+        }),
+      ),
+    )
+    .digest('hex');
 }
 
 type FetchImplementation = typeof fetch;
@@ -571,10 +603,16 @@ export function registerMcpTools(
     {
       name: 'mcp.call',
       description:
-        'Call a tool on an owner-configured MCP server. First use mcp.list_connections and mcp.list_tools. Every MCP call needs owner approval because remote tools and their side effects are not controlled by this assistant.',
+        'Call a tool on an owner-configured MCP server. First use mcp.list_connections and mcp.list_tools. Requires owner approval unless the owner has explicitly saved Always allow for this named tool on this connection.',
       inputSchema: callSchema,
       risk: 'approval',
       acceptsUntrustedInput: false,
+      prepare: async (args, ctx) => {
+        const connection = await getConnection(ctx, args.connectionId);
+        const fingerprint = connection && mcpToolApprovalFingerprint(connection, args.toolName);
+        if (!connection || !fingerprint) throw new Error('MCP connection or tool is not ready.');
+        return { ...args, _approvalMcpScope: { fingerprint, connectionName: connection.name } };
+      },
       approvalSummary: (args) =>
         `Call MCP tool ${args.toolName} with ${clip(JSON.stringify(args.arguments), 360) || 'no arguments'}`,
       execute: async (args, ctx) => {
@@ -587,6 +625,13 @@ export function registerMcpTools(
           throw new Error(
             `Tool ${args.toolName} is not available on ${connection.name}. Refresh the connection first.`,
           );
+        }
+        // Recheck at execution, including once-approved calls, so a connection
+        // edited after dispatch never inherits approval for its former target.
+        const scope = (args as typeof args & { _approvalMcpScope?: { fingerprint?: unknown } })
+          ._approvalMcpScope;
+        if (scope && scope.fingerprint !== mcpToolApprovalFingerprint(connection, args.toolName)) {
+          throw new Error('MCP connection or tool changed since approval. Request fresh approval.');
         }
         return {
           connection: connection.name,
@@ -604,6 +649,8 @@ export function registerMcpTools(
       networkEgress: true,
       returnsUntrustedContent: true,
       blanketAllowIneligible: true,
+      scopedAllowTemplates: ['mcp.call.named_tool'],
+      scopedAllowUnderTaintTemplates: ['mcp.call.named_tool'],
       autonomyFloor: true,
     },
   );

@@ -31,11 +31,15 @@ export async function denyApproval(approvalId: string): Promise<void> {
 export async function resolveApprovalInline(
   approvalId: string,
   decision: 'approved' | 'denied',
+  remember = false,
 ): Promise<{ ok: boolean; error?: string }> {
   await requireOwner();
   const result = await withApprovalDecisionStore((store) =>
-    decideApproval(store, approvalId, decision),
+    remember && decision === 'approved'
+      ? approveAndRememberApproval(store, approvalId)
+      : decideApproval(store, approvalId, decision),
   );
+  if (result.ok && remember) revalidatePath('/settings');
   revalidateApprovalViews();
   return result.ok ? { ok: true } : { ok: false, error: result.reason };
 }
@@ -58,10 +62,14 @@ export async function resolveApprovalsInline(
   return { failures };
 }
 
-/** Approve and create the one currently supported recipient-scoped standing rule. */
+/** Approve and save the supported standing rule derived from the current request. */
 export async function approveAndRemember(approvalId: string): Promise<void> {
   await requireOwner();
-  await withApprovalDecisionStore((store) => approveAndRememberApproval(store, approvalId));
+  const result = await withApprovalDecisionStore((store) =>
+    approveAndRememberApproval(store, approvalId),
+  );
+  if (!result.ok) throw new Error(result.reason);
+  revalidatePath('/settings');
   revalidateApprovalViews();
 }
 

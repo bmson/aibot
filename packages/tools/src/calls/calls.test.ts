@@ -13,12 +13,13 @@ describe('phone.call tool', () => {
     return { registered, startCall };
   };
 
-  it('always needs approval and is never blanket-allowed or available to outside tasks', () => {
+  it('requires approval by default and allows only an explicitly saved call brief', () => {
     const { registered } = setup();
     expect(registered.tool.risk).toBe('approval');
     expect(registered.flags).toMatchObject({
       outwardFacing: true,
       blanketAllowIneligible: true,
+      scopedAllowTemplates: ['phone.call.same_brief'],
       autonomyFloor: true,
       returnsUntrustedContent: true,
     });

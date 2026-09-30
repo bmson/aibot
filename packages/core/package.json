@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./approval-rule": "./src/approval-rule.ts",
     ".": "./src/index.ts",
     "./chat": "./src/chat.ts",
     "./chat-card": "./src/chat-card.ts",

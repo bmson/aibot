@@ -14,6 +14,8 @@ struct MessageBubble: View {
     let retry: ((String) -> Void)?
     /// Inline approve/decline for pending approval cards — (approvalId, decision).
     let decideApproval: ((String, String) async -> Bool)?
+    /// Save the server-described standing approval from an inline card.
+    var rememberApproval: ((String) async -> Bool)? = nil
     /// One-tap answers for suggestion cards — (suggestionId, decision). Returns
     /// what the card should say when the answer did not land. Nil outside the
     /// live log, where the question is shown but cannot be answered.
@@ -97,7 +99,7 @@ struct MessageBubble: View {
                            let decideApproval,
                            let approvalId = part.approvalId,
                            !approvalId.isEmpty {
-                            inlineDecisionRow(approvalId: approvalId, decide: decideApproval)
+                            inlineDecisionRow(approvalId: approvalId, rememberLabel: part.rememberLabel, decide: decideApproval)
                                 .padding(.horizontal, 15)
                                 .padding(.bottom, 15)
                         }
@@ -501,25 +503,35 @@ struct MessageBubble: View {
 
     private func inlineDecisionRow(
         approvalId: String,
+        rememberLabel: String?,
         decide: @escaping (String, String) async -> Bool
     ) -> some View {
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(spacing: 8))
             : AnyLayout(HStackLayout(spacing: 8))
-        return layout {
-            // The affirmative answer leads, as it does for a suggestion's
-            // answers and on the web — one order for every decision row.
-            AssistantConfirmationButton("Approve", confirmationTitle: "Approve?", systemImage: "checkmark",
-                kind: .primary, hint: "Approves this request and resumes the task.", compact: true, fillsWidth: true) {
-                decidingApproval = true
-                _ = await decide(approvalId, "approved")
-                decidingApproval = false
+        return VStack(spacing: 8) {
+            layout {
+                AssistantConfirmationButton("Approve", confirmationTitle: "Approve?", systemImage: "checkmark",
+                    kind: .primary, hint: "Approves this request and resumes the task.", compact: true, fillsWidth: true) {
+                    decidingApproval = true
+                    _ = await decide(approvalId, "approved")
+                    decidingApproval = false
+                }
+                AssistantConfirmationButton("Deny", confirmationTitle: "Deny?", systemImage: "xmark",
+                    kind: .neutral, hint: "Stops this action.", compact: true, fillsWidth: true) {
+                    decidingApproval = true
+                    _ = await decide(approvalId, "denied")
+                    decidingApproval = false
+                }
             }
-            AssistantConfirmationButton("Deny", confirmationTitle: "Deny?", systemImage: "xmark",
-                kind: .neutral, hint: "Stops this action.", compact: true, fillsWidth: true) {
-                decidingApproval = true
-                _ = await decide(approvalId, "denied")
-                decidingApproval = false
+            if let rememberLabel, let rememberApproval {
+                AssistantConfirmationButton(rememberLabel, confirmationTitle: "Save standing approval?",
+                    systemImage: "checkmark.shield", kind: .neutral,
+                    hint: "Approves this action and saves the permission described above.", compact: true, fillsWidth: true) {
+                    decidingApproval = true
+                    _ = await rememberApproval(approvalId)
+                    decidingApproval = false
+                }
             }
         }
         .id(approvalId)
@@ -5977,6 +5989,7 @@ extension MessageBubble: Equatable {
             && (lhs.runForReal == nil) == (rhs.runForReal == nil)
             && (lhs.retry == nil) == (rhs.retry == nil)
             && (lhs.decideApproval == nil) == (rhs.decideApproval == nil)
+            && (lhs.rememberApproval == nil) == (rhs.rememberApproval == nil)
             && (lhs.decideSuggestion == nil) == (rhs.decideSuggestion == nil)
             && (lhs.openActivity == nil) == (rhs.openActivity == nil)
             && (lhs.refreshCard == nil) == (rhs.refreshCard == nil)

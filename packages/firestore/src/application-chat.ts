@@ -661,12 +661,25 @@ export class FirestoreApplicationChatPersistence implements ApplicationChatPersi
         .filter((doc) => doc.exists && doc.get('agentId') === agentId)
         .map((doc) => String(doc.get('id'))),
     );
+    const toolCallIds = boundedIds(
+      rawApprovals
+        .filter((doc) => ownedTaskIds.has(String(doc.get('taskId'))))
+        .map((doc) => doc.get('toolCallId'))
+        .filter((id): id is string => typeof id === 'string'),
+    );
+    const toolCallDocs = toolCallIds.length
+      ? await this.store.db.getAll(...toolCallIds.map((id) => this.store.doc('toolCalls', id)))
+      : [];
+    const toolNameById = new Map(
+      toolCallDocs.filter((doc) => doc.exists).map((doc) => [doc.id, String(doc.get('toolName'))]),
+    );
     const decodeApproval = (doc: FirebaseFirestore.DocumentSnapshot): ApplicationChatApproval => ({
       id: String(doc.get('id')),
       taskId: String(doc.get('taskId')),
       summary: String(doc.get('summary')),
       status: String(doc.get('status')),
       payload: decodeRecord(doc.get('payload')),
+      toolName: toolNameById.get(String(doc.get('toolCallId'))),
       expiresAt: decodeRecord<Date>(doc.get('expiresAt')),
     });
     const directIdSet = new Set(approvalIds);

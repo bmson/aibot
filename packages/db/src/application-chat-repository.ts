@@ -488,10 +488,12 @@ export function createPostgresApplicationChatPersistence(db: Db): ApplicationCha
                 summary: approvals.summary,
                 status: approvals.status,
                 payload: approvals.payload,
+                toolName: toolCalls.toolName,
                 expiresAt: approvals.expiresAt,
               })
               .from(approvals)
               .innerJoin(tasks, eq(approvals.taskId, tasks.id))
+              .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
               .where(and(eq(tasks.agentId, agentId), inArray(approvals.id, input.approvalIds)))
           : [],
         input.approvalTaskIds.length
@@ -502,10 +504,12 @@ export function createPostgresApplicationChatPersistence(db: Db): ApplicationCha
                 summary: approvals.summary,
                 status: approvals.status,
                 payload: approvals.payload,
+                toolName: toolCalls.toolName,
                 expiresAt: approvals.expiresAt,
               })
               .from(approvals)
               .innerJoin(tasks, eq(approvals.taskId, tasks.id))
+              .innerJoin(toolCalls, eq(approvals.toolCallId, toolCalls.id))
               .where(
                 and(eq(tasks.agentId, agentId), inArray(approvals.taskId, input.approvalTaskIds)),
               )

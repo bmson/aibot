@@ -28,12 +28,12 @@ export function ApprovalGroup({ parts }: { parts: InlineApprovalPart[] }) {
   const pendingParts = parts.filter((part) => statusOf(part) === 'pending');
   const allSettled = pendingParts.length === 0;
 
-  const resolveOne = (approvalId: string, decision: 'approved' | 'denied') => {
+  const resolveOne = (approvalId: string, decision: 'approved' | 'denied', remember = false) => {
     if (busy) return;
     setActiveResolution({ approvalId, decision });
     startTransition(async () => {
       try {
-        const result = await resolveApprovalInline(approvalId, decision);
+        const result = await resolveApprovalInline(approvalId, decision, remember);
         if (result.ok) {
           setResolutions((prev) => ({ ...prev, [approvalId]: decision }));
           setError(null);
