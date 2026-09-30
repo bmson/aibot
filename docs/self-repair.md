@@ -29,7 +29,7 @@ The worker opens a feature branch, adds a regression test, checks the patch, and
    Match `SELF_REPAIR_REF` to the worker repository's actual default branch. Source commits are resolved from the source repository's default branch. Use separate dedicated fine-grained tokens. Runtime: restrict to source and worker repositories with Actions read/write, Contents read and Pull requests read. Publisher: restrict to the source repository with Contents and Pull requests read/write. Keep the runtime token in Secret Manager; do not copy an all-repositories CLI login token into the worker. The health endpoint must return the deployed commit SHA. Configure the normal assistant model provider for investigation and the existing notification delivery channel for owner pings. Use the installation's secret manager for runtime credentials; never commit them or pass them as visible command arguments.
 6. Submit a small, reproducible report through Improvements. Confirm investigation, worker checks, PR notification, owner merge, deployment monitoring, and confirmation before relying on unattended runs. Check both SQL and Firestore paths for the selected installation backend.
 
-The approved local coding key is stored in ignored `.env.local`. It has not been uploaded to GitHub. Runtime configuration loads `.env`; creating this local key alone does not activate the worker.
+The local coding key is stored in ignored `.env.local`; transfer it only to the private worker secret with explicit owner approval. The key has now been installed in this installation’s private worker. Runtime configuration loads `.env`; installing the coding key alone does not activate the worker.
 
 ## Limits and recovery
 
