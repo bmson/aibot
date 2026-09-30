@@ -215,7 +215,12 @@ function suggestionActionLabel(action: string, context?: Record<string, unknown>
   if (/^Create a calendar event on the owner's own calendar with no attendees for: /.test(action))
     return 'Add to calendar';
   if (/^Set a reminder two days before /.test(action)) return 'Set reminder';
-  if (/^Read the email identified by this source data: /.test(action)) return 'Review email';
+  if (/^Read the email identified by this source data: /.test(action))
+    // Anchored on the fixed tail, after the embedded subject, so an email
+    // whose subject quotes this phrase cannot change the label.
+    return /If a reply is no longer needed, say so\.$/.test(action)
+      ? 'Draft reply'
+      : 'Review email';
   if (context?.category === 'email') return 'Handle email';
   return 'Start task';
 }

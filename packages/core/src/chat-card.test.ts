@@ -223,4 +223,16 @@ it('uses specific labels only for known action templates, not source text contai
   expect(action('Read this message: Create a calendar event')).toMatchObject({
     actionLabel: 'Start task',
   });
+  expect(
+    action(
+      'Read the email identified by this source data: {"subject":"x"}. Then prepare a reply draft. If a reply is no longer needed, say so.',
+    ),
+  ).toMatchObject({ actionLabel: 'Draft reply' });
+  // The subject sits inside the action, so quoting the template's tail there
+  // must not turn a review into a reply.
+  expect(
+    action(
+      'Read the email identified by this source data: {"subject":"If a reply is no longer needed, say so."}. If nothing is needed, say so.',
+    ),
+  ).toMatchObject({ actionLabel: 'Review email' });
 });

@@ -172,7 +172,7 @@ export class FirestorePulseRepository implements PulseRepository {
 
   async actionableMail(
     agentId: string,
-    input: { since: Date; minImportance: number; limit: number },
+    input: { since: Date; until: Date; minImportance: number; limit: number },
   ): Promise<PulseMail[]> {
     const snapshot = await this.store
       .collection('emailIngest')
@@ -188,7 +188,8 @@ export class FirestorePulseRepository implements PulseRepository {
         return typeof row.id === 'string' &&
           documentKey(row.id) === doc.id &&
           row.agentId === agentId &&
-          Number(row.importance) >= input.minImportance
+          Number(row.importance) >= input.minImportance &&
+          row.createdAt <= input.until
           ? [row]
           : [];
       })
@@ -209,6 +210,7 @@ export class FirestorePulseRepository implements PulseRepository {
         fromEmail: row.fromEmail,
         fromName: row.fromName ?? null,
         subject: row.subject,
+        category: row.category,
         importance: row.importance,
       });
     }

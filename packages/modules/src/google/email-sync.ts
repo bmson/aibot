@@ -469,6 +469,32 @@ async function reportUnauthenticatedTrustedSender(
     .catch((err) => console.error('unauthenticated-sender notice failed', err));
 }
 
+/**
+ * One arrival alert per sender per window. A sender that mails in bursts (a
+ * bank confirming three steps of one transfer, a recruiter's scheduler sending
+ * each invite separately) would otherwise buzz the phone once per message for
+ * what the owner experiences as one thing. Best-effort and per-instance, like
+ * the spoof notice above: a second instance can repeat one alert, which is the
+ * failure mode worth having over a lost one.
+ */
+const ARRIVAL_ALERT_SENDER_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const lastArrivalAlertAt = new Map<string, number>();
+
+function arrivalAlertedRecently(fromEmail: string, now = Date.now()): boolean {
+  const previous = lastArrivalAlertAt.get(fromEmail);
+  return previous !== undefined && now - previous < ARRIVAL_ALERT_SENDER_INTERVAL_MS;
+}
+
+/** Recorded only once an alert went out, so a notifier outage suppresses nothing. */
+function recordArrivalAlert(fromEmail: string, now = Date.now()): void {
+  if (lastArrivalAlertAt.size >= 500) {
+    for (const [sender, at] of lastArrivalAlertAt) {
+      if (now - at >= ARRIVAL_ALERT_SENDER_INTERVAL_MS) lastArrivalAlertAt.delete(sender);
+    }
+  }
+  lastArrivalAlertAt.set(fromEmail, now);
+}
+
 function conversationForThread(
   deps: EmailSyncDeps,
   agentId: string,
@@ -545,7 +571,12 @@ interface ForwardedIngestInput {
 
 /**
  * The deterministic heads-up for important mail, composed to read fine as both
- * a chat bubble and an SMS: three short lines, no markdown structure.
+ * a chat bubble and an SMS: at most three short lines, no markdown structure.
+ *
+ * It leads with who and what, then what the owner needs to do. The old
+ * "Important email from …" headline said the same thing about a wire
+ * confirmation and a recruiter waiting on an answer, which left the owner to
+ * open every one to find out which kind it was.
  */
 export function importantEmailNotice(
   from: string,
@@ -554,13 +585,16 @@ export function importantEmailNotice(
     category: string;
     importance: number;
     reason: string;
+    nextStep?: string;
     dates: { iso: string; what: string }[];
   },
 ): string {
   // Scoring rationale is an operator diagnostic, not a summary for the reader.
   const sender = truncateAtBoundary(from, 120) || 'Unknown sender';
   const title = truncateAtBoundary(subject, 200) || '(no subject)';
-  const lines = [`Important email from ${sender}`, `“${title}”`];
+  const lines = [`Email from ${sender}: “${title}”`];
+  const step = truncateAtBoundary(score.nextStep ?? '', 80);
+  if (step) lines.push(`Next: ${step}`);
   const dates = score.dates.slice(0, 3);
   if (dates.length > 0) {
     lines.push(
@@ -686,15 +720,25 @@ export async function processForwardedIngest(
   // beats a silent loss.
   let alerted = false;
   if (score.importance >= deps.config.EMAIL_INGEST_NOTIFY_THRESHOLD) {
-    // Ambient urgency: it still lands the moment it arrives, but quiet hours
-    // and the daily cap govern whether the phone buzzes for it.
-    alerted = await deps
-      .notifyOwner({ text: importantEmailNotice(from, subject, score), urgency: 'ambient' })
-      .then(() => true)
-      .catch((err) => {
-        console.error('email-sync: importance alert failed', err);
-        return false;
-      });
+    if (arrivalAlertedRecently(from)) {
+      // The owner was just told about this sender; the triage task is told
+      // so too, which keeps it from pinging about the follow-up either.
+      alerted = true;
+    } else {
+      // Ambient urgency: it still lands the moment it arrives, but quiet hours
+      // and the daily cap govern whether the phone buzzes for it.
+      const sender = parseSenderName(gmailHeader(msg.payload, 'From')) ?? from;
+      alerted = await deps
+        .notifyOwner({ text: importantEmailNotice(sender, subject, score), urgency: 'ambient' })
+        .then(() => {
+          recordArrivalAlert(from);
+          return true;
+        })
+        .catch((err) => {
+          console.error('email-sync: importance alert failed', err);
+          return false;
+        });
+    }
   }
 
   if (
