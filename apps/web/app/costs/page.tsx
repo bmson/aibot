@@ -68,7 +68,7 @@ export default async function CostsPage() {
       <PageHeader
         back={{ href: '/chat', label: 'Chat' }}
         title="Costs"
-        intro="See provider-reported spend, understand estimates, and update task, daily, and monthly spending caps."
+        intro="See this month’s provider charges, estimate month-end costs, and control assistant usage."
       />
 
       {parked > 0 ? (
@@ -134,6 +134,11 @@ export default async function CostsPage() {
 
       {/* Cap editing */}
       <section className="mt-6">
+        <h2 className="mb-2 text-lg font-semibold">Assistant spending limits</h2>
+        <p className="mb-3 text-sm text-muted">
+          These limits pause assistant work using its usage ledger. They do not change Google Cloud
+          billing budgets or stop hosting, storage and other cloud charges.
+        </p>
         <form action={updateCaps} className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-xs font-medium text-muted">
             Default task cap (USD)

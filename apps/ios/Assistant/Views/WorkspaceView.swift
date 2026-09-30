@@ -45,7 +45,7 @@ enum WorkspaceArea {
         case .capabilities:
             "Optional tools installed on this assistant, including anything that still needs setup."
         case .costs:
-            "Live spend, reserved work, and the limits that keep your assistant in control."
+            "This month’s charges, estimated month-end costs, and assistant usage limits."
         case .anomalies:
             "Unusual approval-policy activity that deserves a closer look before it becomes routine."
         case .improvements:
@@ -501,7 +501,7 @@ struct WorkspaceView: View {
             sectionHeading("Usage this month")
             SpendingBreakdownCard(title: "By source", rows: costs.bySource.map { ($0.source, $0.usd, $0.count) })
             SpendingBreakdownCard(title: "By model", rows: costs.byModel.map { ($0.model, $0.usd, $0.count) })
-            Button("Edit spending limits", systemImage: "slider.horizontal.3") {
+            Button("Edit assistant limits", systemImage: "slider.horizontal.3") {
                 showingCostEditor = true
             }
             .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
@@ -513,12 +513,28 @@ struct WorkspaceView: View {
             Text(report.label).font(.headline)
             Text("\(report.scope) · \(report.period) · \(report.source)").font(.caption).foregroundStyle(.secondary)
             if report.lines.isEmpty {
-                Text("Unavailable").font(.title3.weight(.semibold))
+                Text(report.includedIn != nil ? "Included in Google Cloud" : report.status == "not_configured" ? "Setup needed" : "Unavailable").font(.title3.weight(.semibold))
             } else {
                 let currencies = Dictionary(grouping: report.lines, by: \.currency)
                 ForEach(currencies.keys.sorted(), id: \.self) { code in
                     let total = currencies[code, default: []].reduce(0) { $0 + $1.net }
-                    Text(total, format: .currency(code: code).precision(.fractionLength(2...8))).font(.title3.weight(.semibold)).monospacedDigit()
+                    Text(total, format: .currency(code: code).precision(.fractionLength(2))).font(.title3.weight(.semibold)).monospacedDigit()
+                }
+                if let forecast = report.forecast {
+                    ForEach(forecast.totals, id: \.currency) { total in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Estimated month end").font(.caption).foregroundStyle(.secondary)
+                            Text(total.projected, format: .currency(code: total.currency).precision(.fractionLength(2)))
+                                .font(.title2.weight(.semibold)).monospacedDigit()
+                            Text("Average per day: \(total.dailyAverage.formatted(.currency(code: total.currency).precision(.fractionLength(2))))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 6)
+                    }
+                    Text(forecast.message).font(.caption).foregroundStyle(.secondary)
+                } else if report.status == "reported" {
+                    Text("Month-end estimate needs at least three days of reported usage.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 DisclosureGroup("Services and credits") {
                     ForEach(Array(report.lines.enumerated()), id: \.offset) { _, line in
@@ -538,6 +554,14 @@ struct WorkspaceView: View {
                 Label("Stale snapshot", systemImage: "clock.badge.exclamationmark").font(.subheadline)
             }
             Text(report.message).font(.footnote).foregroundStyle(.secondary)
+            if report.id == "google-cloud", report.status == "not_configured" {
+                Text("Enable standard usage export in Google Cloud Billing, then connect its BigQuery table and grant this installation read access. Initial data can take hours or days. Missing costs are not zero.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Link("Open Google Cloud Billing", destination: URL(string: "https://console.cloud.google.com/billing")!)
+                    .font(.subheadline)
+                Link("Export setup guide", destination: URL(string: "https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery-setup")!)
+                    .font(.subheadline)
+            }
             if let fetched = report.fetchedAt {
                 Text("Fetched \(fetched)").font(.caption2).foregroundStyle(.secondary)
             }
@@ -1983,12 +2007,12 @@ private struct CostLimitsEditor: View {
                 TextField("Monthly limit", text: $monthly)
                     .keyboardType(.decimalPad)
             } header: {
-                Text("Spending limits in USD")
+                Text("Assistant limits in USD")
             } footer: {
-                Text("Limits must be between $0.01 and $10,000. Blank fields keep their current value.")
+                Text("These limits pause assistant work using its usage ledger. They do not cap Google Cloud billing or stop hosting and storage charges. Limits must be between $0.01 and $10,000. Blank fields keep their current value.")
             }
         }
-        .navigationTitle("Spending limits")
+        .navigationTitle("Assistant limits")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ModelProviderPorts } from './model-providers.js';
 import {
   type BillingPorts,
+  billingForecast,
   getProviderBilling,
   googleBillingQuery,
   type ProviderBilling,
@@ -251,4 +252,62 @@ it('does not reuse a snapshot when the selected Google Cloud scope changes', asy
   p.config.GCP_PROJECT = 'different-project';
   await getProviderBilling(p);
   expect(p.fetch).toHaveBeenCalledTimes(2);
+});
+
+describe('month-end run rate', () => {
+  const report: ProviderBilling = {
+    ...base,
+    status: 'reported',
+    latestUsageAt: '2026-09-16T00:00:00Z',
+    fetchedAt: '2026-09-20T00:00:00Z',
+    lines: [
+      { service: 'Vertex AI', detail: '', currency: 'USD', cost: 40, credits: -10, net: 30 },
+      { service: 'Cloud Run', detail: '', currency: 'EUR', cost: 15, credits: 0, net: 15 },
+    ],
+  };
+
+  it('uses the Google usage horizon, credits and separate currencies', () => {
+    const forecast = billingForecast(report);
+    expect(forecast?.observedDays).toBe(15);
+    expect(forecast?.totals).toEqual([
+      { currency: 'USD', spent: 30, dailyAverage: 2, projected: 60 },
+      { currency: 'EUR', spent: 15, dailyAverage: 1, projected: 30 },
+    ]);
+  });
+
+  it('withholds estimates for stale, missing, early or wrong-month data', () => {
+    for (const change of [
+      { status: 'stale' as const },
+      { latestUsageAt: null },
+      { latestUsageAt: '2026-09-02T00:00:00Z' },
+      { latestUsageAt: '2026-08-31T00:00:00Z' },
+      { latestUsageAt: '2026-10-02T00:00:00Z' },
+      { lines: [] },
+    ])
+      expect(billingForecast({ ...report, ...change })).toBeUndefined();
+  });
+
+  it('uses the provider fetch horizon and calendar month length including leap years', () => {
+    const forecast = billingForecast({
+      ...report,
+      id: 'openrouter',
+      period: '2024-02',
+      fetchedAt: '2024-02-16T00:00:00Z',
+    });
+    expect(forecast?.daysInMonth).toBe(29);
+    expect(forecast?.totals[0]?.projected).toBe(58);
+  });
+});
+
+it('marks covered Vertex billing as included without duplicating Google charges', async () => {
+  const p = ports();
+  p.models.config.VERTEX_PROJECT = 'assistant';
+  p.fetch = vi.fn(async () => response({ jobComplete: true, rows: [row()] }));
+  const reports = await getProviderBilling(p);
+  const vertex = reports.find((report) => report.id === 'vertex');
+  expect(vertex?.status).toBe('included');
+  expect(vertex?.includedIn).toBe('google-cloud');
+  expect(vertex?.lines).toEqual([]);
+  expect(vertex?.forecast).toBeUndefined();
+  expect(reports[0]?.forecast?.totals[0]?.spent).toBe(7);
 });

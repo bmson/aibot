@@ -1770,6 +1770,23 @@ struct WorkspaceProviderBilling: Codable, Identifiable, Sendable {
     let latestExportAt: String?
     let latestUsageAt: String?
     let lines: [WorkspaceBillingLine]
+    var includedIn: String? = nil
+    var forecast: WorkspaceBillingForecast? = nil
+}
+
+struct WorkspaceBillingForecast: Codable, Sendable {
+    let through: String
+    let observedDays: Double
+    let daysInMonth: Double
+    let totals: [WorkspaceBillingForecastTotal]
+    let message: String
+}
+
+struct WorkspaceBillingForecastTotal: Codable, Sendable {
+    let currency: String
+    let spent: Double
+    let dailyAverage: Double
+    let projected: Double
 }
 
 struct WorkspaceBillingLine: Codable, Sendable {
