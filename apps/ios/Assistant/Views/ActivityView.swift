@@ -13,12 +13,12 @@ struct ActivityView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var filter: ActivityFilter = .all
     @State private var showingArchived = false
     @State private var activityActionInFlight: String?
     @State private var budgetItem: ActivityItem?
+    @State private var itemPendingCancellation: ActivityItem?
     @State private var budgetText = ""
 
     var body: some View {
@@ -63,24 +63,18 @@ struct ActivityView: View {
         }
         .navigationTitle("Activity")
         .assistantSubmenuChrome()
+        .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    showingArchived.toggle()
-                    if showingArchived { Task { await model.refreshArchivedActivity() } }
-                } label: {
-                    Label(
-                        showingArchived ? "Current activity" : "Archived activity",
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button(
+                        showingArchived ? "Show current activity" : "Show archived activity",
                         systemImage: showingArchived ? "tray.and.arrow.up" : "archivebox"
-                    )
-                }
-                .accessibilityHint(
-                    showingArchived
-                        ? "Shows activity that is still current"
-                        : "Shows hidden completed activity"
-                )
-                if !showingArchived {
-                    Menu {
+                    ) {
+                        showingArchived.toggle()
+                        if showingArchived { Task { await model.refreshArchivedActivity() } }
+                    }
+                    if !showingArchived {
                         Button("Archive old activity", systemImage: "archivebox") {
                             activityActionInFlight = "archive-old"
                             Task {
@@ -88,9 +82,10 @@ struct ActivityView: View {
                                 activityActionInFlight = nil
                             }
                         }
-                    } label: {
-                        Label("More activity actions", systemImage: "ellipsis.circle")
+                        .disabled(activityActionInFlight != nil)
                     }
+                } label: {
+                    Label("Activity actions", systemImage: "ellipsis")
                 }
             }
         }
@@ -119,6 +114,21 @@ struct ActivityView: View {
             Button("Cancel", role: .cancel) { budgetItem = nil }
         } message: {
             Text("The task resumes from its saved checkpoint; completed actions are not repeated.")
+        }
+        .confirmationDialog(
+            "Stop task?",
+            isPresented: Binding(
+                get: { itemPendingCancellation != nil },
+                set: { if !$0 { itemPendingCancellation = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: itemPendingCancellation
+        ) { item in
+            Button("Stop task", role: .destructive) {
+                updateActivity(item, action: "cancel")
+            }
+        } message: { item in
+            Text("This cancels “\(item.displayTitle)”.")
         }
         .sensoryFeedback(.selection, trigger: filter)
     }
@@ -176,7 +186,7 @@ struct ActivityView: View {
     }
 
     private func activityCard(_ item: ActivityItem) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
             activityHeader(item)
 
             if !item.displayProgress.isEmpty {
@@ -187,95 +197,77 @@ struct ActivityView: View {
                     .lineLimit(usesAccessibilityLayout ? nil : 3)
             }
 
-            HStack(alignment: .center, spacing: 8) {
-                activityMetadata(item)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                if !showingArchived && isTerminal(item) {
-                    Spacer(minLength: 0)
-                    Button { updateActivity(item, action: "archive") } label: {
-                        if activityActionInFlight == item.id {
-                            ProgressView().controlSize(.small).frame(width: 44, height: 44)
-                        } else {
-                            Label("Archive \(item.displayTitle)", systemImage: "archivebox")
-                                .labelStyle(.iconOnly).frame(width: 44, height: 44)
-                        }
-                    }
-                    .foregroundStyle(AssistantTheme.inkMuted(for: colorScheme))
-                    .buttonStyle(AssistantTactileButtonStyle(reduceMotion: reduceMotion))
-                    .disabled(activityActionInFlight != nil)
-                    .accessibilityLabel("Archive \(item.displayTitle)")
+            Divider()
+            HStack(alignment: .bottom, spacing: AssistantTheme.actionSpacing) {
+                VStack(alignment: .leading, spacing: AssistantTheme.actionSpacing) {
+                    activityMetadata(item)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    activityPrimaryActions(item)
                 }
-            }
-
-            if showingArchived {
-                Button {
-                    updateActivity(item, action: "restore")
-                } label: {
-                    activityActionLabel(
-                        item,
-                        title: "Restore to activity",
-                        icon: "tray.and.arrow.up"
-                    )
-                }
-                .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                .disabled(activityActionInFlight != nil)
-            } else {
-                if item.hasPendingApproval {
-                    Button {
-                        model.present(.approvals)
-                    } label: {
-                        Label("Review approval", systemImage: "checkmark.shield")
-                    }
-                    .buttonStyle(AssistantActionButtonStyle(kind: .primary))
-                    .tint(AssistantTheme.warning(for: colorScheme))
-                }
-
-                if !isTerminal(item) || item.stuckWaiting == true || item.hasActiveAutonomy == true {
-                    AssistantFlowLayout(spacing: 9) {
-                        if item.status == "needs_attention" {
-                            if item.progress.hasPrefix("budget: task budget") {
-                                Button {
-                                    budgetItem = item
-                                    budgetText = suggestedBudget(for: item)
-                                } label: {
-                                    Label("Raise budget", systemImage: "dollarsign.arrow.circlepath")
-                                }
-                                .buttonStyle(AssistantActionButtonStyle(kind: .primary))
-                                .disabled(activityActionInFlight != nil)
-                            } else {
-                                actionButton(item, title: "Retry", icon: "arrow.clockwise", action: "retry")
-                            }
-                        } else if item.stuckWaiting == true {
-                            actionButton(item, title: "Retry", icon: "arrow.clockwise", action: "retry")
-                        }
-
-                        if item.hasActiveAutonomy == true {
-                            actionButton(
-                                item,
-                                title: "Revoke autonomy",
-                                icon: "hand.raised",
-                                action: "revoke-autonomy"
-                            )
-                        }
-
-                        // Calling a task off is the one action here that stops
-                        // work for good: it goes last and asks twice, with the
-                        // same words as the web and the chat's spending card.
-                        if !isTerminal(item) {
-                            AssistantConfirmationButton("Stop task", confirmationTitle: "Stop task?",
-                                systemImage: "xmark.circle", hint: "Cancels this task.") {
-                                activityActionInFlight = item.id
-                                _ = await model.updateActivity(item, action: "cancel")
-                                activityActionInFlight = nil
-                            }
-                            .disabled(activityActionInFlight != nil)
-                        }
-                    }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if !showingArchived {
+                    activityActions(item)
                 }
             }
         }
         .assistantCard(in: colorScheme)
+    }
+
+    @ViewBuilder
+    private func activityPrimaryActions(_ item: ActivityItem) -> some View {
+        if showingArchived || item.hasPendingApproval || item.status == "needs_attention" || item.stuckWaiting == true {
+            AssistantFlowLayout(spacing: AssistantTheme.actionSpacing) {
+                if showingArchived {
+                    actionButton(item, title: "Restore", icon: "tray.and.arrow.up", action: "restore")
+                } else {
+                    if item.hasPendingApproval {
+                        Button { model.present(.approvals) } label: {
+                            Label("Review approval", systemImage: "checkmark.shield")
+                        }
+                        .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
+                        .disabled(activityActionInFlight != nil)
+                    }
+                    if item.status == "needs_attention" && item.progress.hasPrefix("budget: task budget") {
+                        Button {
+                            budgetItem = item
+                            budgetText = suggestedBudget(for: item)
+                        } label: {
+                            Label("Raise budget", systemImage: "dollarsign.arrow.circlepath")
+                        }
+                        .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
+                        .disabled(activityActionInFlight != nil)
+                    } else if item.status == "needs_attention" || item.stuckWaiting == true {
+                        actionButton(item, title: "Retry", icon: "arrow.clockwise", action: "retry")
+                    }
+                }
+            }
+        }
+    }
+
+    private func activityActions(_ item: ActivityItem) -> some View {
+        Menu {
+            if isTerminal(item) {
+                Button("Archive", systemImage: "archivebox") {
+                    updateActivity(item, action: "archive")
+                }
+            }
+            if item.hasActiveAutonomy == true {
+                Button("Revoke autonomy", systemImage: "hand.raised") {
+                    updateActivity(item, action: "revoke-autonomy")
+                }
+            }
+            if !isTerminal(item) {
+                Button("Stop task", systemImage: "xmark.circle", role: .destructive) {
+                    itemPendingCancellation = item
+                }
+            }
+        } label: {
+            AssistantActionMenuLabel(isUpdating: activityActionInFlight == item.id)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Actions for \(item.displayTitle)")
+        .disabled(activityActionInFlight != nil)
     }
 
     @ViewBuilder
@@ -319,7 +311,7 @@ struct ActivityView: View {
         Button { updateActivity(item, action: action) } label: {
             activityActionLabel(item, title: title, icon: icon)
         }
-        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
+        .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
         .disabled(activityActionInFlight != nil)
     }
 

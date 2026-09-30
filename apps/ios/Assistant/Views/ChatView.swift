@@ -51,19 +51,6 @@ enum PullMenuMotion {
     /// menu motion.
     static let composerSurfaceBottomSpacing: CGFloat = 12
 
-    /// The sheet silhouette eases in with the first part of the reveal. A
-    /// binary jump makes a slow finger pull look like the surface snaps into a
-    /// different component before the menu has actually opened.
-    static func sheetCornerRadius(
-        isActive: Bool,
-        progress: CGFloat = 1,
-        fullRadius: CGFloat
-    ) -> CGFloat {
-        guard isActive else { return 0 }
-        let eased = min(max(progress / 0.18, 0), 1)
-        return max(fullRadius, 0) * eased
-    }
-
     /// Returns a bottom-up row rank for a row-major collection. Items in the
     /// same visual row share a rank; zero is the first row to become visible.
     static func bottomUpFadeRank(
@@ -332,9 +319,9 @@ struct ChatView: View {
     @GestureState private var menuOpeningDragActive = false
     @GestureState private var menuClosingDragActive = false
     @State private var menuOpen = false
-    // Radius is a sheet state, not a reveal-progress effect. It switches on
-    // at the first real pull point and stays on until a close spring finishes.
-    @State private var menuSurfaceRounded = false
+    // Hold transient overlays back from the first pull until the close
+    // spring finishes, including when a closing gesture is reversed.
+    @State private var menuSurfaceActive = false
     @State private var menuDetentReached = false
     @State private var menuDetentFeedback = 0
     @State private var menuAutonomyFeedback = 0
@@ -427,14 +414,13 @@ struct ChatView: View {
                     // chat region. Respecting the keyboard safe area lets the
                     // green window backing show through its rounded corners.
                     .background(stageBackdrop.ignoresSafeArea(.container))
+                    // Resolve the device's corner geometry before offsetting
+                    // the sheet. Its silhouette stays rounded through opening,
+                    // closing, and reversals instead of tweening from a square.
                     .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: PullMenuMotion.sheetCornerRadius(
-                                isActive: menuSurfaceRounded,
-                                progress: menuSurfaceProgress,
-                                fullRadius: menuSheetCornerRadius
-                            ),
-                            style: .continuous
+                        ConcentricRectangle(
+                            corners: .concentric(minimum: .fixed(menuSheetCornerRadius)),
+                            isUniform: true
                         )
                     )
                     .shadow(
@@ -915,7 +901,7 @@ struct ChatView: View {
         )
     }
 
-    /// Corner radius the lifted conversation sheet rounds to at full reveal.
+    /// Minimum curve for the lifted sheet; device concentricity can increase it.
     private var menuSheetCornerRadius: CGFloat { 34 }
 
     private var menuSurfaceProgress: CGFloat {
@@ -1004,7 +990,7 @@ struct ChatView: View {
                     var transaction = Transaction(animation: nil)
                     transaction.disablesAnimations = true
                     withTransaction(transaction) {
-                        menuSurfaceRounded = true
+                        menuSurfaceActive = true
                     }
                 }
 
@@ -1136,7 +1122,7 @@ struct ChatView: View {
             // The frame already includes the bottom safe-area allowance. Bleed
             // upward only through the sheet's rounded corner so the window
             // backing cannot show through that curve.
-            .padding(.top, -menuSheetCornerRadius)
+            .padding(.top, -max(menuSheetCornerRadius, safeAreaTopInset, deviceBottomSafeAreaInset))
             .ignoresSafeArea(.container, edges: .bottom)
             .allowsHitTesting(false)
         }
@@ -1609,7 +1595,7 @@ struct ChatView: View {
             menuPullDistance = currentRevealDistance
             menuCloseDragDistance = 0
             if open {
-                menuSurfaceRounded = true
+                menuSurfaceActive = true
             }
         }
 
@@ -1619,7 +1605,7 @@ struct ChatView: View {
             menuPullDistance = open ? menuRevealHeight : 0
         } completion: {
             // A close can be reversed before its spring settles. Only clear the
-            // radius when the surface is still closed and no new pull owns it.
+            // presentation gate when the surface is closed and no new pull owns it.
             guard !menuOpen,
                   !menuPullActive,
                   visibleMenuRevealDistance <= 0.5
@@ -1628,7 +1614,7 @@ struct ChatView: View {
             var transaction = Transaction(animation: nil)
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                menuSurfaceRounded = false
+                menuSurfaceActive = false
             }
         }
     }
@@ -2249,7 +2235,7 @@ struct ChatView: View {
         // banner stayed up, which is why it was sometimes missing.
         !menuPullActive
             && !menuOpen
-            && !menuSurfaceRounded
+            && !menuSurfaceActive
             && !isAtBottom
             && !model.messages.isEmpty
     }

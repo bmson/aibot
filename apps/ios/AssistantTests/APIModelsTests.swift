@@ -2204,29 +2204,6 @@ final class APIModelsTests: XCTestCase {
             137,
             accuracy: 0.001
         )
-        XCTAssertEqual(
-            PullMenuMotion.sheetCornerRadius(isActive: false, fullRadius: 34),
-            0
-        )
-        XCTAssertEqual(
-            PullMenuMotion.sheetCornerRadius(isActive: true, fullRadius: 34),
-            34
-        )
-        XCTAssertEqual(
-            PullMenuMotion.sheetCornerRadius(isActive: true, fullRadius: -10),
-            0
-        )
-        XCTAssertEqual(
-            PullMenuMotion.sheetCornerRadius(isActive: true, progress: 0.09, fullRadius: 34),
-            17,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            PullMenuMotion.sheetCornerRadius(isActive: true, progress: 0, fullRadius: 34),
-            0,
-            accuracy: 0.001
-        )
-
         // Normal layouts pair the destinations into rows. The bottom row
         // appears first, and every destination in a row shares a fade rank.
         // Nine destinations leave the last row holding More on its own.

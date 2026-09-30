@@ -10,247 +10,191 @@ import SwiftUI
 /// drift apart. Nothing here formats a date or infers a fact.
 struct PeopleView: View {
     @EnvironmentObject private var model: AppModel
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var query = ""
-    @State private var showsConnections = true
-    @State private var activeMapID: String?
     @State private var showsVisualGraph = false
     @State private var showsPersonCreator = false
 
-    /// Birthdays inside this window get their own section at the top.
-    private let comingUpWindowDays = 30
-
     private var matches: [PersonSummary] {
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return model.people }
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return model.people.filter { person in
-            person.name.lowercased().contains(needle)
-                || person.relationship.lowercased().contains(needle)
-                || (person.location?.lowercased().contains(needle) ?? false)
-        }
+            needle.isEmpty || person.name.localizedStandardContains(needle)
+                || person.relationship.localizedStandardContains(needle)
+                || (person.location?.localizedStandardContains(needle) ?? false)
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    /// Family, Work, Friends, then everyone not yet placed. The order is fixed
-    /// rather than alphabetical so the list does not reshuffle as people move
-    /// between buckets.
     private var groups: [PersonGroupSection] {
-        let order = ["family", "work", "friends", "other"]
-        return order.compactMap { key in
-            let people = matches.filter { $0.group == key }
+        ["family", "work", "friends", "other"].compactMap { key in
+            let people = matches.filter {
+                key == "other" ? !["family", "work", "friends"].contains($0.group) : $0.group == key
+            }
             guard !people.isEmpty else { return nil }
-            // "Other" is a gap in what we know, not a group someone belongs to,
-            // so the server sends no label for it and the heading says so.
             let label = people.first?.groupLabel ?? ""
-            return PersonGroupSection(
-                label: label.isEmpty ? "Not placed yet" : label,
-                people: people
-            )
+            return PersonGroupSection(label: key == "other" || label.isEmpty ? "Other people" : label, people: people)
         }
     }
 
     private var comingUp: [PersonSummary] {
-        model.people
-            .filter { ($0.birthdayDaysUntil ?? .max) <= comingUpWindowDays }
-            .sorted { ($0.birthdayDaysUntil ?? .max) < ($1.birthdayDaysUntil ?? .max) }
+        model.people.filter {
+            guard let days = $0.birthdayDaysUntil else { return false }
+            return (0...30).contains(days)
+        }.sorted {
+            let first = $0.birthdayDaysUntil ?? .max
+            let second = $1.birthdayDaysUntil ?? .max
+            return first == second
+                ? $0.name.localizedStandardCompare($1.name) == .orderedAscending
+                : first < second
+        }
     }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if !model.peopleLoaded {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, minHeight: 220)
-                    } else if model.people.isEmpty {
-                        emptyDirectory
-                    } else {
-                        Button { showsVisualGraph = true } label: {
-                            Label("Open relationship graph", systemImage: "circle.hexagongrid")
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                        }
-                        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-                        .accessibilityIdentifier("assistant.people.visual-graph")
-                        Picker("People view", selection: $showsConnections) {
-                            Text("Connections").tag(true)
-                            Text("Directory").tag(false)
-                        }
-                        .pickerStyle(.segmented)
-                        .id("people-top")
-                        if showsConnections {
-                            PeopleConnectionsExplorer(people: matches, query: $query) { id in
-                                activeMapID = id
-                                proxy.scrollTo("people-top", anchor: .top)
+        AssistantSettingsList {
+            if !model.peopleLoaded {
+                AssistantLoadingState(title: "Loading people…")
+            } else if model.people.isEmpty {
+                Section {
+                    AssistantEmptyState("No people yet", systemImage: "person.2",
+                        description: "Add someone here, or mention them in a conversation.")
+                    Button("Add person", systemImage: "plus") { showsPersonCreator = true }
+                }
+            } else {
+                if !comingUp.isEmpty && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Section {
+                        DisclosureGroup {
+                            ForEach(comingUp) { person in
+                                NavigationLink(value: AssistantDestination.person(id: person.id)) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(person.name).font(.subheadline.weight(.semibold))
+                                        if let birthday = person.birthday {
+                                            Text(birthday).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .padding(.vertical, 4)
+                                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                }
                             }
-                        } else {
-                            content
+                        } label: {
+                            Label("Upcoming birthdays (\(comingUp.count))", systemImage: "gift")
+                                .font(.subheadline)
                         }
                     }
                 }
-                .padding(16)
-                .padding(.bottom, 28)
-                .frame(maxWidth: isLandscape ? 760 : .infinity, alignment: .leading)
-            }
-            .fullScreenCover(isPresented: $showsVisualGraph) {
-                NavigationStack { RelationshipGraphScreen() }
-            }
-            .navigationTitle("People")
-            .assistantSubmenuChrome()
-            // Adding someone used to mean switching to Memory; the web
-            // directory offers it right here.
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Add person", systemImage: "person.badge.plus") {
-                        showsPersonCreator = true
+
+                if matches.isEmpty {
+                    ContentUnavailableView.search(text: query)
+                } else {
+                    ForEach(groups) { group in
+                        Section {
+                            ForEach(group.people) { person in
+                                NavigationLink(value: AssistantDestination.person(id: person.id)) {
+                                    personRow(person)
+                                }
+                            }
+                        } header: {
+                            HStack {
+                                Text(group.label)
+                                Spacer()
+                                Text("\(group.people.count)").monospacedDigit()
+                            }
+                        }
                     }
                 }
             }
-            .sheet(isPresented: $showsPersonCreator) {
-                NavigationStack { PersonEditor(person: nil) }
-            }
-            .searchable(text: $query, prompt: "Name, relationship, or place")
-            .contentMargins(.bottom, 72, for: .scrollContent)
-            .refreshable {
-                await model.loadPeople()
-                if showsConnections, let id = activeMapID { await model.loadPersonCard(id: id) }
-            }
-            .task { if !model.peopleLoaded { await model.loadPeople() } }
         }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        // Birthdays are the one time-sensitive thing here, so they lead.
-        if !comingUp.isEmpty && query.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionHeading("Coming up", count: comingUp.count)
-                ForEach(comingUp) { person in
-                    NavigationLink(value: AssistantDestination.person(id: person.id)) {
-                        comingUpRow(person)
+        .navigationTitle("People")
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    NavigationLink {
+                        PeopleConnectionsScreen()
+                    } label: {
+                        Label("Explore connections", systemImage: "person.2")
                     }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-
-        if matches.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Nobody matches “\(query)”.").font(.headline)
-                Text("Try a name, a relationship, or a place.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .assistantPanel(in: colorScheme)
-        }
-
-        ForEach(groups) { group in
-            VStack(alignment: .leading, spacing: 10) {
-                sectionHeading(group.label, count: group.people.count)
-                ForEach(group.people) { person in
-                    NavigationLink(value: AssistantDestination.person(id: person.id)) {
-                        personRow(person)
+                    Button("Relationship graph", systemImage: "circle.hexagongrid") {
+                        showsVisualGraph = true
                     }
-                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("assistant.people.visual-graph")
+                } label: {
+                    Label("People actions", systemImage: "ellipsis")
                 }
+                .disabled(model.people.isEmpty)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Add person", systemImage: "plus") { showsPersonCreator = true }
             }
         }
-    }
-
-    private var emptyDirectory: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("No people yet").font(.headline)
-            Text(
-                "Names mentioned in conversations become contacts automatically, "
-                    + "or add someone from Memory."
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        .sheet(isPresented: $showsPersonCreator) {
+            NavigationStack { PersonEditor(person: nil) }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .assistantPanel(in: colorScheme)
-    }
-
-    private func comingUpRow(_ person: PersonSummary) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "calendar")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AssistantTheme.accent(for: colorScheme))
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(person.name).font(.subheadline.weight(.semibold))
-                if let birthday = person.birthday {
-                    Text(birthday).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
+        .fullScreenCover(isPresented: $showsVisualGraph) {
+            NavigationStack { RelationshipGraphScreen() }
         }
-        .assistantCard(
-            in: colorScheme,
-            surface: AssistantTheme.accent(for: colorScheme).opacity(0.07),
-            strokeTint: AssistantTheme.accent(for: colorScheme).opacity(0.28)
-        )
+        .searchable(text: $query, prompt: "Name, relationship, or place")
+        .refreshable { await model.loadPeople() }
+        .task { if !model.peopleLoaded { await model.loadPeople() } }
     }
 
     private func personRow(_ person: PersonSummary) -> some View {
-        HStack(spacing: 12) {
-            PersonInitialsBadge(initials: person.initials, size: 40)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(person.name).font(.headline)
-                    if person.trust == "unknown" {
-                        Text("Unverified")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 5)
-                            .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
-                    }
+        HStack(alignment: .center, spacing: AssistantTheme.cardContentSpacing) {
+            PersonInitialsBadge(initials: person.initials)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(person.name)
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !person.relationship.isEmpty {
+                    Text(person.relationship)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                // Each line is dropped when its source is empty, so a person
-                // the assistant barely knows shows a name and nothing invented.
-                Text(person.relationship.isEmpty ? "Relationship not set" : person.relationship)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let detail = secondaryLine(person) {
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                let details = [person.location, person.lastContact,
+                    person.trust == "unknown" ? "Unverified" : nil]
+                    .compactMap { $0 }.filter { !$0.isEmpty }
+                if !details.isEmpty {
+                    Text(details.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .assistantCard(in: colorScheme)
+        .padding(.vertical, 4)
+        .frame(minHeight: 56)
+        .contentShape(Rectangle())
+    }
+}
+
+/// Connection exploration stays available without taking over the directory.
+private struct PeopleConnectionsScreen: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var query = ""
+    @State private var focusedPersonID: String?
+
+    private var matches: [PersonSummary] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.people.filter { needle.isEmpty || $0.name.localizedStandardContains(needle)
+            || $0.relationship.localizedStandardContains(needle)
+            || ($0.location?.localizedStandardContains(needle) ?? false) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    /// Location, last contact, and birthday joined into one quiet line.
-    private func secondaryLine(_ person: PersonSummary) -> String? {
-        let parts = [person.location, person.lastContact, person.birthday].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    private func sectionHeading(_ title: String, count: Int? = nil) -> some View {
-        HStack(spacing: 7) {
-            Text(title).font(.headline)
-            if let count {
-                Text("\(count)")
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 5)
-                    .background(AssistantTheme.sunken(for: colorScheme), in: Capsule())
-            }
+    var body: some View {
+        ScrollView {
+            PeopleConnectionsExplorer(people: matches, query: $query) { focusedPersonID = $0 }
+                .padding(AssistantTheme.compactGutter)
+                .padding(.bottom, 28)
+        }
+        .navigationTitle("Connections")
+        .assistantSubmenuChrome()
+        .toolbarBackground(.visible, for: .navigationBar)
+        .searchable(text: $query, prompt: "Name, relationship, or place")
+        .refreshable {
+            await model.loadPeople()
+            if let id = focusedPersonID { await model.loadPersonCard(id: id) }
         }
     }
-
-    private var isLandscape: Bool { verticalSizeClass == .compact }
 }
 
 /// One heading in the directory. A named type rather than a tuple so `ForEach`
@@ -606,13 +550,19 @@ struct PersonCardScreen: View {
         .navigationTitle(card?.name ?? "Person")
         .navigationBarTitleDisplayMode(.inline)
         .assistantSubmenuChrome()
-        // Renaming someone, fixing their relationship or merging a duplicate
-        // used to live only in Memory, so the directory could show you a person
-        // it gave you no way to correct.
+        .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Manage", systemImage: "person.crop.circle") { showsManage = true }
-                    .disabled(card == nil)
+                Menu {
+                    Button("Edit person", systemImage: "pencil") { showsManage = true }
+                    Button(card?.birthday == nil ? "Add birthday" : "Edit birthday", systemImage: "calendar") {
+                        showsDates = true
+                    }
+                    Button("Explore relationships", systemImage: "circle.hexagongrid") { showsTree = true }
+                } label: {
+                    Label("Person actions", systemImage: "ellipsis")
+                }
+                .disabled(card == nil)
             }
         }
         .sheet(isPresented: $showsManage) {
@@ -642,16 +592,8 @@ struct PersonCardScreen: View {
     @ViewBuilder
     private func cardContent(_ card: PersonCard) -> some View {
         identity(card)
-        HStack {
-            Button(card.birthday == nil ? "Add birthday" : "Edit birthday", systemImage: "calendar") { showsDates = true }
-            Spacer(minLength: 4)
-            Button("Explore graph", systemImage: "point.3.connected.trianglepath.dotted") { showsTree = true }
-        }
-        .font(.subheadline)
-        .buttonStyle(AssistantActionButtonStyle(kind: .secondary))
-
         if card.birthday != nil || !card.howWeMet.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
                 if let birthday = card.birthday {
                     detailRow(icon: "gift", label: "Birthday", value: birthday)
                 }
@@ -670,13 +612,9 @@ struct PersonCardScreen: View {
         let groups = PersonRelationGroup.group(card.relations, personName: card.name)
         let family = groups.filter { !$0.roles.isEmpty }
         let other = groups.filter { $0.roles.isEmpty }
-        VStack(alignment: .leading, spacing: 10) {
-            sectionHeading("Relationships", count: family.count)
-            if family.isEmpty {
-                emptyNote(
-                    "No family relationships are identified here yet. Other recorded connections appear below."
-                )
-            } else {
+        if !family.isEmpty {
+            VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
+                sectionHeading("Relationships", count: family.count)
                 ForEach(family) { group in
                     PersonRelationGroupCard(group: group) { inspectingEvidence = $0 }
                 }
@@ -684,7 +622,7 @@ struct PersonCardScreen: View {
         }
 
         if !other.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
                 sectionHeading("Other people mentioned", count: other.count)
                 ForEach(other) { group in
                     PersonRelationGroupCard(group: group) { inspectingEvidence = $0 }
@@ -693,7 +631,7 @@ struct PersonCardScreen: View {
         }
 
         if !card.connections.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
                 sectionHeading("Also connected", count: card.connections.count)
                 ForEach(card.connections) { connection in
                     HStack(alignment: .top, spacing: 10) {
@@ -708,11 +646,9 @@ struct PersonCardScreen: View {
             }
         }
 
-        VStack(alignment: .leading, spacing: 10) {
-            sectionHeading("Recently", count: card.events.count)
-            if card.events.isEmpty {
-                emptyNote("Nothing has been recorded about time spent with \(card.name).")
-            } else {
+        if !card.events.isEmpty {
+            VStack(alignment: .leading, spacing: AssistantTheme.cardContentSpacing) {
+                sectionHeading("Recently", count: card.events.count)
                 ForEach(card.events) { event in
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "sparkles")
@@ -762,12 +698,15 @@ struct PersonCardScreen: View {
     }
 
     private func identity(_ card: PersonCard) -> some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: AssistantTheme.cardContentSpacing) {
             PersonInitialsBadge(initials: card.initials, size: 56)
             VStack(alignment: .leading, spacing: 5) {
                 Text(card.name).font(.title3.weight(.semibold))
-                Text(identityLine(card)).font(.caption).foregroundStyle(.secondary)
-                HStack(spacing: 6) {
+                if !identityLine(card).isEmpty {
+                    Text(identityLine(card)).font(.subheadline).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                AssistantFlowLayout(spacing: AssistantTheme.actionSpacing) {
                     if !card.groupLabel.isEmpty {
                         Text(card.groupLabel)
                             .font(.caption2.weight(.medium))
@@ -794,7 +733,7 @@ struct PersonCardScreen: View {
 
     private func identityLine(_ card: PersonCard) -> String {
         let parts = [
-            card.relationship.isEmpty ? "Relationship not set" : card.relationship,
+            card.relationship.isEmpty ? nil : card.relationship,
             card.location,
             card.lastContact,
         ].compactMap { $0 }
@@ -808,22 +747,13 @@ struct PersonCardScreen: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                Text(label.uppercased())
+                Text(label)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Text(value).font(.subheadline).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
         }
-    }
-
-    private func emptyNote(_ text: String) -> some View {
-        Text(text)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .assistantPanel(in: colorScheme)
     }
 
     private func sectionHeading(_ title: String, count: Int? = nil) -> some View {

@@ -157,7 +157,7 @@ struct VoiceProfileEditor: View {
             .listRowBackground(AssistantTheme.raised(for: colorScheme))
         }
         .scrollContentBackground(.hidden)
-        .assistantSubmenuChrome()
+        .toolbarBackground(.visible, for: .navigationBar)
         .navigationTitle("Writing voice")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
