@@ -1983,9 +1983,11 @@ final class AppModel: ObservableObject {
 
     func approveAndRemember(id: String) async -> Bool {
         guard let client else { return false }
-        return await performApprovalMutation(id: id, status: "approved") {
+        let succeeded = await performApprovalMutation(id: id, status: "approved") {
             try await client.approveAndRemember(id: id)
         }
+        if succeeded { await refreshWorkspace(reportFailure: false) }
+        return succeeded
     }
 
     func editAndApprove(_ item: PendingApproval, payload: JSONValue) async -> Bool {

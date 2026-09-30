@@ -525,13 +525,13 @@ struct MessageBubble: View {
                 }
             }
             if let rememberLabel, let rememberApproval {
-                AssistantConfirmationButton(rememberLabel, confirmationTitle: "Save standing approval?",
-                    systemImage: "checkmark.shield", kind: .neutral,
-                    hint: "Approves this action and saves the permission described above.", compact: true, fillsWidth: true) {
+                AssistantAlwaysApproveButton(scope: rememberLabel, fillsWidth: true) {
+                    guard !decidingApproval else { return }
                     decidingApproval = true
                     _ = await rememberApproval(approvalId)
                     decidingApproval = false
                 }
+                .accessibilityIdentifier("assistant.chat.\(approvalId).alwaysApprove")
             }
         }
         .id(approvalId)

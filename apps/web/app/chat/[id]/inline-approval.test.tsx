@@ -29,7 +29,8 @@ describe('standing approval option in chat', () => {
           onResolve={() => {}}
         />,
       );
-      expect(html.includes(label)).toBe(offered);
+      expect(html.includes('Always approve')).toBe(offered);
+      expect(html.includes(label)).toBe(false);
     },
   );
 });

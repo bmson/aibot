@@ -21,6 +21,7 @@ import {
   denyApproval,
   editAndApprove,
 } from '@/app/approvals/actions';
+import { AlwaysApproveButton } from '@/app/approvals/always-approve-button';
 import {
   btn,
   cardBodyClass,
@@ -219,14 +220,7 @@ export function ApprovalCard({
               action={approveAndRemember.bind(null, approval.id)}
               className="col-span-2 sm:col-auto"
             >
-              <ConfirmButton
-                variant="outline"
-                pendingLabel="Saving…"
-                confirmLabel="Confirm standing rule"
-                className="w-full sm:w-auto"
-              >
-                {approval.rememberLabel}
-              </ConfirmButton>
+              <AlwaysApproveButton scope={approval.rememberLabel} className="w-full sm:w-auto" />
             </form>
           ) : null}
         </div>
