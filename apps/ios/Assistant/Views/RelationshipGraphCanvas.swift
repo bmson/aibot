@@ -49,8 +49,8 @@ struct GraphCanvasCommand: Equatable {
 /// It behaves the way Obsidian's graph does, because that is the model the
 /// owner already has in their hands: the map is alive and finds its own
 /// shape; a dot's size is how connected it is; touching one lights it and its
-/// neighbours while the rest of the map recedes; a node can be picked up and
-/// its neighbours follow it; one finger pans with momentum, two pinch; names
+/// neighbours while the rest of the map recedes; one finger pans with
+/// momentum, two pinch; names
 /// fade in as you zoom, hubs first, and closer still each item says what it
 /// is and each line says what it means. What it adds is connecting:
 /// long-press an item, drag to another, let go.
@@ -120,6 +120,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     var insets = UIEdgeInsets.zero {
         didSet {
             guard oldValue != insets, !nodes.isEmpty, !bounds.isEmpty else { return }
+            guard !isNavigating else { return }
             if !cameraTouched { fit(animated: false) }
             else if let selectedID { keepVisible(selectedID) }
         }
@@ -137,15 +138,15 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     var onConnect: ((String, String?) -> Void)?
 
     // Gesture state.
-    private(set) var dragID: String?
     /// The item under a finger that has touched down but not yet become a
     /// tap, a drag or a connection — the phone's stand-in for hovering.
     private(set) var pressedID: String?
     private var dragStart: CGPoint?
-    private var dragGrabOffset = CGPoint.zero
-    private var originalNodePosition: CGPoint?
     private var originalViewport = GraphViewport()
+    private weak var panGesture: UIPanGestureRecognizer?
+    private var panNeedsReanchor = false
     private var pinchStartScale: CGFloat = 1
+    private var pinchRecognizerStartScale: CGFloat = 1
     private var pinchWorldAnchor = CGPoint.zero
     private var pinching = false
     private var momentum = CGPoint.zero
@@ -229,17 +230,18 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             return
         }
         let pan = UIPanGestureRecognizer(target: self, action: #selector(pan(_:)))
-        pan.maximumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 2
+        panGesture = pan
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinch(_:)))
         let tap = UITapGestureRecognizer(target: self, action: #selector(tap(_:)))
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(doubleTap(_:)))
         doubleTap.numberOfTapsRequired = 2
         let press = UILongPressGestureRecognizer(target: self, action: #selector(longPress(_:)))
         press.minimumPressDuration = 0.32
-        press.allowableMovement = 12
+        press.allowableMovement = 6
         // A finger that moves straight away pans; one that holds still first
         // picks up a thread to connect. Waiting for the press to fail costs
-        // the pan only its first 12 points.
+        // the pan only its first 6 points.
         pan.require(toFail: press)
         tap.require(toFail: pan)
         for recognizer in [pan, pinch, press, tap, doubleTap] as [UIGestureRecognizer] {
@@ -416,6 +418,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     /// keeping the zoom — the owner chose the scale, the canvas only makes
     /// room.
     private func keepVisible(_ id: String) {
+        guard !isNavigating else { return }
         guard !bounds.isEmpty, let position = layout.position(of: id) else { return }
         let point = viewport.screen(position, size: bounds.size)
         let safe = bounds.inset(by: insets).insetBy(dx: 24, dy: 24)
@@ -467,8 +470,8 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     // MARK: - Focus
 
     /// What the map is lighting up: a thread being drawn, a dot being
-    /// dragged or touched, else the selection.
-    private var focusID: String? { connectSourceID ?? dragID ?? pressedID ?? selectedID }
+    /// touched, else the selection.
+    private var focusID: String? { connectSourceID ?? pressedID ?? selectedID }
 
     private func focusSet(_ focus: String?) -> Set<String> {
         guard let focus else { return [] }
@@ -477,8 +480,12 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
 
     // MARK: - Frame loop
 
+    private var isNavigating: Bool {
+        dragStart != nil || panNeedsReanchor || pinching || connectSourceID != nil || hypot(momentum.x, momentum.y) > 4
+    }
+
     private var needsFrames: Bool {
-        (!layout.isSettled && !reduceMotion) || camera != nil || animating
+        (!layout.isSettled && !reduceMotion && !isNavigating) || camera != nil || animating
             || hypot(momentum.x, momentum.y) > 4 || connectSourceID != nil
     }
 
@@ -507,8 +514,8 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         let now = link.timestamp
         let dt = min(1.0 / 20, max(1.0 / 240, now - lastTick))
         lastTick = now
-        if !layout.isSettled && !reduceMotion {
-            layout.step(pinned: dragID)
+        if !layout.isSettled && !reduceMotion && !isNavigating {
+            layout.step()
             if !interactive { fit(animated: false) }
         }
         if let flight = camera {
@@ -617,6 +624,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
+        camera = nil; momentum = .zero
         guard interactive, event?.allTouches?.count == 1, let touch = touches.first else { return press(nil) }
         press(hitNode(at: touch.location(in: self), slop: 12))
     }
@@ -661,30 +669,17 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    /// Starts a one-finger drag: on a node it picks the node up, anywhere else
-    /// it grabs the canvas.
+    /// Every ordinary drag grabs the map, including one starting on a dot.
     func beginDrag(at point: CGPoint) {
+        guard !pinching else { return }
         cameraTouched = true
         camera = nil; momentum = .zero
         dragStart = point; originalViewport = viewport
-        dragID = hitNode(at: point, slop: 12)
-        originalNodePosition = dragID.flatMap { layout.position(of: $0) }
-        if let origin = originalNodePosition {
-            let world = viewport.world(point, size: bounds.size)
-            dragGrabOffset = CGPoint(x: origin.x - world.x, y: origin.y - world.y)
-            // Warm enough that neighbours follow the dragged node, cool enough
-            // that the rest of the map does not churn.
-            layout.hold(0.28)
-            wake()
-        }
     }
 
     func drag(to point: CGPoint) {
         guard dragStart != nil, !pinching else { return }
-        if let id = dragID {
-            let world = viewport.world(point, size: bounds.size)
-            layout.move(id: id, to: CGPoint(x: world.x + dragGrabOffset.x, y: world.y + dragGrabOffset.y))
-        } else if let start = dragStart {
+        if let start = dragStart {
             viewport.offset = CGPoint(x: originalViewport.offset.x + point.x - start.x,
                                       y: originalViewport.offset.y + point.y - start.y)
         }
@@ -693,29 +688,58 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
 
     func endDrag(cancelled: Bool, velocity: CGPoint = .zero) {
         guard dragStart != nil else { return }
-        let draggedNode = dragID != nil
-        if let id = dragID {
-            if cancelled, let point = originalNodePosition { layout.move(id: id, to: point) }
-            layout.hold(0)
-        } else if cancelled {
-            viewport = originalViewport
-        } else if !reduceMotion {
-            momentum = velocity
+        // Pinch owns the camera while two fingers are down. A cancelled pan
+        // must not restore the camera from before the second finger arrived.
+        if !pinching {
+            if cancelled { viewport = originalViewport }
+            else if !reduceMotion { momentum = velocity }
         }
-        dragID = nil; dragStart = nil; originalNodePosition = nil
-        if draggedNode { wake() } else { startLoopIfNeeded() }
+        dragStart = nil
+        startLoopIfNeeded()
         refreshAccessibility(); setNeedsDisplay()
     }
 
     @objc private func pan(_ gesture: UIPanGestureRecognizer) {
-        let point = gesture.location(in: self)
-        switch gesture.state {
+        handlePan(state: gesture.state, at: gesture.location(in: self),
+                  translation: gesture.translation(in: self), velocity: gesture.velocity(in: self),
+                  touchCount: gesture.numberOfTouches)
+    }
+
+    func handlePan(state: UIGestureRecognizer.State, at point: CGPoint,
+                   translation: CGPoint = .zero, velocity: CGPoint = .zero, touchCount: Int) {
+        switch state {
         case .began:
-            let translation = gesture.translation(in: self)
+            guard touchCount == 1, !pinching else {
+                panNeedsReanchor = true
+                momentum = .zero; camera = nil
+                return
+            }
+            panNeedsReanchor = false
             beginDrag(at: CGPoint(x: point.x - translation.x, y: point.y - translation.y)); drag(to: point)
-        case .changed: drag(to: point)
-        case .ended: endDrag(cancelled: false, velocity: gesture.velocity(in: self))
-        case .cancelled, .failed: endDrag(cancelled: true)
+        case .changed:
+            // Adding a finger changes UIPan's location from that finger to
+            // the midpoint. Only the pinch may use that midpoint to move
+            // the camera, even before it crosses its recognition threshold.
+            guard touchCount == 1 else {
+                panNeedsReanchor = true
+                momentum = .zero; camera = nil
+                return
+            }
+            guard !pinching else { return }
+            if panNeedsReanchor {
+                panNeedsReanchor = false
+                beginDrag(at: point)
+            } else { drag(to: point) }
+        case .ended:
+            let releaseVelocity = panNeedsReanchor ? CGPoint.zero : velocity
+            panNeedsReanchor = false
+            endDrag(cancelled: false, velocity: releaseVelocity)
+            startLoopIfNeeded()
+        case .cancelled, .failed:
+            let restore = !panNeedsReanchor
+            panNeedsReanchor = false
+            endDrag(cancelled: restore)
+            startLoopIfNeeded()
         default: break
         }
     }
@@ -724,28 +748,51 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         let point = gesture.location(in: self)
         switch gesture.state {
         case .began:
-            cameraTouched = true
-            camera = nil; momentum = .zero
-            pinching = true
-            // A node being dragged stays where the second finger found it.
-            if dragID != nil { endDrag(cancelled: false) }
-            pinchStartScale = viewport.scale
-            pinchWorldAnchor = viewport.world(point, size: bounds.size)
-        case .changed, .ended:
-            viewport.scale = min(4, max(0.15, pinchStartScale * gesture.scale))
-            // The point under the fingers stays under the fingers, so moving
-            // them while pinching pans as well.
-            viewport.offset = CGPoint(x: point.x - bounds.midX - pinchWorldAnchor.x * viewport.scale,
-                                      y: point.y - bounds.midY - pinchWorldAnchor.y * viewport.scale)
+            beginPinch(at: point, recognizerScale: gesture.scale)
+        case .changed:
+            if gesture.numberOfTouches == 2 { changePinch(scale: gesture.scale, at: point) }
         default: break
         }
         if gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed {
-            pinching = false
-            // Re-anchor any pan still in progress so it continues from here.
-            if dragStart != nil { dragStart = point; originalViewport = viewport }
-            refreshAccessibility()
+            let continuing = panGesture.flatMap { pan in
+                (pan.state == .began || pan.state == .changed) && pan.numberOfTouches == 1
+                    ? pan.location(in: self) : nil
+            }
+            endPinch(continuingPanAt: continuing)
         }
         setNeedsDisplay()
+    }
+
+    func beginPinch(at point: CGPoint, recognizerScale: CGFloat = 1) {
+        cameraTouched = true
+        camera = nil; momentum = .zero
+        pinching = true
+        pinchStartScale = viewport.scale
+        pinchRecognizerStartScale = max(0.001, recognizerScale)
+        pinchWorldAnchor = viewport.world(point, size: bounds.size)
+    }
+
+    func changePinch(scale: CGFloat, at point: CGPoint) {
+        guard pinching else { return }
+        // Use the live midpoint only while both fingers are down. On .ended
+        // UIKit may report the remaining finger instead, which would jump
+        // the map from the midpoint to that finger.
+        viewport.scale = min(4, max(0.15, pinchStartScale * scale / pinchRecognizerStartScale))
+        viewport.offset = CGPoint(x: point.x - bounds.midX - pinchWorldAnchor.x * viewport.scale,
+                                  y: point.y - bounds.midY - pinchWorldAnchor.y * viewport.scale)
+        setNeedsDisplay()
+    }
+
+    func endPinch(continuingPanAt point: CGPoint? = nil) {
+        // A pinch that merely failed to recognize during an ordinary drag
+        // does not own that drag and must not clear its starting position.
+        guard pinching else { return }
+        pinching = false
+        panNeedsReanchor = false
+        dragStart = nil
+        if let point { beginDrag(at: point) }
+        startLoopIfNeeded()
+        refreshAccessibility()
     }
 
     @objc private func longPress(_ gesture: UILongPressGestureRecognizer) {

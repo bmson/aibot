@@ -268,8 +268,8 @@ struct KnowledgeConnectionEditor: View {
                     await model.createKnowledgeConnection(mutation)
                 }
             if saved {
-                await didSave()
                 dismiss()
+                await didSave()
             } else {
                 saveError =
                     "The relationship could not be saved. Your changes are still here; please try again."
