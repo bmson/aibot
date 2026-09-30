@@ -1701,6 +1701,33 @@
         { "fieldPath": "embeddingSpace", "order": "ASCENDING" },
         { "fieldPath": "embedding", "vectorConfig": { "dimension": 1536, "flat": {} } }
       ]
+    },
+    {
+      "collectionGroup": "modelCallAudit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "taskId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" },
+        { "fieldPath": "id", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "responseChecks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "taskId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" },
+        { "fieldPath": "id", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recallMetrics",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "taskId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" },
+        { "fieldPath": "id", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

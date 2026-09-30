@@ -5,6 +5,7 @@ export * from './application-confirmations.js';
 export * from './approval-policies.js';
 export * from './approvals.js';
 export * from './assistant-health.js';
+export * from './audit-investigation.js';
 export * from './briefing.js';
 export * from './budget-caps.js';
 export * from './builtin-tools.js';
