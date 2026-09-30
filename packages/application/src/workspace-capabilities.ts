@@ -20,6 +20,15 @@ export interface MobileWorkspaceCapability {
   detail: string;
 }
 
+/** Present installed capabilities without duplicating Workspace's Calendar access. */
+export function visibleWorkspaceCapabilityModules<T extends WorkspaceCapabilityMeta>(
+  modules: readonly T[],
+  diagnostics: readonly Pick<WorkspaceCapabilityDiagnostic, 'module' | 'enabled'>[],
+): T[] {
+  const enabled = new Map(diagnostics.map((item) => [item.module, item.enabled]));
+  return modules.filter((module) => module.name !== 'calendar' || !enabled.get('google'));
+}
+
 function completeDiagnostics(
   diagnostics: WorkspaceCapabilityDiagnostic[],
   modules: readonly WorkspaceCapabilityMeta[],
@@ -46,7 +55,14 @@ export async function listMobileWorkspaceCapabilities(
     ? completeDiagnostics(readiness.diagnostics, modules)
     : null;
   const enabledWhenUnavailable = new Set(configuredEnabledModules);
-  return modules.map((module) => {
+  const visibleModules = visibleWorkspaceCapabilityModules(
+    modules,
+    modules.map((module) => ({
+      module: module.name,
+      enabled: diagnostics?.get(module.name)?.enabled ?? enabledWhenUnavailable.has(module.name),
+    })),
+  );
+  return visibleModules.map((module) => {
     const diagnostic = diagnostics?.get(module.name);
     const enabled = diagnostic?.enabled ?? enabledWhenUnavailable.has(module.name);
     const ready = diagnostic?.ready ?? false;
