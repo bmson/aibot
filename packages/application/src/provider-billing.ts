@@ -18,7 +18,7 @@ export interface BillingLine {
 export interface ProviderBilling {
   id: string;
   label: string;
-  status: 'reported' | 'unavailable' | 'stale' | 'not_configured' | 'unsupported';
+  status: 'reported' | 'unavailable' | 'stale' | 'not_configured' | 'unsupported' | 'included';
   period: string;
   scope: string;
   source: string;
@@ -27,6 +27,45 @@ export interface ProviderBilling {
   latestExportAt: string | null;
   latestUsageAt: string | null;
   lines: BillingLine[];
+  includedIn?: string;
+  forecast?: BillingForecast;
+}
+
+export interface BillingForecast {
+  through: string;
+  observedDays: number;
+  daysInMonth: number;
+  totals: Array<{ currency: string; spent: number; dailyAverage: number; projected: number }>;
+  message: string;
+}
+
+/** A transparent run rate, never an invoice prediction or an extrapolated stale snapshot. */
+export function billingForecast(report: ProviderBilling): BillingForecast | undefined {
+  if (report.status !== 'reported' || !report.lines.length) return;
+  const through = report.id === 'google-cloud' ? report.latestUsageAt : report.fetchedAt;
+  if (!through || !/^\d{4}-\d{2}$/.test(report.period)) return;
+  const start = Date.parse(`${report.period}-01T00:00:00Z`);
+  const end = new Date(start);
+  end.setUTCMonth(end.getUTCMonth() + 1);
+  const observedDays = (Date.parse(through) - start) / 86_400_000;
+  const daysInMonth = (end.getTime() - start) / 86_400_000;
+  if (!Number.isFinite(observedDays) || observedDays < 3 || observedDays > daysInMonth) return;
+  const amounts = new Map<string, number>();
+  for (const line of report.lines)
+    amounts.set(line.currency, (amounts.get(line.currency) ?? 0) + line.net);
+  return {
+    through,
+    observedDays,
+    daysInMonth,
+    totals: [...amounts].map(([currency, spent]) => ({
+      currency,
+      spent,
+      dailyAverage: spent / observedDays,
+      projected: (spent / observedDays) * daysInMonth,
+    })),
+    message:
+      'Month-end estimate at the observed average daily spend, after credits. Assumes this export covers the month from day one and usage stays similar. Delayed charges, changing usage and one-off credits can change the result.',
+  };
 }
 
 export type BillingConfig = Pick<
@@ -436,6 +475,7 @@ export async function getProviderBilling(ports: BillingPorts): Promise<ProviderB
       updatedAt: now,
     });
   }
+  const googleReport = await google;
   const reports = connections.map(async (connection) => {
     const report = empty(
       connection.id,
@@ -446,13 +486,22 @@ export async function getProviderBilling(ports: BillingPorts): Promise<ProviderB
     );
     if (connection.kind === 'vertex') {
       const project = connection.vertexProject || ports.models.config.VERTEX_PROJECT;
+      const covered =
+        Boolean(project) &&
+        (config.GCP_BILLING_SCOPE === 'billing_account'
+          ? googleReport.lines.some((line) => line.detail.startsWith(`${project} ·`))
+          : project === config.GCP_PROJECT);
+      const available = covered && ['reported', 'stale'].includes(googleReport.status);
       return {
         ...report,
-        status: 'unsupported' as const,
+        status: available ? ('included' as const) : ('unavailable' as const),
+        ...(available ? { includedIn: 'google-cloud' } : {}),
         message:
           project && config.GCP_BILLING_SCOPE === 'project' && project !== config.GCP_PROJECT
             ? `Vertex uses project ${project}, outside the selected Google Cloud billing scope. Its costs are not included above.`
-            : 'Vertex charges are part of Google Cloud billing when its project is covered by the export. Model-level token costs below remain estimates.',
+            : available
+              ? 'Vertex AI is covered by Google Cloud billing above. See its service breakdown; no separate bill is added. Model-level token costs below remain estimates.'
+              : 'Connect Google Cloud billing to track Vertex AI charges. Both use the same billing export. Model-level token costs below remain estimates.',
       };
     }
     if (connection.kind !== 'openrouter')
@@ -480,5 +529,6 @@ export async function getProviderBilling(ports: BillingPorts): Promise<ProviderB
       readOpenRouterBilling(ports.fetch ?? fetch, key, report, now),
     );
   });
-  return Promise.all([google, ...reports]);
+  const result = await Promise.all([googleReport, ...reports]);
+  return result.map((report) => ({ ...report, forecast: billingForecast(report) }));
 }

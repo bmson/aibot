@@ -33,6 +33,12 @@ Every model-router ledger entry records its connection, model and available requ
 
 New models automatically use the same metering path, including custom gateway identities. Live voice model usage is explicitly marked as a rate-based estimate. Connected providers without a billing connector show their coverage gap instead of a made-up bill. Direct OpenAI and arbitrary compatible gateways currently have usage tracking, not account billing imports. Vertex uses the Google Cloud export, subject to project coverage. Adding a billing API requires a provider-specific adapter; there is no universal model billing endpoint.
 
+## Month-end estimate and assistant limits
+
+Web and iOS show an average daily spend and a month-end run rate for each available billing source, keeping currencies separate. The calculation is net month-to-date spend divided by elapsed UTC days, multiplied by the number of days in that month. Google uses the latest exported usage time; OpenRouter uses the snapshot fetch time. Estimates require at least three elapsed days and are withheld for stale or missing data. They assume coverage from the start of the month and similar future usage; partial exports, delayed charges, one-off credits and changes in usage can make them inaccurate. This is an estimate, not an invoice forecast from Google.
+
+Covered Vertex connections are marked as included in Google Cloud, without a second total. Account-wide exports must contain the connection's project before claiming coverage. The assistant's task, daily and monthly limits remain enforced using its operation ledger. “Edit assistant limits” does not edit provider billing budgets or stop infrastructure charges.
+
 ## Refresh and persistence
 
 Billing is read on demand and durably cached for one hour, shared by web and iOS, in the installation's existing tool cache. Snapshots are keyed by period, configuration and connection credentials (hashed, never stored in plaintext). Transport/auth/query errors retain the previous successful snapshot with a stale status; unsuccessful refreshes retry after five minutes. A prior month's snapshot cannot masquerade as the new month's spend. Cache records expire after seven days; this is a current-month dashboard, not a historical invoice archive. The billing export remains the historical source of truth.

@@ -15,8 +15,8 @@ export function ProviderBillingCards({ reports }: { reports: ProviderBilling[] }
       <div>
         <h2 className="text-lg font-semibold">Provider billing</h2>
         <p className="mt-1 text-sm text-muted">
-          Reported spend by billing source. Results are cached for an hour and keep their original
-          currency.
+          Month-to-date charges and estimated month-end spend. Vertex AI is part of Google Cloud.
+          Sources keep their original currency and refresh hourly.
         </p>
       </div>
       {reports.map((report) => {
@@ -45,13 +45,42 @@ export function ProviderBillingCards({ reports }: { reports: ProviderBilling[] }
               <span className="text-sm tabular-nums">
                 {totals.size
                   ? [...totals].map(([currency, total]) => money(total, currency)).join(' · ')
-                  : 'Unavailable'}
+                  : report.includedIn
+                    ? 'Included in Google Cloud'
+                    : report.status === 'not_configured'
+                      ? 'Setup needed'
+                      : 'Unavailable'}
                 {report.status === 'stale' ? ' · Stale' : ''}
               </span>
             </div>
             <p className="mt-1 text-xs text-muted">
               {report.scope} · {report.period} · {report.source}
             </p>
+            {report.forecast ? (
+              <div className="mt-4 rounded-xl bg-sunken/55 p-3">
+                {report.forecast.totals.map((total) => (
+                  <div key={total.currency} className="flex flex-wrap justify-between gap-3">
+                    <p className="text-sm">
+                      Estimated month end{' '}
+                      <strong className="block text-xl tabular-nums">
+                        {money(total.projected, total.currency)}
+                      </strong>
+                    </p>
+                    <p className="text-sm text-muted">
+                      Average per day{' '}
+                      <span className="block tabular-nums">
+                        {money(total.dailyAverage, total.currency)}
+                      </span>
+                    </p>
+                  </div>
+                ))}
+                <p className="mt-2 text-xs text-muted">{report.forecast.message}</p>
+              </div>
+            ) : report.status === 'reported' ? (
+              <p className="mt-2 text-xs text-muted">
+                Month-end estimate needs at least three days of reported usage.
+              </p>
+            ) : null}
             <p className="mt-3 text-sm text-muted">{report.message}</p>
             {report.fetchedAt ? (
               <p className="mt-2 text-xs text-muted">
@@ -88,9 +117,34 @@ export function ProviderBillingCards({ reports }: { reports: ProviderBilling[] }
               </table>
             ) : null}
             {report.id === 'google-cloud' && report.status === 'not_configured' ? (
-              <p className="mt-2 text-xs text-muted">
-                Billing export needs to be configured for this installation.
-              </p>
+              <div className="mt-3 text-sm">
+                <p>
+                  Enable standard usage export in Google Cloud Billing, then connect its BigQuery
+                  table and grant this installation read access. Initial data can take hours or
+                  days.
+                </p>
+                <a
+                  className="mt-2 inline-block underline"
+                  href="https://console.cloud.google.com/billing"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open Google Cloud Billing
+                </a>
+                {' · '}
+                <a
+                  className="underline"
+                  href="https://docs.cloud.google.com/billing/docs/how-to/export-data-bigquery-setup"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Export setup guide
+                </a>
+                <p className="mt-2 text-xs text-muted">
+                  Google Cloud and Vertex AI are missing from this overview until the export is
+                  connected. Missing costs are not zero.
+                </p>
+              </div>
             ) : null}
           </article>
         );

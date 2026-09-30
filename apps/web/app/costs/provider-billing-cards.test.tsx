@@ -20,7 +20,8 @@ const report: ProviderBilling = {
 describe('provider billing presentation', () => {
   it('shows missing spend as unavailable rather than zero', () => {
     const html = renderToStaticMarkup(<ProviderBillingCards reports={[report]} />);
-    expect(html).toContain('Unavailable');
+    expect(html).toContain('Setup needed');
+    expect(html).toContain('Open Google Cloud Billing');
     expect(html).toContain('Project: assistant');
     expect(html).not.toContain('$0.00');
   });
@@ -54,4 +55,39 @@ describe('provider billing presentation', () => {
     expect(html).toContain('Fetched 2026-09-26');
     expect(html).not.toContain('$11.00');
   });
+});
+
+it('shows forecast and inclusion without creating a second Vertex total', () => {
+  const html = renderToStaticMarkup(
+    <ProviderBillingCards
+      reports={[
+        {
+          ...report,
+          status: 'reported',
+          lines: [
+            { service: 'Vertex AI', detail: '', currency: 'USD', cost: 15, credits: 0, net: 15 },
+          ],
+          forecast: {
+            through: '2026-09-16T00:00:00Z',
+            observedDays: 15,
+            daysInMonth: 30,
+            totals: [{ currency: 'USD', spent: 15, dailyAverage: 1, projected: 30 }],
+            message: 'Assumes similar usage.',
+          },
+        },
+        {
+          ...report,
+          id: 'vertex',
+          label: 'Google Vertex AI',
+          status: 'included',
+          includedIn: 'google-cloud',
+        },
+      ]}
+    />,
+  );
+  expect(html).toContain('Estimated month end');
+  expect(html).toContain('$30.00');
+  expect(html).toContain('Average per day');
+  expect(html).toContain('Included in Google Cloud');
+  expect(html).not.toContain('Unavailable');
 });
