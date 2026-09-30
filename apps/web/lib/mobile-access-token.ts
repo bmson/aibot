@@ -12,7 +12,11 @@ export function clearMobileAccessTokenCache() {
 /** Cloud Run secret environment values are snapshots taken at instance startup. */
 export async function getMobileAccessToken(forceRefresh = false): Promise<string> {
   const config = loadConfig();
-  if (!process.env.K_SERVICE || !config.GCP_PROJECT) return config.MOBILE_API_TOKEN;
+  // Passkey installations issue independent device keys and can provision an
+  // optional legacy token in an installation-specific secret. That token is
+  // not rotated by this console, so preserve its configured value.
+  if (config.OWNER_AUTH_MODE === 'passkey' || !process.env.K_SERVICE || !config.GCP_PROJECT)
+    return config.MOBILE_API_TOKEN;
   const project = config.GCP_PROJECT;
   if (!forceRefresh && cached?.project === project && Date.now() - cached.at < CACHE_MS)
     return cached.token;

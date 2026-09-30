@@ -3,12 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const config = vi.hoisted(() => ({
   GCP_PROJECT: 'test-project',
   MOBILE_API_TOKEN: 'startup-token',
+  OWNER_AUTH_MODE: 'google',
 }));
 vi.mock('@assistant/config', () => ({ loadConfig: () => config }));
 
 import { clearMobileAccessTokenCache, getMobileAccessToken } from './mobile-access-token';
 
 afterEach(() => {
+  config.OWNER_AUTH_MODE = 'google';
   clearMobileAccessTokenCache();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -17,6 +19,14 @@ describe('mobile token refresh across Cloud Run instances', () => {
   it('uses the local configured token outside Cloud Run', async () => {
     vi.stubEnv('K_SERVICE', '');
     expect(await getMobileAccessToken()).toBe('startup-token');
+  });
+  it('preserves installation-specific legacy tokens alongside passkey device keys', async () => {
+    vi.stubEnv('K_SERVICE', 'customer-web');
+    config.OWNER_AUTH_MODE = 'passkey';
+    const fetcher = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+    expect(await getMobileAccessToken()).toBe('startup-token');
+    expect(fetcher).not.toHaveBeenCalled();
   });
   it('refreshes the latest secret on another instance after rotation', async () => {
     vi.stubEnv('K_SERVICE', 'assistant-web');
