@@ -12,6 +12,17 @@ const status = (path: string, method: string) =>
   proxy(new NextRequest(`http://localhost${path}`, { method })).status;
 
 describe('Firestore mobile and web ingress', () => {
+  it('passes repair reads, reports, and decisions to authenticated handlers', () => {
+    for (const method of ['GET', 'POST'])
+      expect(status('/api/mobile/v1/repairs', method)).toBe(200);
+    const path = `/api/mobile/v1/repairs/${randomUUID()}`;
+    expect(status(path, 'POST')).toBe(200);
+    for (const method of ['GET', 'PATCH', 'DELETE']) expect(status(path, method)).toBe(503);
+    expect(status('/api/mobile/v1/repairs', 'DELETE')).toBe(503);
+    expect(status('/api/mobile/v1/repairs/not-a-uuid', 'POST')).toBe(503);
+    expect(status(`${path}/extra`, 'POST')).toBe(503);
+  });
+
   it('passes supported anomaly and suggestion writes to authenticated handlers', () => {
     const paths = [
       `/api/mobile/v1/anomalies/${randomUUID()}`,
