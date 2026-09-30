@@ -1,331 +1,58 @@
-import { loadConfig } from '@assistant/config';
-import { hiddenModuleNavHrefs } from '@assistant/modules/meta';
 import type { Metadata, Viewport } from 'next';
-import { JetBrains_Mono } from 'next/font/google';
-import Script from 'next/script';
-import type { CSSProperties, ReactNode } from 'react';
-import { auth, authMode, isAuthed } from '@/auth';
-import { getAgentIdentity, getChatApplication } from '@/lib/server';
-import { NavCommandsProvider, type NavDestination } from './nav-commands';
-import { NotchCompanion } from './notch-companion';
+import Link from 'next/link';
+import type { ReactNode } from 'react';
+import { authMode, isAuthed } from '@/auth';
+import { focusRing } from '@/lib/ui';
 import './globals.css';
-import './motion-system.css';
-import './chrome.css';
-import './conversation.css';
-import './mobile-shell.css';
-import './notch.css';
 
-const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
-
-// Sets the .dark class from localStorage or OS preference BEFORE first paint, so
-// there is no light→dark flash and OS-dark users still default to dark.
 const THEME_SCRIPT = `(()=>{try{const t=localStorage.getItem('theme');const d=t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.dataset.jellyMode=d?'dark':'light';}catch{}})()`;
 
-export async function generateMetadata(): Promise<Metadata> {
-  const { name } = await getAgentIdentity();
-  return {
-    title: { default: name, template: `%s · ${name}` },
-    description: `${name} — your personal AI assistant`,
-    applicationName: name,
-    manifest: '/manifest.webmanifest',
-    appleWebApp: {
-      capable: true,
-      title: name,
-      // The translucent style is what lets the app canvas continue beneath the
-      // clock, Dynamic Island, and notch in an iOS home-screen installation.
-      statusBarStyle: 'black-translucent',
-    },
-    // Keep iOS from inventing tappable phone/address links inside assistant
-    // responses. Real links rendered by Markdown are unaffected.
-    formatDetection: {
-      telephone: false,
-      date: false,
-      address: false,
-      email: false,
-      url: false,
-    },
-    icons: {
-      icon: [{ url: '/icon.svg', type: 'image/svg+xml' }],
-      apple: [{ url: '/apple-icon.png', sizes: '180x180', type: 'image/png' }],
-    },
-    // Next emits the standards-track mobile-web-app-capable tag for
-    // `appleWebApp`; this legacy Apple spelling is still useful on older iOS.
-    other: { 'apple-mobile-web-app-capable': 'yes' },
-  };
-}
-
-export const viewport: Viewport = {
-  width: 'device-width',
-  initialScale: 1,
-  // NOTE: these two make browser pinch-zoom unavailable, which axe reports as a
-  // WCAG 1.4.4 failure on every page. They are kept because the iOS install
-  // contract asserts them (scripts/mobile-smoke.ts) — changing them is a
-  // product decision about the home-screen app feel, not a lint fix.
-  maximumScale: 1,
-  userScalable: false,
-  // Lets the layout reach the physical edges of a notched phone, which is what
-  // makes env(safe-area-inset-*) report real values. Without it those insets are
-  // always 0 and `.mobile-safe-bottom` — which exists precisely to keep the chat
-  // composer off the home indicator — silently does nothing. Every edge that can
-  // now reach hardware pads itself from the insets (see `.page-gutter`).
-  viewportFit: 'cover',
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#eef5f0' },
-    { media: '(prefers-color-scheme: dark)', color: '#121a15' },
-  ],
-  colorScheme: 'light dark',
+export const metadata: Metadata = {
+  title: { default: 'Assistant settings', template: '%s · Assistant' },
+  description: 'Mobile access and diagnostics for your assistant.',
+  icons: { icon: '/icon.svg' },
 };
-
-// The shell badge counts and session lookup are per-request — never prerender.
+export const viewport: Viewport = { width: 'device-width', initialScale: 1 };
 export const dynamic = 'force-dynamic';
 
-// IA (owner-approved): the chat composer's "/" palette is the whole navigation.
-// A flat, typed, searchable list needs no primary/utility/system grouping — the
-// two tiers only ever existed to keep a menu panel short. Routes with a real
-// parent stay off this list and are linked from it: /import from Documents,
-// /tasks/<id> from Activity, /profile/... from Memory.
-const navItems: Array<Omit<NavDestination, 'count'>> = [
-  {
-    href: '/chat',
-    label: 'Chat',
-    command: '/chat',
-    hint: 'Your main thread with the assistant',
-    aliases: ['home'],
-  },
-  {
-    href: '/chat/all',
-    label: 'All chats',
-    command: '/chats',
-    hint: 'Every conversation, active and archived',
-    aliases: ['history', 'conversations'],
-  },
-  {
-    href: '/approvals',
-    label: 'Approvals',
-    command: '/approvals',
-    hint: 'Actions waiting on your decision',
-    aliases: [],
-  },
-  {
-    href: '/calls',
-    label: 'Calls',
-    command: '/calls',
-    hint: 'Phone calls the assistant made for you',
-    aliases: ['phone'],
-  },
-  {
-    href: '/cards',
-    label: 'Cards',
-    command: '/cards',
-    hint: 'Tickets, travel, scores, and saved live information',
-    aliases: ['wallet', 'passes'],
-  },
-  {
-    href: '/tasks',
-    label: 'Activity',
-    command: '/activity',
-    hint: 'What the assistant is working on',
-    aliases: ['tasks'],
-  },
-  {
-    href: '/goals',
-    label: 'Goals',
-    command: '/goals',
-    hint: 'Outcomes you are working toward',
-    aliases: [],
-  },
-  {
-    href: '/people',
-    label: 'People',
-    command: '/people',
-    hint: 'Everyone you know, and how you are connected',
-    aliases: ['contacts', 'relations', 'relationships'],
-  },
-  {
-    href: '/profile',
-    label: 'Memory',
-    command: '/memory',
-    // 'people' no longer belongs here: it is its own destination, and leaving
-    // the alias behind would send the word to the wrong page.
-    hint: 'What the assistant knows about you',
-    aliases: ['profile'],
-  },
-  {
-    href: '/documents',
-    label: 'Documents',
-    command: '/documents',
-    hint: 'Files the assistant can read',
-    aliases: ['files'],
-  },
-  {
-    href: '/skills',
-    label: 'Skills',
-    command: '/skills',
-    hint: 'What the assistant has learned to do',
-    aliases: [],
-  },
-  {
-    href: '/capabilities',
-    label: 'Capabilities',
-    command: '/capabilities',
-    hint: 'Optional tools and setup status',
-    aliases: ['integrations', 'modules'],
-  },
-  {
-    href: '/settings',
-    label: 'Settings',
-    command: '/settings',
-    hint: 'Identity, models, and behaviour',
-    aliases: [],
-  },
-  {
-    href: '/costs',
-    label: 'Costs',
-    command: '/costs',
-    hint: 'What the assistant is spending',
-    aliases: ['spend', 'budget'],
-  },
-  {
-    href: '/anomalies',
-    label: 'Anomalies',
-    command: '/anomalies',
-    hint: 'Things that did not look right',
-    aliases: [],
-  },
-  {
-    href: '/improvements',
-    label: 'Improvements',
-    command: '/improvements',
-    hint: 'Changes the assistant is proposing',
-    aliases: [],
-  },
-];
-
-/** The one place a destination's badge count comes from. */
-function badgeCountFor(
-  href: string,
-  counts: { pendingApprovals: number; memoryReview: number; needsAttention: number },
-): number {
-  if (href === '/approvals') return counts.pendingApprovals;
-  if (href === '/profile') return counts.memoryReview;
-  if (href === '/tasks') return counts.needsAttention;
-  return 0;
-}
-
-function emptyShellStatus() {
-  return {
-    dashboard: { pendingApprovals: 0, needsAttention: 0, presence: 'idle' as const },
-    memoryHealth: {
-      totalUsable: 0,
-      notYetOrganized: 0,
-      awaitingReview: 0,
-      ownerConfirmed: 0,
-      lastOrganizedAt: null,
-    },
-  };
-}
-
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const config = loadConfig();
-  const hiddenNav = hiddenModuleNavHrefs(config);
-  const visibleNavItems = navItems.filter(
-    (item) =>
-      !hiddenNav.has(item.href) &&
-      (config.PERSISTENCE_DRIVER !== 'firestore' ||
-        item.href === '/chat' ||
-        item.href === '/chat/all'),
-  );
-  // Passkey installations serve /setup and /signin through this layout, so an
-  // anonymous visitor must not receive shell counts or presence.
-  const passkeyOwner = authMode === 'passkey' ? await isAuthed() : null;
-  if (authMode === 'passkey' && !passkeyOwner) {
-    return (
-      <html lang="en" className={mono.variable} suppressHydrationWarning>
-        <head>
-          {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static no-flash theme script */}
-          <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
-        </head>
-        <body className="flex min-h-dvh flex-col bg-surface font-sans text-strong antialiased">
-          <main className="app-main page-gutter relative z-10 min-w-0 flex-1 py-5 lg:py-7">
-            {children}
-          </main>
-        </body>
-      </html>
-    );
-  }
-  const identity = await getAgentIdentity();
-  const [shell, session] = await Promise.all([
-    identity.id
-      ? getChatApplication()
-          .getShellStatus(identity.id)
-          .catch((error) => {
-            console.error('[layout] failed to load shell status', error);
-            if (config.PERSISTENCE_DRIVER === 'firestore') throw error;
-            return emptyShellStatus();
-          })
-      : config.PERSISTENCE_DRIVER === 'firestore'
-        ? Promise.reject(new Error('Configured Firestore agent identity is unavailable'))
-        : Promise.resolve(emptyShellStatus()),
-    (async () => {
-      if (authMode !== 'google') return null;
-      try {
-        return await auth();
-      } catch (error) {
-        console.error('[layout] failed to load auth session', error);
-        return null;
-      }
-    })(),
-  ]);
-  const { dashboard, memoryHealth } = shell;
-  const counts = {
-    pendingApprovals: dashboard.pendingApprovals,
-    memoryReview: memoryHealth.awaitingReview,
-    needsAttention: dashboard.needsAttention,
-  };
-  const destinations = visibleNavItems.map((item) => ({
-    ...item,
-    count: badgeCountFor(item.href, counts),
-  }));
-
+  const owner = await isAuthed();
   return (
-    <html lang="en" className={mono.variable} suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <head>
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: static no-flash theme script */}
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
-      {/* The page column is a flex stack: the dev banner is a fixed row and the
-          shell takes exactly what is left. `--app-chrome` carries the banner's
-          height to viewport-positioned shell controls and the chat column. */}
-      <body
-        style={{ '--app-chrome': authMode === 'dev-bypass' ? '1.5rem' : '0px' } as CSSProperties}
-        className="flex min-h-dvh flex-col bg-surface font-sans text-strong antialiased"
-      >
-        {/* Jelly UI is intentionally limited to compact controls and live counts.
-            The CSP in next.config.ts pins script execution to this origin plus
-            'self', so no other remote script can run even if injected. */}
-        <Script src="https://jelly-ui.com/package.js" type="module" strategy="afterInteractive" />
+      <body className="min-h-dvh bg-surface font-sans text-strong antialiased">
         {authMode === 'dev-bypass' ? (
-          <div className="flex h-6 shrink-0 items-center justify-center bg-amber-100 px-4 text-center text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-            dev mode — auth disabled
-          </div>
+          <p className="bg-amber-100 p-2 text-center text-xs text-amber-900">
+            Development mode — authentication disabled
+          </p>
         ) : null}
-        {/* No navigation chrome in the shell — the destinations ride down to the
-            chat composer's "/" palette, and every other surface carries a back
-            link. `main` is the whole app column. */}
-        {/* Firestore's shell projection includes a bounded memory-health scan,
-            so it is not exposed at the fresh-poll status route. */}
-        <NotchCompanion
-          presence={dashboard.presence}
-          pollShellStatus={config.PERSISTENCE_DRIVER !== 'firestore'}
-        />
-        <NavCommandsProvider
-          destinations={destinations}
-          signedIn={authMode === 'passkey' ? Boolean(passkeyOwner) : !!session?.user}
-        >
-          <main className="app-main page-gutter relative z-10 min-w-0 flex-1 py-5 lg:py-7">
-            {children}
-          </main>
-        </NavCommandsProvider>
+        <header className="border-b border-edge">
+          <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-4 px-5 py-5">
+            <Link href="/settings" className={`text-lg font-semibold ${focusRing}`}>
+              Assistant
+            </Link>
+            {owner ? (
+              <nav aria-label="Administration" className="flex gap-6 text-sm">
+                <Link
+                  href="/settings"
+                  className={`inline-flex min-h-11 items-center hover:underline ${focusRing}`}
+                >
+                  Settings
+                </Link>
+                <Link
+                  href="/audit"
+                  className={`inline-flex min-h-11 items-center hover:underline ${focusRing}`}
+                >
+                  Audit trail
+                </Link>
+              </nav>
+            ) : null}
+          </div>
+        </header>
+        <main className="mx-auto max-w-4xl px-5 py-10">{children}</main>
       </body>
     </html>
   );

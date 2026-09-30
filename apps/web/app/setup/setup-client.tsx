@@ -22,7 +22,7 @@ export function SetupClient() {
     setCode(match?.[1] ?? '');
   }, []);
 
-  if (recoveryCode) return <RecoveryCodeNotice code={recoveryCode} continueHref="/chat" />;
+  if (recoveryCode) return <RecoveryCodeNotice code={recoveryCode} continueHref="/settings" />;
 
   if (code === '')
     return (

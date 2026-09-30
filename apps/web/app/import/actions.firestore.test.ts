@@ -163,8 +163,6 @@ describe.skipIf(!localEmulator)('Firestore import commands with PostgreSQL offli
   it('opens the import surfaces in the proxy while PostgreSQL stays fenced', () => {
     expect(() => getDb()).toThrow('PostgreSQL-backed web surface is unavailable');
     const allowed: Array<[string, string]> = [
-      ['/import', 'GET'],
-      ['/import', 'POST'],
       ['/api/import/upload', 'POST'],
       ['/api/mobile/v1/imports', 'POST'],
     ];

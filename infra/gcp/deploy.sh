@@ -356,6 +356,9 @@ grant_secret mcp-enc-key "$AGENT_SA"
 for secret in database-url openrouter-api-key google-oauth-client-id google-oauth-client-secret auth-secret mobile-api-token; do
   grant_secret "$secret" "$WEB_SA"
 done
+# The owner settings page may rotate only the mobile credential.
+gcloud secrets add-iam-policy-binding mobile-api-token --project "$PROJECT" \
+  --member "serviceAccount:${WEB_SA}" --role roles/secretmanager.secretVersionAdder --quiet
 grant_secret mcp-enc-key "$WEB_SA"
 if module_enabled browser; then
   grant_secret profile-enc-key "$BROWSER_SA"

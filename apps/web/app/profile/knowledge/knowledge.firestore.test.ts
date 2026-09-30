@@ -274,7 +274,9 @@ describe.skipIf(!localEmulator)('Firestore knowledge workspace with PostgreSQL o
       [`/api/mobile/v1/knowledge/relations/${id}`, 'POST'],
     ];
     for (const [path, method] of allowed)
-      expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(200);
+      expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(
+        path.startsWith('/api/') ? 200 : method === 'GET' ? 307 : 410,
+      );
     for (const [path, method] of [
       ['/api/mobile/v1/knowledge/workspace', 'POST'],
       ['/api/mobile/v1/knowledge/cleanup', 'DELETE'],

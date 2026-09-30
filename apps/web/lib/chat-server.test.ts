@@ -206,12 +206,12 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
     expect(proxy(request('/api/mobile/v1/bootstrap')).status).toBe(200);
     expect(proxy(request('/api/mobile/v1/bootstrap', 'POST')).status).toBe(503);
     expect(proxy(request('/api/shell/status')).status).toBe(200);
-    expect(proxy(request('/cards')).status).toBe(200);
-    expect(proxy(request('/cards', 'POST')).status).toBe(200);
-    expect(proxy(request('/chat')).status).toBe(200);
-    expect(proxy(request(`/chat/${randomUUID()}`)).status).toBe(200);
-    expect(proxy(request('/chat/all')).status).toBe(200);
-    expect(proxy(request('/tasks')).status).toBe(200);
+    expect(proxy(request('/cards')).status).toBe(307);
+    expect(proxy(request('/cards', 'POST')).status).toBe(410);
+    expect(proxy(request('/chat')).status).toBe(307);
+    expect(proxy(request(`/chat/${randomUUID()}`)).status).toBe(307);
+    expect(proxy(request('/chat/all')).status).toBe(307);
+    expect(proxy(request('/tasks')).status).toBe(307);
     expect(proxy(request('/api/mobile/v1/chats', 'POST')).status).toBe(200);
     expect(proxy(request('/api/chat', 'POST')).status).toBe(200);
     expect(proxy(request('/api/mobile/v1/chat/status')).status).toBe(200);
@@ -266,21 +266,10 @@ describe.skipIf(!localEmulator)('Firestore web chat routes with PostgreSQL offli
     });
 
     const { default: RootLayout } = await import('../app/layout.js');
-    const { NotchCompanion } = await import('../app/notch-companion.js');
-    const layout = await RootLayout({ children: null });
-    const [head, body] = (layout.props as { children: unknown[] }).children as [
-      unknown,
-      { props: { children: unknown[] } },
-    ];
-    void head;
-    const notch = body.props.children.find(
-      (child): child is { type: typeof NotchCompanion; props: { pollShellStatus?: boolean } } =>
-        typeof child === 'object' &&
-        child !== null &&
-        'type' in child &&
-        child.type === NotchCompanion,
-    );
-    expect(notch?.props.pollShellStatus).toBe(false);
+    const layoutMarkup = renderToStaticMarkup(await RootLayout({ children: null }));
+    expect(layoutMarkup).toContain('Audit trail');
+    expect(layoutMarkup).toContain('href="/settings"');
+    expect(layoutMarkup).not.toContain('notch-companion');
 
     const ChatIndexPage = (await import('../app/chat/page.js')).default;
     const index = await ChatIndexPage({ searchParams: Promise.resolve({}) });

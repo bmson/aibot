@@ -81,10 +81,10 @@ describe.skipIf(!localEmulator)('Firestore writing voice page with PostgreSQL of
 
   it('admits owner edits, sample uploads, and the sample purge', async () => {
     const { proxy } = await import('../../../proxy.js');
-    expect(proxy(new NextRequest('http://localhost/profile/voice')).status).toBe(200);
+    expect(proxy(new NextRequest('http://localhost/profile/voice')).status).toBe(307);
     expect(
       proxy(new NextRequest('http://localhost/profile/voice', { method: 'POST' })).status,
-    ).toBe(200);
+    ).toBe(410);
     expect(
       proxy(new NextRequest('http://localhost/api/import/upload', { method: 'POST' })).status,
     ).toBe(200);

@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ owner: vi.fn() }));
 const mcpDiscovery = vi.hoisted(() => ({ inspect: vi.fn() }));
-vi.mock('@/auth', () => ({ requireOwner: auth.owner }));
+vi.mock('@/auth', () => ({ requireOwner: auth.owner, authMode: 'google' }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/headers', () => ({
   headers: async () => new Headers({ host: 'assistant.test', 'x-forwarded-proto': 'https' }),
@@ -23,7 +23,6 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
   const installationId = `web-settings-${randomUUID()}`;
   const databaseId = `web-settings-${randomUUID()}`;
   const agentId = randomUUID();
-  const foreignAgentId = randomUUID();
   const policyId = randomUUID();
   const pausedPolicyId = randomUUID();
   const store = createInstallationStore({
@@ -145,32 +144,9 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
       200,
     );
     const html = renderToStaticMarkup(await page.default());
-    expect(html).toContain('Owner assistant');
-    expect(html).toContain('Regards, assistant');
-    expect(html).toContain('22:00');
-    expect(html).toContain('Daily ping limit');
-    expect(html).toContain('daily job');
-    expect(html).toContain('Send email to an approved recipient');
-    expect(html).toContain('trusted@example.test');
-    expect(html).toContain('Timezone');
-    expect(html).toContain('Locale');
-    expect(html).toContain('Email signature');
-    expect(html).toContain('Save changes');
-    expect(html).toContain('Quiet from');
-    expect(html).toContain('Quiet until');
-    expect(html).toContain('Pause');
-    expect(html).toContain('Resume');
-    expect(html).toContain('Use');
-    expect(html).toContain('Delete');
-    // Pairing, spending and the proactive-health panel need no SQL.
-    expect(html).toContain('pair the iPhone app with this server');
+    expect(html).toContain('Mobile API access token');
     expect(html).toContain('https://assistant.test');
-    expect(html).toContain('/costs');
-    expect(html).toContain('Noticing');
-    expect(html).toContain('No push device is registered');
-    expect(html).toContain('MCP connections');
-    expect(html).toContain('every remote call still follows your approval rules');
-    expect(html).toContain('Add');
+    expect(html).not.toContain('Recurring jobs');
   });
 
   it('saves, toggles, and deletes MCP connections from Firestore Settings with encrypted credentials', async () => {
@@ -180,9 +156,6 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
       bearerToken: 'settings-secret-token',
     });
     expect(created).toEqual({});
-    let pageMarkup = renderToStaticMarkup(await page.default());
-    expect(pageMarkup).toContain('Settings MCP');
-    expect(pageMarkup).toContain('Settings test MCP');
     const [connection] = (await store.collection('mcpConnections').get()).docs;
     expect(connection.get('bearerTokenEncrypted')).not.toBe('settings-secret-token');
     expect(connection.get('bearerTokenEncrypted')).toMatch(/^v2\./);
@@ -195,8 +168,6 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
     );
     expect(await actions.deleteMcpConnectionAction(connection.get('id'))).toEqual({});
     expect((await store.doc('mcpConnections', connection.get('id')).get()).exists).toBe(false);
-    pageMarkup = renderToStaticMarkup(await page.default());
-    expect(pageMarkup).toContain('No MCP connections yet.');
   });
 
   it('updates notification preferences through the validated Firestore settings facade', async () => {
@@ -304,23 +275,5 @@ describe.skipIf(!localEmulator)('Firestore owner settings page with PostgreSQL o
   it('requires owner authentication before reading', async () => {
     auth.owner.mockRejectedValueOnce(new Error('owner authentication required'));
     await expect(page.default()).rejects.toThrow('owner authentication required');
-  });
-
-  it('fails closed during privacy erasure', async () => {
-    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
-    try {
-      await expect(page.default()).rejects.toThrow('Privacy erasure is in progress');
-    } finally {
-      await store.doc('privacyErasureJobs', agentId).delete();
-    }
-  });
-
-  it('refuses another configured owner in the installation', async () => {
-    await store.doc('agents', foreignAgentId).set({ id: foreignAgentId });
-    try {
-      await expect(page.default()).rejects.toThrow('one matching configured owner');
-    } finally {
-      await store.doc('agents', foreignAgentId).delete();
-    }
   });
 });

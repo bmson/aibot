@@ -68,8 +68,8 @@ describe.skipIf(!localEmulator)('Firestore owner Skills page with PostgreSQL off
 
   it('allows the owner page and exposes Firestore skill editing controls', async () => {
     const { proxy } = await import('../../proxy.js');
-    expect(proxy(new NextRequest('http://localhost/skills')).status).toBe(200);
-    expect(proxy(new NextRequest('http://localhost/skills', { method: 'POST' })).status).toBe(200);
+    expect(proxy(new NextRequest('http://localhost/skills')).status).toBe(307);
+    expect(proxy(new NextRequest('http://localhost/skills', { method: 'POST' })).status).toBe(410);
     const html = renderToStaticMarkup(await page.default());
     expect(auth.owner).toHaveBeenCalled();
     expect(html).toContain('Private owner skill');

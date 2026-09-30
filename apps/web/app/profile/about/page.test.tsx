@@ -87,10 +87,10 @@ describe.skipIf(!localEmulator)('Firestore About page with PostgreSQL offline', 
 
   it('renders the interactive owner facts view with PostgreSQL unreachable', async () => {
     const { proxy } = await import('../../../proxy.js');
-    expect(proxy(new NextRequest('http://localhost/profile/about')).status).toBe(200);
+    expect(proxy(new NextRequest('http://localhost/profile/about')).status).toBe(307);
     expect(
       proxy(new NextRequest('http://localhost/profile/about', { method: 'POST' })).status,
-    ).toBe(200);
+    ).toBe(410);
     const html = renderToStaticMarkup(await page.default());
     expect(auth.owner).toHaveBeenCalled();
     expect(html).toContain('Private owner fact');

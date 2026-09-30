@@ -84,9 +84,9 @@ describe.skipIf(!localEmulator)('Firestore web Approvals with PostgreSQL offline
     const own = await createApproval();
     await createApproval(randomUUID());
     expect(() => getDb()).toThrow('PostgreSQL-backed web surface is unavailable');
-    expect(proxy(new NextRequest('http://localhost/approvals')).status).toBe(200);
+    expect(proxy(new NextRequest('http://localhost/approvals')).status).toBe(307);
     expect(proxy(new NextRequest('http://localhost/approvals', { method: 'POST' })).status).toBe(
-      200,
+      410,
     );
     const inbox = await listApprovalInbox(getApprovalStore());
     expect(inbox.pending.map((item) => item.approval.id)).toEqual([own.approvalId]);

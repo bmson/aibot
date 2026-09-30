@@ -64,8 +64,8 @@ describe.skipIf(!localEmulator)('Firestore web Goals with PostgreSQL offline', (
 
   it('exposes the page and its actions through the Firestore proxy', async () => {
     const { proxy } = await import('../../proxy.js');
-    expect(proxy(new NextRequest('http://localhost/goals')).status).toBe(200);
-    expect(proxy(new NextRequest('http://localhost/goals', { method: 'POST' })).status).toBe(200);
+    expect(proxy(new NextRequest('http://localhost/goals')).status).toBe(307);
+    expect(proxy(new NextRequest('http://localhost/goals', { method: 'POST' })).status).toBe(410);
   });
 
   it('creates, renders, edits, and archives a goal without opening SQL', async () => {

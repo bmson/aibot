@@ -79,7 +79,9 @@ describe.skipIf(!localEmulator)('Firestore device registration and readiness', (
       [`/profile/people/${randomUUID()}`, 'GET'],
     ];
     for (const [path, method] of allowed)
-      expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(200);
+      expect(proxy(new NextRequest(`http://localhost${path}`, { method })).status).toBe(
+        path.startsWith('/api/') ? 200 : method === 'GET' ? 307 : 410,
+      );
     expect(
       proxy(new NextRequest('http://localhost/api/mobile/v1/devices', { method: 'DELETE' })).status,
     ).toBe(503);

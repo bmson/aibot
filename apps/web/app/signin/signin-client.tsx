@@ -32,7 +32,7 @@ export function SignInClient() {
             setError(null);
             try {
               await signInWithPasskey();
-              window.location.assign('/chat');
+              window.location.assign('/settings');
             } catch (failure) {
               setError(ownerAuthMessage(failure));
             } finally {

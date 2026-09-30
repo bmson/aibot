@@ -14,10 +14,8 @@ import { ConfirmButton } from '@/lib/ui-client';
  * changes — mirroring how GitHub PATs and Cloud providers handle their
  * tokens. An owner who needs a working key rotates and copies the fresh one.
  *
- * Rotation is only offered when the server has a writable .env (local and
- * self-hosted installs). Cloud Run installs manage the value through Secret
- * Manager, so the panel shows the CLI steps instead of a button whose effect
- * would silently revert on the next instance recycle.
+ * Rotation persists to the local .env or to Secret Manager on Cloud Run.
+ * Other Cloud Run instances refresh the secret within 30 seconds.
  */
 export function MobileTokenPanel({
   maskedToken,
@@ -62,10 +60,10 @@ export function MobileTokenPanel({
       </div>
 
       <p className="text-xs leading-5 text-muted">
-        Enter these two values in the iPhone app’s Connection screen. The key is stored in the
+        Enter these two values in the iPhone app’s Connection screen. The token is stored in the
         device Keychain and sent only to this server. For security the stored key is never shown
-        here — rotating generates a new one you can copy once, and invalidates the old key
-        immediately.
+        here — rotating generates a new one you can copy once, and invalidates the old key within 30
+        seconds on all server instances.
       </p>
 
       {freshToken ? (
@@ -87,7 +85,8 @@ export function MobileTokenPanel({
             </button>
           </div>
           <span className="text-xs text-emerald-700 dark:text-emerald-400">
-            Update the Connection screen on your phone — the previous key no longer works.
+            Update the Connection screen on your phone — the previous key stops working within 30
+            seconds.
           </span>
         </div>
       ) : null}
@@ -98,11 +97,15 @@ export function MobileTokenPanel({
             action={async () => {
               setError(null);
               setFreshToken(null);
-              const result = await rotateMobileToken();
-              if (result.error) {
-                setError(result.error);
-              } else if (result.token) {
-                setFreshToken(result.token);
+              try {
+                const result = await rotateMobileToken();
+                if (result.error) {
+                  setError(result.error);
+                } else if (result.token) {
+                  setFreshToken(result.token);
+                }
+              } catch {
+                setError('Could not create a token. Check the server connection and try again.');
               }
             }}
           >

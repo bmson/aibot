@@ -77,8 +77,8 @@ describe.skipIf(!localEmulator)('Firestore owner import page with PostgreSQL off
 
   it('renders import history, local workspace files, and their actions', async () => {
     const { proxy } = await import('../../proxy.js');
-    expect(proxy(new NextRequest('http://localhost/import')).status).toBe(200);
-    expect(proxy(new NextRequest('http://localhost/import', { method: 'POST' })).status).toBe(200);
+    expect(proxy(new NextRequest('http://localhost/import')).status).toBe(307);
+    expect(proxy(new NextRequest('http://localhost/import', { method: 'POST' })).status).toBe(410);
     expect(
       proxy(new NextRequest('http://localhost/api/import/upload', { method: 'POST' })).status,
     ).toBe(200);
