@@ -59,7 +59,7 @@ jobs:
         uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
         with:
           openai-api-key: ${{ secrets.SELF_REPAIR_OPENAI_API_KEY }}
-          model: gpt-6-luna
+          model: gpt-6.1-sol
           effort: medium
           permission-profile: ':workspace'
           safety-strategy: drop-sudo
