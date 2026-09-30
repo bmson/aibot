@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { type ExecutorDeps, executeTask } from '@assistant/core';
 import type { Db } from '@assistant/db';
-import { createFirestoreExecutionPersistence } from '@assistant/firestore';
+import {
+  createFirestoreExecutionPersistence,
+  FirestoreSelfImprovementRepository,
+} from '@assistant/firestore';
 import type { ExecutionPersistence } from '@assistant/persistence';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { encodeRecord, type InstallationStore } from '../../../packages/firestore/src/store.js';
@@ -273,6 +276,65 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       await task({ status: 'done' });
       expect(await runJob()).toBe('self-improve: 0 proposal(s) from 0 failure pattern(s)');
       expect(prompts).toEqual([]);
+    });
+
+    it('keeps ordered fields available to cursors after projected signal scans exceed one page', async () => {
+      const ownerTaskId = await task({ status: 'done' });
+      for (let start = 0; start < 501; start += 250) {
+        const batch = store.db.batch();
+        for (let index = start; index < Math.min(start + 250, 501); index += 1) {
+          const createdAt = hoursAgo(1);
+          const toolCallId = `paged-failure-${String(index).padStart(3, '0')}`;
+          batch.set(store.doc('toolCalls', toolCallId), {
+            id: toolCallId,
+            taskId: ownerTaskId,
+            toolName: 'test.paged_failure',
+            status: 'failed',
+            error: 'synthetic paged failure',
+            createdAt,
+          });
+          const modelCallId = `paged-model-${String(index).padStart(3, '0')}`;
+          batch.set(store.doc('modelCalls', modelCallId), {
+            id: modelCallId,
+            taskId: ownerTaskId,
+            role: 'draft',
+            model: 'fixture',
+            costUsd: '0.020000',
+            createdAt,
+          });
+        }
+        await batch.commit();
+      }
+
+      for (let start = 0; start < 501; start += 250) {
+        const batch = store.db.batch();
+        for (let index = start; index < Math.min(start + 250, 501); index += 1) {
+          const taskId = `paged-stuck-${String(index).padStart(3, '0')}`;
+          batch.set(store.doc('tasks', taskId), {
+            id: taskId,
+            agentId,
+            type: 'adhoc',
+            trust: 'owner',
+            status: 'needs_attention',
+            attempt: 2,
+            progress: '',
+            createdAt: hoursAgo(2),
+            updatedAt: hoursAgo(1),
+          });
+        }
+        await batch.commit();
+      }
+
+      const signals = await new FirestoreSelfImprovementRepository(store, agentId).signals({
+        agentId,
+        since: hoursAgo(24),
+        staleBefore: hoursAgo(10),
+        costOutlierUsd: 0.01,
+        outlierLimit: 10,
+      });
+      expect(signals.failedCalls).toHaveLength(501);
+      expect(signals.costOutliers).toHaveLength(10);
+      expect(signals.stuckCount).toBe(501);
     });
   },
 );

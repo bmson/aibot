@@ -3,11 +3,12 @@ import type {
   ExecutionEvidenceRepository,
   ResponseCheckInput,
 } from '@assistant/persistence';
-import { evidenceLimit, type Records } from '@assistant/persistence';
+import { evidenceLimit, type Records, taskEvidenceLimit } from '@assistant/persistence';
 import { FieldPath } from '@google-cloud/firestore';
 import { decodeRecord, documentKey, encodeRecord, type InstallationStore } from './store.js';
 
 const MAX_SHARED_DOCUMENT_RECEIPT_SCAN = 500;
+const EVIDENCE_PAGE_SIZE = 200;
 
 function read<T>(snapshot: { exists: boolean; data(): unknown }, id?: string): T | null {
   if (!snapshot.exists) return null;
@@ -29,11 +30,6 @@ function evidence(row: Records['toolCalls']): ExecutionEvidenceRecord {
     error: row.error,
     step: row.step,
   };
-}
-
-function bounded<T>(rows: T[], max: number): T[] {
-  if (rows.length > max) throw new Error(`Execution evidence exceeds the ${max}-row bound`);
-  return rows;
 }
 
 async function ownedTask(store: InstallationStore, agentId: string, taskId: string) {
@@ -58,29 +54,39 @@ export class FirestoreExecutionEvidenceRepository implements ExecutionEvidenceRe
     maxRows?: number;
   }) {
     await ownedTask(this.store, agentId, taskId);
-    const max = evidenceLimit(maxRows);
-    const snapshot = await this.store
-      .collection('toolCalls')
-      .where('taskId', '==', taskId)
-      .limit(max + 1)
-      .get();
-    const rows = snapshot.docs
-      .map((doc) => {
-        const row = read<Records['toolCalls']>(
-          { exists: doc.exists, data: () => doc.data() },
-          undefined,
-        );
-        if (!row || documentKey(row.id) !== doc.id)
+    // When a caller supplies maxRows it asks for an explicit small window. The
+    // normal workflow path needs complete evidence, so page up to a separate
+    // safety ceiling instead of treating Firestore's 500-document batch size
+    // as the task's evidence limit.
+    const max = taskEvidenceLimit(maxRows);
+    const rows: Records['toolCalls'][] = [];
+    let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+    for (;;) {
+      const pageLimit = Math.min(EVIDENCE_PAGE_SIZE, max + 1 - rows.length);
+      let query = this.store
+        .collection('toolCalls')
+        .where('taskId', '==', taskId)
+        .orderBy(FieldPath.documentId())
+        .limit(pageLimit);
+      if (cursor) query = query.startAfter(cursor);
+      const page = await query.get();
+      for (const doc of page.docs) {
+        const row = read<Records['toolCalls']>({ exists: doc.exists, data: () => doc.data() });
+        if (!row || row.taskId !== taskId || documentKey(row.id) !== doc.id)
           throw new Error('Execution evidence contains a corrupt tool-call identity');
-        return row;
-      })
-      .sort(
-        (a, b) =>
-          a.step - b.step ||
-          a.createdAt.getTime() - b.createdAt.getTime() ||
-          a.id.localeCompare(b.id),
-      );
-    return bounded(rows.map(evidence), max);
+        rows.push(row);
+      }
+      if (rows.length > max) throw new Error(`Execution evidence exceeds the ${max}-row bound`);
+      if (page.size < pageLimit) break;
+      cursor = page.docs.at(-1);
+    }
+    rows.sort(
+      (a, b) =>
+        a.step - b.step ||
+        a.createdAt.getTime() - b.createdAt.getTime() ||
+        a.id.localeCompare(b.id),
+    );
+    return rows.map(evidence);
   }
 
   async conversationEvidence({
@@ -288,22 +294,32 @@ export class FirestoreExecutionEvidenceRepository implements ExecutionEvidenceRe
 
   async checklistDecisions({ agentId, taskId }: { agentId: string; taskId: string }) {
     await ownedTask(this.store, agentId, taskId);
-    const snapshot = await this.store
-      .collection('approvals')
-      .where('taskId', '==', taskId)
-      .limit(501)
-      .get();
-    const rows = snapshot.docs.map((doc) => {
-      const row = read<Records['approvals']>({ exists: doc.exists, data: () => doc.data() });
-      if (!row) throw new Error('Execution evidence contains a corrupt approval record');
-      if (documentKey(row.id) !== doc.id)
-        throw new Error('Execution evidence contains a corrupt approval identity');
-      return row;
-    });
-    return bounded(
-      rows.map((row) => ({ toolCallId: row.toolCallId, status: row.status })),
-      500,
-    );
+    const rows: Records['approvals'][] = [];
+    let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+    for (;;) {
+      let query = this.store
+        .collection('approvals')
+        .where('taskId', '==', taskId)
+        .orderBy(FieldPath.documentId())
+        .limit(Math.min(EVIDENCE_PAGE_SIZE, taskEvidenceLimit(undefined) + 1 - rows.length));
+      if (cursor) query = query.startAfter(cursor);
+      const page = await query.get();
+      for (const doc of page.docs) {
+        const row = read<Records['approvals']>({ exists: doc.exists, data: () => doc.data() });
+        if (!row || row.taskId !== taskId)
+          throw new Error('Execution evidence contains a corrupt approval record');
+        if (documentKey(row.id) !== doc.id)
+          throw new Error('Execution evidence contains a corrupt approval identity');
+        rows.push(row);
+      }
+      if (rows.length > taskEvidenceLimit(undefined))
+        throw new Error(
+          `Execution checklist evidence exceeds the ${taskEvidenceLimit(undefined)}-row bound`,
+        );
+      if (page.size < EVIDENCE_PAGE_SIZE) break;
+      cursor = page.docs.at(-1);
+    }
+    return rows.map((row) => ({ toolCallId: row.toolCallId, status: row.status }));
   }
 
   async recordResponseCheck({ agentId, check }: { agentId: string; check: ResponseCheckInput }) {

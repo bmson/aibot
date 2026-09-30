@@ -725,6 +725,10 @@ export async function stageModelFinalResponse(
   // just this prose-model one — persists its verdict and loop-health counters.
   pending.contractBlocked = checked.blocked;
   pending.contractUnsupportedCount = checked.unsupported.length;
+  if (checked.qualityFallback) {
+    pending.terminalStatus = 'needs_attention';
+    pending.outcome = 'needs_attention';
+  }
   pending.outputVerificationAttempted = reflection.attempted || undefined;
   pending.outputVerificationRevised = reflection.revised || undefined;
   pending.outputVerificationUnavailable = reflection.unavailable || undefined;

@@ -55,6 +55,7 @@ import {
 import { requestChecklistDirective } from '../request-checklist.js';
 import { enforcePersonalReadResponse, isSimulatedApprovalNotice } from '../response-contract.js';
 import { isMemoryWriteRequest, stepLimitResponse } from '../saved-work.js';
+import { groundWorkspaceWrite, writeGroundingCorpus } from '../write-grounding.js';
 import { refreshRequestChecklist } from './checklist.js';
 import {
   budgetResumeAt,
@@ -827,6 +828,17 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
       if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
     }
 
+    if (stepResult.ok && stepResult.qualityFailure) {
+      const safeText = stepResult.text.trim();
+      rc.window.push({ role: 'assistant', content: safeText } as ModelMessage);
+      return stageFinalResponse(deps, lease, state, rc.window, {
+        text: safeText,
+        progress: safeText.slice(0, 200),
+        terminalStatus: 'needs_attention',
+        outcome: 'needs_attention',
+      });
+    }
+
     // toolChoice 'none' already asks for this; dropping the calls outright is
     // what makes it a guarantee. The old ledger short-circuit got the same
     // property by never running a model turn at all, and letting the model
@@ -1114,6 +1126,23 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         }
         if (!(await renewTaskLease(deps.persistence?.tasks ?? db, lease))) return LOST_LEASE;
         rc.browserStageRemainder = stepResult.toolCalls.slice(toolIndex + 1);
+        if (tc.toolName === 'calendar.create_event' || tc.toolName === 'sheets.create') {
+          const grounding = groundWorkspaceWrite(
+            tc.toolName,
+            tc.input,
+            ownerText,
+            writeGroundingCorpus(rc.window, ownerText),
+            task.createdAt,
+          );
+          if (!grounding.allowed) {
+            rc.window.push(
+              toolResultMessage(tc.toolCallId, tc.toolName, {
+                error: `Write not sent: ${grounding.reason}. Ask the owner to confirm the missing detail or read a source that contains it before trying again.`,
+              }),
+            );
+            continue;
+          }
+        }
         const outcome = await dispatcher.dispatch({
           task,
           step: state.step,

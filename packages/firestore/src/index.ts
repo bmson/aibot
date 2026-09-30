@@ -151,7 +151,7 @@ export { FirestoreSkillContextRepository } from './skill-context.js';
 export { FirestoreSkillMutationRepository } from './skill-mutations.js';
 export { FirestoreSkillReflectionRepository } from './skill-reflection.js';
 export { FirestoreSmsChannelRepository } from './sms-channel.js';
-export { createInstallationStore, InstallationStore } from './store.js';
+export { createInstallationStore, decodeRecord, InstallationStore } from './store.js';
 export { FirestoreSuggestionDecisionRepository } from './suggestion-decisions.js';
 export { FirestoreSuggestionRepository, suggestionIdFor } from './suggestions.js';
 export { FirestoreTaskActivityRepository } from './task-activity.js';

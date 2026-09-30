@@ -6,6 +6,36 @@ import {
 } from './response-contract.js';
 
 describe('response execution contract', () => {
+  it('replaces an obvious generation loop with a bounded failure reply', () => {
+    const malformed = 'not-a-word'.repeat(30);
+    const result = enforceResponseContract(malformed, []);
+    expect(result).toMatchObject({
+      text: "I couldn't produce a reliable answer just now. Please try again.",
+      blocked: true,
+      unsupported: [],
+      qualityFallback: true,
+    });
+    // The same deterministic contract runs after an optional verifier rewrite.
+    expect(enforceResponseContract(malformed, []).qualityFallback).toBe(true);
+  });
+
+  it('preserves a long repetition when the owner explicitly asks for it', () => {
+    const repeated = 'bad-token-'.repeat(30);
+    expect(
+      enforceResponseContract(repeated, [], {
+        requestText: 'Repeat this exactly: bad-token-',
+      }),
+    ).toMatchObject({ text: repeated, blocked: false });
+  });
+
+  it('rejects malformed verifier wording on the same post-rewrite contract path', () => {
+    const verifierRevision = 'The reported temperature is 12°Chare.';
+    expect(enforceResponseContract(verifierRevision, [])).toMatchObject({
+      text: "I couldn't produce a reliable answer just now. Please try again.",
+      qualityFallback: true,
+    });
+  });
+
   it('blocks a fabricated spreadsheet and silent background-work claim', () => {
     const result = enforceResponseContract(
       "I created a shared spreadsheet and I'll keep researching silently.",
@@ -1827,5 +1857,156 @@ describe('presentation repair before publish', () => {
     // must still be blocked, fence or no fence.
     const result = enforceResponseContract('I emailed Alice.\n```', []);
     expect(result.blocked).toBe(true);
+  });
+});
+
+describe('flight write response grounding', () => {
+  const outboundWrite = {
+    toolName: 'calendar.create_event',
+    status: 'succeeded',
+    args: {
+      summary: 'United outbound flight from SFO to BER',
+      location: 'SFO to BER',
+      start: '2026-10-09T09:15:00-07:00',
+      end: '2026-10-11T05:15:00+02:00',
+    },
+    result: { eventId: 'evt-flight-1' },
+  };
+  const returnWrite = {
+    toolName: 'calendar.create_event',
+    status: 'succeeded',
+    args: {
+      summary: 'United return flight from BER to SFO',
+      location: 'BER to SFO',
+      start: '2026-10-20T10:30:00+02:00',
+      end: '2026-10-20T13:00:00-07:00',
+    },
+    result: { eventId: 'evt-flight-2' },
+  };
+  const writeEvidence = [outboundWrite, returnWrite];
+
+  it('replaces a KLM route and missing-return claim with the successful write receipt', () => {
+    const result = enforceResponseContract(
+      'Your KLM flight via Amsterdam is on the calendar. The return time is unavailable. The hotel is still on your list.',
+      writeEvidence,
+      {
+        requestText: 'Add my United flight from SFO to BER to the calendar.',
+      },
+    );
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).not.toContain('KLM');
+    expect(result.text).not.toContain('Amsterdam');
+    expect(result.text).not.toContain('return time is unavailable');
+    expect(result.text).toContain('2026-10-09T09:15:00-07:00');
+    expect(result.text).toContain('2026-10-11T05:15:00+02:00');
+    expect(result.text).toContain('2026-10-20T10:30:00+02:00');
+    expect(result.text).toContain('The hotel is still on your list.');
+  });
+
+  it('does not treat an outbound arrival as a scheduled return', () => {
+    const text = 'The return time is unavailable.';
+    const result = enforceResponseContract(text, [outboundWrite], {
+      requestText: 'Add my United flight from SFO to BER to the calendar.',
+    });
+
+    expect(result).toMatchObject({ blocked: false, text });
+  });
+
+  it('does not infer a return from an outbound description about missing return details', () => {
+    const text = 'The return time is unavailable.';
+    const evidence = {
+      ...outboundWrite,
+      args: {
+        ...outboundWrite.args,
+        description: 'Return flight not booked; return time unavailable.',
+      },
+    };
+    expect(
+      enforceResponseContract(text, [evidence], {
+        requestText: 'Add my United flight from SFO to BER to the calendar.',
+      }),
+    ).toMatchObject({ blocked: false, text });
+  });
+
+  it('corrects a different explicitly zoned flight time while preserving the valid arrival', () => {
+    const result = enforceResponseContract(
+      'Your United flight departs at 10:15 AM PDT and arrives at 5:15 AM CEST.',
+      writeEvidence,
+      { requestText: 'Add my United flight to the calendar.' },
+    );
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).not.toContain('10:15 AM PDT');
+    expect(result.text).toContain('2026-10-09T09:15:00-07:00');
+  });
+
+  it('preserves matching airline, airports, dates, and zoned times from the write', () => {
+    const text =
+      'Your United flight from SFO to BER departs at 9:15 AM PDT on Oct 9, 2026 and arrives at 5:15 AM CEST on Oct 11, 2026.';
+    const result = enforceResponseContract(text, [outboundWrite], {
+      requestText: 'Add my United flight from SFO to BER to the calendar.',
+    });
+
+    expect(result).toMatchObject({ blocked: false, text });
+  });
+
+  it('does not misread unrelated uppercase acronyms as airport codes', () => {
+    const text = 'Your United flight from SFO to BER is saved; the CEO will join.';
+    const result = enforceResponseContract(text, [outboundWrite], {
+      requestText: 'Add my United flight from SFO to BER to the calendar.',
+    });
+
+    expect(result).toMatchObject({ blocked: false, text });
+  });
+
+  it('rejects a flight date that differs even when the clock time matches', () => {
+    const result = enforceResponseContract(
+      'Your United flight from SFO to BER departs at 9:15 AM PDT on Oct 10, 2026.',
+      [outboundWrite],
+      { requestText: 'Add my United flight from SFO to BER to the calendar.' },
+    );
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).not.toContain('Oct 10, 2026');
+    expect(result.text).toContain('2026-10-09T09:15:00-07:00');
+  });
+
+  it('checks a combined private-read reply against the successful writes', () => {
+    const text = 'Your KLM flight via Amsterdam is on the calendar.';
+    const result = enforceResponseContract(
+      text,
+      [
+        {
+          toolName: 'drive.search',
+          status: 'succeeded',
+          args: { query: 'flight confirmation' },
+          result: { files: [{ fileId: 'f1', name: 'KLM flight confirmation' }] },
+        },
+        ...writeEvidence,
+      ],
+      {
+        requestText: 'Find my flight confirmation in Drive and add both flights to the calendar.',
+        readRequest: {
+          kind: 'drive',
+          queryTerms: ['flight', 'confirmation'],
+          firstToolName: 'drive.search',
+          requiresThreadRead: false,
+        },
+      },
+    );
+
+    expect(result.blocked).toBe(true);
+    expect(result.text).not.toContain('KLM');
+    expect(result.text).toContain('Saved to your calendar:');
+  });
+
+  it('preserves flight wording when the owner explicitly asks for exact repetition', () => {
+    const text = 'Your KLM flight via Amsterdam has no return time.';
+    const result = enforceResponseContract(text, writeEvidence, {
+      requestText: `Repeat this exactly: ${text}`,
+    });
+
+    expect(result).toMatchObject({ blocked: false, text });
   });
 });

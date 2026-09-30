@@ -21,6 +21,11 @@ import {
 } from '../cost.js';
 import { withSpan } from '../otel.js';
 import { type AuditCaptureMode, captureField, captureInput } from './audit-capture.js';
+import {
+  explicitlyRequestsRepetition,
+  gradeAuditedOutput,
+  OBJECT_PARSE_FAILURE_PREFIX,
+} from './audit-graders.js';
 import { type BudgetDecision, evaluateBudget } from './budget.js';
 import {
   connectionIdForModel,
@@ -185,6 +190,8 @@ export type StepCallOutcome =
       text: string;
       toolCalls: ProposedToolCall[];
       finishReason?: string;
+      /** A repeated-generation guard exhausted its single fallback attempt. */
+      qualityFailure?: true;
     };
 
 export type ObjectOutcome<T> =
@@ -301,9 +308,40 @@ function validTokenCount(value: unknown): value is number {
 
 function providerResultFromError(error: unknown): FinishEventLike | undefined {
   if (!isUnparseableObjectError(error) || !(error instanceof Error)) return undefined;
-  const candidate = error as Error & FinishEventLike;
-  if (!candidate.usage && !candidate.providerMetadata && !candidate.response) return undefined;
+  const candidate = error as Error & FinishEventLike & { text?: unknown };
+  if (!candidate.usage && !candidate.providerMetadata && !candidate.response && !candidate.text)
+    return undefined;
   return candidate;
+}
+
+export function objectFailureAuditOutput(error: unknown): string | undefined {
+  if (!isUnparseableObjectError(error) || !(error instanceof Error)) return undefined;
+  const text = (error as Error & { text?: unknown }).text;
+  return `${OBJECT_PARSE_FAILURE_PREFIX} (${error.name})\n${typeof text === 'string' ? text : ''}`;
+}
+
+const MALFORMED_OUTPUT_FALLBACK =
+  "I couldn't produce a reliable answer just now. Please try again.";
+
+function ownerRequestText(opts: CallOptions): string | undefined {
+  if (opts.prompt) return opts.prompt;
+  const message = opts.messages?.findLast((item) => item.role === 'user');
+  if (!message) return undefined;
+  if (typeof message.content === 'string') return message.content;
+  if (!Array.isArray(message.content)) return undefined;
+  return message.content
+    .filter(
+      (part): part is Extract<(typeof message.content)[number], { type: 'text' }> =>
+        Boolean(part) && typeof part === 'object' && 'type' in part && part.type === 'text',
+    )
+    .map((part) => part.text)
+    .join('\n');
+}
+
+function hasOutputIntegrityDefect(text: string, repetitionRequested: boolean): boolean {
+  return gradeAuditedOutput(text, { repetitionRequested }).some(
+    (defect) => defect.kind === 'repetitive-output' || defect.kind === 'malformed-output',
+  );
 }
 
 function aggregateEmbeddingUsage(
@@ -540,8 +578,30 @@ function isModelCallTimeout(err: unknown): boolean {
  * task-level retry.
  */
 export function isProviderCapabilityError(err: unknown): boolean {
-  if (!(err instanceof Error) || err.name !== 'AI_APICallError') return false;
-  return /not supported|no endpoints? (found|match)|no allowed providers/i.test(err.message);
+  const pending: unknown[] = [err];
+  const seen = new Set<unknown>();
+  for (let depth = 0; depth < 4 && pending.length > 0; depth += 1) {
+    const candidate = pending.shift();
+    if (!candidate || typeof candidate !== 'object' || seen.has(candidate)) continue;
+    seen.add(candidate);
+    const record = candidate as Record<string, unknown>;
+    if (candidate instanceof Error && candidate.name === 'AI_APICallError') {
+      const statusCode = record.statusCode;
+      const paymentRequired =
+        statusCode === 402 ||
+        statusCode === '402' ||
+        /\bpayment method is required\b/i.test(candidate.message);
+      if (
+        paymentRequired ||
+        /not supported|no endpoints? (found|match)|no allowed providers/i.test(candidate.message)
+      ) {
+        return true;
+      }
+    }
+    pending.push(record.lastError, record.cause);
+    if (Array.isArray(record.errors)) pending.push(...record.errors.slice(0, 4));
+  }
+  return false;
 }
 
 export class ModelRouter {
@@ -1167,7 +1227,66 @@ export class ModelRouter {
     opts: CallOptions & { tools: ToolSet; toolChoice?: StepToolChoice },
   ): Promise<StepCallOutcome> {
     if (role === 'embed') throw new Error('step() cannot use the embed role');
-    return this.withTimeoutRetry(opts, () => this.stepOnce(role, opts));
+    let outcome: StepCallOutcome;
+    try {
+      outcome = await this.withTimeoutRetry(opts, () => this.stepOnce(role, opts));
+    } catch (error) {
+      if (opts.forceFallback || !isProviderCapabilityError(error)) throw error;
+      try {
+        const primary = await this.route(role, { ...opts, forceFallback: false });
+        const fallback = await this.route(role, { ...opts, forceFallback: true });
+        if (!primary.ok || !fallback.ok || primary.modelId === fallback.modelId) throw error;
+        outcome = await this.withTimeoutRetry({ ...opts, forceFallback: true }, () =>
+          this.stepOnce(role, { ...opts, forceFallback: true }),
+        );
+        if (!outcome.ok) throw error;
+      } catch {
+        // A provider-shape/billing failure gets one distinct configured-role
+        // fallback. Preserve the original error so normal task retry and
+        // diagnostics remain authoritative when the fallback cannot run.
+        throw error;
+      }
+    }
+    // A tool decision is not owner-facing prose. Let its normal execution and
+    // the step loop continue; only intercept obvious generation loops in a
+    // text-only answer, leaving ordinary partial answers alone.
+    const repetitionRequested = explicitlyRequestsRepetition(ownerRequestText(opts));
+    if (
+      !outcome.ok ||
+      outcome.toolCalls.length > 0 ||
+      !hasOutputIntegrityDefect(outcome.text, repetitionRequested)
+    ) {
+      return outcome;
+    }
+
+    try {
+      const fallbackRoute = await this.route(role, { ...opts, forceFallback: true });
+      if (!fallbackRoute.ok || fallbackRoute.modelId === outcome.modelId) {
+        return {
+          ...outcome,
+          text: MALFORMED_OUTPUT_FALLBACK,
+          finishReason: 'error',
+          qualityFailure: true,
+        };
+      }
+      const retry = await this.withTimeoutRetry({ ...opts, forceFallback: true }, () =>
+        this.stepOnce(role, { ...opts, forceFallback: true }),
+      );
+      if (
+        retry.ok &&
+        (retry.toolCalls.length > 0 || !hasOutputIntegrityDefect(retry.text, repetitionRequested))
+      )
+        return retry;
+    } catch {
+      // The already completed provider call is unusable; a bounded retry is
+      // best-effort and must not turn this into a paid task retry loop.
+    }
+    return {
+      ...outcome,
+      text: MALFORMED_OUTPUT_FALLBACK,
+      finishReason: 'error',
+      qualityFailure: true,
+    };
   }
 
   /**
@@ -1372,6 +1491,7 @@ export class ModelRouter {
               method: 'object',
               system: opts.system,
               input: captureInput(opts),
+              output: objectFailureAuditOutput(err),
             },
           });
         } else {
@@ -1404,6 +1524,9 @@ export class ModelRouter {
         throw err;
       }
       try {
+        const primary = await this.route(role, { ...opts, forceFallback: false });
+        const fallback = await this.route(role, { ...opts, forceFallback: true });
+        if (!primary.ok || !fallback.ok || primary.modelId === fallback.modelId) throw err;
         outcome = await attempt(true);
       } catch {
         // No usable fallback, or it also failed: surface the original

@@ -1,5 +1,5 @@
 import type { ExecutionEvidenceRepository, ResponseCheckInput } from '@assistant/persistence';
-import { evidenceLimit } from '@assistant/persistence';
+import { evidenceLimit, taskEvidenceLimit } from '@assistant/persistence';
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { approvals, conversations, messages, responseChecks, tasks, toolCalls } from './schema.js';
@@ -29,16 +29,16 @@ export function createPostgresExecutionEvidenceRepository(db: Db): ExecutionEvid
   return {
     kind: 'execution-evidence-repository',
     async taskEvidence({ agentId, taskId, maxRows }) {
-      const max = requestedLimit(maxRows);
+      const max = taskEvidenceLimit(maxRows);
       const query = db
         .select({ toolCall: toolCalls })
         .from(toolCalls)
         .innerJoin(tasks, and(eq(toolCalls.taskId, tasks.id), eq(tasks.agentId, agentId)))
         .where(eq(toolCalls.taskId, taskId))
         .orderBy(toolCalls.step, toolCalls.createdAt, toolCalls.id);
-      const rows = max === undefined ? await query : await query.limit(max + 1);
+      const rows = await query.limit(max + 1);
       const values = rows.map(({ toolCall }) => evidence(toolCall));
-      return max === undefined ? values : bounded(values, max);
+      return bounded(values, max);
     },
     async conversationEvidence({ agentId, conversationId, excludeTaskId, maxRows }) {
       const max = requestedLimit(maxRows);

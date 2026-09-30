@@ -56,6 +56,70 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore execution evide
     ]);
   });
 
+  it('pages through more than one Firestore page and returns complete task evidence and decisions', async () => {
+    for (let start = 0; start < 501; start += 400) {
+      const batch = store.db.batch();
+      for (let index = start; index < Math.min(start + 400, 501); index += 1) {
+        const id = `large-call-${String(index).padStart(3, '0')}`;
+        batch.set(store.doc('toolCalls', id), {
+          id,
+          taskId: 'task',
+          step: index,
+          toolName: 'test.large',
+          status: 'succeeded',
+          args: {},
+          result: { index },
+          error: null,
+          createdAt: new Date(Date.UTC(2026, 8, 12, 12, 0, index)),
+        });
+        const approvalId = `large-approval-${String(index).padStart(3, '0')}`;
+        batch.set(store.doc('approvals', approvalId), {
+          id: approvalId,
+          taskId: 'task',
+          toolCallId: id,
+          status: 'approved',
+          createdAt: new Date(Date.UTC(2026, 8, 12, 12, 0, index)),
+        });
+      }
+      await batch.commit();
+    }
+
+    const calls = await repository.taskEvidence({ agentId: 'owner', taskId: 'task' });
+    expect(calls).toHaveLength(503);
+    expect(calls.filter((row) => row.toolName === 'test.large').map((row) => row.step)).toEqual([
+      ...Array(501).keys(),
+    ]);
+
+    const decisions = await repository.checklistDecisions({ agentId: 'owner', taskId: 'task' });
+    expect(decisions).toHaveLength(501);
+    expect(decisions.filter((row) => row.toolCallId.startsWith('large-call-'))).toHaveLength(501);
+  });
+
+  it('fails closed when complete task evidence exceeds the explicit safety ceiling', async () => {
+    for (let start = 0; start < 10_001; start += 500) {
+      const batch = store.db.batch();
+      for (let index = start; index < Math.min(start + 500, 10_001); index += 1) {
+        const id = `ceiling-call-${String(index).padStart(5, '0')}`;
+        batch.set(store.doc('toolCalls', id), {
+          id,
+          taskId: 'task',
+          step: index,
+          toolName: 'test.ceiling',
+          status: 'succeeded',
+          args: {},
+          result: null,
+          error: null,
+          createdAt: new Date(Date.UTC(2026, 8, 12, 12, 0, index % 60)),
+        });
+      }
+      await batch.commit();
+    }
+
+    await expect(
+      repository.taskEvidence({ agentId: 'owner', taskId: 'task', maxRows: 10_000 }),
+    ).rejects.toThrow('Execution evidence exceeds the 10000-row bound');
+  });
+
   it('does not accept a foreign conversation task as prior evidence', async () => {
     await expect(
       repository.conversationEvidence({
