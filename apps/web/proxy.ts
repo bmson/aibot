@@ -8,9 +8,19 @@ export function proxy(request: NextRequest) {
   // their existing persistence and authentication boundaries below.
   const adminPage = ['/settings', '/security', '/signin', '/setup'].includes(path);
   const auditPage = path === '/audit' || /^\/audit\/[0-9a-f-]{36}$/i.test(path);
-  const asset = ['/icon.svg', '/apple-icon.png', '/favicon.ico', '/manifest.webmanifest'].includes(
-    path,
-  );
+  const asset = [
+    '/icon.svg',
+    '/apple-icon.png',
+    '/favicon.ico',
+    '/manifest.webmanifest',
+    '/icons/assistant-192.png',
+    '/icons/assistant-512.png',
+    '/icons/assistant-mark.svg',
+    '/icons/assistant-source.svg',
+  ].includes(path);
+  // Public branding assets must reach Next's static-file handler in either
+  // persistence mode, including the isolated shipping-image smoke check.
+  if (asset && ['GET', 'HEAD'].includes(request.method)) return NextResponse.next();
   if (!path.startsWith('/api/') && !path.startsWith('/_next/') && !asset) {
     if (path === '/' || (!adminPage && !auditPage)) {
       if (request.method === 'GET' || request.method === 'HEAD') {

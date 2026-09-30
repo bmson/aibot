@@ -8,6 +8,24 @@ vi.mock('@assistant/config', () => ({ loadConfig: () => config }));
 import { proxy } from './proxy';
 
 describe.each(['firestore', 'postgres'])('mobile administration in %s mode', (driver) => {
+  it('serves public app icons instead of redirecting them to Settings', () => {
+    config.PERSISTENCE_DRIVER = driver;
+    for (const path of [
+      '/icon.svg',
+      '/apple-icon.png',
+      '/icons/assistant-192.png',
+      '/icons/assistant-512.png',
+      '/icons/assistant-mark.svg',
+      '/icons/assistant-source.svg',
+    ]) {
+      for (const method of ['GET', 'HEAD']) {
+        const response = proxy(new NextRequest(`https://assistant.test${path}`, { method }));
+        expect(response.status).toBe(200);
+        expect(response.headers.get('location')).toBeNull();
+        expect(response.headers.get('x-middleware-next')).toBe('1');
+      }
+    }
+  });
   it('retires browser app pages and preserves the administration pages', () => {
     config.PERSISTENCE_DRIVER = driver;
     for (const path of [
