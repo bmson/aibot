@@ -1,7 +1,7 @@
 /** The week's reliability, response-quality and graph health signals for one owner. */
 export interface SelfImproveSignals {
   /** Failed tool calls of the owner's tasks. */
-  failedCalls: Array<{ toolName: string; error: string | null }>;
+  failedCalls: Array<{ toolName: string; error: string | null; taskId?: string }>;
   /** The owner's tasks that needed attention or failed after at least two attempts. */
   stuckCount: number;
   /** The owner's most expensive model calls at or above the outlier cost, costliest first. */

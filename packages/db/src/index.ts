@@ -52,6 +52,7 @@ export { createPostgresRecallMetricsRepository } from './recall-metrics-reposito
 export { createPostgresReminderRepository } from './reminder-repository.js';
 export { createPostgresScheduleRepository } from './schedule-repository.js';
 export * from './schema.js';
+export { createPostgresSelfRepairRepository } from './self-repair-repository.js';
 export { createPostgresSettingsRepository } from './settings-repository.js';
 export { createPostgresSkillContextRepository } from './skill-context-repository.js';
 export { createPostgresSmsChannelRepository } from './sms-channel-repository.js';

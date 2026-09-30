@@ -1,3 +1,4 @@
+import { isRepairFeedback } from '@assistant/core/workflow/self-repair';
 /**
  * Deterministic pre-gate for the chat action/conversation triage.
  *
@@ -112,6 +113,7 @@ export function looksLikeActionRequest(
 ): boolean {
   let t = text.trim().toLowerCase();
   if (!t) return false;
+  if (isRepairFeedback(text)) return true;
   if (
     detectLiveLookups([
       ...recentHistory.slice(-8),

@@ -117,6 +117,7 @@ import {
   createPostgresGeneratedCardRepository,
   createPostgresModelCatalogRepository,
   createPostgresModelConnectionRepository,
+  createPostgresSelfRepairRepository,
   createPostgresToolExecutionRepository,
   type Db,
 } from '@assistant/db';
@@ -139,11 +140,13 @@ import {
   FirestoreModelConnectionRepository,
   FirestoreOwnerKnowledgeGraphFactRepository,
   FirestoreRecallFeedbackRepository,
+  FirestoreSelfRepairRepository,
   FirestoreShellStatusRepository,
   FirestoreSkillMutationRepository,
   FirestoreToolExecutionRepository,
   FirestoreWorkspaceFileLookup,
 } from '@assistant/firestore';
+import type { SelfRepairRepository } from '@assistant/persistence';
 import { embeddingModelId, validateEmbedding } from '@assistant/persistence';
 import { inspectMcpConnection } from '@assistant/tools/mcp';
 import {
@@ -947,4 +950,22 @@ export async function getOwnerAuditInvestigation(
     taskId,
     options,
   );
+}
+
+/** Shared owner-scoped repair service for web and native clients. */
+export async function getSelfRepairService(): Promise<{
+  repository: SelfRepairRepository;
+  agentId: string;
+}> {
+  const config = loadConfig();
+  if (config.PERSISTENCE_DRIVER === 'firestore')
+    return {
+      repository: new FirestoreSelfRepairRepository(
+        getFirestoreInstallationStore(),
+        config.FIRESTORE_AGENT_ID,
+      ),
+      agentId: config.FIRESTORE_AGENT_ID,
+    };
+  const db = getDb();
+  return { repository: createPostgresSelfRepairRepository(db), agentId: (await getAgent(db)).id };
 }

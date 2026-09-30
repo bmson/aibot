@@ -398,6 +398,7 @@ export class FirestorePrivacyErasureRepository implements PrivacyErasureReposito
     const job = await this.begin(agentId);
     await this.eraseVoiceImports(agentId, job.generation);
     await this.eraseSituationPacks(agentId, job.generation);
+    await this.deleteOwned(agentId, job.generation, 'selfRepairIssues');
     await this.deleteOwned(agentId, job.generation, 'knowledgeGraphRelations', 'graphRelations');
     await this.deleteOwned(agentId, job.generation, 'knowledgeGraphEntityAliases');
     await this.deleteOwned(agentId, job.generation, 'knowledgeGraphEntities');

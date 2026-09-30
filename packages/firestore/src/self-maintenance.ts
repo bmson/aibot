@@ -41,7 +41,7 @@ export class FirestoreSelfMaintenanceRepository implements SelfMaintenanceReposi
       .collection('improvementProposals')
       .where('agentId', '==', agentId)
       .where('status', '==', 'open')
-      .select('id', 'kind', 'title', 'rationale')
+      .select('id', 'kind', 'title', 'rationale', 'evidenceIds')
       .limit(limit)
       .get();
     return snapshot.docs.flatMap((doc) => {
@@ -54,7 +54,17 @@ export class FirestoreSelfMaintenanceRepository implements SelfMaintenanceReposi
         typeof kind === 'string' &&
         typeof title === 'string' &&
         typeof rationale === 'string'
-        ? [{ id, kind, title, rationale }]
+        ? [
+            {
+              id,
+              kind,
+              title,
+              rationale,
+              evidenceIds: Array.isArray(doc.get('evidenceIds'))
+                ? (doc.get('evidenceIds') as string[])
+                : [],
+            },
+          ]
         : [];
     });
   }

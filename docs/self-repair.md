@@ -1,0 +1,40 @@
+# Automatic issue investigation and repair PRs
+
+The assistant captures failed tasks, explicit owner corrections in chat, manual reports in Improvements, and selected self-maintenance proposals. A scheduled investigation checks the audit, separates code defects from provider/configuration/answer problems, and produces a bounded technical brief with synthetic reproduction steps. Only reproducible code defects reach the coding worker.
+
+The worker opens a feature branch, adds a regression test, checks the patch, and creates a PR. Improvements shows the diagnosis, progress, history, worker run and PR. The existing notification channel sends the owner the PR link. The owner reviews and merges; this flow never merges or deploys. After the merge reaches the configured deployment, the issue enters monitoring. Confirm the behavior in Improvements to mark it resolved. A matching failure after deployment starts a new linked investigation.
+
+## Activate
+
+1. Release these changes and the `self-repair.yml` workflow to the private repository's default branch. For PostgreSQL, apply migration 0081 and run the seed. For Firestore, provision the checked-in indexes, including `tasks(agentId, updatedAt DESC)`; the agent creates the 15-minute schedule when enabled. Existing disabled schedules remain disabled.
+2. Create the repository label `self-maintenance`.
+3. Add repository Actions secrets:
+   - `SELF_REPAIR_OPENAI_API_KEY`: a dedicated project API key for the coding worker.
+   - `SELF_REPAIR_GITHUB_TOKEN`: a repository-scoped publisher token with Contents and Pull requests write access. Use a dedicated identity without permission to bypass protected-branch rules. This token is available only to the publish job, after checks pass. A separate token is used so creating the PR triggers ordinary PR checks.
+4. Configure the assistant runtime and web service:
+
+   ```dotenv
+   GITHUB_REPO=bmson/assistant
+   GITHUB_TOKEN=<runtime token: Actions read/write, Contents read, Pull requests read>
+   SELF_REPAIR_ENABLED=true
+   SELF_REPAIR_ALLOW_EXECUTOR=false
+   SELF_REPAIR_DAILY_LIMIT=2
+   SELF_REPAIR_WORKFLOW=self-repair.yml
+   SELF_REPAIR_REF=main
+   SELF_REPAIR_DEPLOYMENT_URL=https://<assistant-host>/api/health
+   ```
+
+   Match `SELF_REPAIR_REF` to the repository's actual default branch. The health endpoint must return the deployed commit SHA. Configure the normal assistant model provider for investigation and the existing notification delivery channel for owner pings. Use the installation's secret manager for runtime credentials; never commit them or pass them as visible command arguments.
+5. Submit a small, reproducible report through Improvements. Confirm investigation, worker checks, PR notification, owner merge, deployment monitoring, and confirmation before relying on unattended runs. Check both SQL and Firestore paths for the selected installation backend.
+
+The approved local coding key is stored in ignored `.env.local`. It has not been uploaded to GitHub. Runtime configuration loads `.env`; creating this local key alone does not activate the worker.
+
+## Limits and recovery
+
+There is one active issue per owner and a default limit of two coding dispatches per rolling 24 hours (maximum configurable limit: five). The coding step has a 15-minute timeout. Investigation uses the scheduled task budget. These are execution limits, not a guaranteed dollar cap; set a dedicated API project budget and monitor usage.
+
+Patches are limited to 20 files and 100 KB. A regression test and explicit reproduction result are required. Credentials, authentication, trust controls, infrastructure, dependency/configuration files, schemas and the repair machinery are protected. Executor fixes require the separate owner-enabled tier, which permits only selected implementation files. The candidate is tested in fresh jobs without publisher credentials. Publication rechecks the exact patch that passed lint, type checking, PostgreSQL tests, Firestore tests and applicable iOS tests.
+
+An uncertain dispatch is reconciled by repair UUID, branch and workflow run before retry. A missing run eventually becomes failed; interrupted investigations expire. Failed or blocked issues expose Retry; active coding/PR issues cannot be dismissed. Closed PRs become dismissed. Deployment is recorded separately from confirmation of a fix. Disabling `SELF_REPAIR_ENABLED` stops new investigations, dispatches and polling; already-dispatched GitHub runs must be cancelled separately if needed.
+
+Raw conversations and audits stay in the assistant installation. Reports are scrubbed before storage; the worker receives a technical brief rather than the original audit or owner message. Model-generated briefs still need care: the investigation prompt requires synthetic data, and the repository must be private. Repair records participate in privacy erasure.

@@ -768,3 +768,5 @@ export function registerBuiltinTools(registry: ToolRegistry, deps: BuiltinDeps):
 }
 
 export { registerAuditTools } from './audit.js';
+
+export { registerSelfRepairTools } from './self-repair.js';

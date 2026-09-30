@@ -1,8 +1,10 @@
 import { ProposalCard, type ProposalView } from '@/app/improvements/proposal-card';
 import { requireOwner } from '@/auth';
 import { relativeTime } from '@/lib/format';
+import { getSelfRepairOverview } from '@/lib/self-repair-server';
 import { cardGridClass, EmptyState, PageHeader, PageShell } from '@/lib/ui';
 import { listOpenImprovements } from '@/lib/workspace-reviews';
+import { RepairPanel } from './repair-panel';
 
 export const metadata = { title: 'Improvements' };
 
@@ -11,7 +13,7 @@ export const dynamic = 'force-dynamic';
 export default async function ImprovementsPage() {
   await requireOwner();
   const now = new Date();
-  const rows = await listOpenImprovements();
+  const [rows, repairs] = await Promise.all([listOpenImprovements(), getSelfRepairOverview()]);
 
   const proposals: ProposalView[] = rows.map((p) => {
     const change = (p.change ?? {}) as { suggestion?: unknown };
@@ -32,8 +34,9 @@ export default async function ImprovementsPage() {
       <PageHeader
         back={{ href: '/chat', label: 'Chat' }}
         title="Improvements"
-        intro="Changes the assistant proposes for itself after reviewing its own failures, retries, and costs — a model swap, a suggested rule, or an observation. Nothing is applied automatically: approve what helps, dismiss the rest."
+        intro="Track fixes from reported failures to tested pull requests, alongside model and behavior suggestions. Review and merge code changes yourself."
       />
+      <RepairPanel overview={repairs} />
       <section className="mt-8">
         {proposals.length === 0 ? (
           <EmptyState>

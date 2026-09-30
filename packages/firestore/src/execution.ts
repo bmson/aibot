@@ -5,6 +5,7 @@ import { FirestoreApplicationConfirmationRepository } from './application-confir
 import { FirestoreApprovalPolicyRepository } from './approval-policies.js';
 import { FirestoreApprovalRepository } from './approvals.js';
 import { FirestoreAssistantHealthRepository } from './assistant-health.js';
+import { FirestoreAuditInvestigationRepository } from './audit-investigation.js';
 import { FirestoreBriefingRepository } from './briefing.js';
 import { FirestoreCallSessionRepository } from './call-sessions.js';
 import { createFirestoreCardRefreshRepository } from './card-refresh.js';
@@ -49,6 +50,7 @@ import { FirestoreRecallMetricsRepository } from './recall-metrics.js';
 import { FirestoreReminderDeliveryRepository } from './reminders.js';
 import { FirestoreSelfImprovementRepository } from './self-improvement.js';
 import { FirestoreSelfMaintenanceRepository } from './self-maintenance.js';
+import { FirestoreSelfRepairRepository } from './self-repair.js';
 import { FirestoreSkillContextRepository } from './skill-context.js';
 import { FirestoreSkillReflectionRepository } from './skill-reflection.js';
 import { FirestoreSmsChannelRepository } from './sms-channel.js';
@@ -127,6 +129,8 @@ export function createFirestoreExecutionPersistence(
     ),
     skillReflection: new FirestoreSkillReflectionRepository(store, agentId, skillEmbeddingSpace),
     selfMaintenance: new FirestoreSelfMaintenanceRepository(store, agentId),
+    selfRepair: new FirestoreSelfRepairRepository(store, agentId),
+    selfRepairAudit: new FirestoreAuditInvestigationRepository(store),
     dream: new FirestoreDreamRepository(store, agentId),
     selfImprovement: new FirestoreSelfImprovementRepository(store, agentId),
     graphDateBackfill: new FirestoreGraphDateBackfillRepository(store, agentId),

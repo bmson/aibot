@@ -92,7 +92,7 @@ function postgresSelfImprovement(db: Db): SelfImprovementRepository {
     kind: 'self-improvement-repository',
     async signals({ agentId, since, staleBefore, costOutlierUsd, outlierLimit }) {
       const failedCalls = await db
-        .select({ toolName: toolCalls.toolName, error: toolCalls.error })
+        .select({ toolName: toolCalls.toolName, error: toolCalls.error, taskId: toolCalls.taskId })
         .from(toolCalls)
         .innerJoin(tasks, eq(tasks.id, toolCalls.taskId))
         .where(
@@ -394,6 +394,7 @@ export async function runSelfImprove(
     }
 
     const evidenceIds = [
+      ...new Set(failedCalls.flatMap((call) => (call.taskId ? [call.taskId] : []))),
       ...topFailures.map((f) => `${f.toolName}:${f.sig}`),
       ...responseSignals.map((signal) => `response_checks:${signal.slice(2)}`),
       ...graphSignals.map((signal) => `knowledge_graph_sources:${signal.slice(2)}`),

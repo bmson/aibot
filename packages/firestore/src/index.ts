@@ -113,6 +113,7 @@ export { getFirestorePersonGraph } from './person-graph-read.js';
 export { getFirestorePersonTemporalDetails } from './person-temporal-details.js';
 export {
   assertPrivacyErasureFenceUnchanged,
+  assertPrivacyErasureInactiveInTransaction,
   FirestorePrivacyErasureRepository,
   readPrivacyErasureFence,
 } from './privacy-erasure.js';
@@ -141,6 +142,7 @@ export {
 export { FirestoreScheduleRepository } from './schedules.js';
 export { FirestoreSelfImprovementRepository } from './self-improvement.js';
 export { FirestoreSelfMaintenanceRepository } from './self-maintenance.js';
+export { FirestoreSelfRepairRepository } from './self-repair.js';
 export { FirestoreSettingsRepository } from './settings.js';
 export { createFirestoreSettingsPersistence } from './settings-persistence.js';
 export { FirestoreShellPresenceRepository } from './shell-presence.js';

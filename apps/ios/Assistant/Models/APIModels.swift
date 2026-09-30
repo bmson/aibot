@@ -1011,6 +1011,7 @@ struct WorkspaceResponse: Codable, Sendable {
     let costs: WorkspaceCosts
     let anomalies: [WorkspaceAnomaly]
     let improvements: [WorkspaceImprovement]
+    var repairs: WorkspaceRepairs? = nil
     let imports: WorkspaceImports?
 }
 
@@ -2402,4 +2403,23 @@ extension String {
             || trimmed.contains(".")
             || trimmed == trimmed.lowercased()
     }
+}
+
+struct WorkspaceRepairs: Codable, Sendable {
+    let enabled: Bool
+    let configured: Bool
+    let dailyLimit: Int
+    let issues: [WorkspaceRepairIssue]
+}
+struct WorkspaceRepairIssue: Codable, Identifiable, Sendable {
+    let id: String
+    let title: String
+    let summary: String
+    let status: String
+    let diagnosis: String
+    let lastError: String
+    let sourceTaskId: String?
+    let prUrl: String?
+    let runUrl: String?
+    let updatedAt: String
 }

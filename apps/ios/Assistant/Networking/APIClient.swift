@@ -586,6 +586,10 @@ struct APIClient: Sendable {
         try await postWorkspaceAction(path: "anomalies/\(id)", action: action)
     }
 
+    func updateRepair(id: String, action: String) async throws {
+        try await postWorkspaceAction(path: "repairs/\(id)", action: action)
+    }
+
     func updateImprovement(id: String, action: String) async throws {
         try await postWorkspaceAction(path: "improvements/\(id)", action: action)
     }

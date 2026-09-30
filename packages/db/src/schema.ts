@@ -2359,3 +2359,27 @@ export type ProactiveMomentRow = typeof proactiveMoments.$inferSelect;
 export type WatchRow = typeof watches.$inferSelect;
 export type WatchFireRow = typeof watchFires.$inferSelect;
 export type CanaryRunRow = typeof canaryRuns.$inferSelect;
+
+/** Issue-to-PR lifecycle; no production write capability is granted by this ledger. */
+export const selfRepairIssues = pgTable(
+  'self_repair_issues',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id),
+    fingerprint: text('fingerprint').notNull(),
+    status: text('status').notNull().default('reported'),
+    version: integer('version').notNull().default(0),
+    data: jsonb('data').notNull().default({}),
+    ...timestamps,
+  },
+  (t) => [
+    uniqueIndex('self_repair_issues_dedup_idx').on(t.agentId, t.fingerprint),
+    index('self_repair_issues_owner_idx').on(t.agentId, t.status),
+    check(
+      'self_repair_issues_status_check',
+      sql`${t.status} IN ('reported','investigating','fixing','testing','pr_open','merged','monitoring','resolved','blocked','failed','dismissed')`,
+    ),
+  ],
+);

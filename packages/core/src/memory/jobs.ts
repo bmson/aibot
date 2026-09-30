@@ -1,4 +1,12 @@
-import { type Db, type ScheduleRow, schedules, type TaskRow } from '@assistant/db';
+import {
+  createPostgresAuditInvestigationRepository,
+  createPostgresMessageRepository,
+  createPostgresSelfRepairRepository,
+  type Db,
+  type ScheduleRow,
+  schedules,
+  type TaskRow,
+} from '@assistant/db';
 import type {
   DocumentExtractionRepository,
   ExecutionPersistence,
@@ -17,7 +25,9 @@ import { type BriefingCalendarReader, briefingSummary, runBriefing } from '../wo
 import { runDream } from '../workflow/dream.js';
 import { runAssistantHealthMonitor } from '../workflow/health-monitor.js';
 import { runSelfImprove } from '../workflow/improve.js';
+import { createGitHubRepairWorker } from '../workflow/repair-github.js';
 import { runSelfMaintenance } from '../workflow/self-maintenance.js';
+import { runRepairCycle } from '../workflow/self-repair.js';
 import { runWatchSuggest } from '../workflow/watch-suggest.js';
 import { refreshAmbientSnapshot } from './ambient.js';
 import { extractCommitments, markStaleCommitments } from './commitments.js';
@@ -66,6 +76,7 @@ export type CodeJobName =
   | 'ambient.refresh'
   | 'dream.run'
   | 'self.maintain'
+  | 'self.repair'
   | 'health.monitor'
   | 'watch.suggest'
   | 'pulse.check'
@@ -91,6 +102,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
   'ambient.refresh',
   'dream.run',
   'self.maintain',
+  'self.repair',
   'health.monitor',
   'watch.suggest',
   'pulse.check',
@@ -103,6 +115,7 @@ const CODE_JOBS: ReadonlySet<string> = new Set([
  * task rows, and a manually queued job completes without provider work.
  */
 export function isCodeJobEnabled(job: string): boolean {
+  if (job === 'self.repair') return loadConfig().SELF_REPAIR_ENABLED;
   // Everything that reads or writes the knowledge graph rides the same switch —
   // curiosity included, since a graph that is turned off has no gaps to ask
   // about and would otherwise produce a question built on nothing.
@@ -137,6 +150,7 @@ const FIRESTORE_PORTABLE_CODE_JOBS: ReadonlySet<string> = new Set([
   'anomaly.scan',
   'skill.reflect',
   'self.maintain',
+  'self.repair',
   'self.improve',
   'memory.graph_date_backfill',
   'graph.curiosity',
@@ -633,9 +647,67 @@ export async function runCodeJob(
         summary: `dream: ${r.footnotes} footnote(s), ${r.hypotheses} hypothesis(es), ${r.anticipations} anticipation(s)`,
       };
     }
+    case 'self.repair': {
+      const config = loadConfig();
+      if (!config.SELF_REPAIR_ENABLED) return { done: true, summary: 'self-repair: disabled' };
+      const repository =
+        deps.persistence?.selfRepair ?? createPostgresSelfRepairRepository(deps.db);
+      const audit =
+        deps.persistence?.selfRepairAudit ?? createPostgresAuditInvestigationRepository(deps.db);
+      const worker =
+        config.GITHUB_TOKEN && config.GITHUB_REPO
+          ? createGitHubRepairWorker({
+              token: config.GITHUB_TOKEN,
+              repo: config.GITHUB_REPO,
+              workflow: config.SELF_REPAIR_WORKFLOW,
+              ref: config.SELF_REPAIR_REF,
+              deploymentUrl: config.SELF_REPAIR_DEPLOYMENT_URL,
+            })
+          : undefined;
+      const dispatched = await runRepairCycle(
+        {
+          repository,
+          audit,
+          router: deps.router,
+          worker,
+          enabled: config.SELF_REPAIR_ENABLED,
+          allowExecutor: config.SELF_REPAIR_ALLOW_EXECUTOR,
+          dailyLimit: config.SELF_REPAIR_DAILY_LIMIT,
+          heartbeat: deps.heartbeat,
+          notify: async (issue, text) => {
+            const conversationId = deps.persistence
+              ? await deps.persistence.notifications.getOrCreate(task.agentId)
+              : await getOrCreateNotificationsConversation(deps.db, task.agentId);
+            const messages = deps.persistence?.messages ?? createPostgresMessageRepository(deps.db);
+            const saved = await messages.append({
+              conversationId,
+              taskId: task.id,
+              role: 'assistant',
+              origin: 'assistant',
+              parts: [{ type: 'text', text }],
+              text,
+              channelMessageId: `self-repair:${issue.id}:${issue.status}`,
+            });
+            if (saved) await pingOwner(deps.notifyOwner, { taskId: task.id, conversationId, text });
+          },
+        },
+        task.agentId,
+        task.id,
+      );
+      return { done: true, summary: `self-repair: ${dispatched} coding run(s) dispatched` };
+    }
     case 'self.maintain': {
       await deps.heartbeat?.();
-      const r = await runSelfMaintenance(deps, { agentId: task.agentId, taskId: task.id });
+      const r = await runSelfMaintenance(
+        {
+          ...deps,
+          persistence: {
+            ...deps.persistence,
+            selfRepair: deps.persistence?.selfRepair ?? createPostgresSelfRepairRepository(deps.db),
+          },
+        },
+        { agentId: task.agentId, taskId: task.id },
+      );
       return {
         done: true,
         summary: `self-maintain: ${r.backlog} backlog item(s), ${r.blocked} blocked by the fence`,

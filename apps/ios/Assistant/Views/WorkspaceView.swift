@@ -224,7 +224,7 @@ struct WorkspaceView: View {
         case .anomalies:
             anomalies(workspace.anomalies)
         case .improvements:
-            improvements(workspace.improvements)
+            improvements(workspace.improvements, repairs: workspace.repairs)
         case .documents:
             EmptyView()
         }
@@ -666,11 +666,15 @@ struct WorkspaceView: View {
         }
     }
 
-    private func improvements(_ improvements: [WorkspaceImprovement]) -> some View {
+    private func improvements(_ improvements: [WorkspaceImprovement], repairs: WorkspaceRepairs?) -> some View {
         let directlyApplyable = improvements.filter(\.applyable)
         let advisory = improvements.filter { !$0.applyable }
 
         return VStack(alignment: .leading, spacing: 16) {
+            if let repairs {
+                repairIssues(repairs)
+            }
+
             if improvements.isEmpty {
                 improvementEmptyState
             } else {
@@ -690,6 +694,66 @@ struct WorkspaceView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func repairIssues(_ repairs: WorkspaceRepairs) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Code fixes").font(.headline)
+            Text(repairs.enabled && repairs.configured
+                 ? "Automatic investigation is on. You review and merge every PR."
+                 : "Automatic coding is not configured yet. Reports are saved for review.")
+                .font(.subheadline).foregroundStyle(.secondary)
+            ForEach(repairs.issues.filter { !["dismissed", "resolved"].contains($0.status) }) { issue in
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(repairStatusLabel(issue.status)).font(.caption).foregroundStyle(.secondary)
+                    Text(issue.title).font(.headline)
+                    Text(issue.diagnosis.isEmpty ? issue.summary : issue.diagnosis).font(.subheadline)
+                    if !issue.lastError.isEmpty { Text(issue.lastError).font(.caption).foregroundStyle(.secondary) }
+                    if let link = issue.prUrl, let url = URL(string: link), url.scheme == "https", url.host == "github.com" {
+                        Link("Review pull request", destination: url).font(.subheadline.weight(.semibold))
+                    }
+                    if let link = issue.runUrl, let url = URL(string: link), url.scheme == "https", url.host == "github.com" {
+                        Link("View coding run", destination: url).font(.subheadline)
+                    }
+                    if ["failed", "blocked"].contains(issue.status) {
+                        Button("Retry investigation") { updateRepair(issue, action: "retry") }
+                    }
+                    if issue.status == "monitoring" {
+                        Button("Confirm fixed") { updateRepair(issue, action: "resolve") }
+                    }
+                    if !["investigating", "fixing", "testing", "pr_open"].contains(issue.status) {
+                        Button("Dismiss", role: .destructive) { updateRepair(issue, action: "dismiss") }
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
+                .disabled(workspaceActionInFlight == issue.id)
+            }
+        }
+    }
+
+    private func repairStatusLabel(_ status: String) -> String {
+        switch status {
+        case "reported": "Reported"
+        case "investigating": "Investigating"
+        case "fixing": "Preparing fix"
+        case "testing": "Testing"
+        case "pr_open": "PR ready to review"
+        case "merged": "Awaiting deployment"
+        case "monitoring": "Deployed · confirm fix"
+        case "blocked": "Needs your attention"
+        case "failed": "Fix attempt failed"
+        default: status.sentenceCaseIdentifier
+        }
+    }
+
+    private func updateRepair(_ issue: WorkspaceRepairIssue, action: String) {
+        workspaceActionInFlight = issue.id
+        Task {
+            _ = await model.updateRepair(issue, action: action)
+            workspaceActionInFlight = nil
         }
     }
 
