@@ -31,10 +31,10 @@ struct RelationshipGraphSnapshot: Codable, Sendable {
     static let empty = Self(nodes: [], edges: [], totalEdges: 0, truncated: false, focusId: nil)
 
     /// How much of the graph the phone holds at once. The server sends at most
-    /// about two hundred items per request; the window is larger so that
+    /// a thousand items per request; the window matches so that
     /// opening a neighbourhood adds to the map rather than replacing it.
-    static let windowNodeCap = 320
-    static let windowEdgeCap = 1600
+    static let windowNodeCap = 1000
+    static let windowEdgeCap = 10000
 
     /// Merges a freshly fetched neighbourhood of `entityID` into the map.
     ///
@@ -381,9 +381,15 @@ struct RelationshipGraphLayout {
     private var pairs: [(a: Int, b: Int)] = []
     private var charges: [CGFloat] = []
     private var pulls: [CGFloat] = []
+    private var groupCenters: [CGPoint] = []
+    private var groupFor: [Int] = []
+    private var groupTargets: [CGPoint] = []
     private var springs: [(a: Int, b: Int, strength: CGFloat, bias: CGFloat, rest: CGFloat)] = []
     private(set) var alpha: CGFloat = 1
     private var alphaTarget: CGFloat = 0
+    private var tick = 0
+    private var needsUntangling = true
+    private var untangleTargets: [CGPoint]?
 
     static let linkDistance: CGFloat = 70
     static let alphaMin: CGFloat = 0.004
@@ -415,7 +421,7 @@ struct RelationshipGraphLayout {
         min(28, 4.5 + 2.6 * sqrt(CGFloat(max(0, degree)))) * size
     }
 
-    var isSettled: Bool { positions.isEmpty || (alpha < Self.alphaMin && alphaTarget == 0) }
+    var isSettled: Bool { positions.isEmpty || (alpha < Self.alphaMin && alphaTarget == 0 && !needsUntangling && untangleTargets == nil) }
 
     func index(of id: String) -> Int? { slots[id] }
     func position(of id: String) -> CGPoint? { slots[id].map { positions[$0] } }
@@ -425,6 +431,7 @@ struct RelationshipGraphLayout {
         let old = Dictionary(zip(ids, positions), uniquingKeysWith: { first, _ in first })
         let oldVelocity = Dictionary(zip(ids, velocities), uniquingKeysWith: { first, _ in first })
         let oldLinks = Set(pairs.map { GraphLink(ids[$0.a], ids[$0.b]) })
+        let oldTargets = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, groupTargets.isEmpty ? CGPoint.zero : groupTargets[$0.offset]) })
         let firstLayout = ids.isEmpty
         ids = Array(Set(nodes.map(\.id))).sorted()
         slots = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset) })
@@ -459,13 +466,88 @@ struct RelationshipGraphLayout {
             degree[a] += 1; degree[b] += 1
             return (a, b)
         }
+        rebuildGroups(previous: oldTargets, firstLayout: firstLayout)
         rebuildForces()
-        if firstLayout { alpha = 1 }
+        if firstLayout { alpha = 1; needsUntangling = true }
         else if placedNew > 0 || old.count != ids.count { reheat(0.6) }
         // A new line between two items already on the map has to pull them
         // together, and a removed one let them drift apart; without this the
         // map drew the line and left its ends where they were.
-        else if Set(pairs.map { GraphLink(ids[$0.a], ids[$0.b]) }) != oldLinks { reheat(0.35) }
+        else if Set(pairs.map { GraphLink(ids[$0.a], ids[$0.b]) }) != oldLinks { reheat(0.8) }
+    }
+
+    /// Separate components get their own center instead of competing for the
+    /// origin. Joining groups averages their previous centers, so the new line
+    /// brings them together while unrelated groups retain their destinations.
+    private mutating func rebuildGroups(previous: [String: CGPoint], firstLayout: Bool) {
+        var adjacent = Array(repeating: [Int](), count: ids.count)
+        for pair in pairs { adjacent[pair.a].append(pair.b); adjacent[pair.b].append(pair.a) }
+        groupFor = Array(repeating: -1, count: ids.count)
+        var groups: [[Int]] = []
+        for start in ids.indices where groupFor[start] == -1 {
+            let group = groups.count
+            var members = [start], cursor = 0
+            groupFor[start] = group
+            while cursor < members.count {
+                let current = members[cursor]; cursor += 1
+                for next in adjacent[current] where groupFor[next] == -1 {
+                    groupFor[next] = group; members.append(next)
+                }
+            }
+            groups.append(members)
+        }
+        let widths = groups.map { max(120, 76 * sqrt(CGFloat($0.count))) }
+        let rowWidth = max(widths.max() ?? 0, sqrt(widths.reduce(0) { $0 + $1 * $1 }))
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        groupCenters = groups.enumerated().map { group, members in
+            let width = widths[group]
+            if x > 0 && x + width > rowWidth { x = 0; y += rowHeight + 40; rowHeight = 0 }
+            let point = CGPoint(x: x + width / 2, y: y + width / 2)
+            x += width + 40; rowHeight = max(rowHeight, width)
+            return point
+        }
+        let center = CGPoint(x: (groupCenters.map(\.x).min() ?? 0) / 2 + (groupCenters.map(\.x).max() ?? 0) / 2,
+                             y: (groupCenters.map(\.y).min() ?? 0) / 2 + (groupCenters.map(\.y).max() ?? 0) / 2)
+        for group in groups.indices {
+            let members = groups[group]
+            let anchors = members.compactMap { previous[ids[$0]] }
+            if !anchors.isEmpty {
+                groupCenters[group] = CGPoint(x: anchors.reduce(0) { $0 + $1.x } / CGFloat(anchors.count),
+                                              y: anchors.reduce(0) { $0 + $1.y } / CGFloat(anchors.count))
+            } else {
+                groupCenters[group].x -= center.x; groupCenters[group].y -= center.y
+            }
+            if firstLayout {
+                // Hubs seed the center of their own cluster. Existing positions
+                // are never reseeded when evidence or selection changes.
+                let root = members.sorted { degree[$0] == degree[$1] ? ids[$0] < ids[$1] : degree[$0] > degree[$1] }[0]
+                var order = [root], seen = Set([root]), children: [Int: [Int]] = [:], depth = [root: 0], cursor = 0
+                while cursor < order.count {
+                    let parent = order[cursor]; cursor += 1
+                    for child in adjacent[parent].sorted(by: { ids[$0] < ids[$1] }) where seen.insert(child).inserted {
+                        children[parent, default: []].append(child)
+                        depth[child] = depth[parent]! + 1; order.append(child)
+                    }
+                }
+                var weight: [Int: CGFloat] = [:]
+                for index in order.reversed() {
+                    weight[index] = max(1, (children[index] ?? []).reduce(0) { $0 + weight[$1, default: 1] })
+                }
+                var sectors = [root: (start: CGFloat(0), span: CGFloat.pi * 2)]
+                for index in order {
+                    let sector = sectors[index]!, angle = sector.start + sector.span / 2
+                    let radius = CGFloat(depth[index]!) * Self.linkDistance
+                    positions[index] = CGPoint(x: groupCenters[group].x + cos(angle) * radius,
+                                               y: groupCenters[group].y + sin(angle) * radius)
+                    var start = sector.start
+                    for child in children[index] ?? [] {
+                        let span = sector.span * weight[child]! / weight[index]!
+                        sectors[child] = (start, span); start += span
+                    }
+                }
+            }
+        }
+        groupTargets = groupFor.map { groupCenters[$0] }
     }
 
     /// Retunes the physics to the owner's settings, and wakes the map so the
@@ -490,21 +572,21 @@ struct RelationshipGraphLayout {
         // most of the moving. Its rest length leaves room for both bubbles.
         springs = pairs.map { pair in
             let da = CGFloat(degree[pair.a]), db = CGFloat(degree[pair.b])
-            return (pair.a, pair.b, 1 / max(1, min(da, db)), da / max(1, da + db),
+            return (pair.a, pair.b, max(0.12, 1 / max(1, min(da, db))), da / max(1, da + db),
                     distance + (radii[pair.a] + radii[pair.b]) * 0.6)
         }
     }
 
     /// Lets the simulation come to rest where it stands.
-    mutating func cool() { alpha = min(alpha, Self.alphaMin / 2) }
+    mutating func cool() { alpha = min(alpha, Self.alphaMin / 2); needsUntangling = false; untangleTargets = nil }
 
     /// Wakes the simulation without restarting it from scratch.
-    mutating func reheat(_ value: CGFloat = 0.3) { alpha = max(alpha, value) }
+    mutating func reheat(_ value: CGFloat = 0.3) { alpha = max(alpha, value); needsUntangling = true; untangleTargets = nil }
 
     /// Holds the simulation warm while something is being dragged; 0 lets it cool.
     mutating func hold(_ target: CGFloat) {
         alphaTarget = target
-        if target > 0 { alpha = max(alpha, target) }
+        if target > 0 { reheat(target) }
     }
 
     mutating func move(id: String, to point: CGPoint) {
@@ -519,10 +601,115 @@ struct RelationshipGraphLayout {
         while !isSettled && steps < maxSteps { step(); steps += 1 }
     }
 
+    /// Keep unrelated bubbles out of a connection's corridor. Spatial buckets
+    /// restrict checks to the line's vicinity instead of every node/edge pair.
+    private func repelNodesFromLinks(force: inout [CGPoint], alpha: CGFloat) {
+        let cellSize: CGFloat = 90
+        struct Cell: Hashable { let x: Int; let y: Int }
+        var cells: [Cell: [Int]] = [:]
+        for i in positions.indices {
+            let p = positions[i]
+            cells[Cell(x: Int(floor(p.x / cellSize)), y: Int(floor(p.y / cellSize))), default: []].append(i)
+        }
+        for pair in pairs {
+            let a = positions[pair.a], b = positions[pair.b]
+            let dx = b.x - a.x, dy = b.y - a.y, squared = dx * dx + dy * dy
+            guard squared > 1 else { continue }
+            let length = sqrt(squared)
+            let samples = max(1, min(32, Int(ceil(length / 60))))
+            var candidates = Set<Int>()
+            for sample in 0...samples {
+                let t = CGFloat(sample) / CGFloat(samples)
+                let cx = Int(floor((a.x + dx * t) / cellSize)), cy = Int(floor((a.y + dy * t) / cellSize))
+                for x in (cx - 1)...(cx + 1) { for y in (cy - 1)...(cy + 1) {
+                    candidates.formUnion(cells[Cell(x: x, y: y)] ?? [])
+                } }
+            }
+            for i in candidates.sorted() where i != pair.a && i != pair.b {
+                let point = positions[i]
+                let t = ((point.x - a.x) * dx + (point.y - a.y) * dy) / squared
+                guard t > 0.08 && t < 0.92 else { continue }
+                let px = point.x - a.x - dx * t, py = point.y - a.y - dy * t
+                let distance = hypot(px, py), clearance = radii[i] + 14
+                guard distance < clearance else { continue }
+                let nx: CGFloat = distance > 0.01 ? px / distance : -dy / length
+                let ny: CGFloat = distance > 0.01 ? py / distance : dx / length
+                let strength = (clearance - distance) * 0.75 * alpha
+                force[i].x += nx * strength; force[i].y += ny * strength
+                force[pair.a].x -= nx * strength * (1 - t) * 0.5
+                force[pair.a].y -= ny * strength * (1 - t) * 0.5
+                force[pair.b].x -= nx * strength * t * 0.5
+                force[pair.b].y -= ny * strength * t * 0.5
+            }
+        }
+    }
+
+    /// Greedy endpoint swaps are accepted only when they reduce crossings,
+    /// keep the group intact, and do not stretch its incident lines. Targets
+    /// are approached over frames; Reduce Motion resolves them before paint.
+    private func uncrossedPositions() -> [CGPoint] {
+        var points = positions
+        func crosses(_ e: (a: Int, b: Int), _ f: (a: Int, b: Int)) -> Bool {
+            if e.a == f.a || e.a == f.b || e.b == f.a || e.b == f.b { return false }
+            func side(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> CGFloat {
+                (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+            }
+            let a = points[e.a], b = points[e.b], c = points[f.a], d = points[f.b]
+            return side(a,b,c) * side(a,b,d) < 0 && side(c,d,a) * side(c,d,b) < 0
+        }
+        func cost(_ affected: Set<Int>) -> (crossings: Int, length: CGFloat) {
+            var count = 0, length: CGFloat = 0
+            for i in affected {
+                let e = pairs[i], a = points[e.a], b = points[e.b]
+                length += hypot(a.x-b.x, a.y-b.y)
+                for j in pairs.indices where j != i && (!affected.contains(j) || j > i) {
+                    if crosses(e, pairs[j]) { count += 1 }
+                }
+            }
+            return (count, length)
+        }
+        for _ in 0..<12 {
+            var improved = false
+            search: for i in pairs.indices { for j in pairs.indices where j > i {
+                let e = pairs[i], f = pairs[j]
+                guard crosses(e, f) else { continue }
+                for (a,b) in [(e.a,f.a), (e.a,f.b), (e.b,f.a), (e.b,f.b)] {
+                    guard groupFor[a] == groupFor[b], degree[a] <= 8, degree[b] <= 8 else { continue }
+                    let affected = Set(pairs.indices.filter { pairs[$0].a == a || pairs[$0].b == a || pairs[$0].a == b || pairs[$0].b == b })
+                    let before = cost(affected)
+                    points.swapAt(a,b)
+                    let after = cost(affected)
+                    let clear = [a,b].allSatisfy { moved in
+                        points.indices.allSatisfy { other in
+                            moved == other || hypot(points[moved].x-points[other].x, points[moved].y-points[other].y) >= radii[moved]+radii[other]+Self.collisionPadding
+                        }
+                    }
+                    if clear && after.crossings < before.crossings && after.length <= before.length * 1.15 {
+                        improved = true; break search
+                    }
+                    points.swapAt(a,b)
+                }
+            } }
+            if !improved { break }
+        }
+        return points
+    }
+
     /// One tick. `pinned` stays exactly where it is put, like d3's fx/fy.
     @discardableResult mutating func step(pinned: String? = nil) -> CGFloat {
         let n = positions.count
         guard n > 0 else { return 0 }
+        if pinned != nil, untangleTargets != nil { reheat() }
+        if let targets = untangleTargets {
+            var remaining: CGFloat = 0
+            for i in positions.indices where ids[i] != pinned {
+                let dx = targets[i].x - positions[i].x, dy = targets[i].y - positions[i].y
+                remaining = max(remaining, hypot(dx,dy))
+                positions[i].x += dx * 0.18; positions[i].y += dy * 0.18
+            }
+            if remaining < 0.5 { positions = targets; untangleTargets = nil }
+            return remaining
+        }
         alpha += (alphaTarget - alpha) * Self.alphaDecay
         let pinnedIndex = pinned.flatMap { slots[$0] }
         var force = Array(repeating: CGPoint.zero, count: n)
@@ -530,9 +717,9 @@ struct RelationshipGraphLayout {
         let floor = Self.collisionRadius * 2
         let reach = Self.repelReach * max(1, settings.linkDistance)
         // Many-body repulsion, plus a hard collision floor so two dots never
-        // sit on top of each other however crowded a cluster gets. At the
-        // window's cap this is about fifty thousand pairs a tick, well inside
-        // a frame.
+        // sit on top of each other however crowded a cluster gets. The
+        // largest maps still need device profiling; the corridor pass below
+        // is amortized over multiple frames.
         for i in 0..<n {
             for j in (i + 1)..<n {
                 var dx = positions[j].x - positions[i].x
@@ -569,11 +756,15 @@ struct RelationshipGraphLayout {
             force[b].x -= x * spring.bias; force[b].y -= y * spring.bias
             force[a].x += x * (1 - spring.bias); force[a].y += y * (1 - spring.bias)
         }
+        // Corridor clearance changes slowly; spreading this spatial pass
+        // across frames keeps larger maps responsive while forces settle.
+        tick += 1
+        if tick % 3 == 0 { repelNodesFromLinks(force: &force, alpha: alpha) }
         let gravity = Self.gravity * settings.centerForce * alpha
         var energy: CGFloat = 0
         for i in 0..<n where i != pinnedIndex {
-            force[i].x -= positions[i].x * gravity * pulls[i]
-            force[i].y -= positions[i].y * gravity * pulls[i]
+            force[i].x -= (positions[i].x - groupTargets[i].x) * gravity * pulls[i]
+            force[i].y -= (positions[i].y - groupTargets[i].y) * gravity * pulls[i]
             velocities[i].x = (velocities[i].x + force[i].x) * (1 - Self.velocityDecay)
             velocities[i].y = (velocities[i].y + force[i].y) * (1 - Self.velocityDecay)
             // Clamped so one tick can never fling a node across the canvas,
@@ -583,6 +774,145 @@ struct RelationshipGraphLayout {
             energy += abs(velocities[i].x) + abs(velocities[i].y)
         }
         if let pinnedIndex { velocities[pinnedIndex] = .zero }
+        if alpha < Self.alphaMin && alphaTarget == 0 && pinned == nil && needsUntangling {
+            needsUntangling = false
+            let targets = uncrossedPositions()
+            if targets != positions { untangleTargets = targets; velocities = Array(repeating: .zero, count: n) }
+        }
         return energy / CGFloat(n)
+    }
+}
+
+/// A possible family connection for the owner to review, never a stored fact.
+struct GraphFamilySuggestion: Identifiable, Equatable, Sendable {
+    struct Support: Identifiable, Equatable, Sendable {
+        let id: String
+        let sentence: String
+        let reviewStatus: String
+        let sourceContent: String
+    }
+    let id: String
+    let subject: RelationshipGraphNode
+    let predicate: String
+    let object: RelationshipGraphNode
+    let sentence: String
+    let reason: String
+    let support: [Support]
+
+    fileprivate static func normalizedPredicate(_ value: String) -> String {
+        var result = value.lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: "_")
+        for prefix in ["is_the_", "is_a_", "is_"] where result.hasPrefix(prefix) {
+            result = String(result.dropFirst(prefix.count)); break
+        }
+        return result
+    }
+
+    static func canTrigger(_ predicate: String) -> Bool {
+        ["mother_of", "father_of", "parent_of", "son_of", "daughter_of", "child_of", "sibling_of", "brother_of", "sister_of"].contains(normalizedPredicate(predicate))
+    }
+
+    var mutation: KnowledgeConnectionMutation {
+        .init(subjectLabel: subject.label, subjectKind: "person", subjectId: subject.id,
+              predicate: predicate, objectLabel: object.label, objectKind: "person", objectId: object.id,
+              note: "I confirmed this family connection: \(sentence)")
+    }
+}
+
+extension RelationshipGraphSnapshot {
+    /// Eligible, undated, source-backed person connections participate; their
+    /// review status stays visible. The transport already excludes stale and
+    /// quarantined sources. Every
+    /// proposal remains conditional: siblings may share only one parent.
+    func familyConnectionSuggestions(triggerRelationID: String? = nil, matchingSuggestionID: String? = nil) -> [GraphFamilySuggestion] {
+        struct Parent {
+            let parent: RelationshipGraphNode
+            let child: RelationshipGraphNode
+            var predicate: String
+            var evidence: [RelationshipGraphEdge]
+        }
+        struct Siblings {
+            let a: RelationshipGraphNode
+            let b: RelationshipGraphNode
+            var evidence: [RelationshipGraphEdge]
+        }
+        func key(_ category: String, _ a: String, _ b: String) -> String { "\(category):\(a):\(b)" }
+        let people = Dictionary(nodes.filter { $0.kind == "person" }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var parents: [String: Parent] = [:], siblings: [String: Siblings] = [:]
+        var existing = Set<String>(), rejected = Set<String>()
+        let parentRoles = Set(["mother_of", "father_of", "parent_of"])
+        let childRoles = Set(["son_of", "daughter_of", "child_of"])
+        let siblingRoles = Set(["sibling_of", "brother_of", "sister_of"])
+        let grandparentRoles = Set(["grandmother_of", "grandfather_of", "grandparent_of"])
+        let grandchildRoles = Set(["grandson_of", "granddaughter_of", "grandchild_of"])
+        for edge in edges {
+            guard edge.subjectId != edge.objectId, let subject = people[edge.subjectId], let object = people[edge.objectId] else { continue }
+            let role = GraphFamilySuggestion.normalizedPredicate(edge.predicate)
+            let category: String, a: String, b: String
+            if parentRoles.contains(role) { category = "parent"; a = subject.id; b = object.id }
+            else if childRoles.contains(role) { category = "parent"; a = object.id; b = subject.id }
+            else if siblingRoles.contains(role) { category = "sibling"; a = min(subject.id, object.id); b = max(subject.id, object.id) }
+            else if grandparentRoles.contains(role) { category = "grandparent"; a = subject.id; b = object.id }
+            else if grandchildRoles.contains(role) { category = "grandparent"; a = object.id; b = subject.id }
+            else { continue }
+            let id = key(category,a,b)
+            if edge.reviewStatus == "rejected" { rejected.insert(id); continue }
+            // Existing claims suppress duplicates, including dated claims
+            // that are not used to propose a timeless family relationship.
+            existing.insert(id)
+            guard ["confirmed", "unreviewed"].contains(edge.reviewStatus), edge.validFrom == nil, edge.validUntil == nil else { continue }
+            if category == "parent" {
+                let role = parentRoles.contains(role) ? role : "parent_of"
+                if var previous = parents[id] {
+                    if previous.predicate == "parent_of" { previous.predicate = role }
+                    previous.evidence.append(edge); parents[id] = previous
+                } else {
+                    parents[id] = Parent(parent: people[a]!, child: people[b]!, predicate: role, evidence: [edge])
+                }
+            } else if category == "sibling" {
+                if var previous = siblings[id] { previous.evidence.append(edge); siblings[id] = previous }
+                else { siblings[id] = Siblings(a: people[a]!, b: people[b]!, evidence: [edge]) }
+            }
+        }
+        var proposals: [String: GraphFamilySuggestion] = [:]
+        func propose(category: String, subject: RelationshipGraphNode, role: String, object: RelationshipGraphNode,
+                     reason: String, evidence: [RelationshipGraphEdge]) {
+            guard subject.id != object.id else { return }
+            let id = category == "sibling" ? key(category,min(subject.id,object.id),max(subject.id,object.id)) : key(category,subject.id,object.id)
+            guard matchingSuggestionID == nil || matchingSuggestionID == id else { return }
+            guard !existing.contains(id), !rejected.contains(id), proposals.count < 40 || proposals[id] != nil else { return }
+            if let triggerRelationID, !evidence.contains(where: { $0.id == triggerRelationID }) { return }
+            let roleName = role.dropLast(3).replacingOccurrences(of: "_", with: " ")
+            let sentence = category == "sibling" ? "\(subject.label) and \(object.label) are siblings."
+                : "\(subject.label) is \(object.label)’s \(roleName)."
+            let support = Dictionary(evidence.map { ($0.id, GraphFamilySuggestion.Support(id: $0.id, sentence: $0.presentation.sentence, reviewStatus: $0.reviewStatus, sourceContent: $0.sourceContent)) }, uniquingKeysWith: { first, _ in first }).values.sorted { $0.id < $1.id }
+            let proposal = GraphFamilySuggestion(id: id, subject: subject, predicate: role, object: object,
+                                                sentence: sentence, reason: reason, support: support)
+            // Prefer a specific recorded parent role over a generic one.
+            if proposals[id] == nil || proposals[id]?.predicate == "parent_of" { proposals[id] = proposal }
+        }
+        let parentFacts = parents.values.sorted { $0.parent.id == $1.parent.id ? $0.child.id < $1.child.id : $0.parent.id < $1.parent.id }
+        let parentsOf = Dictionary(grouping: parentFacts, by: { $0.child.id })
+        let childrenOf = Dictionary(grouping: parentFacts, by: { $0.parent.id })
+        for sibling in siblings.values.sorted(by: { $0.a.id == $1.a.id ? $0.b.id < $1.b.id : $0.a.id < $1.a.id }) {
+            for (child, other) in [(sibling.a, sibling.b), (sibling.b, sibling.a)] {
+                for parent in parentsOf[child.id] ?? [] {
+                    propose(category: "parent", subject: parent.parent, role: parent.predicate, object: other,
+                            reason: "\(child.label) and \(other.label) are recorded as siblings. Confirm that they share this parent; siblings can have different parents.",
+                            evidence: parent.evidence + sibling.evidence)
+                }
+            }
+        }
+        for parent in parentFacts {
+            for other in childrenOf[parent.parent.id] ?? [] where parent.child.id < other.child.id {
+                propose(category: "sibling", subject: parent.child, role: "sibling_of", object: other.child,
+                        reason: "Both have \(parent.parent.label) recorded as a parent. This may be a full or half-sibling relationship.", evidence: parent.evidence + other.evidence)
+            }
+            for next in childrenOf[parent.child.id] ?? [] {
+                let role = parent.predicate == "mother_of" ? "grandmother_of" : parent.predicate == "father_of" ? "grandfather_of" : "grandparent_of"
+                propose(category: "grandparent", subject: parent.parent, role: role, object: next.child,
+                        reason: "\(parent.parent.label) is a parent of \(parent.child.label), who is a parent of \(next.child.label). Confirm that this describes their family.", evidence: parent.evidence + next.evidence)
+            }
+        }
+        return proposals.values.sorted { $0.id < $1.id }
     }
 }

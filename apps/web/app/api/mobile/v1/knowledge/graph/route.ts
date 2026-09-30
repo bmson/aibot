@@ -8,7 +8,7 @@ import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 export const dynamic = 'force-dynamic';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/** Native canvas transport; retains the existing active-source and size bounds. */
+/** Native canvas transport; uses the broader source-backed overview display bounds. */
 export async function GET(request: Request): Promise<Response> {
   if (!(await isMobileAuthed(request))) return mobileUnauthorized();
   const params = new URL(request.url).searchParams;
@@ -32,6 +32,7 @@ export async function GET(request: Request): Promise<Response> {
     entityId: entityId ?? undefined,
     query: params.get('q') ?? '',
     includeVisibleConnections: true,
+    completeOverview: true,
   };
   const snapshot = firestore
     ? await (await firestore.load()).map(input)

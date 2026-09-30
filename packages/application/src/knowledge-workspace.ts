@@ -173,6 +173,7 @@ export async function getKnowledgeMapSnapshot(
     sourceMemoryId?: string;
     entityId?: string;
     includeVisibleConnections?: boolean;
+    completeOverview?: boolean;
   } = {},
 ): Promise<KnowledgeMapSnapshot> {
   const agent = await getAgent(db);
@@ -224,7 +225,14 @@ export async function getKnowledgeMapSnapshot(
       .innerJoin(knowledgeGraphSources, eq(knowledgeGraphSources.memoryId, memories.id))
       .where(where);
   const [rows, [totalRow]] = await Promise.all([
-    mapRows(filters).orderBy(desc(knowledgeGraphRelations.createdAt)).limit(MAP_EDGE_FETCH_LIMIT),
+    input.completeOverview
+      ? mapRows(filters).orderBy(
+          desc(knowledgeGraphRelations.createdAt),
+          knowledgeGraphRelations.id,
+        )
+      : mapRows(filters)
+          .orderBy(desc(knowledgeGraphRelations.createdAt))
+          .limit(MAP_EDGE_FETCH_LIMIT),
     db
       .select({ value: count() })
       .from(knowledgeGraphRelations)
@@ -236,6 +244,7 @@ export async function getKnowledgeMapSnapshot(
   ]);
   return assembleKnowledgeMapSnapshot({
     rows,
+    completeOverview: input.completeOverview,
     totalEdges: Number(totalRow?.value ?? 0),
     filters: { query, kind, predicates, review, sourceMemoryId },
     interior: input.includeVisibleConnections

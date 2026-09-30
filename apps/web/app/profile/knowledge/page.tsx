@@ -303,6 +303,7 @@ async function loadPostgresWorkspace(
     view === 'map'
       ? getKnowledgeMapSnapshot(db, {
           ...mapInput,
+          completeOverview: true,
           entityId: graph.selected && entity === graph.selected.id ? graph.selected.id : undefined,
         })
       : Promise.resolve(null),
@@ -327,7 +328,9 @@ async function loadFirestoreWorkspace(
   ]);
   const focus = view === 'map' && entity ? await workspace.focus(entity) : null;
   const map =
-    view === 'map' ? await workspace.map({ ...mapInput, entityId: focus?.selected.id }) : null;
+    view === 'map'
+      ? await workspace.map({ ...mapInput, completeOverview: true, entityId: focus?.selected.id })
+      : null;
   return {
     overview: workspace.overview,
     findings: workspace.findings,

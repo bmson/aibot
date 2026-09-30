@@ -392,12 +392,13 @@ struct APIClient: Sendable {
         _ = try await perform(request, as: OkPayload.self)
     }
 
-    func createKnowledgeConnection(_ mutation: KnowledgeConnectionMutation) async throws {
+    @discardableResult
+    func createKnowledgeConnection(_ mutation: KnowledgeConnectionMutation) async throws -> String {
         var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/knowledge"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONEncoder().encode(mutation)
-        _ = try await perform(request, as: KnowledgeConnectionSavedPayload.self)
+        return try await perform(request, as: KnowledgeConnectionSavedPayload.self).relationId
     }
 
     func reviewKnowledgeRelation(id: String, approve: Bool) async throws {

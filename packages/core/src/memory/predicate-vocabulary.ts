@@ -54,6 +54,7 @@ export const PREDICATE_VOCABULARY: readonly PredicateSpec[] = [
   { id: 'grandfather_of', group: 'family', ...PERSON_TO_PERSON, inverse: 'grandchild_of' },
   { id: 'grandmother_of', group: 'family', ...PERSON_TO_PERSON, inverse: 'grandchild_of' },
   { id: 'grandparent_of', group: 'family', ...PERSON_TO_PERSON, inverse: 'grandchild_of' },
+  { id: 'grandchild_of', group: 'family', ...PERSON_TO_PERSON, inverse: 'grandparent_of' },
   { id: 'grandson_of', group: 'family', ...PERSON_TO_PERSON, inverse: 'grandparent_of' },
   { id: 'granddaughter_of', group: 'family', ...PERSON_TO_PERSON, inverse: 'grandparent_of' },
   { id: 'spouse_of', group: 'family', ...PERSON_TO_PERSON, symmetric: true, temporal: true },

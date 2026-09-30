@@ -120,6 +120,16 @@ final class APIClientRetryTests: XCTestCase {
     }
 
     @MainActor
+    func testKnowledgeConnectionReturnsTheCommittedIDForSuggestionScope() async throws {
+        StubURLProtocol.prime([.success(status: 201, body: Data(#"{"memoryId":"family-memory","relationId":"family-relation"}"#.utf8))])
+        let model = AppModel(apiClient: makeClient())
+        let id = await model.createKnowledgeConnectionID(.init(subjectLabel: "Morgan", subjectKind: "person", subjectId: "mom",
+            predicate: "mother_of", objectLabel: "Alex", objectKind: "person", objectId: "me", note: ""))
+        XCTAssertEqual(id, "family-relation")
+        XCTAssertEqual(StubURLProtocol.attempts, ["POST"], "Saving must not silently create inferred connections")
+    }
+
+    @MainActor
     func testKnowledgeConnectionCorrectionAcceptsCommittedIDs() async throws {
         StubURLProtocol.prime([
             .success(status: 201, body: Data(#"{"memoryId":"replacement-memory","relationId":"replacement-relation"}"#.utf8))
@@ -649,7 +659,8 @@ final class APIClientRetryTests: XCTestCase {
         let panned = view.viewport
         view.configure(snapshot: graph, selectedID: "node-0", dark: false, reduceMotion: true)
         XCTAssertEqual(view.layout.positions, positions, "Selecting never rearranges the map")
-        graph.edges.removeLast()
+        let refreshed = graph.edges.removeLast()
+        graph.edges.append(RelationshipGraphFixture.edge("refreshed-evidence", from: refreshed.subjectId, to: refreshed.objectId))
         view.configure(snapshot: graph, selectedID: "node-0", dark: true, reduceMotion: true)
         XCTAssertEqual(view.layout.positions, positions, "An evidence refresh with the same items keeps them where they are")
         XCTAssertEqual(view.viewport, panned)
@@ -659,6 +670,28 @@ final class APIClientRetryTests: XCTestCase {
         let screenAfter = view.viewport.screen(positions[0], size: view.bounds.size)
         XCTAssertEqual(screenAfter.x, screenBefore.x, accuracy: 0.001, "Resizing must not shift map targets")
         XCTAssertEqual(screenAfter.y, screenBefore.y, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testReducedMotionConnectionStillRegroupsWhileKeepingSelectionAndCamera() {
+        let view = RelationshipGraphCanvasView(frame: CGRect(x: 0, y: 0, width: 393, height: 620))
+        var graph = RelationshipGraphFixture.snapshot()
+        view.configure(snapshot: graph, selectedID: "node-7", dark: false, reduceMotion: true)
+        view.layoutIfNeeded()
+        view.beginDrag(at: CGPoint(x: 2, y: 2))
+        view.drag(to: CGPoint(x: 22, y: 14)); view.endDrag(cancelled: false)
+        let camera = view.viewport
+        func gap() -> CGFloat {
+            let a = view.layout.position(of: "node-7")!, b = view.layout.position(of: "node-15")!
+            return hypot(a.x - b.x, a.y - b.y)
+        }
+        let before = gap()
+        graph.edges.append(RelationshipGraphFixture.edge("new-connection", from: "node-7", to: "node-15"))
+        view.configure(snapshot: graph, selectedID: "node-7", dark: false, reduceMotion: true)
+        XCTAssertLessThan(gap(), before, "Reduce Motion must not freeze a new connection's geometry")
+        XCTAssertEqual(view.selectedID, "node-7")
+        XCTAssertEqual(view.viewport, camera)
+        XCTAssertTrue(view.layout.isSettled, "The new layout appears without animated settling")
     }
 
     @MainActor

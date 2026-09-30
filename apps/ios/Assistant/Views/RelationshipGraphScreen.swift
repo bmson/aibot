@@ -505,6 +505,7 @@ struct RelationshipGraphScreen: View {
         selectedID = id
         flash("Connection saved")
         await expand(id)
+        await refresh()
         model.invalidatePersonCaches()
     }
 
@@ -709,6 +710,9 @@ struct GraphQuickConnectSheet: View {
     @State private var newKind = "person"
     @State private var saving = false
     @State private var failure: String?
+    @State private var familySuggestions: [GraphFamilySuggestion] = []
+    @State private var showFamilySuggestions = false
+    @State private var committedProvisional: RelationshipGraphEdge?
     @FocusState private var nameFocused: Bool
 
     private struct End { let id: String?; let label: String; let kind: String }
@@ -802,6 +806,11 @@ struct GraphQuickConnectSheet: View {
         .navigationBarTitleDisplayMode(.inline)
         .interactiveDismissDisabled(saving)
         .onAppear { if draft.second == nil { nameFocused = true } }
+        .sheet(isPresented: $showFamilySuggestions, onDismiss: {
+            Task { await saved(committedProvisional); saving = false }
+        }) {
+            NavigationStack { GraphFamilySuggestionsSheet(suggestions: familySuggestions) }
+        }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
             ToolbarItem(placement: .confirmationAction) {
@@ -840,7 +849,16 @@ struct GraphQuickConnectSheet: View {
                 validFrom: nil, validUntil: nil)
         }
         Task {
-            if await model.createKnowledgeConnection(mutation) {
+            if let relationID = await model.createKnowledgeConnectionID(mutation) {
+                committedProvisional = provisional
+                model.invalidatePersonCaches()
+                if GraphFamilySuggestion.canTrigger(mutation.predicate), let graph = await model.relationshipGraph() {
+                    familySuggestions = GraphFamilySuggestionDismissals.remaining(graph.familyConnectionSuggestions(triggerRelationID: relationID))
+                    if !familySuggestions.isEmpty {
+                        showFamilySuggestions = true
+                        return
+                    }
+                }
                 await saved(provisional)
             } else {
                 failure = model.errorMessage ?? "Couldn’t save this connection. Try again."

@@ -114,10 +114,14 @@ export interface KnowledgeMapInput {
   sourceMemoryId?: string;
   entityId?: string;
   includeVisibleConnections?: boolean;
+  /** Scan all eligible claims before applying the larger overview display bounds. */
+  completeOverview?: boolean;
 }
 
 export const MAP_NODE_LIMIT = 200;
 export const MAP_EDGE_FETCH_LIMIT = 500;
+export const MAP_OVERVIEW_NODE_LIMIT = 1000;
+export const MAP_OVERVIEW_EDGE_LIMIT = 10000;
 /** Visible-topology completion: at most this many edges in total, fetched one past the cap. */
 const MAP_VISIBLE_EDGE_LIMIT = 1000;
 /**
@@ -214,16 +218,21 @@ export function buildKnowledgeCleanupFindings(
 }
 
 /**
- * Draw the capped map from recency-ordered rows. `interior` completes the
+ * Draw the map from eligible rows. Complete overviews allocate space to
+ * distinct connections before repeated evidence; compact previews keep their
+ * existing recency bounds. `interior` completes the
  * visible topology with existing eligible edges between drawn nodes, so recent
  * records cannot hide old bridges; it never infers relationships.
  */
 export async function assembleKnowledgeMapSnapshot(input: {
   rows: KnowledgeMapEdgeRecord[];
+  completeOverview?: boolean;
   totalEdges: number;
   filters: KnowledgeMapSnapshot['filters'];
   interior?: (entityIds: string[], limit: number) => Promise<KnowledgeMapEdgeRecord[]>;
 }): Promise<KnowledgeMapSnapshot> {
+  const nodeLimit = input.completeOverview ? MAP_OVERVIEW_NODE_LIMIT : MAP_NODE_LIMIT;
+  const edgeLimit = input.completeOverview ? MAP_OVERVIEW_EDGE_LIMIT : MAP_VISIBLE_EDGE_LIMIT;
   const nodeData = new Map<
     string,
     { id: string; label: string; kind: string; degree: number; contactId: string | null }
@@ -231,9 +240,9 @@ export async function assembleKnowledgeMapSnapshot(input: {
   const edges: KnowledgeMapEdge[] = [];
   const edgeIds = new Set<string>();
   const appendRow = (row: KnowledgeMapEdgeRecord) => {
-    if (edgeIds.has(row.id)) return;
+    if (edgeIds.has(row.id) || edges.length >= edgeLimit) return;
     const newIds = [row.subjectId, row.objectId].filter((id) => !nodeData.has(id));
-    if (nodeData.size + new Set(newIds).size > MAP_NODE_LIMIT) return;
+    if (nodeData.size + new Set(newIds).size > nodeLimit) return;
     edgeIds.add(row.id);
     nodeData.set(row.subjectId, {
       id: row.subjectId,
@@ -263,14 +272,31 @@ export async function assembleKnowledgeMapSnapshot(input: {
       validUntil: row.validUntil,
     });
   };
+  if (input.completeOverview) {
+    // Draw each distinct directed, time-qualified claim before extra evidence
+    // rows. A frequently mentioned pair must not displace another person.
+    const connections = new Set<string>();
+    for (const row of input.rows) {
+      const key = JSON.stringify([
+        row.subjectId,
+        row.objectId,
+        row.predicate,
+        row.validFrom,
+        row.validUntil,
+      ]);
+      if (connections.has(key)) continue;
+      connections.add(key);
+      appendRow(row);
+    }
+  }
   input.rows.forEach(appendRow);
   const overviewEdgeCount = edges.length;
   let visibleConnectionsTruncated = false;
   if (input.interior && nodeData.size > 0) {
-    const interior = await input.interior([...nodeData.keys()], MAP_VISIBLE_EDGE_LIMIT + 1);
+    const interior = await input.interior([...nodeData.keys()], edgeLimit + 1);
     for (const row of interior) {
       if (edgeIds.has(row.id)) continue;
-      if (edges.length >= MAP_VISIBLE_EDGE_LIMIT) {
+      if (edges.length >= edgeLimit) {
         visibleConnectionsTruncated = true;
         break;
       }
@@ -320,7 +346,9 @@ export async function assembleKnowledgeMapSnapshot(input: {
     edges,
     components,
     totalEdges: input.totalEdges,
-    truncated: input.totalEdges > overviewEdgeCount || visibleConnectionsTruncated,
+    truncated:
+      input.totalEdges > (input.completeOverview ? edges.length : overviewEdgeCount) ||
+      visibleConnectionsTruncated,
     filters: input.filters,
   };
 }
@@ -347,10 +375,11 @@ export function knowledgeWorkspaceQueries(repository: KnowledgeWorkspaceReadRepo
           const filters = knowledgeMapFilters(input);
           const { rows, total } = await snapshot.mapEdges(
             { ...filters, entityId: input.entityId },
-            MAP_EDGE_FETCH_LIMIT,
+            input.completeOverview ? Number.MAX_SAFE_INTEGER : MAP_EDGE_FETCH_LIMIT,
           );
           return assembleKnowledgeMapSnapshot({
             rows,
+            completeOverview: input.completeOverview,
             totalEdges: total,
             filters,
             interior: input.includeVisibleConnections

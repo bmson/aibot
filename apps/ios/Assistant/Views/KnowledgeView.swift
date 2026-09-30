@@ -118,6 +118,8 @@ struct KnowledgeConnectionEditor: View {
     @State private var note = ""
     @State private var saving = false
     @State private var saveError: String?
+    @State private var familySuggestions: [GraphFamilySuggestion] = []
+    @State private var showFamilySuggestions = false
 
     init(
         selected: KnowledgeEntity,
@@ -230,6 +232,11 @@ struct KnowledgeConnectionEditor: View {
         .navigationBarTitleDisplayMode(.inline)
         .tint(AssistantTheme.accent(for: colorScheme))
         .interactiveDismissDisabled(saving)
+        .sheet(isPresented: $showFamilySuggestions, onDismiss: {
+            Task { dismiss(); await didSave(); saving = false }
+        }) {
+            NavigationStack { GraphFamilySuggestionsSheet(suggestions: familySuggestions) }
+        }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }.disabled(saving)
@@ -260,13 +267,17 @@ struct KnowledgeConnectionEditor: View {
             note: note
         )
         Task {
-            let saved =
-                if let relationToCorrect {
-                    await model.correctKnowledgeRelation(
-                        id: relationToCorrect.id, mutation: mutation)
-                } else {
-                    await model.createKnowledgeConnection(mutation)
+            let saved: Bool
+            if let relationToCorrect {
+                saved = await model.correctKnowledgeRelation(id: relationToCorrect.id, mutation: mutation)
+            } else if let relationID = await model.createKnowledgeConnectionID(mutation) {
+                saved = true
+                model.invalidatePersonCaches()
+                if GraphFamilySuggestion.canTrigger(mutation.predicate), let graph = await model.relationshipGraph() {
+                    familySuggestions = GraphFamilySuggestionDismissals.remaining(graph.familyConnectionSuggestions(triggerRelationID: relationID))
+                    if !familySuggestions.isEmpty { showFamilySuggestions = true; return }
                 }
+            } else { saved = false }
             if saved {
                 dismiss()
                 await didSave()
@@ -292,11 +303,28 @@ struct KnowledgeConnectionEditor: View {
         switch (subjectKind, objectKind) {
         case ("person", "person"):
             return [
+                ("father_of", "is the father of"),
+                ("mother_of", "is the mother of"),
                 ("parent_of", "is the parent of"),
+                ("child_of", "is the child of"),
                 ("daughter_of", "is the daughter of"),
                 ("son_of", "is the son of"),
                 ("spouse_of", "is the spouse of"),
+                ("partner_of", "is the partner of"),
+                ("brother_of", "is the brother of"),
+                ("sister_of", "is the sister of"),
                 ("sibling_of", "is the sibling of"),
+                ("grandmother_of", "is the grandmother of"),
+                ("grandfather_of", "is the grandfather of"),
+                ("grandparent_of", "is the grandparent of"),
+                ("grandson_of", "is the grandson of"),
+                ("granddaughter_of", "is the granddaughter of"),
+                ("grandchild_of", "is the grandchild of"),
+                ("aunt_of", "is the aunt of"),
+                ("uncle_of", "is the uncle of"),
+                ("niece_of", "is the niece of"),
+                ("nephew_of", "is the nephew of"),
+                ("cousin_of", "is the cousin of"),
                 ("friend_of", "is a friend of"),
                 ("colleague_of", "is a colleague of"),
                 ("met", "met"),
@@ -304,7 +332,7 @@ struct KnowledgeConnectionEditor: View {
         case ("person", "organization"):
             return [
                 ("works_at", "works at"), ("worked_at", "worked at"), ("studies_at", "studies at"),
-                ("studied_at", "studied at"),
+                ("studied_at", "studied at"), ("graduated_from", "graduated from"), ("interned_at", "interned at"),
             ]
         case ("organization", "person"):
             return [("employs", "employs")]
@@ -314,7 +342,7 @@ struct KnowledgeConnectionEditor: View {
                 ("met_at", "met at"),
             ]
         case ("person", "event"):
-            return [("attended", "attended"), ("attends", "attends"), ("met_during", "met during")]
+            return [("attended", "attended"), ("attends", "attends"), ("met_at", "met at"), ("met_during", "met during")]
         case ("event", "person"):
             return [("attended_by", "was attended by")]
         case ("event", "place"):
@@ -325,8 +353,10 @@ struct KnowledgeConnectionEditor: View {
             ]
         case ("person", "date"):
             return [
-                ("born_on", "was born on"), ("married_on", "married on"), ("died_on", "died on"),
+                ("born_on", "was born on"), ("engaged_on", "got engaged on"), ("married_on", "married on"), ("divorced_on", "divorced on"), ("died_on", "died on"),
             ]
+        case ("organization", "place"), ("project", "place"):
+            return [("based_in", "is based in")]
         default:
             return []
         }
@@ -350,6 +380,10 @@ struct KnowledgeConnectionEditor: View {
         case "lives_in": return "\(subject) lives in \(object)."
         case "attended": return "\(subject) attended \(object)."
         default:
+            if predicate.hasSuffix("_of") {
+                let role = predicate.dropLast(3).replacingOccurrences(of: "_", with: " ")
+                return "\(subject) is \(object)’s \(role)."
+            }
             return
                 "\(subject) \(predicate.replacingOccurrences(of: "_", with: " ")) \(object)."
         }
@@ -564,4 +598,121 @@ private struct KnowledgeForgetButton: View {
             "This removes \(impact.activeConnections) active connections and \(impact.orphanedItems.count) items that would no longer be connected.\(retired) The source is tombstoned so it is not learned again verbatim."
     }
 
+}
+
+/// A dismissal stores only the proposal's stable entity IDs, never the names
+/// or source notes. It prevents the same declined family claim being repeated.
+@MainActor
+enum GraphFamilySuggestionDismissals {
+    static let key = "assistant.graph.dismissedFamilySuggestions"
+    static func ids() -> Set<String> {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
+        return (try? JSONDecoder().decode(Set<String>.self, from: data)) ?? []
+    }
+    static func remaining(_ suggestions: [GraphFamilySuggestion]) -> [GraphFamilySuggestion] {
+        let dismissed = ids()
+        return suggestions.filter { !dismissed.contains($0.id) }
+    }
+    static func dismiss(_ id: String) {
+        var next = ids(); next.insert(id)
+        UserDefaults.standard.set(try? JSONEncoder().encode(next), forKey: key)
+    }
+}
+
+struct GraphFamilySuggestionsSheet: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dismiss) private var dismiss
+    @State private var suggestions: [GraphFamilySuggestion]
+    @State private var handled = Set<String>()
+    @State private var working: String?
+    @State private var failure: String?
+    @State private var added = 0
+
+    init(suggestions: [GraphFamilySuggestion]) { _suggestions = State(initialValue: suggestions) }
+
+    var body: some View {
+        List {
+            Section {
+                Text("These may follow from your recorded family connections. Review each one before adding it.")
+                Text("Siblings can share one parent or both. These suggestions do not assume which.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            ForEach(suggestions) { suggestion in
+                Section {
+                    Text(suggestion.sentence).font(.headline)
+                    Text(suggestion.reason).font(.subheadline).foregroundStyle(.secondary)
+                    DisclosureGroup("Based on recorded connections") {
+                        ForEach(suggestion.support) { source in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(source.sentence).font(.footnote)
+                                if source.reviewStatus != "confirmed" { Text("Not reviewed yet").font(.caption).foregroundStyle(.secondary) }
+                                DisclosureGroup("Source note") { Text(source.sourceContent).font(.footnote).foregroundStyle(.secondary) }
+                            }
+                        }
+                    }
+                    Button {
+                        Task { await accept(suggestion) }
+                    } label: {
+                        if working == suggestion.id { ProgressView("Adding…") }
+                        else { Label("Add connection", systemImage: "plus") }
+                    }
+                    .disabled(working != nil)
+                    Button("Not right") {
+                        GraphFamilySuggestionDismissals.dismiss(suggestion.id)
+                        handled.insert(suggestion.id)
+                        suggestions.removeAll { $0.id == suggestion.id }
+                    }
+                    .disabled(working != nil)
+                }
+            }
+            if suggestions.isEmpty {
+                Section { Text(added == 0 ? "No more suggestions to review." : "\(added) connection\(added == 1 ? "" : "s") added.") }
+            }
+            if let failure {
+                Section { Text(failure).foregroundStyle(.red) }
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(AssistantTheme.canvas(for: colorScheme))
+        .tint(AssistantTheme.accent(for: colorScheme))
+        .navigationTitle("Family suggestions")
+        .navigationBarTitleDisplayMode(.inline)
+        .interactiveDismissDisabled(working != nil)
+        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(working != nil) } }
+    }
+
+    private func accept(_ suggestion: GraphFamilySuggestion) async {
+        guard working == nil else { return }
+        working = suggestion.id; failure = nil
+        defer { working = nil }
+        // Re-read before writing: edits or rejection on another screen must
+        // not turn an obsolete suggestion into a new owner-confirmed fact.
+        guard let fresh = await model.relationshipGraph() else {
+            failure = "Couldn’t check the recorded connections. Nothing was added. Try again."
+            return
+        }
+        let eligibleIDs = Set(fresh.edges.filter { ["confirmed", "unreviewed"].contains($0.reviewStatus) && $0.validFrom == nil && $0.validUntil == nil }.map(\.id))
+        guard suggestion.support.allSatisfy({ eligibleIDs.contains($0.id) }),
+              let current = fresh.familyConnectionSuggestions(matchingSuggestionID: suggestion.id).first,
+              current.predicate == suggestion.predicate else {
+            suggestions.removeAll { $0.id == suggestion.id }
+            failure = "That suggestion changed or is already recorded. It was not added."
+            return
+        }
+        guard let relationID = await model.createKnowledgeConnectionID(current.mutation) else {
+            failure = "Couldn’t add this connection. Try again."
+            return
+        }
+        handled.insert(suggestion.id); added += 1
+        suggestions.removeAll { $0.id == suggestion.id }
+        model.invalidatePersonCaches()
+        // Each accepted connection can offer another small, reviewable step;
+        // proposed connections never become evidence before they are saved.
+        if let updated = await model.relationshipGraph() {
+            let next = GraphFamilySuggestionDismissals.remaining(updated.familyConnectionSuggestions(triggerRelationID: relationID))
+            let shown = Set(suggestions.map(\.id)).union(handled)
+            suggestions.append(contentsOf: next.filter { !shown.contains($0.id) })
+        }
+    }
 }

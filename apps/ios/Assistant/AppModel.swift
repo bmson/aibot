@@ -390,9 +390,13 @@ final class AppModel: ObservableObject {
     }
 
     func createKnowledgeConnection(_ mutation: KnowledgeConnectionMutation) async -> Bool {
-        guard let client else { return false }
-        do { try await client.createKnowledgeConnection(mutation); return true }
-        catch { reportError(error); return false }
+        await createKnowledgeConnectionID(mutation) != nil
+    }
+
+    func createKnowledgeConnectionID(_ mutation: KnowledgeConnectionMutation) async -> String? {
+        guard let client else { return nil }
+        do { return try await client.createKnowledgeConnection(mutation) }
+        catch { reportError(error); return nil }
     }
 
     func reviewKnowledgeRelation(id: String, approve: Bool) async -> Bool {

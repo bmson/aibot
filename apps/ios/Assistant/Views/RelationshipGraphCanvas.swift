@@ -110,6 +110,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
     private var unreviewed = Set<GraphLink>()
     private var dark = false
     private var reduceMotion = false
+    private var needsReducedMotionSettle = false
     private var previousSize = CGSize.zero
     private var edgeLabels: [GraphLink: String] = [:]
     private var edgeDirections: [GraphLink: String] = [:]
@@ -279,7 +280,6 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         unreviewed = Set(snapshot.edges.filter { $0.reviewStatus != "confirmed" }.map { GraphLink($0.subjectId, $0.objectId) })
         if changed {
             let firstLayout = layout.ids.isEmpty
-            let membershipChanged = Set(nodes.map(\.id)) != Set(snapshot.nodes.map(\.id))
             let leaving: Set<String> = firstLayout || reduceMotion ? [] : Set(nodes.map(\.id)).subtracting(snapshot.nodes.map(\.id))
             if !leaving.isEmpty { letGo(leaving) }
             nodes = snapshot.nodes
@@ -289,16 +289,11 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
             adjacency = snapshot.adjacency
             layout.update(nodes: nodes, links: links)
             if firstLayout || reduceMotion {
-                // A cold start is run most of the way to rest before the
-                // first frame, so the map opens already recognisable and then
-                // eases into place, rather than exploding out of one point.
-                // Reduce Motion runs it all the way — but only when items came
-                // or went. A line added or removed between items already
-                // placed is drawn where they stand: settling would jump the
-                // whole map at once, which is what Reduce Motion asks to avoid.
+                // Reduce Motion changes the geometry without animating it;
+                // topology edits still need a settled, correctly grouped map.
                 if !reduceMotion { for _ in 0..<150 where !layout.isSettled { layout.step() } }
-                else if firstLayout || membershipChanged { layout.settle() }
-                else { layout.cool() }
+                else if isNavigating { needsReducedMotionSettle = true }
+                else { layout.settle(); needsReducedMotionSettle = false }
                 if firstLayout { needsInitialFit = true }
             }
             syncMotion(arriving: !firstLayout && !reduceMotion)
@@ -486,7 +481,7 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
 
     private var needsFrames: Bool {
         (!layout.isSettled && !reduceMotion && !isNavigating) || camera != nil || animating
-            || hypot(momentum.x, momentum.y) > 4 || connectSourceID != nil
+            || hypot(momentum.x, momentum.y) > 4 || connectSourceID != nil || needsReducedMotionSettle
     }
 
     /// Something the drawing animates towards has changed.
@@ -514,6 +509,9 @@ final class RelationshipGraphCanvasView: UIView, UIGestureRecognizerDelegate {
         let now = link.timestamp
         let dt = min(1.0 / 20, max(1.0 / 240, now - lastTick))
         lastTick = now
+        if needsReducedMotionSettle && !isNavigating {
+            layout.settle(); needsReducedMotionSettle = false
+        }
         if !layout.isSettled && !reduceMotion && !isNavigating {
             layout.step()
             if !interactive { fit(animated: false) }

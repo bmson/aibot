@@ -297,6 +297,10 @@ describe('knowledge workspace map (integration)', () => {
       const basic = await getKnowledgeMapSnapshot(db, { entityId: hubId });
       expect(basic.edges).toHaveLength(500);
       expect(basic.truncated).toBe(true);
+      const broad = await getKnowledgeMapSnapshot(db, { entityId: hubId, completeOverview: true });
+      expect(broad.nodes.length).toBeGreaterThan(basic.nodes.length);
+      expect(broad.edges.length).toBeGreaterThan(500);
+      expect(broad.truncated).toBe(false);
       expect(basic.edges.some((edge) => edge.id === records[0]!.id)).toBe(false);
       const complete = await getKnowledgeMapSnapshot(db, {
         entityId: hubId,

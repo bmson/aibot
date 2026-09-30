@@ -55,7 +55,7 @@ describe('native relationship graph', () => {
     );
     expect(mocks.snapshot).toHaveBeenCalledWith(
       {},
-      { entityId: entity, query: '', includeVisibleConnections: true },
+      { entityId: entity, query: '', includeVisibleConnections: true, completeOverview: true },
     );
     expect(await response.json()).toMatchObject({
       focusId: entity,

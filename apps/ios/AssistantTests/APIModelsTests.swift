@@ -570,8 +570,18 @@ final class APIModelsTests: XCTestCase {
         XCTAssertNil(overview.entitySelected(by: "another-item"), "A stale response must not show a different item")
     }
 
+    func testRelationshipEditorIncludesExtendedFamily() {
+        let options = KnowledgeConnectionEditor.relationshipOptions(subjectKind: "person", objectKind: "person")
+        let ids = Set(options.map(\.id))
+        for role in ["father", "mother", "child", "brother", "sister", "grandmother", "grandfather", "grandparent", "grandchild", "grandson", "granddaughter", "aunt", "uncle", "niece", "nephew", "cousin", "partner"] {
+            XCTAssertTrue(ids.contains("\(role)_of"), "Missing \(role)")
+        }
+        XCTAssertEqual(options.first { $0.id == "grandmother_of" }?.label, "is the grandmother of")
+        XCTAssertFalse(KnowledgeConnectionEditor.relationshipOptions(subjectKind: "person", objectKind: "place").contains { $0.id == "grandmother_of" })
+    }
+
     func testRelationshipEditorPreviewPreservesDirection() {
-        for (predicate, role) in [("son_of", "son"), ("daughter_of", "daughter"), ("parent_of", "parent")] {
+        for (predicate, role) in [("son_of", "son"), ("daughter_of", "daughter"), ("parent_of", "parent"), ("grandmother_of", "grandmother"), ("grandchild_of", "grandchild")] {
             XCTAssertEqual(
                 KnowledgeConnectionEditor.previewSentence(subject: "Alex", predicate: predicate, objectLabel: "Robin"),
                 "Alex is Robin’s \(role).")
@@ -2745,6 +2755,58 @@ extension APIModelsTests {
         XCTAssertTrue(layout.isSettled, "Reloading the same items does not wake the map")
     }
 
+    func testDisconnectedClustersSeparateAndJoiningThemRegroupsWithoutReseeding() {
+        let nodes = (0..<12).map { RelationshipGraphNode(id: "n\($0)", label: "Person \($0)", kind: "person") }
+        let links = [GraphLink("n0", "n1"), GraphLink("n1", "n2"), GraphLink("n2", "n3"),
+                     GraphLink("n4", "n5"), GraphLink("n5", "n6"), GraphLink("n6", "n7"),
+                     GraphLink("n8", "n9"), GraphLink("n9", "n10"), GraphLink("n10", "n11")]
+        var layout = RelationshipGraphLayout(); layout.update(nodes: nodes, links: links); layout.settle()
+        func gap(_ a: String, _ b: String) -> CGFloat {
+            let p = layout.position(of: a)!, q = layout.position(of: b)!
+            return hypot(p.x - q.x, p.y - q.y)
+        }
+        XCTAssertGreaterThan(gap("n1", "n5"), gap("n1", "n2") * 1.5, "Separate groups have their own space")
+        let before = gap("n1", "n5"), placed = layout.positions
+        layout.update(nodes: nodes, links: links + [GraphLink("n1", "n5")])
+        XCTAssertEqual(layout.positions, placed, "New connections move through the simulation rather than reseeding the map")
+        layout.settle()
+        XCTAssertLessThan(gap("n1", "n5"), before * 0.75, "A bridge brings its groups together")
+        let settled = layout.positions
+        layout.update(nodes: nodes, links: links + [GraphLink("n1", "n5")])
+        XCTAssertEqual(layout.positions, settled)
+        XCTAssertTrue(layout.isSettled, "Repeated evidence updates do not rearrange the map")
+    }
+
+    func testSettledGraphUntanglesCrossedConnections() {
+        let graph = RelationshipGraphFixture.snapshot(count: 50)
+        var layout = RelationshipGraphLayout(); layout.update(nodes: graph.nodes, links: graph.links); layout.settle()
+        func side(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> CGFloat {
+            (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x)
+        }
+        var crossings = 0
+        for i in graph.links.indices { for j in graph.links.indices where j > i {
+            let e = graph.links[i], f = graph.links[j]
+            if e.contains(f.a) || e.contains(f.b) { continue }
+            let a = layout.position(of: e.a)!, b = layout.position(of: e.b)!, c = layout.position(of: f.a)!, d = layout.position(of: f.b)!
+            if side(a,b,c)*side(a,b,d) < 0 && side(c,d,a)*side(c,d,b) < 0 { crossings += 1 }
+        } }
+        XCTAssertEqual(crossings, 0, "The sparse relationship clusters should settle without crossed lines")
+        XCTAssertTrue(layout.isSettled)
+    }
+
+    func testConnectionCorridorsClearUnrelatedBubbles() {
+        let nodes = ["a", "b", "c"].map { RelationshipGraphNode(id: $0, label: $0, kind: "person") }
+        var layout = RelationshipGraphLayout(); layout.update(nodes: nodes, links: [GraphLink("a", "b"), GraphLink("a", "c")])
+        layout.move(id: "a", to: CGPoint(x: -90, y: 0))
+        layout.move(id: "b", to: CGPoint(x: 90, y: 0))
+        layout.move(id: "c", to: .zero)
+        layout.settle()
+        let a = layout.position(of: "a")!, b = layout.position(of: "b")!, c = layout.position(of: "c")!
+        let dx = b.x - a.x, dy = b.y - a.y
+        let distance = abs(dx * (c.y - a.y) - dy * (c.x - a.x)) / hypot(dx, dy)
+        XCTAssertGreaterThan(distance, layout.radius(of: "c")! + 8, "A bubble must not settle across someone else's line")
+    }
+
     func testDraggedNodePullsItsNeighbourAlong() {
         let nodes = (0..<3).map { RelationshipGraphNode(id: "n\($0)", label: "Item \($0)", kind: "person") }
         let graph = RelationshipGraphSnapshot(nodes: nodes, edges: [RelationshipGraphFixture.edge("a", from: "n0", to: "n1")],
@@ -2931,5 +2993,103 @@ extension APIModelsTests {
         XCTAssertEqual(graph.directNeighbors(of: "node-4").map(\.id), order, "The list does not reshuffle")
         graph.edges.append(graph.edges[0])
         XCTAssertEqual(graph.degrees["node-4"], neighbors.count, "A second source for one link is not a second neighbour")
+    }
+}
+
+extension APIModelsTests {
+    private func familyGraph(_ claims: [(String, String, String, String)], review: String = "confirmed", dated: Bool = false) -> RelationshipGraphSnapshot {
+        let names = ["mom": "Morgan", "me": "Alex", "sibling": "Robin", "grandma": "Grandma", "other": "Casey"]
+        let nodes = names.map { RelationshipGraphNode(id: $0.key, label: $0.value, kind: "person") }
+        let edges = claims.map { id, subject, role, object in
+            let sentence = "\(names[subject]!) \(role.replacingOccurrences(of: "_", with: " ")) \(names[object]!)."
+            return RelationshipGraphEdge(id: id, subjectId: subject, objectId: object, predicate: role,
+                reviewStatus: review, sourceContent: sentence,
+                presentation: .init(sentence: sentence, label: role, accessibleLabel: sentence),
+                validFrom: dated ? "2020-01-01" : nil, validUntil: nil)
+        }
+        return .init(nodes: nodes, edges: edges, totalEdges: edges.count, truncated: false, focusId: nil)
+    }
+
+    func testFamilySuggestionsOfferMotherOfSiblingFromEitherSavedConnection() throws {
+        let graph = familyGraph([("mother", "mom", "mother_of", "me"), ("siblings", "me", "sibling_of", "sibling")])
+        for trigger in ["mother", "siblings"] {
+            let suggestion = try XCTUnwrap(graph.familyConnectionSuggestions(triggerRelationID: trigger).first)
+            XCTAssertEqual(suggestion.subject.id, "mom")
+            XCTAssertEqual(suggestion.object.id, "sibling")
+            XCTAssertEqual(suggestion.predicate, "mother_of")
+            XCTAssertEqual(suggestion.sentence, "Morgan is Robin’s mother.")
+            XCTAssertTrue(suggestion.reason.contains("siblings can have different parents"))
+            XCTAssertEqual(Set(suggestion.support.map(\.id)), ["mother", "siblings"])
+            XCTAssertEqual(suggestion.mutation.subjectId, "mom")
+            XCTAssertEqual(suggestion.mutation.objectId, "sibling")
+        }
+        XCTAssertTrue(graph.familyConnectionSuggestions(triggerRelationID: "unrelated-save").isEmpty)
+    }
+
+    func testFamilySuggestionsPreserveInverseChildAndSiblingDirection() throws {
+        let graph = familyGraph([("child", "me", "son_of", "mom"), ("siblings", "sibling", "sister_of", "me")])
+        let suggestion = try XCTUnwrap(graph.familyConnectionSuggestions(triggerRelationID: "child").first)
+        XCTAssertEqual(suggestion.subject.id, "mom")
+        XCTAssertEqual(suggestion.object.id, "sibling")
+        XCTAssertEqual(suggestion.predicate, "parent_of", "A child's gender cannot tell us the parent's role")
+    }
+
+    func testFamilySuggestionsRecognizeExistingInverseClaimsAndAliases() {
+        let graph = familyGraph([("mother", "mom", "is_the_mother_of", "me"), ("siblings", "me", "sibling_of", "sibling"),
+                                 ("already", "sibling", "daughter_of", "mom")])
+        XCTAssertTrue(graph.familyConnectionSuggestions(triggerRelationID: "mother").isEmpty)
+    }
+
+    func testFamilySuggestionsDeriveSiblingsAndGrandparentsWithRecordedRoles() throws {
+        let children = familyGraph([("one", "mom", "mother_of", "me"), ("two", "mom", "parent_of", "sibling")])
+        let sibling = try XCTUnwrap(children.familyConnectionSuggestions(triggerRelationID: "two").first)
+        XCTAssertEqual(sibling.predicate, "sibling_of")
+        XCTAssertEqual(Set([sibling.subject.id,sibling.object.id]), ["me","sibling"])
+        XCTAssertTrue(sibling.reason.contains("half-sibling"))
+        let generations = familyGraph([("one", "grandma", "mother_of", "mom"), ("two", "mom", "mother_of", "me")])
+        let grandparent = try XCTUnwrap(generations.familyConnectionSuggestions(triggerRelationID: "two").first)
+        XCTAssertEqual(grandparent.subject.id, "grandma")
+        XCTAssertEqual(grandparent.object.id, "me")
+        XCTAssertEqual(grandparent.predicate, "grandmother_of")
+    }
+
+    func testFamilySuggestionsExcludeDatedRejectedAndUnknownSupport() {
+        let claims = [("mother", "mom", "mother_of", "me"), ("siblings", "me", "sibling_of", "sibling")]
+        for review in ["unknown", "rejected"] {
+            XCTAssertTrue(familyGraph(claims, review: review).familyConnectionSuggestions().isEmpty)
+        }
+        XCTAssertTrue(familyGraph(claims, dated: true).familyConnectionSuggestions().isEmpty)
+        var graph = familyGraph(claims)
+        graph.edges += familyGraph([("declined", "mom", "mother_of", "sibling")], review: "rejected").edges
+        XCTAssertTrue(graph.familyConnectionSuggestions().isEmpty)
+    }
+
+    func testFamilySuggestionsRetainUnreviewedEvidenceForExplicitReview() throws {
+        let graph = familyGraph([("mother", "mom", "mother_of", "me"), ("siblings", "me", "sibling_of", "sibling")], review: "unreviewed")
+        let suggestion = try XCTUnwrap(graph.familyConnectionSuggestions().first)
+        XCTAssertTrue(suggestion.support.allSatisfy { $0.reviewStatus == "unreviewed" && !$0.sourceContent.isEmpty })
+        XCTAssertTrue(graph.edges.allSatisfy { $0.reviewStatus == "unreviewed" }, "Proposing a connection must not confirm its source records")
+        XCTAssertFalse(GraphFamilySuggestion.canTrigger("works_at"))
+        XCTAssertTrue(GraphFamilySuggestion.canTrigger("is the mother of"))
+    }
+
+    func testFamilySuggestionRevalidationDropsRemovedSupportAndAvoidsCycles() throws {
+        var graph = familyGraph([("mother", "mom", "mother_of", "me"), ("siblings", "me", "sibling_of", "sibling")])
+        let proposal = try XCTUnwrap(graph.familyConnectionSuggestions().first)
+        XCTAssertEqual(graph.familyConnectionSuggestions(matchingSuggestionID: proposal.id), [proposal])
+        graph.edges.removeAll { $0.id == "siblings" }
+        XCTAssertTrue(graph.familyConnectionSuggestions(matchingSuggestionID: proposal.id).isEmpty)
+        let cycle = familyGraph([("one", "mom", "parent_of", "me"), ("two", "me", "parent_of", "mom")])
+        XCTAssertTrue(cycle.familyConnectionSuggestions().isEmpty, "A parent cycle must not suggest that someone is their own grandparent")
+    }
+
+    func testFamilySuggestionsDeduplicateSourcesWithoutCascadingProposals() {
+        let graph = familyGraph([("mother", "mom", "mother_of", "me"), ("another-source", "mom", "mother_of", "me"),
+                                 ("siblings", "me", "sibling_of", "sibling"), ("next-sibling", "sibling", "sibling_of", "other")])
+        let suggestions = graph.familyConnectionSuggestions(triggerRelationID: "mother")
+        XCTAssertEqual(suggestions.count, 1)
+        XCTAssertEqual(suggestions.first?.object.id, "sibling")
+        XCTAssertFalse(suggestions.contains { $0.object.id == "other" }, "An unaccepted suggestion cannot become evidence for another one")
+        XCTAssertEqual(Set(suggestions.first!.support.map(\.id)), ["mother", "another-source", "siblings"])
     }
 }
