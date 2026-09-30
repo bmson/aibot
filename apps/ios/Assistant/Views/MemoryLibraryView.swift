@@ -71,7 +71,7 @@ struct MemoryLibraryScreen: View {
         VStack(alignment: .leading, spacing: 10) {
             Picker("State", selection: stateBinding) {
                 Text("In use").tag("in-use")
-                Text("Held for review").tag("review")
+                Text("To review").tag("review")
             }
             .pickerStyle(.segmented)
 
@@ -151,11 +151,10 @@ struct MemoryLibraryScreen: View {
     private func actions(_ row: MemoryLibraryRow) -> some View {
         AssistantFlowLayout(spacing: 9) {
             if query.state == "review" {
-                Button("Approve", systemImage: "checkmark") { perform(row, action: "approve") }
+                Button("Remember", systemImage: "checkmark") { perform(row, action: "approve") }
                     .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
-                AssistantConfirmationButton("Reject", systemImage: "xmark", compact: true) {
-                    await act(row, action: "reject")
-                }
+                Button("Don’t remember", systemImage: "xmark") { perform(row, action: "reject") }
+                    .buttonStyle(AssistantActionButtonStyle(kind: .neutral, compact: true))
             } else {
                 if !row.ownerConfirmed {
                     Button("Confirm", systemImage: "checkmark.seal") {

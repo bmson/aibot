@@ -1499,12 +1499,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func updateMemory(id: String, action: String, prominence: String? = nil) async -> Bool {
+    func updateMemory(id: String, action: String, prominence: String? = nil, refreshAfterSave: Bool = true) async -> Bool {
         guard let client else { return false }
         errorMessage = nil
         do {
             try await client.updateMemory(id: id, action: action, prominence: prominence)
-            await refreshWorkspace(reportFailure: false)
+            if refreshAfterSave { await refreshWorkspace(reportFailure: false) }
             return true
         } catch {
             reportError(error)
