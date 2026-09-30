@@ -2,6 +2,38 @@ import AVFoundation
 import XCTest
 @testable import Assistant
 
+@MainActor
+final class SpeechListenerCancellationTests: XCTestCase {
+    func testCancellationIgnoresLatePermissionGrant() async {
+        await assertCancelledPermissionResult(granted: true)
+    }
+
+    func testCancellationIgnoresLatePermissionDenial() async {
+        await assertCancelledPermissionResult(granted: false)
+    }
+
+    private func assertCancelledPermissionResult(granted: Bool) async {
+        var permission: CheckedContinuation<Bool, Never>?
+        let listener = SpeechListener {
+            await withCheckedContinuation { permission = $0 }
+        }
+        let start = Task { await listener.start() }
+        // Suspend permission setup without accessing real microphone permissions
+        // or downloading a speech model on the test runner.
+        while permission == nil { await Task.yield() }
+        XCTAssertEqual(listener.state, .preparing)
+
+        _ = await listener.stop()
+        XCTAssertEqual(listener.state, .idle)
+        permission?.resume(returning: granted)
+        await start.value
+
+        XCTAssertEqual(listener.state, .idle)
+        XCTAssertFalse(listener.isListening)
+        XCTAssertEqual(listener.transcript, "")
+    }
+}
+
 /// How the assistant sounds, decided without an audio stack.
 ///
 /// None of this can be tested by listening on CI — the simulator has no neural

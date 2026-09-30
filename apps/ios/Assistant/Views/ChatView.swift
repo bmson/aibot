@@ -342,7 +342,10 @@ struct ChatView: View {
     @StateObject private var listener = SpeechListener()
     @State private var draftBeforeDictation = ""
     @State private var pushToTalkActive = false
-    @State private var pushToTalkStartedAt: Date?
+    @State private var micPressActive = false
+    @GestureState private var micTouchDown = false
+    @State private var micHoldConsumed = false
+    @State private var micStopping = false
     /// A tap leaves the microphone on without a finger holding it down. The
     /// button stays in its active state until it is tapped again.
     @State private var micLatched = false
@@ -1965,45 +1968,83 @@ struct ChatView: View {
     /// next tap puts it back to rest. Neither one leaves the conversation; the
     /// words land in the composer and nothing is sent until you send it.
     private var pushToTalkButton: some View {
-        let listening = listener.isListening || micLatched
-        let preparing = listener.state == .preparing
-        return ZStack {
-            if preparing {
-                // On the active fill the indicator has to switch to the dark
-                // ink the icon uses, or it draws white on white.
-                ComposerWorkingIndicator(
-                    color: listening ? AssistantTheme.stageDepth : composerTextColor
+        let listening = micLatched || pushToTalkActive
+        let preparing = listening && listener.state == .preparing
+        return Button {
+            // A completed hold owns this press; its release must not also
+            // trigger the button's tap action and turn listening back on.
+            guard !micHoldConsumed else { return }
+            toggleMicrophone()
+        } label: {
+            ZStack {
+                if preparing {
+                    // On the active fill the indicator has to switch to the dark
+                    // ink the icon uses, or it draws white on white.
+                    ComposerWorkingIndicator(
+                        color: listening ? AssistantTheme.stageDepth : composerTextColor
+                    )
+                } else {
+                    Image(systemName: listening ? "waveform" : "mic.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .symbolEffect(.variableColor, isActive: listening && !reduceMotion)
+                }
+            }
+            .foregroundStyle(listening ? AssistantTheme.stageDepth : composerPlaceholderColor)
+            .frame(width: 44, height: 44)
+            .background(
+                (listening ? sendReadyFill : AssistantTheme.raised(for: colorScheme))
+                    .opacity(listening ? 1 : 0.06),
+                in: Circle()
+            )
+            .overlay {
+                Circle().strokeBorder(
+                    composerTextColor.opacity(listening ? 0.3 : 0.1),
+                    lineWidth: 0.7
                 )
-            } else {
-                Image(systemName: listening ? "waveform" : "mic.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                    .symbolEffect(.variableColor, isActive: listening && !reduceMotion)
+            }
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .updating($micTouchDown) { _, down, _ in down = true }
+                .onChanged { _ in
+                    guard !micPressActive else { return }
+                    micPressActive = true
+                    micHoldConsumed = false
+                }
+                .onEnded { _ in
+                    micPressActive = false
+                    if pushToTalkActive {
+                        stopMicrophone(focusingComposer: true)
+                    }
+                }
+        )
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: ChatView.micTapSeconds)
+                .onEnded { _ in
+                    micHoldConsumed = true
+                    if micLatched {
+                        stopMicrophone(focusingComposer: true)
+                    } else {
+                        beginPushToTalk()
+                    }
+                }
+        )
+        .onChange(of: micTouchDown) { _, down in
+            // Gesture state also resets when a system gesture cancels the
+            // touch, which has no onEnded callback.
+            guard !down else { return }
+            micPressActive = false
+            if pushToTalkActive {
+                stopMicrophone(focusingComposer: true)
             }
         }
-        .foregroundStyle(listening ? AssistantTheme.stageDepth : composerPlaceholderColor)
-        .frame(width: 44, height: 44)
-        .background(
-            (listening ? sendReadyFill : AssistantTheme.raised(for: colorScheme))
-                .opacity(listening ? 1 : 0.06),
-            in: Circle()
-        )
-        .overlay {
-            Circle().strokeBorder(
-                composerTextColor.opacity(listening ? 0.3 : 0.1),
-                lineWidth: 0.7
-            )
-        }
-        .contentShape(Circle())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in beginPushToTalk() }
-                .onEnded { _ in endPushToTalk() }
-        )
-        .accessibilityLabel(listening ? "Listening" : "Tap to talk")
+        .accessibilityLabel(listening ? "Stop listening" : "Tap to talk")
+        .accessibilityIdentifier("assistant.chat.microphone")
         .accessibilityHint(
             "Tap to start, tap again to stop, or hold to talk. The words land in the message field; nothing is sent until you send it."
         )
-        .accessibilityAddTraits(.isButton)
         // A hold and a tap are hard to tell apart under VoiceOver, so the
         // default action is the toggle and the hands-free loop keeps a named
         // action of its own rather than relying on a timing trick.
@@ -2027,42 +2068,24 @@ struct ChatView: View {
             // Nothing is listening any more, so the button must not be left
             // sitting there in its active state claiming otherwise.
             micLatched = false
+            pushToTalkActive = false
             listener.reset()
         }
     }
 
     private func beginPushToTalk() {
-        // A press while the microphone is latched on is the tap that turns it
-        // off: it must not restart a session underneath the finger.
-        guard !pushToTalkActive, !micLatched else { return }
+        // A hold must not open a second session while dictation is active
+        // or while the previous session is finishing.
+        guard !pushToTalkActive, !micLatched, !micStopping else { return }
         pushToTalkActive = true
-        pushToTalkStartedAt = .now
         draftBeforeDictation = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         Task { await listener.start() }
-    }
-
-    private func endPushToTalk() {
-        if micLatched {
-            stopMicrophone(focusingComposer: true)
-            return
-        }
-        guard pushToTalkActive else { return }
-        pushToTalkActive = false
-        let held = Date.now.timeIntervalSince(pushToTalkStartedAt ?? .now)
-        // Hold to dictate, tap to leave it listening — the way a shutter
-        // button takes a photo on a tap and a video on a hold. A tap keeps the
-        // session that the press already opened, so the words carry on landing
-        // in the composer until the next tap.
-        guard held >= ChatView.micTapSeconds else {
-            micLatched = true
-            return
-        }
-        stopMicrophone(focusingComposer: true)
     }
 
     /// The whole of the button's behaviour in one place, for VoiceOver's
     /// default action: a press-and-hold is a gesture it cannot perform.
     private func toggleMicrophone() {
+        guard !micStopping else { return }
         if micLatched || listener.isListening || listener.state == .preparing {
             stopMicrophone(focusingComposer: true)
             return
@@ -2075,10 +2098,13 @@ struct ChatView: View {
     /// - Parameter focusingComposer: bring the keyboard up on what was heard,
     ///   so a correction is one tap away rather than a re-take.
     private func stopMicrophone(focusingComposer: Bool) {
+        guard !micStopping else { return }
         micLatched = false
         pushToTalkActive = false
+        micStopping = true
         Task {
             _ = await listener.stop()
+            micStopping = false
             if focusingComposer { composerFocused = true }
         }
     }
@@ -2088,8 +2114,8 @@ struct ChatView: View {
 
     private var composerPrompt: String {
         // Short enough to survive the narrowest phones without truncating.
-        if listener.isListening { return "Listening…" }
-        if listener.state == .preparing { return "Getting speech ready…" }
+        if !micStopping && listener.isListening { return "Listening…" }
+        if !micStopping && listener.state == .preparing { return "Getting speech ready…" }
         return model.isSending ? "Working — keep typing" : "Ask anything…"
     }
 
