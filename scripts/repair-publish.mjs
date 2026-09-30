@@ -5,15 +5,11 @@ import { writeFileSync } from 'node:fs';
 const id = process.env.REPAIR_ID;
 if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id ?? ''))
   throw new Error('Invalid repair ID');
-const repo = process.env.GITHUB_REPOSITORY;
+const repo = process.env.REPAIR_TARGET_REPO ?? process.env.GITHUB_REPOSITORY;
 if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? '')) throw new Error('Invalid repository');
 const baseBranch = process.env.REPAIR_DEFAULT_BRANCH;
 if (!/^[\w./-]+$/.test(baseBranch ?? '') || baseBranch.startsWith('-') || baseBranch.includes('..'))
   throw new Error('Invalid base branch');
-const brief = JSON.parse(process.env.REPAIR_BRIEF ?? '{}');
-for (const key of ['diagnosis', 'reproduction', 'acceptance'])
-  if (typeof brief[key] !== 'string' || brief[key].length > 1500)
-    throw new Error('Invalid technical brief');
 const branch = `codex/self-repair-${id}`;
 const gh = (...args) => execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 1_000_000 });
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 1_000_000 });
@@ -36,7 +32,8 @@ if (remote && !remote.startsWith(commit + '\t'))
   throw new Error('Repair branch already exists with a different commit; manual recovery required');
 if (!remote) git('-c', 'core.hooksPath=/dev/null', 'push', 'origin', `HEAD:refs/heads/${branch}`);
 const bodyPath = `${process.env.RUNNER_TEMP}/repair-pr-body.md`;
-const body = `Fixes assistant reliability issue ${id}.\n\n${brief.diagnosis}\n\nReproduction: ${brief.reproduction}\n\nExpected behavior: ${brief.acceptance}\n\nThis change was prepared by the isolated coding worker and passed lint, type checking, the PostgreSQL test suite, and the Firestore emulator suite. Required PR checks, including applicable iOS validation, must pass before merge.\n\nReview the original report and diagnosis in the assistant’s Improvements page. Raw conversation and audit contents are intentionally omitted.\n\nThe owner reviews and merges this PR. Deployment and confirmation of the original behavior are tracked separately.\n\nWorker run: https://github.com/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}\n`;
+const body = `Fixes assistant reliability issue ${id}.\n\nThe private coding worker prepared a bounded fix with a regression test. The exact patch passed lint, type checking, PostgreSQL tests, Firestore tests and applicable iOS tests. Required PR checks must also pass before merge.\n\nThe owner can review the original report, diagnosis and private worker run in the assistant’s Improvements page. Diagnostic briefs, conversations and audits are omitted from this public PR.\n\nThe owner reviews and merges this PR. Deployment and confirmation of the original behavior are tracked separately.\n`;
+
 writeFileSync(bodyPath, body);
 console.log(
   gh(

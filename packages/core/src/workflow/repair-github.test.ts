@@ -35,9 +35,11 @@ it('dispatches a technical brief without exporting owner feedback or source audi
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(Response.json({ private: true }))
+    .mockResolvedValueOnce(Response.json({ default_branch: 'main' }))
+    .mockResolvedValueOnce(Response.json({ sha: 'a'.repeat(40) }))
     .mockResolvedValueOnce(new Response(null, { status: 204 }));
   await worker(fetch).dispatch(issue);
-  const [url, init] = fetch.mock.calls[1] ?? [];
+  const [url, init] = fetch.mock.calls[3] ?? [];
   expect(url).toContain('/actions/workflows/self-repair.yml/dispatches');
   expect(init.body).not.toContain('PRIVATE');
   expect(JSON.parse(init.body).inputs.repair_id).toBe(issue.id);
@@ -96,4 +98,36 @@ it('tracks verify jobs as testing rather than claiming a PR exists', async () =>
     )
     .mockResolvedValueOnce(Response.json({ jobs: [{ name: 'verify', status: 'in_progress' }] }));
   expect(await worker(fetch).inspect(issue)).toMatchObject({ status: 'testing' });
+});
+
+it('sends diagnostics and run queries only to the private worker while PRs and deployment stay on source', async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json({ private: true }))
+    .mockResolvedValueOnce(Response.json({ default_branch: 'main' }))
+    .mockResolvedValueOnce(Response.json({ sha: 'a'.repeat(40) }))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }));
+  const split = createGitHubRepairWorker({
+    token: 'token',
+    repo: 'owner/public',
+    workerRepo: 'owner/private-worker',
+    workflow: 'self-repair.yml',
+    ref: 'main',
+    fetch,
+  });
+  await split.dispatch(issue);
+  expect(fetch.mock.calls[0]?.[0]).toBe('https://api.github.com/repos/owner/private-worker');
+  expect(fetch.mock.calls[1]?.[0]).toBe('https://api.github.com/repos/owner/public');
+  const dispatch = fetch.mock.calls[3];
+  expect(dispatch?.[0]).toContain('owner/private-worker/actions/workflows');
+  expect(JSON.parse(dispatch?.[1].body).inputs.source_sha).toBe('a'.repeat(40));
+  fetch.mockResolvedValueOnce(Response.json([])).mockResolvedValueOnce(
+    Response.json({
+      workflow_runs: [{ id: 10, display_title: `self-repair:${issue.id}`, status: 'queued' }],
+    }),
+  );
+  const observed = await split.inspect(issue);
+  expect(fetch.mock.calls[4]?.[0]).toContain('owner/public/pulls');
+  expect(fetch.mock.calls[5]?.[0]).toContain('owner/private-worker/actions');
+  expect(observed?.patch.runUrl).toBe('https://github.com/owner/private-worker/actions/runs/10');
 });

@@ -318,6 +318,7 @@ const ConfigSchema = z.object({
   GITHUB_TOKEN: z.string().default(''),
   GITHUB_REPO: z.string().default(''),
   SELF_REPAIR_ENABLED: booleanString,
+  SELF_REPAIR_WORKER_REPO: z.string().default(''),
   SELF_REPAIR_ALLOW_EXECUTOR: booleanString,
   SELF_REPAIR_DAILY_LIMIT: z.coerce.number().int().min(1).max(5).default(2),
   SELF_REPAIR_WORKFLOW: z.string().default('self-repair.yml'),

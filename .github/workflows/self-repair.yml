@@ -7,6 +7,10 @@ on:
         description: Durable repair issue UUID
         type: string
         required: true
+      source_sha:
+        description: Immutable source commit from the source repository default branch
+        type: string
+        required: true
       brief:
         description: Technical diagnosis with synthetic reproduction and acceptance criteria
         type: string
@@ -30,7 +34,17 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          repository: ${{ vars.SELF_REPAIR_SOURCE_REPO || github.repository }}
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
+      - name: Validate source revision
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_REF: ${{ vars.SELF_REPAIR_SOURCE_REF || github.event.repository.default_branch }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          git fetch --no-tags origin "$SOURCE_REF"
+          git merge-base --is-ancestor "$SOURCE_SHA" FETCH_HEAD
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -65,7 +79,7 @@ jobs:
       - name: Export fenced patch
         id: patch
         env:
-          REPAIR_BASE: ${{ github.sha }}
+          REPAIR_BASE: ${{ inputs.source_sha }}
           REPAIR_GUARD: ${{ runner.temp }}/repair-guard.ts
           REPAIR_PATCH: ${{ runner.temp }}/repair.patch
           REPAIR_RESULT: ${{ runner.temp }}/repair-result.json
@@ -97,6 +111,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          repository: ${{ vars.SELF_REPAIR_SOURCE_REPO || github.repository }}
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -108,7 +124,7 @@ jobs:
           path: ${{ runner.temp }}/candidate
       - name: Apply and fence candidate
         env:
-          REPAIR_BASE: ${{ github.sha }}
+          REPAIR_BASE: ${{ inputs.source_sha }}
           REPAIR_GUARD: ${{ runner.temp }}/repair-guard.ts
           REPAIR_PATCH: ${{ runner.temp }}/verified.patch
           REPAIR_ALLOW_EXECUTOR: ${{ inputs.allow_executor }}
@@ -145,7 +161,7 @@ jobs:
           pnpm test:firestore
       - name: Recheck exact verified patch
         env:
-          REPAIR_BASE: ${{ github.sha }}
+          REPAIR_BASE: ${{ inputs.source_sha }}
           REPAIR_GUARD: ${{ runner.temp }}/repair-guard.ts
           REPAIR_PATCH: ${{ runner.temp }}/publish.patch
           REPAIR_EXPECTED_PATCH: ${{ runner.temp }}/candidate/repair.patch
@@ -164,6 +180,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          repository: ${{ vars.SELF_REPAIR_SOURCE_REPO || github.repository }}
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -174,7 +192,7 @@ jobs:
           path: ${{ runner.temp }}/verified
       - name: Apply fenced candidate
         env:
-          REPAIR_BASE: ${{ github.sha }}
+          REPAIR_BASE: ${{ inputs.source_sha }}
           REPAIR_GUARD: ${{ runner.temp }}/repair-guard.ts
           REPAIR_PATCH: ${{ runner.temp }}/ios.patch
           REPAIR_EXPECTED_PATCH: ${{ runner.temp }}/verified/publish.patch
@@ -205,6 +223,8 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          repository: ${{ vars.SELF_REPAIR_SOURCE_REPO || github.repository }}
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -217,9 +237,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SELF_REPAIR_GITHUB_TOKEN }}
           REPAIR_ID: ${{ inputs.repair_id }}
-          REPAIR_BRIEF: ${{ inputs.brief }}
-          REPAIR_BASE: ${{ github.sha }}
-          REPAIR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REPAIR_BASE: ${{ inputs.source_sha }}
+          REPAIR_TARGET_REPO: ${{ vars.SELF_REPAIR_SOURCE_REPO || github.repository }}
+          REPAIR_DEFAULT_BRANCH: ${{ vars.SELF_REPAIR_SOURCE_REF || github.event.repository.default_branch }}
           REPAIR_GUARD: ${{ runner.temp }}/repair-guard.ts
           REPAIR_PATCH: ${{ runner.temp }}/publish.patch
           REPAIR_EXPECTED_PATCH: ${{ runner.temp }}/verified/publish.patch

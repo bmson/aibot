@@ -6,16 +6,18 @@ The worker opens a feature branch, adds a regression test, checks the patch, and
 
 ## Activate
 
-1. Release these changes and the `self-repair.yml` workflow to the private repository's default branch. For PostgreSQL, apply migration 0081 and run the seed. For Firestore, provision the checked-in indexes, including `tasks(agentId, updatedAt DESC)`; the agent creates the 15-minute schedule when enabled. Existing disabled schedules remain disabled.
-2. Create the repository label `self-maintenance`.
-3. Add repository Actions secrets:
+1. Release these changes and the `self-repair.yml` workflow to the source repository's default branch. For PostgreSQL, apply migration 0081 and run the seed. For Firestore, provision the checked-in indexes, including `tasks(agentId, updatedAt DESC)`; the agent creates the 15-minute schedule when enabled. Existing disabled schedules remain disabled.
+2. If the source repository is public, create a private worker repository (this installation uses `bmson/assistant-repair-worker`). Copy `.github/workflows/self-repair.yml` to its default branch and set its repository variables `SELF_REPAIR_SOURCE_REPO=bmson/assistant` and `SELF_REPAIR_SOURCE_REF=main`. It checks out an immutable source commit from the source default branch; only verified code is published back. Diagnostics, Actions logs and artifacts stay private. The public PR body omits the brief and private run link.
+3. Create the repository label `self-maintenance`.
+4. Add Actions secrets in the private worker repository:
    - `SELF_REPAIR_OPENAI_API_KEY`: a dedicated project API key for the coding worker.
    - `SELF_REPAIR_GITHUB_TOKEN`: a repository-scoped publisher token with Contents and Pull requests write access. Use a dedicated identity without permission to bypass protected-branch rules. This token is available only to the publish job, after checks pass. A separate token is used so creating the PR triggers ordinary PR checks.
-4. Configure the assistant runtime and web service:
+5. Configure the assistant runtime and web service:
 
    ```dotenv
    GITHUB_REPO=bmson/assistant
    GITHUB_TOKEN=<runtime token: Actions read/write, Contents read, Pull requests read>
+   SELF_REPAIR_WORKER_REPO=bmson/assistant-repair-worker
    SELF_REPAIR_ENABLED=true
    SELF_REPAIR_ALLOW_EXECUTOR=false
    SELF_REPAIR_DAILY_LIMIT=2
@@ -24,8 +26,8 @@ The worker opens a feature branch, adds a regression test, checks the patch, and
    SELF_REPAIR_DEPLOYMENT_URL=https://<assistant-host>/api/health
    ```
 
-   Match `SELF_REPAIR_REF` to the repository's actual default branch. The health endpoint must return the deployed commit SHA. Configure the normal assistant model provider for investigation and the existing notification delivery channel for owner pings. Use the installation's secret manager for runtime credentials; never commit them or pass them as visible command arguments.
-5. Submit a small, reproducible report through Improvements. Confirm investigation, worker checks, PR notification, owner merge, deployment monitoring, and confirmation before relying on unattended runs. Check both SQL and Firestore paths for the selected installation backend.
+   Match `SELF_REPAIR_REF` to the worker repository's actual default branch. Source commits are resolved from the source repository's default branch. Use separate dedicated fine-grained tokens. Runtime: restrict to source and worker repositories with Actions read/write, Contents read and Pull requests read. Publisher: restrict to the source repository with Contents and Pull requests read/write. Keep the runtime token in Secret Manager; do not copy an all-repositories CLI login token into the worker. The health endpoint must return the deployed commit SHA. Configure the normal assistant model provider for investigation and the existing notification delivery channel for owner pings. Use the installation's secret manager for runtime credentials; never commit them or pass them as visible command arguments.
+6. Submit a small, reproducible report through Improvements. Confirm investigation, worker checks, PR notification, owner merge, deployment monitoring, and confirmation before relying on unattended runs. Check both SQL and Firestore paths for the selected installation backend.
 
 The approved local coding key is stored in ignored `.env.local`. It has not been uploaded to GitHub. Runtime configuration loads `.env`; creating this local key alone does not activate the worker.
 
@@ -37,4 +39,15 @@ Patches are limited to 20 files and 100 KB. A regression test and explicit repro
 
 An uncertain dispatch is reconciled by repair UUID, branch and workflow run before retry. A missing run eventually becomes failed; interrupted investigations expire. Failed or blocked issues expose Retry; active coding/PR issues cannot be dismissed. Closed PRs become dismissed. Deployment is recorded separately from confirmation of a fix. Disabling `SELF_REPAIR_ENABLED` stops new investigations, dispatches and polling; already-dispatched GitHub runs must be cancelled separately if needed.
 
-Raw conversations and audits stay in the assistant installation. Reports are scrubbed before storage; the worker receives a technical brief rather than the original audit or owner message. Model-generated briefs still need care: the investigation prompt requires synthetic data, and the repository must be private. Repair records participate in privacy erasure.
+Raw conversations and audits stay in the assistant installation. Reports are scrubbed before storage; the worker receives a technical brief rather than the original audit or owner message. Model-generated briefs still need care: the investigation prompt requires synthetic data, and the worker repository must be private. Repair records participate in privacy erasure.
+
+## Secure credential handoff for this installation
+
+GitHub does not let this setup create a fine-grained personal token through the CLI. The owner creates and enters these credentials. Two prefilled forms help choose the permissions; select only the repositories specified:
+
+- [Runtime token](https://github.com/settings/personal-access-tokens/new?name=Assistant%20repair%20runtime&target_name=bmson&expires_in=90&actions=write&contents=read&pull_requests=read): `assistant` and `assistant-repair-worker`.
+- [Publisher token](https://github.com/settings/personal-access-tokens/new?name=Assistant%20repair%20publisher&target_name=bmson&expires_in=90&contents=write&pull_requests=write): `assistant` only.
+
+Run `python3 scripts/configure-self-repair.py` from the repository. Enter the tokens only into its hidden prompts. It explains and confirms the exact destinations, verifies account/repository access, installs the publisher secret in the private worker, and installs the runtime credential in Google Secret Manager. It preserves existing service settings and mounts the credential only on the two application services. It never prints or saves the tokens locally, rejects broad CLI credentials and keeps automatic repair disabled until merge, release and a synthetic end-to-end check. Tokens expire after 90 days and need rotation. The OpenAI coding key is installed separately with explicit transfer approval.
+
+The owner-facing setup tool is scoped to `bmson-assistant` in `us-west1`; other installations should adapt the constants and repository settings before running it.

@@ -13,16 +13,22 @@ export class RepairDispatchRejected extends Error {}
 export function createGitHubRepairWorker(input: {
   token: string;
   repo: string;
+  workerRepo?: string;
   workflow: string;
   ref: string;
   deploymentUrl?: string;
   fetch?: typeof fetch;
 }): RepairWorker {
-  if (!/^[\w.-]+\/[\w.-]+$/.test(input.repo) || !/^[\w.-]+\.ya?ml$/.test(input.workflow))
+  const workerRepo = input.workerRepo || input.repo;
+  if (
+    !/^[\w.-]+\/[\w.-]+$/.test(input.repo) ||
+    !/^[\w.-]+\/[\w.-]+$/.test(workerRepo) ||
+    !/^[\w.-]+\.ya?ml$/.test(input.workflow)
+  )
     throw new Error('Invalid self-repair repository/workflow');
   const transport = input.fetch ?? fetch;
-  async function api(path: string, body?: unknown): Promise<unknown> {
-    const response = await transport(`https://api.github.com/repos/${input.repo}${path}`, {
+  async function api(path: string, body?: unknown, repo = input.repo): Promise<unknown> {
+    const response = await transport(`https://api.github.com/repos/${repo}${path}`, {
       method: body ? 'POST' : 'GET',
       signal: AbortSignal.timeout(15000),
       headers: {
@@ -43,7 +49,7 @@ export function createGitHubRepairWorker(input: {
   }
   return {
     async dispatch(issue) {
-      const repo = z.object({ private: z.boolean() }).parse(await api(''));
+      const repo = z.object({ private: z.boolean() }).parse(await api('', undefined, workerRepo));
       if (repo.private !== true)
         throw new RepairDispatchRejected(
           'Self-repair requires a private repository for diagnostic briefs',
@@ -55,16 +61,25 @@ export function createGitHubRepairWorker(input: {
         reproduction: issue.data.reproduction,
         acceptance: issue.data.acceptance,
       };
-      await api(`/actions/workflows/${input.workflow}/dispatches`, {
-        ref: input.ref,
-        inputs: {
-          repair_id: issue.id,
-          brief: JSON.stringify(brief),
-          allow_executor: String(
-            issue.data.targetPaths?.some((path) => path.includes('workflow/executor/')) ?? false,
-          ),
+      const source = z.object({ default_branch: z.string() }).parse(await api(''));
+      const commit = z
+        .object({ sha: z.string().regex(/^[a-f0-9]{40}$/i) })
+        .parse(await api(`/commits/${encodeURIComponent(source.default_branch)}`));
+      await api(
+        `/actions/workflows/${input.workflow}/dispatches`,
+        {
+          ref: input.ref,
+          inputs: {
+            repair_id: issue.id,
+            source_sha: commit.sha,
+            brief: JSON.stringify(brief),
+            allow_executor: String(
+              issue.data.targetPaths?.some((path) => path.includes('workflow/executor/')) ?? false,
+            ),
+          },
         },
-      });
+        workerRepo,
+      );
     },
     async inspect(issue) {
       const branch = `codex/self-repair-${issue.id}`;
@@ -123,6 +138,8 @@ export function createGitHubRepairWorker(input: {
         .parse(
           await api(
             `/actions/workflows/${input.workflow}/runs?event=workflow_dispatch&per_page=100`,
+            undefined,
+            workerRepo,
           ),
         );
       const run = runs.workflow_runs.find(
@@ -134,7 +151,7 @@ export function createGitHubRepairWorker(input: {
       if (!run) return null;
       const patch = {
         runId: run.id,
-        runUrl: `https://github.com/${input.repo}/actions/runs/${run.id}`,
+        runUrl: `https://github.com/${workerRepo}/actions/runs/${run.id}`,
       };
       if (run.status === 'completed')
         return {
@@ -147,7 +164,7 @@ export function createGitHubRepairWorker(input: {
       if (run.status === 'in_progress') {
         const jobs = z
           .object({ jobs: z.array(z.object({ name: z.string(), status: z.string() })) })
-          .parse(await api(`/actions/runs/${run.id}/jobs?per_page=100`));
+          .parse(await api(`/actions/runs/${run.id}/jobs?per_page=100`, undefined, workerRepo));
         const verifying = jobs.jobs.some(
           (job) =>
             ['verify', 'publish'].includes(job.name) &&

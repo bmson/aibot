@@ -659,6 +659,7 @@ export async function runCodeJob(
           ? createGitHubRepairWorker({
               token: config.GITHUB_TOKEN,
               repo: config.GITHUB_REPO,
+              workerRepo: config.SELF_REPAIR_WORKER_REPO,
               workflow: config.SELF_REPAIR_WORKFLOW,
               ref: config.SELF_REPAIR_REF,
               deploymentUrl: config.SELF_REPAIR_DEPLOYMENT_URL,
