@@ -12,6 +12,7 @@ import { loadConfig } from '../config.js';
 import { BudgetReservationError, nextDailyReset, nextMonthlyReset } from '../cost.js';
 import { isUnparseableObjectError, type ModelRouter } from '../model-router/router.js';
 import { withSpan } from '../otel.js';
+import { reportRepair } from './self-repair.js';
 
 /**
  * Self-maintenance (Phase 21). The bot proposes fixes to its OWN repo for
@@ -126,6 +127,7 @@ const MaintenanceDraftSchema = z.object({
   items: z
     .array(
       z.object({
+        proposalId: z.string().optional(),
         codeShaped: z.boolean().describe('true only if this is a concrete code fix in this repo'),
         title: z.string().min(3).max(200),
         diagnosis: z.string().max(1500).default(''),
@@ -142,7 +144,7 @@ const MaintenanceDraftSchema = z.object({
 
 const MAINTAIN_SYSTEM = [
   "You triage the assistant's own open improvement proposals for ones that are a concrete CODE fix in THIS repository (a bug, a brittle selector, a missing guard).",
-  'For each code-shaped one, give a short diagnosis and the single most likely repo-relative file path it touches (e.g. "packages/core/src/browse.ts").',
+  'For each code-shaped one, include its exact proposalId, give a short diagnosis and the single most likely repo-relative file path it touches (e.g. "packages/core/src/browse.ts").',
   'Ignore anything that is a config/model-routing change, a prompt tweak, or not clearly code. If nothing is code-shaped, return an empty items array. Never propose changes to security, approval, policy, infra, auth, or migration files.',
 ].join('\n');
 
@@ -162,7 +164,7 @@ export async function runSelfMaintenance(
     router: ModelRouter;
     heartbeat?: () => Promise<void>;
     /** The portable backlog store; without it the job reads and writes PostgreSQL. */
-    persistence?: Pick<ExecutionPersistence, 'selfMaintenance'>;
+    persistence?: Pick<ExecutionPersistence, 'selfMaintenance' | 'selfRepair'>;
   },
   opts: { agentId?: string; taskId?: string } = {},
 ): Promise<SelfMaintenanceResult> {
@@ -182,7 +184,9 @@ export async function runSelfMaintenance(
 
     const prompt = [
       'Open improvement proposals:',
-      ...open.map((p) => `- [${p.kind}] ${p.title}: ${p.rationale.slice(0, 200)}`),
+      ...open.map(
+        (p) => `- [${p.kind}] ${p.title}: ${p.rationale.slice(0, 200)} (proposalId=${p.id})`,
+      ),
     ].join('\n');
 
     const outcome = await router
@@ -210,6 +214,17 @@ export async function runSelfMaintenance(
     let blocked = 0;
     for (const item of outcome.object.items) {
       if (!item.codeShaped) continue;
+      const proposal = open.find((row) => row.id === item.proposalId);
+      if (deps.persistence?.selfRepair && proposal) {
+        await reportRepair(deps.persistence.selfRepair, agentId, {
+          source: 'proposal',
+          sourceTaskId: proposal.evidenceIds?.find((id) => /^[a-f0-9-]{36}$/i.test(id)),
+          proposalId: proposal.id,
+          key: proposal.id,
+          title: proposal.title,
+          summary: `${proposal.rationale}\n${item.diagnosis}`,
+        });
+      }
       // The fence decides status: a protected target is recorded, never worked.
       const isBlocked = !item.targetArea || isProtectedPath(item.targetArea);
       const inserted = await store.insert(agentId, {
@@ -243,6 +258,7 @@ function postgresSelfMaintenance(db: Db): SelfMaintenanceRepository {
           kind: improvementProposals.kind,
           title: improvementProposals.title,
           rationale: improvementProposals.rationale,
+          evidenceIds: improvementProposals.evidenceIds,
         })
         .from(improvementProposals)
         .where(

@@ -25,6 +25,7 @@ import {
   pinnedMemoryEmbed,
 } from './deps.js';
 import { executorDeps } from './executor-deps.js';
+import { ensureRepairSchedule } from './repair-schedule.js';
 
 export type FirestoreSweepResult =
   | { ready: false; error: string }
@@ -109,6 +110,8 @@ export async function runFirestoreSweep(
       persistence.watches.expire(deps.config.FIRESTORE_AGENT_ID, new Date()),
     ),
     schedulesFired: await step('runDueSchedules', async () => {
+      if (deps.config.SELF_REPAIR_ENABLED)
+        await ensureRepairSchedule(store, deps.config.FIRESTORE_AGENT_ID);
       const fired = await runDueSchedules(new FirestoreScheduleRepository(store), timezone, {
         // SQL-only jobs advance their schedule without creating a task.
         isJobEnabled: (job) => isCodeJobEnabled(job) && !firestoreCodeJobUnavailable(job),

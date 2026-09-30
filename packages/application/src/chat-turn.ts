@@ -30,7 +30,12 @@ import {
   clearGoalBlockedOnOwnerReply,
   goalIdForConversation,
 } from '@assistant/core/workflow/schedules';
-import { createPostgresApplicationChatPersistence, type Db } from '@assistant/db';
+import { isRepairFeedback, reportRepair } from '@assistant/core/workflow/self-repair';
+import {
+  createPostgresApplicationChatPersistence,
+  createPostgresSelfRepairRepository,
+  type Db,
+} from '@assistant/db';
 import type {
   ApplicationChatMessage,
   ApplicationChatPersistence,
@@ -512,6 +517,24 @@ export async function handleChatTurn(
   const historyRows = historyPage.messages;
   const noticeRows = await applicationBackgroundNoticeIds(chat, agent.id, historyRows);
   const modelHistory = boundedModelHistory(historyRows, noticeRows);
+  if (config.SELF_REPAIR_ENABLED && isRepairFeedback(userText)) {
+    const original = [...historyRows]
+      .reverse()
+      .find((row) => row.role === 'assistant' && row.taskId && !noticeRows.has(row.id));
+    const repairs =
+      dependencies.persistence?.selfRepair ??
+      (dependencies.db ? createPostgresSelfRepairRepository(dependencies.db) : null);
+    if (repairs) {
+      await reportRepair(repairs, agent.id, {
+        source: 'feedback',
+        key: original?.taskId ?? persistedUser.id,
+        sourceTaskId: original?.taskId ?? undefined,
+        conversationId: conversation.id,
+        title: 'Owner reported incorrect assistant behavior',
+        summary: userText,
+      }).catch((err) => console.error('Could not capture improvement feedback', err));
+    }
+  }
   if (isApprovalReply(userText)) {
     const replyTask = await chat.createDirectChatTask({
       agentId: agent.id,

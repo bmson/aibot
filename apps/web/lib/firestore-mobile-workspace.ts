@@ -22,6 +22,7 @@ import { FirestoreSkillLibraryRepository } from '@assistant/firestore/skill-libr
 import { assistantModuleMetas } from '@assistant/modules/meta';
 import type { AgentReadinessSource } from '@assistant/persistence';
 import { policyLabels, policyScope, scheduleLabels } from '@/app/settings/labels';
+import { getSelfRepairOverview } from '@/lib/self-repair-server';
 import {
   getBillingOverview,
   getChatApplication,
@@ -85,6 +86,7 @@ export async function getFirestoreMobileWorkspace(readinessSource: AgentReadines
 
   return {
     generatedAt: new Date().toISOString(),
+    repairs: await getSelfRepairOverview(),
     chats: { current: conversations(currentChats), archived: conversations(archivedChats) },
     memory: projectMobileWorkspaceMemory(profile),
     skills,

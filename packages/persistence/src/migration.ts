@@ -119,6 +119,7 @@ export const MIGRATION_TABLES = [
   { table: 'recall_feedback', collection: 'recallFeedback', id: 'id', scope: 'agent' },
   { table: 'recall_metrics', collection: 'recallMetrics', id: 'id', scope: 'agent' },
   { table: 'response_checks', collection: 'responseChecks', id: 'id', scope: 'agent' },
+  { table: 'self_repair_issues', collection: 'selfRepairIssues', id: 'id', scope: 'agent' },
   { table: 'self_maintenance', collection: 'selfMaintenance', id: 'id', scope: 'agent' },
   { table: 'situation_packs', collection: 'situationPacks', id: 'id', scope: 'agent' },
   { table: 'situation_previews', collection: 'situationPreviews', id: 'id', scope: 'agent' },

@@ -1218,6 +1218,19 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func updateRepair(_ issue: WorkspaceRepairIssue, action: String) async -> Bool {
+        guard let client else { return false }
+        errorMessage = nil
+        do {
+            try await client.updateRepair(id: issue.id, action: action)
+            await refreshWorkspace(reportFailure: false)
+            return true
+        } catch {
+            reportError(error)
+            return false
+        }
+    }
+
     func updateImprovement(_ improvement: WorkspaceImprovement, action: String) async -> Bool {
         guard let client else { return false }
         errorMessage = nil

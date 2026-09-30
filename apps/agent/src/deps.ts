@@ -25,6 +25,7 @@ import {
   createPostgresAuditInvestigationRepository,
   createPostgresExecutionPersistence,
   createPostgresModelConnectionRepository,
+  createPostgresSelfRepairRepository,
   type Db,
 } from '@assistant/db';
 import {
@@ -89,6 +90,7 @@ import {
   registerPortableReadResultTool,
   registerPortableTaskTools,
   registerPortableWebWorkspaceTools,
+  registerSelfRepairTools,
   registerSituationTools,
   registerSportsTools,
   registerWeatherTool,
@@ -557,6 +559,7 @@ export function composeFirestoreAgent(config: Config): AgentDeps {
   });
   registerPortableReadResultTool(registry, { toolExecution: persistence.toolExecution });
   registerAuditTools(registry, new FirestoreAuditInvestigationRepository(store));
+  if (persistence.selfRepair) registerSelfRepairTools(registry, persistence.selfRepair);
   registerPortableOccasionTools(
     registry,
     new FirestoreOccasionToolRepository(store, config.FIRESTORE_AGENT_ID),
@@ -682,6 +685,7 @@ export function buildDeps(): AgentDeps {
     }),
   );
   registerAuditTools(registry, createPostgresAuditInvestigationRepository(db));
+  registerSelfRepairTools(registry, createPostgresSelfRepairRepository(db));
   const modules = installModules(composition.modules, {
     config,
     db,

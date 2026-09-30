@@ -353,6 +353,11 @@ const scheduleSeed = [
     cron: '0 1 * * *',
     taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.10', job: 'self.maintain' },
   },
+  {
+    name: 'self-repair',
+    cron: '*/15 * * * *',
+    taskTemplate: { type: 'scheduled', budgetUsdLimit: '0.50', job: 'self.repair' },
+  },
   // Deterministic daily alerting for persistent GraphRAG and final-response
   // quality failures. This is a code job: no model interprets telemetry.
   {
@@ -386,6 +391,7 @@ const SEED_OWNED_SCHEDULES = new Set([
   'ambient-refresh',
   'dream',
   'self-maintain',
+  'self-repair',
   'assistant-health-monitor',
   'document-processing',
 ]);

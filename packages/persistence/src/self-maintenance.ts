@@ -4,6 +4,7 @@ export interface OpenImprovementProposal {
   kind: string;
   title: string;
   rationale: string;
+  evidenceIds?: string[];
 }
 
 /** A fenced backlog item; the fence in core has already decided its status. */

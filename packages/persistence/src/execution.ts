@@ -3,6 +3,7 @@ import type { ApplicationConfirmationRepository } from './application-confirmati
 import type { ApprovalPolicyRepository } from './approval-policies.js';
 import type { ApprovalRepository } from './approvals.js';
 import type { AssistantHealthRepository } from './assistant-health.js';
+import type { AuditInvestigationRepository } from './audit-investigation.js';
 import type { BriefingRepository } from './briefing.js';
 import type { CallSessionRepository } from './call-sessions.js';
 import type { CardRefreshRepository } from './card-refresh.js';
@@ -52,6 +53,7 @@ import type { RecallMetricsRepository } from './recall-metrics.js';
 import type { ReminderDeliveryRepository } from './reminders.js';
 import type { SelfImprovementRepository } from './self-improvement.js';
 import type { SelfMaintenanceRepository } from './self-maintenance.js';
+import type { SelfRepairRepository } from './self-repair.js';
 import type { SkillContextRepository } from './skill-context.js';
 import type { SkillReflectionRepository } from './skill-reflection.js';
 import type { SmsChannelRepository } from './sms-channel.js';
@@ -150,6 +152,8 @@ export interface ExecutionPersistence {
   readonly skillReflection?: SkillReflectionRepository;
   /** Present where the `self.maintain` job has a portable adapter. */
   readonly selfMaintenance?: SelfMaintenanceRepository;
+  readonly selfRepair?: SelfRepairRepository;
+  readonly selfRepairAudit?: AuditInvestigationRepository;
   /** Present where the `dream.run` job has a portable adapter. */
   readonly dream?: DreamRepository;
   /** Present where the `self.improve` job has a portable adapter. */

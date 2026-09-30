@@ -147,6 +147,7 @@ export class FirestoreSelfImprovementRepository implements SelfImprovementReposi
       ownChecks.reduce((total, doc) => total + (Number(doc.get(field)) || 0), 0);
     return {
       failedCalls: (await this.byOwnedTask(failedCalls)).map((doc) => ({
+        taskId: String(doc.get('taskId')),
         toolName: String(doc.get('toolName')),
         error: typeof doc.get('error') === 'string' ? doc.get('error') : null,
       })),

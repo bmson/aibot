@@ -63,7 +63,9 @@
     "./workflow/saved-work": "./src/workflow/saved-work.ts",
     "./workflow/schedules": "./src/workflow/schedules.ts",
     "./workflow/watch-suggest": "./src/workflow/watch-suggest.ts",
-    "./audit-investigation": "./src/audit-investigation.ts"
+    "./audit-investigation": "./src/audit-investigation.ts",
+    "./workflow/self-repair": "./src/workflow/self-repair.ts",
+    "./workflow/repair-github": "./src/workflow/repair-github.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

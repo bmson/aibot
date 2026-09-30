@@ -317,6 +317,13 @@ const ConfigSchema = z.object({
   SEARCH_API_KEY: z.string().default(''),
   GITHUB_TOKEN: z.string().default(''),
   GITHUB_REPO: z.string().default(''),
+  SELF_REPAIR_ENABLED: booleanString,
+  SELF_REPAIR_WORKER_REPO: z.string().default(''),
+  SELF_REPAIR_ALLOW_EXECUTOR: booleanString,
+  SELF_REPAIR_DAILY_LIMIT: z.coerce.number().int().min(1).max(5).default(2),
+  SELF_REPAIR_WORKFLOW: z.string().default('self-repair.yml'),
+  SELF_REPAIR_REF: z.string().default('main'),
+  SELF_REPAIR_DEPLOYMENT_URL: z.string().default(''),
   TRACES_BUCKET: z.string().default(''),
   /** Explicit opt-in: canaries perform real provider side effects. */
   CANARY_ENABLED: booleanString,

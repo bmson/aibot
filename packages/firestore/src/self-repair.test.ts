@@ -1,0 +1,55 @@
+import { randomUUID } from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { FirestoreSelfRepairRepository } from './self-repair.js';
+import type { InstallationStore } from './store.js';
+import { disposeStore, emulatorStore } from './test-store.js';
+
+describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore repair ledger', () => {
+  let store: InstallationStore;
+  const agentId = randomUUID();
+  let repository: FirestoreSelfRepairRepository;
+  beforeEach(async () => {
+    store = emulatorStore();
+    repository = new FirestoreSelfRepairRepository(store, agentId);
+    await store.doc('agents', agentId).set({ id: agentId });
+  });
+  afterEach(async () => disposeStore(store));
+  const input = {
+    fingerprint: 'same',
+    source: 'feedback' as const,
+    title: 'Synthetic failure',
+    summary: 'Reproduce it',
+  };
+  it('deduplicates concurrent reports and serializes owner claims', async () => {
+    const [a, b] = await Promise.all([
+      repository.report(agentId, input),
+      repository.report(agentId, input),
+    ]);
+    expect(a.id).toBe(b.id);
+    await repository.report(agentId, { ...input, fingerprint: 'two' });
+    const now = new Date();
+    const claims = await Promise.all([
+      repository.claim(agentId, now, 2),
+      repository.claim(agentId, now, 2),
+    ]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    const claim = claims.find(Boolean)!;
+    const next = await repository.update(claim, 'fixing', { dispatchedAt: now.toISOString() }, now);
+    expect(next).not.toBeNull();
+    expect(await repository.update(claim, 'failed', {}, now)).toBeNull();
+    await repository.update(next!, 'failed', {}, now);
+    expect(await repository.claim(agentId, now, 1)).toBeNull();
+  });
+  it('refuses foreign evidence, owner scope changes, and erasure writes', async () => {
+    const task = randomUUID();
+    await store.doc('tasks', task).set({ id: task, agentId: 'other' });
+    await expect(repository.report(agentId, { ...input, sourceTaskId: task })).rejects.toThrow(
+      'outside the owner',
+    );
+    await expect(repository.report('other', input)).rejects.toThrow('outside the configured owner');
+    await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'running' });
+    await expect(repository.report(agentId, input)).rejects.toThrow();
+    await expect(repository.list(agentId)).rejects.toThrow('Privacy erasure');
+    await expect(repository.failures(agentId, new Date(0))).rejects.toThrow('Privacy erasure');
+  });
+});

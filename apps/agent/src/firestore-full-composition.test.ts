@@ -26,6 +26,7 @@ const { default: composition } = await import('../../../assistant.config.js');
  * docs/firestore-agent-runtime-inventory.md.
  */
 const PORTABLE_TOOLS = [
+  'improvement.report',
   'audit.read',
   'audit.read_field',
   'applications.append_confirmation_doc',

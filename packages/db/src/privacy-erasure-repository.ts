@@ -11,6 +11,7 @@ import {
   memories,
   memoryTombstones,
   ownerCard,
+  selfRepairIssues,
   situationPacks,
   situationPreviews,
   tasks,
@@ -58,6 +59,7 @@ export function createPostgresPrivacyErasureRepository(db: Db): PrivacyErasureRe
         if (owners.length !== 1 || !owners[0])
           throw new Error('Privacy erasure requires exactly one configured owner');
         const agentId = owners[0].id;
+        await tx.delete(selfRepairIssues).where(eq(selfRepairIssues.agentId, agentId));
         const [memoryRows, voiceImports, packs] = await Promise.all([
           tx
             .select({ id: memories.id, contentHash: memories.contentHash })
@@ -216,6 +218,7 @@ export function createPostgresPrivacyErasureRepository(db: Db): PrivacyErasureRe
         if (owners.length !== 1 || !owners[0])
           throw new Error('Privacy erasure requires exactly one configured owner');
         const agentId = owners[0].id;
+        await tx.delete(selfRepairIssues).where(eq(selfRepairIssues.agentId, agentId));
         const [asset] = await tx
           .select({ name: maintenanceCursors.name })
           .from(maintenanceCursors)
