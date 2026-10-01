@@ -1,18 +1,35 @@
 import { createHash } from 'node:crypto';
 import {
-  ACTIVE_REPAIR_STATUSES,
   queuedRepairIssues,
   type RepairIssue,
   repairFailureKey,
+  repairQueueReady,
   repairTransition,
   type SelfRepairRepository,
 } from '@assistant/persistence';
+import type { Transaction } from '@google-cloud/firestore';
 import {
   assertPrivacyErasureFenceUnchanged,
   assertPrivacyErasureInactiveInTransaction,
   readPrivacyErasureFence,
 } from './privacy-erasure.js';
 import { decodeRecord, encodeRecord, type InstallationStore } from './store.js';
+
+/** Arm the existing enabled schedule in the report transaction; the sweep delivers its wake. */
+async function repairScheduleToWake(tx: Transaction, store: InstallationStore, agentId: string) {
+  const schedules = await tx.get(
+    store
+      .collection('schedules')
+      .where('agentId', '==', agentId)
+      .where('name', '==', 'self-repair')
+      .limit(2),
+  );
+  if (schedules.size > 1) throw new Error('Ambiguous repair schedule');
+  const schedule = schedules.docs[0];
+  return schedule?.get('enabled') === true && schedule.get('taskTemplate.job') === 'self.repair'
+    ? schedule
+    : null;
+}
 
 export class FirestoreSelfRepairRepository implements SelfRepairRepository {
   constructor(
@@ -44,6 +61,7 @@ export class FirestoreSelfRepairRepository implements SelfRepairRepository {
       const previous = await tx.get(ref);
       if (previous.exists) return decodeRecord<RepairIssue>(previous.data());
       const now = this.store.now();
+      const schedule = await repairScheduleToWake(tx, this.store, agentId);
       const row: RepairIssue = {
         id,
         agentId,
@@ -55,6 +73,7 @@ export class FirestoreSelfRepairRepository implements SelfRepairRepository {
         updatedAt: now,
       };
       tx.create(ref, encodeRecord(row));
+      if (schedule) tx.update(schedule.ref, { nextRunAt: now, updatedAt: now });
       return row;
     });
   }
@@ -84,19 +103,7 @@ export class FirestoreSelfRepairRepository implements SelfRepairRepository {
       const ownerRow = await tx.get(owner);
       if (!ownerRow.exists) throw new Error('Repair owner is missing');
       const rows = snapshot.docs.map((doc) => decodeRecord<RepairIssue>(doc.data()));
-      if (rows.length > 1000 || rows.some((row) => ACTIVE_REPAIR_STATUSES.includes(row.status)))
-        return null;
-      const since = new Date(now.getTime() - 86400000).toISOString();
-      if (
-        rows.reduce(
-          (sum, row) =>
-            sum +
-            row.data.history.filter((event) => event.status === 'fixing' && event.at >= since)
-              .length,
-          0,
-        ) >= dailyLimit
-      )
-        return null;
+      if (!repairQueueReady(rows, now, dailyLimit)) return null;
       const issue = queuedRepairIssues(rows)[0];
       if (!issue) return null;
       const next = repairTransition(issue, 'investigating', {}, now);
@@ -123,7 +130,12 @@ export class FirestoreSelfRepairRepository implements SelfRepairRepository {
       )
         return null;
       const next = repairTransition(issue, status, patch, now);
+      const schedule =
+        status === 'reported' && issue.status !== 'reported'
+          ? await repairScheduleToWake(tx, this.store, issue.agentId)
+          : null;
       tx.set(ref, encodeRecord(next));
+      if (schedule) tx.update(schedule.ref, { nextRunAt: now, updatedAt: now });
       return next;
     });
   }

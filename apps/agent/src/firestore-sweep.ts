@@ -111,7 +111,11 @@ export async function runFirestoreSweep(
     ),
     schedulesFired: await step('runDueSchedules', async () => {
       if (deps.config.SELF_REPAIR_ENABLED)
-        await ensureRepairSchedule(store, deps.config.FIRESTORE_AGENT_ID);
+        await ensureRepairSchedule(
+          store,
+          deps.config.FIRESTORE_AGENT_ID,
+          deps.config.SELF_REPAIR_DAILY_LIMIT,
+        );
       const fired = await runDueSchedules(new FirestoreScheduleRepository(store), timezone, {
         // SQL-only jobs advance their schedule without creating a task.
         isJobEnabled: (job) => isCodeJobEnabled(job) && !firestoreCodeJobUnavailable(job),
