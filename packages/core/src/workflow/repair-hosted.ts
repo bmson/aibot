@@ -411,6 +411,21 @@ export function createHostedRepairWorker(input: {
         true,
       ),
     );
+    const comparison = z
+      .object({
+        files: z.array(z.object({ filename: z.string(), patch: z.string().optional() })).max(20),
+      })
+      .parse(await github(`/compare/${source}...${commit.sha}`));
+    // GitHub's authoritative diff also bounds deletions and replacements of large existing files.
+    if (
+      comparison.files.length !== paths.length ||
+      comparison.files.some((f) => !paths.includes(f.filename) || f.patch === undefined) ||
+      comparison.files.reduce((bytes, f) => bytes + Buffer.byteLength(f.patch ?? '') + 1024, 0) >
+        100000
+    )
+      throw new Error(
+        'Hosted repair exceeds the 100 KB patch fence or has an incomplete comparison',
+      );
     const branch = repairBranch(issue, 'openai_hosted');
     const ref = await request('github', `/repos/${input.repo}/git/ref/heads/${branch}`);
     if (ref.ok) {

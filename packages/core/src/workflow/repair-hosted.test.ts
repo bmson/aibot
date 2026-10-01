@@ -41,6 +41,7 @@ function harness() {
     checks: false,
     failedCheck: false,
     failedDuplicate: false,
+    oversizedDiff: false,
     deleteConflict: false,
     downloadFailure: false,
     wrongTurn: false,
@@ -155,6 +156,13 @@ function harness() {
                 : 'success'
             : null,
           app: { slug: 'github-actions' },
+        })),
+      });
+    if (u.includes('/compare/'))
+      return Response.json({
+        files: state.result.changes.map((c) => ({
+          filename: c.path,
+          patch: state.oversizedDiff ? 'x'.repeat(100001) : '@@ -1 +1 @@\n-old\n+new',
         })),
       });
     if (u.includes('/git/commits/') && init?.method === 'GET')
@@ -363,4 +371,14 @@ it('requires every matching CI run to pass when push and PR checks share a name'
     patch: { lastError: expect.stringContaining('verify') },
   });
   expect(h.state.ready).toBe(false);
+});
+
+it('bounds the authoritative patch before creating a branch, including large deletions', async () => {
+  const h = harness();
+  h.state.oversizedDiff = true;
+  expect(await h.worker.inspect(issue)).toMatchObject({
+    status: 'failed',
+    patch: { lastError: expect.stringContaining('100 KB patch fence') },
+  });
+  expect(h.calls.some((c) => c.url.endsWith('/git/refs'))).toBe(false);
 });
