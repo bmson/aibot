@@ -68,8 +68,9 @@ jobs:
           output-schema: |
             {"type":"object","properties":{"reproduced":{"type":"boolean"},"regressionTest":{"type":"string"},"summary":{"type":"string"}},"required":["reproduced","regressionTest","summary"],"additionalProperties":false}
           prompt: |
-            Investigate and fix one confirmed repository defect. Read AGENTS.md.
+            Investigate one suspected repository defect and fix it only if confirmed. Read AGENTS.md.
             Reproduce the reported behavior using synthetic data and add a meaningful regression test.
+            The initial diagnosis and source paths are unverified hints. Inspect the repository to establish the cause; empty path hints do not prevent investigation.
             If the diagnosis is wrong or the defect cannot be reproduced, stop without a patch.
             Keep the fix minimal; no refactors, dependency changes, permission changes, commits, pushes, or deployment.
             Never edit infrastructure, workflow files, configuration, schemas, migrations, credentials,

@@ -40,6 +40,14 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore repair ledger',
     await repository.update(next!, 'failed', {}, now);
     expect(await repository.claim(agentId, now, 1)).toBeNull();
   });
+  it('claims a new report before an older retried report', async () => {
+    const first = await repository.report(agentId, { ...input, fingerprint: 'first' });
+    const newer = await repository.report(agentId, { ...input, fingerprint: 'newer' });
+    const blocked = await repository.update(first, 'blocked', {}, new Date());
+    if (!blocked) throw new Error('Fixture update failed');
+    await repository.update(blocked, 'reported', {}, new Date(Date.now() + 1000));
+    expect((await repository.claim(agentId, new Date(Date.now() + 2000), 2))?.id).toBe(newer.id);
+  });
   it('refuses foreign evidence, owner scope changes, and erasure writes', async () => {
     const task = randomUUID();
     await store.doc('tasks', task).set({ id: task, agentId: 'other' });

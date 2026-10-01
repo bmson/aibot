@@ -53,7 +53,7 @@ function setup(issue = fixture()) {
       return next;
     }),
   };
-  const object = vi.fn(async () => ({
+  const object = vi.fn(async (_role?: unknown, _options?: { prompt: string }) => ({
     ok: true,
     object: {
       category: 'bug',
@@ -89,6 +89,8 @@ describe('issue-to-PR flow', () => {
     await runRepairCycle(deps, 'owner', 'task', now);
     expect(rows.get(issue.id)?.status).toBe('failed');
     expect(rows.get(issue.id)?.data.lastError).toBe('GitHub rejected credentials');
+    expect(deps.notify).toHaveBeenCalledTimes(1);
+    expect(rows.get(issue.id)?.data.notifiedStatus).toBe('failed');
     await runRepairCycle(deps, 'owner', 'task', now);
     expect(deps.worker.dispatch).toHaveBeenCalledTimes(1);
   });
@@ -128,7 +130,7 @@ describe('issue-to-PR flow', () => {
       expect(isRepairFeedback(text)).toBe(false);
     expect(repairFingerprint('failure', 'one')).toBe(repairFingerprint('failure', 'one'));
   });
-  it('claims before dispatch and sends only reproducible code bugs to the worker', async () => {
+  it('claims before dispatch and sends actionable code investigations to the worker', async () => {
     const { deps, rows, issue } = setup();
     expect(await runRepairCycle(deps, 'owner', 'task', now)).toBe(1);
     expect(rows.get(issue.id)?.status).toBe('fixing');
@@ -153,8 +155,55 @@ describe('issue-to-PR flow', () => {
       await runRepairCycle(deps, 'owner', 'task', now);
       expect(rows.get(issue.id)?.status).toBe('blocked');
       expect(deps.worker?.dispatch).not.toHaveBeenCalled();
+      expect(deps.notify).toHaveBeenCalledTimes(1);
+      expect(rows.get(issue.id)?.data.notifiedStatus).toBe('blocked');
     },
   );
+  it('lets the repository worker investigate an actionable unknown cause without guessed paths', async () => {
+    const { deps, object, rows, issue } = setup();
+    deps.diagnostics = {
+      persistenceDriver: 'firestore',
+      modules: ['calendar'],
+      calendarReaderAvailable: true,
+    };
+    object.mockResolvedValueOnce({
+      ok: true,
+      object: {
+        category: 'unknown',
+        diagnosis: 'Calendar capability is unexpectedly absent in voice',
+        targetPaths: [],
+        reproduction: 'Start a synthetic voice session and request a test event',
+        acceptance: 'Voice should expose installed calendar capabilities',
+      },
+    } as never);
+    expect(await runRepairCycle(deps, 'owner', 'task', now)).toBe(1);
+    expect(rows.get(issue.id)?.status).toBe('fixing');
+    expect(deps.worker?.dispatch).toHaveBeenCalledOnce();
+    const prompt = JSON.parse(object.mock.calls[0]?.[1]?.prompt ?? '{}');
+    expect(prompt.runtime).toEqual(deps.diagnostics);
+  });
+  it('retries failed notifications next tick without rerunning the investigation', async () => {
+    const { deps, object, rows, issue } = setup();
+    object.mockResolvedValueOnce({
+      ok: true,
+      object: {
+        category: 'provider',
+        diagnosis: 'Provider quota exhausted',
+        targetPaths: [],
+        reproduction: '',
+        acceptance: '',
+      },
+    } as never);
+    vi.mocked(deps.notify).mockRejectedValueOnce(new Error('Notification unavailable'));
+    await expect(runRepairCycle(deps, 'owner', 'task', now)).rejects.toThrow(
+      'Notification unavailable',
+    );
+    expect(rows.get(issue.id)?.data.notifiedStatus).toBeUndefined();
+    await runRepairCycle(deps, 'owner', 'task', now);
+    expect(rows.get(issue.id)?.data.notifiedStatus).toBe('blocked');
+    expect(object).toHaveBeenCalledTimes(1);
+    expect(deps.worker?.dispatch).not.toHaveBeenCalled();
+  });
   it('rejects protected targets regardless of the model diagnosis', async () => {
     const { deps, object, rows, issue } = setup();
     object.mockResolvedValueOnce({

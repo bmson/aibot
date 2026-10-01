@@ -122,3 +122,10 @@ export function repairFailureKey(title: string, state: unknown): string {
     .slice(0, 1000);
   return createHash('sha256').update(signature).digest('hex');
 }
+
+/** A retry joins the back of the queue instead of starving newer reports. */
+export function queuedRepairIssues(issues: RepairIssue[]): RepairIssue[] {
+  return issues
+    .filter((issue) => issue.status === 'reported')
+    .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime() || a.id.localeCompare(b.id));
+}

@@ -674,6 +674,11 @@ export async function runCodeJob(
           enabled: config.SELF_REPAIR_ENABLED,
           allowExecutor: config.SELF_REPAIR_ALLOW_EXECUTOR,
           dailyLimit: config.SELF_REPAIR_DAILY_LIMIT,
+          diagnostics: {
+            persistenceDriver: config.PERSISTENCE_DRIVER,
+            modules: config.ASSISTANT_MODULES,
+            calendarReaderAvailable: Boolean(deps.calendarReader),
+          },
           heartbeat: deps.heartbeat,
           notify: async (issue, text) => {
             const conversationId = deps.persistence
@@ -687,7 +692,7 @@ export async function runCodeJob(
               origin: 'assistant',
               parts: [{ type: 'text', text }],
               text,
-              channelMessageId: `self-repair:${issue.id}:${issue.status}`,
+              channelMessageId: `self-repair:${issue.id}:${issue.status}:${issue.data.history.at(-1)?.at ?? issue.updatedAt.toISOString()}`,
             });
             if (saved) await pingOwner(deps.notifyOwner, { taskId: task.id, conversationId, text });
           },

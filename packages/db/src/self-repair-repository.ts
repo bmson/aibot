@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   ACTIVE_REPAIR_STATUSES,
+  queuedRepairIssues,
   type RepairIssue,
   repairFailureKey,
   repairTransition,
@@ -83,7 +84,7 @@ export function createPostgresSelfRepairRepository(db: Db): SelfRepairRepository
           ) >= dailyLimit
         )
           return null;
-        const issue = rows.find((row) => row.status === 'reported');
+        const issue = queuedRepairIssues(rows)[0];
         if (!issue) return null;
         const next = repairTransition(issue, 'investigating', {}, now);
         await tx
