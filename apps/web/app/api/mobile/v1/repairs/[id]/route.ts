@@ -8,7 +8,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     .uuid()
     .safeParse((await params).id);
   const body = z
-    .object({ action: z.enum(['dismiss', 'retry', 'resolve']) })
+    .object({ action: z.enum(['dismiss', 'retry', 'resolve', 'run_now']) })
     .safeParse(await request.json().catch(() => null));
   if (!id.success || !body.success)
     return mobileJson({ error: 'Invalid repair action' }, { status: 400 });

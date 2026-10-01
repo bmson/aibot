@@ -19,10 +19,13 @@ export async function reportRepairAction(form: FormData) {
   await reportOwnerRepair(input.title, input.summary, input.sourceTaskId);
   revalidatePath('/improvements');
 }
-export async function repairDecisionAction(id: string, action: 'dismiss' | 'retry' | 'resolve') {
+export async function repairDecisionAction(
+  id: string,
+  action: 'dismiss' | 'retry' | 'resolve' | 'run_now',
+) {
   await requireOwner();
   z.string().uuid().parse(id);
-  z.enum(['dismiss', 'retry', 'resolve']).parse(action);
+  z.enum(['dismiss', 'retry', 'resolve', 'run_now']).parse(action);
   await decideOwnerRepair(id, action);
   revalidatePath('/improvements');
 }

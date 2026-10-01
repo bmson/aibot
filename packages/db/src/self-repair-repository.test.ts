@@ -47,6 +47,14 @@ it('deduplicates reports, atomically claims one repair and rejects stale writes'
     expect(await repository.update(row, 'failed', {}, now)).toBeNull();
     await repository.update(dispatched!, 'failed', {}, now);
     expect(await repository.claim(id, now, 1)).toBeNull();
+    const queued = (await repository.list(id)).find((item) => item.status === 'reported');
+    if (!queued) throw new Error('Missing queued issue');
+    await repository.update(queued, 'reported', { manualRunRequestedAt: now.toISOString() }, now);
+    const manual = await repository.claim(id, now, 0);
+    expect(manual?.id).toBe(queued.id);
+    expect(manual?.data.manualRunRequestedAt).toBeUndefined();
+    expect(manual?.data.manualRunStartedAt).toBe(now.toISOString());
+    expect(await repository.claim(id, now, 0)).toBeNull();
     await expect(
       repository.report(id, { ...input, fingerprint: 'foreign', sourceTaskId: randomUUID() }),
     ).rejects.toThrow('outside the owner');

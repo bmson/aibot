@@ -743,8 +743,9 @@ struct WorkspaceView: View {
                     if let link = issue.runUrl, let url = URL(string: link), url.scheme == "https", url.host == "github.com" {
                         Link("View coding run", destination: url).font(.subheadline)
                     }
-                    if ["failed", "blocked"].contains(issue.status) {
-                        Button("Retry investigation") { updateRepair(issue, action: "retry") }
+                    if repairs.enabled && repairs.configured && issue.manualRunRequested != true && ["reported", "failed", "blocked"].contains(issue.status) {
+                        Button("Run now") { updateRepair(issue, action: "run_now") }
+                        Text("One manual attempt beyond the automatic daily limit.").font(.caption).foregroundStyle(.secondary)
                     }
                     if issue.status == "monitoring" {
                         Button("Confirm fixed") { updateRepair(issue, action: "resolve") }

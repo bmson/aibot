@@ -2421,6 +2421,7 @@ struct WorkspaceRepairIssue: Codable, Identifiable, Sendable {
     let sourceTaskId: String?
     let prUrl: String?
     let runUrl: String?
+    var manualRunRequested: Bool? = nil
     var queuePosition: Int? = nil
     var waitingReason: String? = nil
     let updatedAt: String

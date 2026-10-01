@@ -3070,3 +3070,12 @@ extension APIModelsTests {
         XCTAssertEqual(Set(suggestions.first!.support.map(\.id)), ["mother", "another-source", "siblings"])
     }
 }
+
+extension APIModelsTests {
+    func testRepairManualRunFieldDecodesWithOlderServerCompatibility() throws {
+        let old = Data(#"{"id":"issue","title":"Synthetic failure","summary":"Reproduce","status":"reported","diagnosis":"","lastError":"","updatedAt":"2026-10-01T00:00:00Z"}"#.utf8)
+        XCTAssertNil(try JSONDecoder().decode(WorkspaceRepairIssue.self, from: old).manualRunRequested)
+        let requested = Data(#"{"id":"issue","title":"Synthetic failure","summary":"Reproduce","status":"reported","diagnosis":"","lastError":"","manualRunRequested":true,"updatedAt":"2026-10-01T00:00:00Z"}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(WorkspaceRepairIssue.self, from: requested).manualRunRequested, true)
+    }
+}

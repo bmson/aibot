@@ -100,3 +100,24 @@ it('shows the daily allowance blocker instead of implying an imminent start', as
       ?.waitingReason,
   ).toContain('next minute check');
 });
+
+it('records one owner-authorized manual run and refuses active or completed work', async () => {
+  let saved: RepairIssue = { ...issue, status: 'reported', data: { ...issue.data } };
+  const update = vi.fn<SelfRepairRepository['update']>(async (row, status, patch, now) => {
+    saved = { ...row, status, data: { ...row.data, ...patch }, updatedAt: now };
+    return saved;
+  });
+  const repository = { list: async () => [saved], update } as unknown as SelfRepairRepository;
+  await decideRepairIssue(repository, 'owner', saved.id, 'run_now');
+  expect(saved.data.manualRunRequestedAt).toEqual(expect.any(String));
+  await decideRepairIssue(repository, 'owner', saved.id, 'run_now');
+  expect(update).toHaveBeenCalledTimes(1);
+  expect((await listRepairIssues(repository, 'owner', 0))[0]).toMatchObject({
+    manualRunRequested: true,
+    waitingReason: 'Manual run requested. Starts on the next minute check.',
+  });
+  saved = { ...saved, status: 'fixing' };
+  await expect(decideRepairIssue(repository, 'owner', saved.id, 'run_now')).rejects.toThrow(
+    'Only queued',
+  );
+});

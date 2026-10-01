@@ -23,6 +23,7 @@ export function projectRepairIssue(issue: RepairIssue) {
     diagnosis: issue.data.diagnosis ?? '',
     lastError: issue.data.lastError ?? '',
     sourceTaskId: issue.data.sourceTaskId ?? null,
+    manualRunRequested: Boolean(issue.data.manualRunRequestedAt),
     prUrl: githubLink(issue.data.prUrl),
     runUrl: githubLink(issue.data.runUrl),
     mergeSha: issue.data.mergeSha ?? null,
@@ -51,9 +52,11 @@ export async function listRepairIssues(
         issue.status === 'reported'
           ? active
             ? 'Waiting for the current investigation or PR review to finish.'
-            : dailyLimit !== undefined && used >= dailyLimit
-              ? `Daily coding allowance used: ${used} of ${dailyLimit} attempts in the last 24 hours. Starts automatically when an allowance is available.`
-              : 'Queued for automatic investigation on the next minute check.'
+            : issue.data.manualRunRequestedAt
+              ? 'Manual run requested. Starts on the next minute check.'
+              : dailyLimit !== undefined && used >= dailyLimit
+                ? `Daily coding allowance used: ${used} of ${dailyLimit} attempts in the last 24 hours. Starts automatically when an allowance is available.`
+                : 'Queued for automatic investigation on the next minute check.'
           : null,
     }));
 }
@@ -61,7 +64,7 @@ export async function decideRepairIssue(
   repository: SelfRepairRepository,
   agentId: string,
   id: string,
-  action: 'dismiss' | 'retry' | 'resolve',
+  action: 'dismiss' | 'retry' | 'resolve' | 'run_now',
 ) {
   const issue = (await repository.list(agentId)).find((row) => row.id === id);
   if (!issue) throw new Error('Repair issue not found');
@@ -74,13 +77,23 @@ export async function decideRepairIssue(
     throw new Error('Only failed or blocked issues can be retried');
   if (action === 'resolve' && issue.status !== 'monitoring')
     throw new Error('Confirm resolution after the fix is deployed');
+  if (action === 'run_now' && !['reported', 'failed', 'blocked'].includes(issue.status))
+    throw new Error('Only queued, failed or blocked reports can be run now');
+  if (action === 'run_now' && issue.data.manualRunRequestedAt) return;
+  const requestedAt = new Date();
   const next = await repository.update(
     issue,
-    action === 'retry' ? 'reported' : action === 'resolve' ? 'resolved' : 'dismissed',
+    action === 'retry' || action === 'run_now'
+      ? 'reported'
+      : action === 'resolve'
+        ? 'resolved'
+        : 'dismissed',
     {
       lastError: '',
-      ...(action === 'retry'
+      ...(action === 'retry' || action === 'run_now'
         ? {
+            manualRunRequestedAt: action === 'run_now' ? requestedAt.toISOString() : undefined,
+            manualRunStartedAt: undefined,
             notifiedStatus: undefined,
             runId: undefined,
             runUrl: undefined,
@@ -96,7 +109,7 @@ export async function decideRepairIssue(
           }
         : {}),
     },
-    new Date(),
+    requestedAt,
   );
   if (!next) throw new Error('Issue changed; refresh and try again');
 }
