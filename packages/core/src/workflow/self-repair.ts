@@ -317,7 +317,7 @@ function repairProviderUnavailable(error: unknown): boolean {
     if (
       value instanceof Error &&
       value.name === 'AI_APICallError' &&
-      (status === 429 || (status >= 500 && status <= 599))
+      (status === 410 || status === 429 || (status >= 500 && status <= 599))
     )
       return true;
     pending.push(record.lastError, record.cause);

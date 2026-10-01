@@ -246,20 +246,23 @@ describe('issue-to-PR flow', () => {
     const prompt = JSON.parse(object.mock.calls[0]?.[1]?.prompt ?? '{}');
     expect(prompt.runtime).toEqual(deps.diagnostics);
   });
-  it('uses one distinct configured fallback when triage exhausts provider rate-limit retries', async () => {
-    const { deps, object, rows, issue } = setup();
-    const terminal = Object.assign(new Error('Upstream rate limit'), {
-      name: 'AI_APICallError',
-      statusCode: 429,
-    });
-    object.mockRejectedValueOnce(
-      Object.assign(new Error('Retry exhausted'), { name: 'AI_RetryError', lastError: terminal }),
-    );
-    expect(await runRepairCycle(deps, 'owner', 'task', now)).toBe(1);
-    expect(object).toHaveBeenCalledTimes(2);
-    expect(object.mock.calls[1]?.[1]).toMatchObject({ forceFallback: true });
-    expect(rows.get(issue.id)?.status).toBe('fixing');
-  });
+  it.each([410, 429])(
+    'uses one distinct configured fallback when triage provider returns %s',
+    async (statusCode) => {
+      const { deps, object, rows, issue } = setup();
+      const terminal = Object.assign(new Error('Upstream rate limit'), {
+        name: 'AI_APICallError',
+        statusCode,
+      });
+      object.mockRejectedValueOnce(
+        Object.assign(new Error('Retry exhausted'), { name: 'AI_RetryError', lastError: terminal }),
+      );
+      expect(await runRepairCycle(deps, 'owner', 'task', now)).toBe(1);
+      expect(object).toHaveBeenCalledTimes(2);
+      expect(object.mock.calls[1]?.[1]).toMatchObject({ forceFallback: true });
+      expect(rows.get(issue.id)?.status).toBe('fixing');
+    },
+  );
   it.each(['placeholder', 'invented paths'])(
     'uses a distinct fallback for unusable %s output',
     async (kind) => {
