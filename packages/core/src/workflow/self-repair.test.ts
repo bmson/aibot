@@ -144,7 +144,7 @@ describe('issue-to-PR flow', () => {
       expect.objectContaining({ status: 'fixing' }),
     );
   });
-  it.each(['provider', 'configuration', 'answer', 'unknown'])(
+  it.each(['provider', 'configuration'])(
     'keeps %s diagnoses out of the coding runner',
     async (category) => {
       const { deps, object, rows, issue } = setup();
@@ -163,6 +163,44 @@ describe('issue-to-PR flow', () => {
       expect(deps.worker?.dispatch).not.toHaveBeenCalled();
       expect(deps.notify).toHaveBeenCalledTimes(1);
       expect(rows.get(issue.id)?.data.notifiedStatus).toBe('blocked');
+    },
+  );
+  it('investigates a capability denial even when preliminary triage labels it a bad answer', async () => {
+    const { deps, object, rows, issue } = setup();
+    object.mockResolvedValueOnce({
+      ok: true,
+      object: {
+        category: 'answer',
+        diagnosis:
+          'Voice denied calendar access despite enabled capabilities; routing needs inspection',
+        targetPaths: [],
+        reproduction: 'Ask a synthetic voice session to list test calendar events',
+        acceptance: 'Expose installed calendar tools and report the test events',
+      },
+    } as never);
+    expect(await runRepairCycle(deps, 'owner', 'task', now)).toBe(1);
+    expect(rows.get(issue.id)?.status).toBe('fixing');
+    expect(deps.worker?.dispatch).toHaveBeenCalledOnce();
+    expect(deps.notify).not.toHaveBeenCalled();
+  });
+  it.each(['bug', 'unknown', 'answer'])(
+    'requires an actionable brief for %s investigation',
+    async (category) => {
+      const { deps, object, rows, issue } = setup();
+      object.mockResolvedValueOnce({
+        ok: true,
+        object: {
+          category,
+          diagnosis: 'Incomplete evidence',
+          targetPaths: [],
+          reproduction: '',
+          acceptance: '',
+        },
+      } as never);
+      await runRepairCycle(deps, 'owner', 'task', now);
+      expect(rows.get(issue.id)?.status).toBe('blocked');
+      expect(deps.worker?.dispatch).not.toHaveBeenCalled();
+      expect(rows.get(issue.id)?.data.lastError).toContain('More details');
     },
   );
   it('lets the repository worker investigate an actionable unknown cause without guessed paths', async () => {
@@ -243,12 +281,12 @@ describe('issue-to-PR flow', () => {
     expect(object).toHaveBeenCalledTimes(1);
     expect(deps.worker?.dispatch).not.toHaveBeenCalled();
   });
-  it('rejects protected targets regardless of the model diagnosis', async () => {
+  it.each(['bug', 'answer'])('rejects protected targets for a %s diagnosis', async (category) => {
     const { deps, object, rows, issue } = setup();
     object.mockResolvedValueOnce({
       ok: true,
       object: {
-        category: 'bug',
+        category,
         diagnosis: 'Change security',
         targetPaths: ['packages/tools/src/dispatcher.ts'],
         reproduction: 'Synthetic case',
