@@ -66,7 +66,13 @@ function setup(issue = fixture()) {
   const deps: RepairCycleDeps = {
     repository,
     audit: { task: vi.fn(async () => null), read: vi.fn(async () => []) },
-    router: { object } as unknown as ModelRouter,
+    router: {
+      object,
+      route: vi.fn(async (_role: unknown, opts?: { forceFallback?: boolean }) => ({
+        ok: true,
+        modelId: opts?.forceFallback ? 'test/fallback' : 'test/primary',
+      })),
+    } as unknown as ModelRouter,
     worker: {
       dispatch: vi.fn(async () => {}),
       inspect: vi.fn(async () => null),
@@ -181,6 +187,39 @@ describe('issue-to-PR flow', () => {
     expect(deps.worker?.dispatch).toHaveBeenCalledOnce();
     const prompt = JSON.parse(object.mock.calls[0]?.[1]?.prompt ?? '{}');
     expect(prompt.runtime).toEqual(deps.diagnostics);
+  });
+  it('uses one distinct configured fallback when triage exhausts provider rate-limit retries', async () => {
+    const { deps, object, rows, issue } = setup();
+    const terminal = Object.assign(new Error('Upstream rate limit'), {
+      name: 'AI_APICallError',
+      statusCode: 429,
+    });
+    object.mockRejectedValueOnce(
+      Object.assign(new Error('Retry exhausted'), { name: 'AI_RetryError', lastError: terminal }),
+    );
+    expect(await runRepairCycle(deps, 'owner', 'task', now)).toBe(1);
+    expect(object).toHaveBeenCalledTimes(2);
+    expect(object.mock.calls[1]?.[1]).toMatchObject({ forceFallback: true });
+    expect(rows.get(issue.id)?.status).toBe('fixing');
+  });
+  it('does not repeat triage when the fallback is the same model', async () => {
+    const { deps, object, rows, issue } = setup();
+    vi.mocked(deps.router.route).mockResolvedValue({ ok: true, modelId: 'same' } as never);
+    object.mockRejectedValueOnce(
+      Object.assign(new Error('Unavailable'), { name: 'AI_APICallError', statusCode: 503 }),
+    );
+    await runRepairCycle(deps, 'owner', 'task', now);
+    expect(object).toHaveBeenCalledOnce();
+    expect(rows.get(issue.id)?.status).toBe('failed');
+  });
+  it('does not use a provider fallback for invalid credentials', async () => {
+    const { deps, object } = setup();
+    object.mockRejectedValueOnce(
+      Object.assign(new Error('Bad credentials'), { name: 'AI_APICallError', statusCode: 401 }),
+    );
+    await runRepairCycle(deps, 'owner', 'task', now);
+    expect(object).toHaveBeenCalledOnce();
+    expect(deps.worker?.dispatch).not.toHaveBeenCalled();
   });
   it('retries failed notifications next tick without rerunning the investigation', async () => {
     const { deps, object, rows, issue } = setup();
