@@ -77,3 +77,26 @@ it('retries join the back of the queue and clear the previous investigation', as
     (await listRepairIssues(repository, 'owner')).find((row) => row.id === 'old')?.waitingReason,
   ).toContain('PR review');
 });
+
+it('shows the daily allowance blocker instead of implying an imminent start', async () => {
+  const rows: RepairIssue[] = [
+    {
+      ...issue,
+      status: 'failed',
+      data: {
+        ...issue.data,
+        history: [{ status: 'fixing', at: new Date().toISOString(), detail: '' }],
+      },
+    },
+    { ...issue, id: 'waiting', status: 'reported' },
+  ];
+  const repository = { list: async () => rows } as unknown as SelfRepairRepository;
+  expect(
+    (await listRepairIssues(repository, 'owner', 1)).find((row) => row.id === 'waiting')
+      ?.waitingReason,
+  ).toContain('Daily coding allowance used: 1 of 1');
+  expect(
+    (await listRepairIssues(repository, 'owner', 2)).find((row) => row.id === 'waiting')
+      ?.waitingReason,
+  ).toContain('next minute check');
+});

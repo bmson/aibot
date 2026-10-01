@@ -6,7 +6,7 @@ The worker opens a feature branch, adds a regression test, checks the patch, and
 
 ## Activate
 
-1. Release these changes and the `self-repair.yml` workflow to the source repository's default branch. For PostgreSQL, apply migration 0081 and run the seed. For Firestore, provision the checked-in indexes, including `tasks(agentId, updatedAt DESC)`; the agent creates the 15-minute schedule when enabled. Existing disabled schedules remain disabled.
+1. Release these changes and the `self-repair.yml` workflow to the source repository's default branch. For PostgreSQL, apply migration 0081 and run the seed. For Firestore, provision the checked-in indexes, including `tasks(agentId, updatedAt DESC)`; the agent creates the 15-minute reconciliation schedule when enabled. New reports and retries make that schedule due immediately; the minute sweep commits the repair task and its durable queue wake. Waiting reports are also recovered on each sweep as soon as the rolling coding allowance is available. Existing disabled schedules remain disabled.
 2. If the source repository is public, create a private worker repository (this installation uses `bmson/assistant-repair-worker`). Copy `.github/workflows/self-repair.yml` to its default branch and set its repository variables `SELF_REPAIR_SOURCE_REPO=bmson/assistant` and `SELF_REPAIR_SOURCE_REF=main`. It checks out an immutable source commit from the source default branch; only verified code is published back. Diagnostics, Actions logs and artifacts stay private. The public PR body omits the brief and private run link.
 3. Create the repository label `self-maintenance`.
 4. Add Actions secrets in the private worker repository:

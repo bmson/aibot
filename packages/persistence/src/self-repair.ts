@@ -129,3 +129,23 @@ export function queuedRepairIssues(issues: RepairIssue[]): RepairIssue[] {
     .filter((issue) => issue.status === 'reported')
     .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime() || a.id.localeCompare(b.id));
 }
+
+/** Scheduling and atomic claims use the same rolling allowance and active-work fence. */
+export function repairQueueReady(issues: RepairIssue[], now: Date, dailyLimit: number): boolean {
+  if (issues.length > 1000 || issues.some((row) => ACTIVE_REPAIR_STATUSES.includes(row.status)))
+    return false;
+  return (
+    repairDispatchesUsed(issues, now) < dailyLimit &&
+    issues.some((row) => row.status === 'reported')
+  );
+}
+
+export function repairDispatchesUsed(issues: RepairIssue[], now = new Date()): number {
+  const since = new Date(now.getTime() - 86400000).toISOString();
+  return issues.reduce(
+    (sum, row) =>
+      sum +
+      row.data.history.filter((event) => event.status === 'fixing' && event.at >= since).length,
+    0,
+  );
+}

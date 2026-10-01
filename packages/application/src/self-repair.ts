@@ -2,6 +2,7 @@ import {
   ACTIVE_REPAIR_STATUSES,
   queuedRepairIssues,
   type RepairIssue,
+  repairDispatchesUsed,
   type SelfRepairRepository,
 } from '@assistant/persistence';
 
@@ -30,10 +31,15 @@ export function projectRepairIssue(issue: RepairIssue) {
     updatedAt: issue.updatedAt.toISOString(),
   };
 }
-export async function listRepairIssues(repository: SelfRepairRepository, agentId: string) {
+export async function listRepairIssues(
+  repository: SelfRepairRepository,
+  agentId: string,
+  dailyLimit?: number,
+) {
   const rows = await repository.list(agentId);
   const queue = queuedRepairIssues(rows);
   const active = rows.some((row) => ACTIVE_REPAIR_STATUSES.includes(row.status));
+  const used = repairDispatchesUsed(rows);
   return rows
     .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
     .slice(0, 100)
@@ -45,7 +51,9 @@ export async function listRepairIssues(repository: SelfRepairRepository, agentId
         issue.status === 'reported'
           ? active
             ? 'Waiting for the current investigation or PR review to finish.'
-            : 'Waiting for the next automatic check, subject to the daily coding limit.'
+            : dailyLimit !== undefined && used >= dailyLimit
+              ? `Daily coding allowance used: ${used} of ${dailyLimit} attempts in the last 24 hours. Starts automatically when an allowance is available.`
+              : 'Queued for automatic investigation on the next minute check.'
           : null,
     }));
 }
