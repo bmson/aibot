@@ -8,6 +8,30 @@ import { expect, it } from 'vitest';
 const supervisor = fileURLToPath(
   new URL('../../../../scripts/repair-codex-supervisor.mjs', import.meta.url),
 );
+const actionHook = fileURLToPath(
+  new URL('../../../../scripts/repair-codex-action.mjs', import.meta.url),
+);
+it('wraps only the pinned protected execution hook and rejects upstream drift', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'repair-action-hook-'));
+  try {
+    const path = join(dir, 'action.yml');
+    const prefix = 'exec env -u NODE_OPTIONS NODE_OPTIONS=--disable-sigusr1 ';
+    const original = `${prefix}node --disable-sigusr1 "$ACTION_PATH/dist/main.js" run-codex-exec --safety-strategy "$CODEX_SAFETY_STRATEGY"`;
+    writeFileSync(path, original);
+    expect(spawnSync(process.execPath, [actionHook, path]).status).toBe(0);
+    expect(readFileSync(path, 'utf8')).toBe(
+      original.replace(
+        'node --disable-sigusr1 "$ACTION_PATH/dist/main.js"',
+        'node --disable-sigusr1 "$RUNNER_TEMP/repair-codex-supervisor.mjs" --disable-sigusr1 "$ACTION_PATH/dist/main.js"',
+      ),
+    );
+    expect(spawnSync(process.execPath, [actionHook, path]).status).not.toBe(0);
+    writeFileSync(path, 'unrecognized runtime');
+    expect(spawnSync(process.execPath, [actionHook, path]).status).not.toBe(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 function run(source: string) {
   const dir = mkdtempSync(join(tmpdir(), 'repair-supervisor-'));
   try {
