@@ -8,7 +8,7 @@ export async function getSelfRepairOverview() {
     enabled: config.SELF_REPAIR_ENABLED,
     configured: Boolean(config.GITHUB_REPO && config.GITHUB_TOKEN),
     dailyLimit: config.SELF_REPAIR_DAILY_LIMIT,
-    issues: await listRepairIssues(repository, agentId),
+    issues: await listRepairIssues(repository, agentId, config.SELF_REPAIR_DAILY_LIMIT),
   };
 }
 export async function decideOwnerRepair(id: string, action: 'dismiss' | 'retry' | 'resolve') {
