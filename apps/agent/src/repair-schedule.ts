@@ -31,14 +31,12 @@ export async function ensureRepairSchedule(
       const rows = await tx.get(
         store.collection('selfRepairIssues').where('agentId', '==', agentId).limit(1001),
       );
+      const issues = rows.docs.map((doc) => decodeRecord<RepairIssue>(doc.data()));
       // Every minute sweep recovers missed wakes and starts waiting work as soon as the rolling
       // allowance returns. The claim transaction remains the final authority for dispatch.
       if (
-        repairQueueReady(
-          rows.docs.map((doc) => decodeRecord<RepairIssue>(doc.data())),
-          now,
-          dailyLimit,
-        )
+        repairQueueReady(issues, now, dailyLimit) ||
+        issues.some((issue) => ['fixing', 'testing', 'pr_open', 'merged'].includes(issue.status))
       ) {
         const next = schedule.get('nextRunAt')?.toDate?.();
         if (!next || next > now) tx.update(schedule.ref, { nextRunAt: now, updatedAt: now });

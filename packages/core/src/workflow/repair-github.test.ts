@@ -31,42 +31,43 @@ function worker(fetch: typeof globalThis.fetch) {
     fetch,
   });
 }
-it.each(['success', 'failure'])(
-  'distinguishes a no-defect investigation from a failed run (%s)',
-  async (conclusion) => {
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json([]))
-      .mockResolvedValueOnce(
-        Response.json({
-          workflow_runs: [
-            { id: 10, display_title: `self-repair:${issue.id}`, status: 'completed', conclusion },
-          ],
-        }),
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          jobs: [
-            {
-              name: 'code',
-              steps: [
-                {
-                  name: 'No confirmed defect: Synthetic checks passed; no code defect found.',
-                  conclusion: 'success',
-                },
-              ],
-            },
-          ],
-        }),
-      );
-    const observed = await worker(fetch).inspect(issue);
-    expect(observed?.status).toBe(conclusion === 'success' ? 'blocked' : 'failed');
-    expect(observed?.patch.runUrl).toContain('/actions/runs/10');
-    expect(observed?.patch.lastError).toContain(
-      conclusion === 'success' ? 'Synthetic checks passed' : 'Coding run finished (failure)',
+it.each([
+  ['success', 'No code change: '],
+  ['success', 'No confirmed defect: '],
+  ['failure', 'No code change: '],
+])('distinguishes a no-defect investigation from a failed run (%s)', async (conclusion, prefix) => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json([]))
+    .mockResolvedValueOnce(
+      Response.json({
+        workflow_runs: [
+          { id: 10, display_title: `self-repair:${issue.id}`, status: 'completed', conclusion },
+        ],
+      }),
+    )
+    .mockResolvedValueOnce(
+      Response.json({
+        jobs: [
+          {
+            name: 'code',
+            steps: [
+              {
+                name: `${prefix}Synthetic checks passed; no code defect found.`,
+                conclusion: 'success',
+              },
+            ],
+          },
+        ],
+      }),
     );
-  },
-);
+  const observed = await worker(fetch).inspect(issue);
+  expect(observed?.status).toBe(conclusion === 'success' ? 'blocked' : 'failed');
+  expect(observed?.patch.runUrl).toContain('/actions/runs/10');
+  expect(observed?.patch.lastError).toContain(
+    conclusion === 'success' ? 'Synthetic checks passed' : 'Coding run finished (failure)',
+  );
+});
 it('dispatches a technical brief without exporting owner feedback or source audit', async () => {
   const fetch = vi
     .fn()
@@ -74,11 +75,12 @@ it('dispatches a technical brief without exporting owner feedback or source audi
     .mockResolvedValueOnce(Response.json({ default_branch: 'main' }))
     .mockResolvedValueOnce(Response.json({ sha: 'a'.repeat(40) }))
     .mockResolvedValueOnce(new Response(null, { status: 204 }));
-  await worker(fetch).dispatch(issue);
+  await worker(fetch).dispatch({ ...issue, data: { ...issue.data, category: 'feature' } });
   const [url, init] = fetch.mock.calls[3] ?? [];
   expect(url).toContain('/actions/workflows/self-repair.yml/dispatches');
   expect(init.body).not.toContain('PRIVATE');
   expect(JSON.parse(init.body).inputs.repair_id).toBe(issue.id);
+  expect(JSON.parse(JSON.parse(init.body).inputs.brief).kind).toBe('feature');
 });
 it('refuses diagnostic export to a public repository', async () => {
   const fetch = vi.fn().mockResolvedValue(Response.json({ private: false }));

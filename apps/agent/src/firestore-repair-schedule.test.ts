@@ -100,4 +100,26 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('repair schedule provision
     await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
     await expect(ensureRepairSchedule(store, agentId)).rejects.toThrow('Privacy erasure');
   });
+  it.each(['fixing', 'testing', 'pr_open', 'merged'] as const)(
+    'reconciles %s on the next minute check even with no daily allowance',
+    async (status) => {
+      await ensureRepairSchedule(store, agentId);
+      const schedule = (await store.collection('schedules').where('agentId', '==', agentId).get())
+        .docs[0];
+      if (!schedule) throw new Error('Missing schedule');
+      const repairs = new FirestoreSelfRepairRepository(store, agentId);
+      const issue = await repairs.report(agentId, {
+        fingerprint: 'active',
+        source: 'feedback',
+        title: 'Synthetic work',
+        summary: 'Expected behavior',
+      });
+      await repairs.update(issue, status, {}, new Date());
+      const later = new Date(Date.now() + 3600000);
+      await schedule.ref.update({ nextRunAt: later });
+      await ensureRepairSchedule(store, agentId, 0);
+      expect((await schedule.ref.get()).get('nextRunAt').toMillis()).toBeLessThan(later.getTime());
+      expect(await repairs.claim(agentId, new Date(), 0)).toBeNull();
+    },
+  );
 });

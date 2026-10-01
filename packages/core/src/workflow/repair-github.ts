@@ -56,6 +56,7 @@ export function createGitHubRepairWorker(input: {
         );
       // No transcript, tool arguments, audit output, owner feedback, or credentials leave the store.
       const brief = {
+        kind: issue.data.category === 'feature' ? 'feature' : 'bug',
         diagnosis: issue.data.diagnosis,
         targetPaths: issue.data.targetPaths,
         reproduction: issue.data.reproduction,
@@ -171,14 +172,17 @@ export function createGitHubRepairWorker(input: {
           .find((job) => job.name === 'code')
           ?.steps?.find(
             (step) =>
-              step.conclusion === 'success' && step.name.startsWith('No confirmed defect: '),
+              step.conclusion === 'success' &&
+              ['No code change: ', 'No confirmed defect: '].some((prefix) =>
+                step.name.startsWith(prefix),
+              ),
           );
         if (run.conclusion === 'success' && noDefect)
           return {
             status: 'blocked',
             patch: {
               ...patch,
-              lastError: `No repository defect confirmed. ${noDefect.name.slice('No confirmed defect: '.length).slice(0, 1500)}`,
+              lastError: `No code change was made. ${noDefect.name.replace(/^(?:No code change|No confirmed defect): /, '').slice(0, 1500)}`,
             },
           };
         return {

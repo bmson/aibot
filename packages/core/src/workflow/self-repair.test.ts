@@ -86,6 +86,26 @@ function setup(issue = fixture()) {
   return { deps, rows, issue, object };
 }
 describe('issue-to-PR flow', () => {
+  it('dispatches a requested feature with a missing-behavior acceptance test', async () => {
+    const { deps, object, rows, issue } = setup();
+    object.mockResolvedValueOnce({
+      ok: true,
+      object: {
+        category: 'feature',
+        diagnosis: 'Review cards lack the requested conversion interaction',
+        targetPaths: ['apps/web/app/improvements/proposal-card.tsx'],
+        reproduction:
+          'Render a synthetic advisory card and verify the conversion interaction is absent',
+        acceptance:
+          'Owner can convert the advisory into a report using existing authenticated APIs',
+      },
+    } as never);
+    await runRepairCycle(deps, 'owner', 'task', now);
+    expect(rows.get(issue.id)?.status).toBe('fixing');
+    expect(deps.worker?.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ category: 'feature' }) }),
+    );
+  });
   it('surfaces a definite dispatch rejection immediately without automatic retries', async () => {
     const { deps, rows, issue } = setup();
     if (!deps.worker) throw new Error('Missing worker');
@@ -183,7 +203,7 @@ describe('issue-to-PR flow', () => {
     expect(deps.worker?.dispatch).toHaveBeenCalledOnce();
     expect(deps.notify).not.toHaveBeenCalled();
   });
-  it.each(['bug', 'unknown', 'answer'])(
+  it.each(['bug', 'feature', 'unknown', 'answer'])(
     'requires an actionable brief for %s investigation',
     async (category) => {
       const { deps, object, rows, issue } = setup();
