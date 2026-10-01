@@ -73,8 +73,10 @@ jobs:
         run: |
           cp .repair-tools/scripts/repair-codex-supervisor.mjs "$RUNNER_TEMP/repair-codex-supervisor.mjs"
           node .repair-tools/scripts/repair-codex-action.mjs .repair-action/action.yml
-          sudo chown -R root:root .repair-action
-          sudo chmod -R go-w .repair-action
+          mv .repair-action "$RUNNER_TEMP/trusted-codex-action"
+          sudo chown -R root:root "$RUNNER_TEMP/trusted-codex-action"
+          sudo chmod -R go-w "$RUNNER_TEMP/trusted-codex-action"
+          ln -s "$RUNNER_TEMP/trusted-codex-action" .repair-action
           sudo chown root:root "$RUNNER_TEMP/repair-codex-supervisor.mjs"
           sudo chmod 444 "$RUNNER_TEMP/repair-codex-supervisor.mjs"
           rm -rf .repair-tools
@@ -117,7 +119,7 @@ jobs:
       - name: Remove trusted action from candidate checkout
         if: always()
         run: |
-          if [ -d .repair-action ]; then mv .repair-action "$RUNNER_TEMP/used-codex-action"; fi
+          if [ -L .repair-action ]; then rm .repair-action; fi
       - name: Export fenced patch
         id: patch
         env:
