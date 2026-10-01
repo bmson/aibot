@@ -58,6 +58,18 @@ describe('owner repair endpoints', () => {
     expect(mocks.report).not.toHaveBeenCalled();
     expect(mocks.decide).not.toHaveBeenCalled();
   });
+  it('accepts only an authenticated owner manual-run action', async () => {
+    const id = randomUUID();
+    expect(
+      (await decide(request({ action: 'run_now' }), { params: Promise.resolve({ id }) })).status,
+    ).toBe(200);
+    expect(mocks.decide).toHaveBeenCalledWith(id, 'run_now');
+    mocks.allowed.mockResolvedValue(false);
+    expect(
+      (await decide(request({ action: 'run_now' }), { params: Promise.resolve({ id }) })).status,
+    ).toBe(401);
+    expect(mocks.decide).toHaveBeenCalledTimes(1);
+  });
   it('records a validated report and surfaces conflicting owner actions', async () => {
     const id = randomUUID();
     mocks.report.mockResolvedValue({ id });

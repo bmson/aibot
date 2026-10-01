@@ -187,7 +187,7 @@ describe('issue-to-PR flow', () => {
     'requires an actionable brief for %s investigation',
     async (category) => {
       const { deps, object, rows, issue } = setup();
-      object.mockResolvedValueOnce({
+      object.mockResolvedValue({
         ok: true,
         object: {
           category,
@@ -239,6 +239,39 @@ describe('issue-to-PR flow', () => {
     expect(object).toHaveBeenCalledTimes(2);
     expect(object.mock.calls[1]?.[1]).toMatchObject({ forceFallback: true });
     expect(rows.get(issue.id)?.status).toBe('fixing');
+  });
+  it.each(['placeholder', 'invented paths'])(
+    'uses a distinct fallback for unusable %s output',
+    async (kind) => {
+      const { deps, object, rows, issue } = setup();
+      object.mockResolvedValueOnce({
+        ok: true,
+        object: {
+          category: 'bug',
+          diagnosis: kind === 'placeholder' ? '...' : 'Review potential issues',
+          targetPaths: kind === 'invented paths' ? ['improvement/page', 'auto-solve/trigger'] : [],
+          reproduction: kind === 'placeholder' ? '' : 'Open the review page',
+          acceptance: 'Start the investigation',
+        },
+      } as never);
+      expect(await runRepairCycle(deps, 'owner', 'task', now)).toBe(1);
+      expect(object).toHaveBeenCalledTimes(2);
+      expect(object.mock.calls[1]?.[1]).toMatchObject({ forceFallback: true });
+      expect(rows.get(issue.id)?.status).toBe('fixing');
+    },
+  );
+  it('bounds primary triage and uses a fresh deadline for timeout fallback', async () => {
+    const { deps, object } = setup();
+    const deadline = vi.spyOn(AbortSignal, 'timeout');
+    object.mockRejectedValueOnce(
+      Object.assign(new Error('Deadline exceeded'), { name: 'TimeoutError' }),
+    );
+    try {
+      expect(await runRepairCycle(deps, 'owner', 'task', now)).toBe(1);
+      expect(deadline.mock.calls).toEqual([[60000], [60000]]);
+    } finally {
+      deadline.mockRestore();
+    }
   });
   it('does not repeat triage when the fallback is the same model', async () => {
     const { deps, object, rows, issue } = setup();

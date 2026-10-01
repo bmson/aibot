@@ -48,6 +48,29 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore repair ledger',
     await repository.update(blocked, 'reported', {}, new Date(Date.now() + 1000));
     expect((await repository.claim(agentId, new Date(Date.now() + 2000), 2))?.id).toBe(newer.id);
   });
+  it('consumes a manual allowance once while preserving concurrent active-work exclusion', async () => {
+    const issue = await repository.report(agentId, input);
+    await repository.update(
+      issue,
+      'reported',
+      { manualRunRequestedAt: new Date().toISOString() },
+      new Date(),
+    );
+    const claims = await Promise.all([
+      repository.claim(agentId, new Date(), 0),
+      repository.claim(agentId, new Date(), 0),
+    ]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    const claimed = claims.find(Boolean);
+    if (!claimed) throw new Error('Missing manual claim');
+    expect(claimed.data.manualRunRequestedAt).toBeUndefined();
+    expect(claimed.data.manualRunStartedAt).toEqual(expect.any(String));
+    await repository.update(claimed, 'failed', {}, new Date());
+    const failed = (await repository.list(agentId))[0];
+    if (!failed) throw new Error('Missing failed issue');
+    await repository.update(failed, 'reported', {}, new Date());
+    expect(await repository.claim(agentId, new Date(), 0)).toBeNull();
+  });
   it('refuses foreign evidence, owner scope changes, and erasure writes', async () => {
     const task = randomUUID();
     await store.doc('tasks', task).set({ id: task, agentId: 'other' });

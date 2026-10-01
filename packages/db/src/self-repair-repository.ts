@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import {
-  queuedRepairIssues,
   type RepairIssue,
+  repairClaimCandidate,
   repairFailureKey,
-  repairQueueReady,
   repairTransition,
   type SelfRepairRepository,
 } from '@assistant/persistence';
@@ -71,10 +70,17 @@ export function createPostgresSelfRepairRepository(db: Db): SelfRepairRepository
           .where(eq(selfRepairIssues.agentId, agentId))
           .orderBy(selfRepairIssues.createdAt)
           .limit(1001)) as RepairIssue[];
-        if (!repairQueueReady(rows, now, dailyLimit)) return null;
-        const issue = queuedRepairIssues(rows)[0];
+        const issue = repairClaimCandidate(rows, now, dailyLimit);
         if (!issue) return null;
-        const next = repairTransition(issue, 'investigating', {}, now);
+        const next = repairTransition(
+          issue,
+          'investigating',
+          {
+            manualRunStartedAt: issue.data.manualRunRequestedAt ?? issue.data.manualRunStartedAt,
+            manualRunRequestedAt: undefined,
+          },
+          now,
+        );
         await tx
           .update(selfRepairIssues)
           .set({ status: next.status, version: next.version, data: next.data, updatedAt: now })

@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
 import {
-  queuedRepairIssues,
   type RepairIssue,
+  repairClaimCandidate,
   repairFailureKey,
-  repairQueueReady,
   repairTransition,
   type SelfRepairRepository,
 } from '@assistant/persistence';
@@ -103,10 +102,17 @@ export class FirestoreSelfRepairRepository implements SelfRepairRepository {
       const ownerRow = await tx.get(owner);
       if (!ownerRow.exists) throw new Error('Repair owner is missing');
       const rows = snapshot.docs.map((doc) => decodeRecord<RepairIssue>(doc.data()));
-      if (!repairQueueReady(rows, now, dailyLimit)) return null;
-      const issue = queuedRepairIssues(rows)[0];
+      const issue = repairClaimCandidate(rows, now, dailyLimit);
       if (!issue) return null;
-      const next = repairTransition(issue, 'investigating', {}, now);
+      const next = repairTransition(
+        issue,
+        'investigating',
+        {
+          manualRunStartedAt: issue.data.manualRunRequestedAt ?? issue.data.manualRunStartedAt,
+          manualRunRequestedAt: undefined,
+        },
+        now,
+      );
       tx.update(owner, { updatedAt: now });
       tx.set(this.store.doc('selfRepairIssues', issue.id), encodeRecord(next));
       return next;
@@ -131,7 +137,8 @@ export class FirestoreSelfRepairRepository implements SelfRepairRepository {
         return null;
       const next = repairTransition(issue, status, patch, now);
       const schedule =
-        status === 'reported' && issue.status !== 'reported'
+        status === 'reported' &&
+        (issue.status !== 'reported' || Boolean(patch.manualRunRequestedAt))
           ? await repairScheduleToWake(tx, this.store, issue.agentId)
           : null;
       tx.set(ref, encodeRecord(next));

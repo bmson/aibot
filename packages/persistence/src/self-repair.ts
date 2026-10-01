@@ -44,6 +44,9 @@ export interface RepairDetails {
   monitoringAt?: string;
   lastError?: string;
   notifiedStatus?: RepairStatus;
+  /** Set only by an authenticated owner action; authorizes one attempt beyond the automatic cap. */
+  manualRunRequestedAt?: string;
+  manualRunStartedAt?: string;
   history: Array<{ status: RepairStatus; at: string; detail: string }>;
 }
 export interface RepairIssue {
@@ -127,17 +130,35 @@ export function repairFailureKey(title: string, state: unknown): string {
 export function queuedRepairIssues(issues: RepairIssue[]): RepairIssue[] {
   return issues
     .filter((issue) => issue.status === 'reported')
-    .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime() || a.id.localeCompare(b.id));
+    .sort(
+      (a, b) =>
+        Number(Boolean(b.data.manualRunRequestedAt)) -
+          Number(Boolean(a.data.manualRunRequestedAt)) ||
+        a.updatedAt.getTime() - b.updatedAt.getTime() ||
+        a.id.localeCompare(b.id),
+    );
 }
 
 /** Scheduling and atomic claims use the same rolling allowance and active-work fence. */
 export function repairQueueReady(issues: RepairIssue[], now: Date, dailyLimit: number): boolean {
+  return repairClaimCandidate(issues, now, dailyLimit) !== null;
+}
+
+export function repairClaimCandidate(
+  issues: RepairIssue[],
+  now: Date,
+  dailyLimit: number,
+): RepairIssue | null {
   if (issues.length > 1000 || issues.some((row) => ACTIVE_REPAIR_STATUSES.includes(row.status)))
-    return false;
-  return (
-    repairDispatchesUsed(issues, now) < dailyLimit &&
-    issues.some((row) => row.status === 'reported')
-  );
+    return null;
+  const candidate = queuedRepairIssues(issues)[0];
+  if (!candidate) return null;
+  if (
+    candidate.data.manualRunRequestedAt &&
+    Number.isFinite(Date.parse(candidate.data.manualRunRequestedAt))
+  )
+    return candidate;
+  return repairDispatchesUsed(issues, now) < dailyLimit ? candidate : null;
 }
 
 export function repairDispatchesUsed(issues: RepairIssue[], now = new Date()): number {

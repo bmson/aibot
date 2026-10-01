@@ -23,6 +23,8 @@ export interface RepairView {
   status: string;
   diagnosis: string;
   lastError: string;
+  manualRunRequested?: boolean;
+  waitingReason?: string | null;
   sourceTaskId: string | null;
   prUrl: string | null;
   runUrl: string | null;
@@ -129,6 +131,7 @@ export function RepairPanel({
           </div>
           <h3 className="font-semibold">{issue.title}</h3>
           <p className="text-sm text-muted">{issue.diagnosis || issue.summary}</p>
+          {issue.waitingReason && <p className="text-sm text-muted">{issue.waitingReason}</p>}
           {issue.lastError && <p className="text-sm">{issue.lastError}</p>}
           <div className="flex flex-wrap items-center gap-3 text-sm">
             {issue.prUrl && (
@@ -146,14 +149,17 @@ export function RepairPanel({
                 View coding run ↗
               </a>
             )}
-            {['failed', 'blocked'].includes(issue.status) && (
-              <ActionButton
-                disabled={pending}
-                onClick={() => run(() => repairDecisionAction(issue.id, 'retry'))}
-              >
-                Retry investigation
-              </ActionButton>
-            )}
+            {overview.enabled &&
+              overview.configured &&
+              !issue.manualRunRequested &&
+              ['reported', 'failed', 'blocked'].includes(issue.status) && (
+                <ActionButton
+                  disabled={pending}
+                  onClick={() => run(() => repairDecisionAction(issue.id, 'run_now'))}
+                >
+                  Run now
+                </ActionButton>
+              )}
             {issue.status === 'monitoring' && (
               <ActionButton
                 disabled={pending}
@@ -171,6 +177,14 @@ export function RepairPanel({
               </ActionButton>
             )}
           </div>
+          {overview.enabled &&
+            overview.configured &&
+            !issue.manualRunRequested &&
+            ['reported', 'failed', 'blocked'].includes(issue.status) && (
+              <p className="text-xs text-muted">
+                Run now authorizes one attempt beyond the automatic daily limit.
+              </p>
+            )}
           <details className="text-xs text-muted">
             <summary className="cursor-pointer">Progress history</summary>
             <ol className="mt-2 space-y-1">
