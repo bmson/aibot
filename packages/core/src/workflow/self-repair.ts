@@ -8,7 +8,7 @@ import type {
 import { repairPathBlocked } from '@assistant/persistence';
 import { z } from 'zod';
 import { readAuditInvestigation, scrubAudit } from '../audit-investigation.js';
-import type { ModelRouter } from '../model-router/router.js';
+import type { ModelRouter, ObjectOutcome } from '../model-router/router.js';
 import { RepairDispatchRejected, type RepairWorker } from './repair-github.js';
 
 export function isRepairFeedback(text: string): boolean {
@@ -193,7 +193,7 @@ export async function runRepairCycle(
       ? await readAuditInvestigation(deps.audit, agentId, issue.data.sourceTaskId, { limit: 5 })
       : null;
     const evidence = JSON.stringify(audit).slice(0, 32000);
-    const diagnosis = await deps.router.object<z.infer<typeof Diagnosis>>('reason', {
+    const options = {
       taskId,
       schema: Diagnosis,
       system:
@@ -204,7 +204,21 @@ export async function runRepairCycle(
         evidenceMayBeIncomplete: true,
         runtime: deps.diagnostics,
       }),
-    });
+    };
+    let diagnosis: ObjectOutcome<z.infer<typeof Diagnosis>>;
+    try {
+      diagnosis = await deps.router.object<z.infer<typeof Diagnosis>>('reason', options);
+    } catch (error) {
+      if (!repairProviderUnavailable(error)) throw error;
+      const primary = await deps.router.route('reason', { taskId });
+      const fallback = await deps.router.route('reason', { taskId, forceFallback: true });
+      if (!primary.ok || !fallback.ok || primary.modelId === fallback.modelId) throw error;
+      // A single bounded attempt on a distinct configured model; reservations still enforce budgets.
+      diagnosis = await deps.router.object<z.infer<typeof Diagnosis>>('reason', {
+        ...options,
+        forceFallback: true,
+      });
+    }
     await deps.heartbeat?.();
     if (!diagnosis.ok)
       throw new Error('Investigation could not run within the assistant model budget.');
@@ -272,4 +286,26 @@ export async function runRepairCycle(
     if (current) await notifyRepair(current);
   }
   return count;
+}
+
+/** SDK retry wrappers retain the terminal provider error in lastError/cause/errors. */
+function repairProviderUnavailable(error: unknown): boolean {
+  const pending: unknown[] = [error];
+  const seen = new Set<unknown>();
+  for (let depth = 0; depth < 8 && pending.length; depth++) {
+    const value = pending.shift();
+    if (!value || typeof value !== 'object' || seen.has(value)) continue;
+    seen.add(value);
+    const record = value as Record<string, unknown>;
+    const status = Number(record.statusCode);
+    if (
+      value instanceof Error &&
+      value.name === 'AI_APICallError' &&
+      (status === 429 || (status >= 500 && status <= 599))
+    )
+      return true;
+    pending.push(record.lastError, record.cause);
+    if (Array.isArray(record.errors)) pending.push(...record.errors.slice(0, 4));
+  }
+  return false;
 }

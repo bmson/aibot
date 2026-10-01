@@ -33,7 +33,7 @@ The local coding key is stored in ignored `.env.local`; transfer it only to the 
 
 ## Limits and recovery
 
-There is one active issue per owner and a default limit of two coding dispatches per rolling 24 hours (maximum configurable limit: five). The coding step has a 15-minute timeout. Investigation uses the scheduled task budget. These are execution limits, not a guaranteed dollar cap; set a dedicated API project budget and monitor usage.
+There is one active issue per owner and a default limit of two coding dispatches per rolling 24 hours (maximum configurable limit: five). The coding step has a 15-minute timeout. Investigation uses the scheduled task budget. If the preliminary review exhausts retries on a rate limit or provider outage, it tries one distinct configured fallback model within that budget. These are execution limits, not a guaranteed dollar cap; set a dedicated API project budget and monitor usage.
 
 Patches are limited to 20 files and 100 KB. A regression test and explicit reproduction result are required. Credentials, authentication, trust controls, infrastructure, dependency/configuration files, schemas and the repair machinery are protected. Executor fixes require the separate owner-enabled tier, which permits only selected implementation files. The candidate is tested in fresh jobs without publisher credentials. Publication rechecks the exact patch that passed lint, type checking, PostgreSQL tests, Firestore tests and applicable iOS tests.
 
