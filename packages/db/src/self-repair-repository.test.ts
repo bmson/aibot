@@ -40,10 +40,22 @@ it('deduplicates reports, atomically claims one repair and rejects stale writes'
     const dispatched = await repository.update(
       row,
       'fixing',
-      { dispatchedAt: now.toISOString() },
+      {
+        dispatchedAt: now.toISOString(),
+        workerProvider: 'openai_hosted',
+        hostedSessionId: 'sess_saved',
+        hostedTurnId: 'turn_saved',
+        hostedCleanupPending: true,
+      },
       now,
     );
     expect(dispatched).not.toBeNull();
+    expect((await repository.list(id)).find((record) => record.id === row.id)?.data).toMatchObject({
+      workerProvider: 'openai_hosted',
+      hostedSessionId: 'sess_saved',
+      hostedTurnId: 'turn_saved',
+      hostedCleanupPending: true,
+    });
     expect(await repository.update(row, 'failed', {}, now)).toBeNull();
     await repository.update(dispatched!, 'failed', {}, now);
     expect(await repository.claim(id, now, 1)).toBeNull();

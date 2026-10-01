@@ -65,7 +65,8 @@
     "./workflow/watch-suggest": "./src/workflow/watch-suggest.ts",
     "./audit-investigation": "./src/audit-investigation.ts",
     "./workflow/self-repair": "./src/workflow/self-repair.ts",
-    "./workflow/repair-github": "./src/workflow/repair-github.ts"
+    "./workflow/repair-github": "./src/workflow/repair-github.ts",
+    "./workflow/repair-hosted": "./src/workflow/repair-hosted.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

@@ -41,6 +41,13 @@ export interface RepairDetails {
   prUrl?: string;
   mergeSha?: string;
   dispatchedAt?: string;
+  workerProvider?: 'github' | 'openai_hosted';
+  hostedSessionId?: string;
+  hostedTurnId?: string;
+  hostedSourceSha?: string;
+  hostedCommitSha?: string;
+  hostedPublishedAt?: string;
+  hostedCleanupPending?: boolean;
   monitoringAt?: string;
   lastError?: string;
   notifiedStatus?: RepairStatus;
