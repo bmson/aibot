@@ -1,6 +1,6 @@
 /** Runs from a trusted immutable copy OUTSIDE the candidate checkout. Never execute candidate scripts here. */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const { repairPathBlocked } = await import(pathToFileURL(process.env.REPAIR_GUARD).href);
@@ -18,6 +18,29 @@ for (const path of untracked) {
 }
 if (untracked.length) git('add', '--', ...untracked);
 const files = git('diff', '--name-only', '--no-renames', '-z', base).split('\0').filter(Boolean);
+// Only the coding stage may finish without a patch. Verification/publication always require one.
+if (!files.length && process.env.REPAIR_ALLOW_NO_CHANGE === 'true') {
+  if (!process.env.REPAIR_RESULT || !existsSync(process.env.REPAIR_RESULT))
+    throw new Error('Coding agent returned no investigation result; no patch was produced');
+  const result = JSON.parse(readFileSync(process.env.REPAIR_RESULT, 'utf8'));
+  if (
+    result.reproduced !== false ||
+    typeof result.summary !== 'string' ||
+    !result.summary.trim() ||
+    typeof result.regressionTest !== 'string' ||
+    !result.regressionTest.trim()
+  )
+    throw new Error(
+      'No-change investigation requires a complete result explaining why no defect was confirmed',
+    );
+  const summary = result.summary.replace(/\s+/g, ' ').trim().slice(0, 1500);
+  if (process.env.GITHUB_OUTPUT)
+    writeFileSync(process.env.GITHUB_OUTPUT, `outcome=no_defect\nsummary=${summary}\n`, {
+      flag: 'a',
+    });
+  console.log('Investigation completed without a confirmed defect; no patch will be published.');
+  process.exit(0);
+}
 if (!files.length || files.length > 20)
   throw new Error('Repair must change between 1 and 20 files');
 for (const path of files) {
@@ -57,6 +80,6 @@ console.log(`Validated ${files.length} changed file(s).`);
 if (process.env.GITHUB_OUTPUT)
   writeFileSync(
     process.env.GITHUB_OUTPUT,
-    `ios=${files.some((path) => path.startsWith('apps/ios/'))}\n`,
+    `outcome=patch\nios=${files.some((path) => path.startsWith('apps/ios/'))}\n`,
     { flag: 'a' },
   );

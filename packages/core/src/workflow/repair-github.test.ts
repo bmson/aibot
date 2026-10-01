@@ -31,6 +31,42 @@ function worker(fetch: typeof globalThis.fetch) {
     fetch,
   });
 }
+it.each(['success', 'failure'])(
+  'distinguishes a no-defect investigation from a failed run (%s)',
+  async (conclusion) => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json([]))
+      .mockResolvedValueOnce(
+        Response.json({
+          workflow_runs: [
+            { id: 10, display_title: `self-repair:${issue.id}`, status: 'completed', conclusion },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          jobs: [
+            {
+              name: 'code',
+              steps: [
+                {
+                  name: 'No confirmed defect: Synthetic checks passed; no code defect found.',
+                  conclusion: 'success',
+                },
+              ],
+            },
+          ],
+        }),
+      );
+    const observed = await worker(fetch).inspect(issue);
+    expect(observed?.status).toBe(conclusion === 'success' ? 'blocked' : 'failed');
+    expect(observed?.patch.runUrl).toContain('/actions/runs/10');
+    expect(observed?.patch.lastError).toContain(
+      conclusion === 'success' ? 'Synthetic checks passed' : 'Coding run finished (failure)',
+    );
+  },
+);
 it('dispatches a technical brief without exporting owner feedback or source audit', async () => {
   const fetch = vi
     .fn()
