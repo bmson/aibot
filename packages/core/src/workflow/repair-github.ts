@@ -153,7 +153,34 @@ export function createGitHubRepairWorker(input: {
         runId: run.id,
         runUrl: `https://github.com/${workerRepo}/actions/runs/${run.id}`,
       };
-      if (run.status === 'completed')
+      if (run.status === 'completed') {
+        // Read the trusted workflow's result step, never execute or follow model-generated text.
+        const jobs = z
+          .object({
+            jobs: z.array(
+              z.object({
+                name: z.string(),
+                steps: z
+                  .array(z.object({ name: z.string(), conclusion: z.string().nullable() }))
+                  .optional(),
+              }),
+            ),
+          })
+          .parse(await api(`/actions/runs/${run.id}/jobs?per_page=100`, undefined, workerRepo));
+        const noDefect = jobs.jobs
+          .find((job) => job.name === 'code')
+          ?.steps?.find(
+            (step) =>
+              step.conclusion === 'success' && step.name.startsWith('No confirmed defect: '),
+          );
+        if (run.conclusion === 'success' && noDefect)
+          return {
+            status: 'blocked',
+            patch: {
+              ...patch,
+              lastError: `No repository defect confirmed. ${noDefect.name.slice('No confirmed defect: '.length).slice(0, 1500)}`,
+            },
+          };
         return {
           status: 'failed',
           patch: {
@@ -161,6 +188,7 @@ export function createGitHubRepairWorker(input: {
             lastError: `Coding run finished (${run.conclusion ?? 'unknown'}) without a PR. Inspect the run for reproduction, test, or permission failures.`,
           },
         };
+      }
       if (run.status === 'in_progress') {
         const jobs = z
           .object({ jobs: z.array(z.object({ name: z.string(), status: z.string() })) })

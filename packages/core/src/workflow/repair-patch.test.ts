@@ -45,6 +45,46 @@ function checkout() {
   return { dir, git, put, run, patch: join(artifacts, 'candidate.patch') };
 }
 describe('trusted worker patch gate', () => {
+  it('allows an explained no-defect result only at the coding stage and keeps publication fenced', () => {
+    const c = checkout();
+    const resultPath = `${c.patch}.json`;
+    const outputPath = `${c.patch}.outputs`;
+    writeFileSync(
+      resultPath,
+      JSON.stringify({
+        reproduced: false,
+        regressionTest: 'Synthetic checks passed',
+        summary: 'No defect found.\noutcome=patch',
+      }),
+    );
+    const extra = { REPAIR_RESULT: resultPath, GITHUB_OUTPUT: outputPath };
+    expect(c.run({ ...extra, REPAIR_ALLOW_NO_CHANGE: 'true' }).status).toBe(0);
+    expect(readFileSync(outputPath, 'utf8')).toBe(
+      'outcome=no_defect\nsummary=No defect found. outcome=patch\n',
+    );
+    expect(c.run(extra).status).not.toBe(0);
+    c.put('apps/web/src/sample.ts', 'export const value = 2;\n');
+    c.put('apps/web/src/sample.test.ts', 'export const expected = 2;\n');
+    expect(c.run({ ...extra, REPAIR_ALLOW_NO_CHANGE: 'true' }).stderr).toContain(
+      'did not reproduce',
+    );
+  });
+  it('rejects an empty checkout with an incomplete or contradictory coding result', () => {
+    const c = checkout();
+    const resultPath = `${c.patch}.json`;
+    expect(c.run({ REPAIR_RESULT: resultPath, REPAIR_ALLOW_NO_CHANGE: 'true' }).stderr).toContain(
+      'no investigation result',
+    );
+    for (const result of [
+      { reproduced: false },
+      { reproduced: true, summary: 'Fixed', regressionTest: 'test' },
+    ]) {
+      writeFileSync(resultPath, JSON.stringify(result));
+      expect(c.run({ REPAIR_RESULT: resultPath, REPAIR_ALLOW_NO_CHANGE: 'true' }).stderr).toContain(
+        'complete result',
+      );
+    }
+  });
   it('exports the tested patch and rejects mutations after verification', () => {
     const c = checkout();
     c.put('apps/web/src/sample.ts', 'export const value = 2;\n');

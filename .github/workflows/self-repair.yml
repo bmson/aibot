@@ -31,6 +31,7 @@ jobs:
     timeout-minutes: 25
     outputs:
       ios: ${{ steps.patch.outputs.ios }}
+      outcome: ${{ steps.patch.outputs.outcome }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -87,14 +88,27 @@ jobs:
           REPAIR_PATCH: ${{ runner.temp }}/repair.patch
           REPAIR_RESULT: ${{ runner.temp }}/repair-result.json
           REPAIR_ALLOW_EXECUTOR: ${{ inputs.allow_executor }}
+          REPAIR_ALLOW_NO_CHANGE: 'true'
         run: node "$RUNNER_TEMP/repair-patch.mjs"
+      - name: 'No confirmed defect: ${{ steps.patch.outputs.summary }}'
+        if: steps.patch.outputs.outcome == 'no_defect'
+        run: echo 'Investigation completed; no PR will be created.'
+      - name: Preserve investigation result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: repair-investigation
+          path: ${{ runner.temp }}/repair-result.json
+          retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.patch.outputs.outcome == 'patch'
         with:
           name: repair-candidate
           path: ${{ runner.temp }}/repair.patch
           retention-days: 1
   verify:
     needs: code
+    if: needs.code.outputs.outcome == 'patch'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     services:
