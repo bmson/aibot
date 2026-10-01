@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { requireOwner } from '@/auth';
+import { requestOwnerProposalCodeFix } from '@/lib/proposal-code-fix';
 import { decideOwnerImprovement } from '@/lib/workspace-reviews';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -23,5 +24,12 @@ export async function dismissProposalAction(id: string): Promise<void> {
   await requireOwner();
   if (!UUID_RE.test(id)) return;
   await decideOwnerImprovement(id, 'dismiss');
+  revalidate();
+}
+
+export async function requestProposalCodeFixAction(id: string): Promise<void> {
+  await requireOwner();
+  if (!UUID_RE.test(id)) throw new Error('Invalid proposal id');
+  await requestOwnerProposalCodeFix(id);
   revalidate();
 }

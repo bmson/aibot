@@ -965,7 +965,7 @@ struct WorkspaceView: View {
             .accessibilityElement(children: .combine)
         } else {
             workspaceTag(
-                improvement.applyable ? "Ready to apply" : "Review only",
+                improvement.applyable ? "Ready to apply" : canRequestCodeFix ? "Can request a fix" : "Review only",
                 tint: improvement.applyable
                     ? AssistantTheme.success(for: colorScheme)
                     : .secondary
@@ -997,14 +997,19 @@ struct WorkspaceView: View {
         )
     }
 
+    private var canRequestCodeFix: Bool {
+        model.workspace?.repairs?.enabled == true && model.workspace?.repairs?.configured == true
+    }
+
     private func improvementActions(_ improvement: WorkspaceImprovement) -> some View {
-        AssistantFlowLayout(spacing: AssistantTheme.actionSpacing) {
+        let requestFix = !improvement.applyable && canRequestCodeFix
+        return AssistantFlowLayout(spacing: AssistantTheme.actionSpacing) {
             Button {
-                updateImprovement(improvement, action: "apply")
+                updateImprovement(improvement, action: requestFix ? "request_fix" : "apply")
             } label: {
                 Label(
-                    improvement.applyable ? "Apply change" : "Mark reviewed",
-                    systemImage: improvement.applyable ? "checkmark.circle.fill" : "checkmark"
+                    requestFix ? "Request code fix" : improvement.applyable ? "Apply change" : "Mark reviewed",
+                    systemImage: requestFix ? "hammer" : improvement.applyable ? "checkmark.circle.fill" : "checkmark"
                 )
             }
             .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))

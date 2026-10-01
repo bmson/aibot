@@ -1,7 +1,11 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import { applyProposalAction, dismissProposalAction } from '@/app/improvements/actions';
+import {
+  applyProposalAction,
+  dismissProposalAction,
+  requestProposalCodeFixAction,
+} from '@/app/improvements/actions';
 import {
   Badge,
   cardBodyClass,
@@ -31,14 +35,25 @@ const kindLabels: Record<string, string> = {
   note: 'Note',
 };
 
-export function ProposalCard({ proposal }: { proposal: ProposalView }) {
+export function ProposalCard({
+  proposal,
+  canRequestFix = false,
+}: {
+  proposal: ProposalView;
+  canRequestFix?: boolean;
+}) {
+  const requestFix = !proposal.applyable && canRequestFix;
+  const [error, setError] = useState('');
   const [pending, startTransition] = useTransition();
   const [pendingAction, setPendingAction] = useState<'apply' | 'dismiss' | null>(null);
   const runAction = (name: 'apply' | 'dismiss', action: () => Promise<unknown>) => {
+    setError('');
     setPendingAction(name);
     startTransition(async () => {
       try {
         await action();
+      } catch {
+        setError('Could not complete this request. Please try again.');
       } finally {
         setPendingAction(null);
       }
@@ -47,6 +62,11 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
 
   return (
     <article className={`${cardShellClass} flex h-full flex-col`}>
+      {error && (
+        <p role="alert" className="px-5 pt-4 text-sm text-red-600">
+          {error}
+        </p>
+      )}
       <div className={`${cardBodyClass} flex-1`}>
         <div className={cardHeaderClass}>
           <div className="min-w-0">
@@ -87,15 +107,23 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
           variant="primary"
           disabled={pending}
           pending={pendingAction === 'apply'}
-          pendingLabel="Applying…"
-          onClick={() => runAction('apply', () => applyProposalAction(proposal.id))}
+          pendingLabel={requestFix ? 'Queuing…' : 'Applying…'}
+          onClick={() =>
+            runAction('apply', () =>
+              requestFix
+                ? requestProposalCodeFixAction(proposal.id)
+                : applyProposalAction(proposal.id),
+            )
+          }
           title={
-            proposal.applyable
-              ? 'Approve and enact this change'
-              : 'Acknowledge this advisory suggestion'
+            requestFix
+              ? 'Create a code-fix report for automatic investigation'
+              : proposal.applyable
+                ? 'Approve and enact this change'
+                : 'Acknowledge this advisory suggestion'
           }
         >
-          {proposal.applyable ? 'Approve & apply' : 'Acknowledge'}
+          {requestFix ? 'Request code fix' : proposal.applyable ? 'Approve & apply' : 'Acknowledge'}
         </ActionButton>
         <ActionButton
           disabled={pending}
