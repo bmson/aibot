@@ -130,6 +130,12 @@ jobs:
           REPAIR_ALLOW_EXECUTOR: ${{ inputs.allow_executor }}
           REPAIR_ALLOW_NO_CHANGE: 'true'
         run: node "$RUNNER_TEMP/repair-patch.mjs"
+      - name: Restore trusted action for post-job cleanup
+        if: always()
+        run: |
+          if [ ! -e .repair-action ]; then
+            ln -s "$RUNNER_TEMP/trusted-codex-action" .repair-action
+          fi
       - name: 'No code change: ${{ steps.patch.outputs.summary }}'
         if: steps.patch.outputs.outcome == 'no_defect'
         run: echo 'Investigation completed; no PR will be created.'
