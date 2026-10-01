@@ -999,15 +999,18 @@ struct WorkspaceView: View {
 
     private func improvementActions(_ improvement: WorkspaceImprovement) -> some View {
         AssistantFlowLayout(spacing: AssistantTheme.actionSpacing) {
-            Button {
+            Button(
+                improvement.applyable ? "Apply change" : "Mark reviewed",
+                systemImage: improvement.applyable ? "checkmark.circle.fill" : "checkmark"
+            ) {
                 updateImprovement(improvement, action: "apply")
-            } label: {
-                Label(
-                    improvement.applyable ? "Apply change" : "Mark reviewed",
-                    systemImage: improvement.applyable ? "checkmark.circle.fill" : "checkmark"
-                )
             }
             .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
+
+            Button("Request code fix", systemImage: "wrench.and.screwdriver") {
+                updateImprovement(improvement, action: "request_code_fix")
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
 
             Button("Dismiss", systemImage: "xmark") {
                 updateImprovement(improvement, action: "dismiss")

@@ -1,3 +1,4 @@
+import { requestProposalCodeFix } from '@/lib/proposal-code-fix';
 import { decideOwnerImprovement } from '@/lib/workspace-reviews';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
@@ -14,8 +15,15 @@ export async function POST(
   if (!UUID_RE.test(id)) return mobileJson({ error: 'invalid proposal id' }, { status: 400 });
   const body = (await request.json().catch(() => null)) as { action?: unknown } | null;
   try {
+    if (body?.action === 'request_code_fix') {
+      const issue = await requestProposalCodeFix(id);
+      return mobileJson({ ok: true, issueId: issue.id });
+    }
     if (body?.action !== 'apply' && body?.action !== 'dismiss')
-      return mobileJson({ error: 'action must be apply or dismiss' }, { status: 400 });
+      return mobileJson(
+        { error: 'action must be apply, dismiss or request_code_fix' },
+        { status: 400 },
+      );
     await decideOwnerImprovement(id, body.action);
     return mobileJson({ ok: true });
   } catch (error) {
