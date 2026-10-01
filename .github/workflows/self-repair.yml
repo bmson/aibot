@@ -51,6 +51,26 @@ jobs:
         with:
           node-version: 24
       - run: pnpm install --frozen-lockfile
+      - name: Load trusted coding supervisor from private worker
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: .repair-tools
+          sparse-checkout: scripts/repair-codex-supervisor.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Bound coding process and capture diagnostics
+        run: |
+          mkdir -p "$RUNNER_TEMP/repair-bin"
+          cp .repair-tools/scripts/repair-codex-supervisor.mjs "$RUNNER_TEMP/repair-bin/codex"
+          chmod 755 "$RUNNER_TEMP/repair-bin/codex"
+          rm -rf .repair-tools
+          rm -f "$RUNNER_TEMP/repair-result.json"
+          echo "$RUNNER_TEMP/repair-bin" >> "$GITHUB_PATH"
+          echo "REPAIR_CODEX_REAL_BIN=$(npm prefix -g)/bin/codex" >> "$GITHUB_ENV"
+          echo "REPAIR_CODEX_RESULT=$RUNNER_TEMP/repair-result.json" >> "$GITHUB_ENV"
+          echo "REPAIR_CODEX_LOG=$RUNNER_TEMP/repair-codex.log" >> "$GITHUB_ENV"
       - name: Preserve trusted patch gate
         run: |
           cp scripts/repair-patch.mjs "$RUNNER_TEMP/repair-patch.mjs"
@@ -74,6 +94,7 @@ jobs:
             The initial diagnosis and source paths are unverified hints. Inspect the repository to establish the cause; empty path hints do not prevent investigation.
             A feature request is actionable even when the current behavior is intentional: implement the requested behavior within scope rather than declining it as not a bug. Use the brief kind to distinguish features from bugs. Only stop without a patch when the requested behavior already exists, cannot be established from the brief, or requires protected changes. Explain any blocker clearly in the final result.
             Keep the fix minimal; no refactors, dependency changes, permission changes, commits, pushes, or deployment.
+            Finish within ten minutes. Run focused tests for the changed behavior using pnpm exec vitest run with explicit test paths. PostgreSQL is unavailable in this coding job. Do not run the full suite, pnpm test, global typecheck, or the iOS build here: the independent verification jobs run those after your patch is complete. Return the structured result promptly when the focused test passes, or explain a blocker.
             Never edit infrastructure, workflow files, configuration, schemas, migrations, credentials,
             approval/trust controls, test configuration, package manifests, or self-repair machinery.
             Ordinary Improvements UI and proposal endpoints may add owner-authenticated calls to existing report APIs; preserve their owner checks. This does not authorize editing protected repair execution, patch guards, or authentication machinery.
@@ -99,7 +120,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: repair-investigation
-          path: ${{ runner.temp }}/repair-result.json
+          path: |
+            ${{ runner.temp }}/repair-result.json
+            ${{ runner.temp }}/repair-codex.log
           retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: steps.patch.outputs.outcome == 'patch'
