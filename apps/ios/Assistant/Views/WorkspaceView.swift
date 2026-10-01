@@ -730,6 +730,12 @@ struct WorkspaceView: View {
                     Text(repairStatusLabel(issue.status)).font(.caption).foregroundStyle(.secondary)
                     Text(issue.title).font(.headline)
                     Text(issue.diagnosis.isEmpty ? issue.summary : issue.diagnosis).font(.subheadline)
+                    if let position = issue.queuePosition {
+                        Text("Queue position: \(position)").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let reason = issue.waitingReason {
+                        Text(reason).font(.caption).foregroundStyle(.secondary)
+                    }
                     if !issue.lastError.isEmpty { Text(issue.lastError).font(.caption).foregroundStyle(.secondary) }
                     if let link = issue.prUrl, let url = URL(string: link), url.scheme == "https", url.host == "github.com" {
                         Link("Review pull request", destination: url).font(.subheadline.weight(.semibold))
@@ -757,7 +763,7 @@ struct WorkspaceView: View {
 
     private func repairStatusLabel(_ status: String) -> String {
         switch status {
-        case "reported": "Reported"
+        case "reported": "Queued"
         case "investigating": "Investigating"
         case "fixing": "Preparing fix"
         case "testing": "Testing"
@@ -2073,6 +2079,7 @@ private struct IssueReportForm: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
+    @State private var sourceTaskId: String?
     @State private var happened = ""
     @State private var expected = ""
     @State private var submitting = false
@@ -2118,6 +2125,19 @@ private struct IssueReportForm: View {
                 Text("Include steps we can reproduce. Avoid passwords, API keys, and private information. Details must fit within 3,000 characters.")
             }
             Section {
+                Picker("Related activity", selection: $sourceTaskId) {
+                    Text("None selected").tag(String?.none)
+                    ForEach(model.overview?.activity.items.filter {
+                        !$0.type.hasPrefix("self.")
+                    } ?? []) { task in
+                        Text(task.title ?? task.type).tag(Optional(task.id))
+                    }
+                }
+                .accessibilityIdentifier("issue-report-related-task")
+            } footer: {
+                Text("Select the task that went wrong to include its diagnostic history. Personal content stays out of the coding brief.")
+            }
+            Section {
                 Text("The assistant will investigate. If it finds a code defect, it can prepare a fix for you to review.")
                     .font(.subheadline).foregroundStyle(.secondary)
                 if summary.count > 3000 {
@@ -2155,7 +2175,7 @@ private struct IssueReportForm: View {
         submitting = true
         submissionError = nil
         Task {
-            let saved = await model.reportRepair(title: cleanTitle, summary: summary)
+            let saved = await model.reportRepair(title: cleanTitle, summary: summary, sourceTaskId: sourceTaskId)
             submitting = false
             if saved {
                 onReported()

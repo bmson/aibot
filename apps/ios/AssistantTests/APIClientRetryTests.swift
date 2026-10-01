@@ -110,8 +110,19 @@ final class APIClientRetryTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.urls.first?.path, "/api/mobile/v1/repairs")
         let body = try XCTUnwrap(StubURLProtocol.bodies.first)
         let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertNil(payload["sourceTaskId"])
         XCTAssertEqual(payload["title"], "Calendar event missing")
         XCTAssertEqual(payload["summary"], "What happened:\nNo event appeared.\n\nWhat I expected:\nThe saved event should appear.")
+    }
+
+    func testIssueReportIncludesExplicitlySelectedTask() async throws {
+        StubURLProtocol.prime([
+            .success(status: 200, body: Data(#"{"ok":true,"issueId":"repair-1"}"#.utf8))
+        ])
+        try await makeClient().reportRepair(title: "Calendar event missing", summary: "The saved event did not appear.", sourceTaskId: "task-1")
+        let body = try XCTUnwrap(StubURLProtocol.bodies.first)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(payload["sourceTaskId"], "task-1")
     }
 
     @MainActor

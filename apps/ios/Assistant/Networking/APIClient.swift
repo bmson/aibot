@@ -590,11 +590,13 @@ struct APIClient: Sendable {
         try await postWorkspaceAction(path: "repairs/\(id)", action: action)
     }
 
-    func reportRepair(title: String, summary: String) async throws {
+    func reportRepair(title: String, summary: String, sourceTaskId: String? = nil) async throws {
         var request = makeRequest(url: configuration.baseURL.appending(path: "api/mobile/v1/repairs"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = try JSONEncoder().encode(["title": title, "summary": summary])
+        var payload = ["title": title, "summary": summary]
+        if let sourceTaskId { payload["sourceTaskId"] = sourceTaskId }
+        request.httpBody = try JSONEncoder().encode(payload)
         _ = try await perform(request, as: OkPayload.self)
     }
 

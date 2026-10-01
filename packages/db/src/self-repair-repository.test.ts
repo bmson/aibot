@@ -28,11 +28,15 @@ it('deduplicates reports, atomically claims one repair and rejects stale writes'
     };
     const [a, b] = await Promise.all([repository.report(id, input), repository.report(id, input)]);
     expect(a.id).toBe(b.id);
-    await repository.report(id, { ...input, fingerprint: 'another' });
+    const newer = await repository.report(id, { ...input, fingerprint: 'another' });
+    const blocked = await repository.update(a, 'blocked', {}, new Date());
+    if (!blocked) throw new Error('Fixture update failed');
+    await repository.update(blocked, 'reported', {}, new Date(Date.now() + 1000));
     const now = new Date();
     const claimed = await Promise.all([repository.claim(id, now, 2), repository.claim(id, now, 2)]);
     expect(claimed.filter(Boolean)).toHaveLength(1);
     const row = claimed.find(Boolean)!;
+    expect(row.id).toBe(newer.id);
     const dispatched = await repository.update(
       row,
       'fixing',

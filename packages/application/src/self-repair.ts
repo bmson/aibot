@@ -1,4 +1,9 @@
-import type { RepairIssue, SelfRepairRepository } from '@assistant/persistence';
+import {
+  ACTIVE_REPAIR_STATUSES,
+  queuedRepairIssues,
+  type RepairIssue,
+  type SelfRepairRepository,
+} from '@assistant/persistence';
 
 export { isRepairFeedback, reportRepair } from '@assistant/core/workflow/self-repair';
 
@@ -26,10 +31,23 @@ export function projectRepairIssue(issue: RepairIssue) {
   };
 }
 export async function listRepairIssues(repository: SelfRepairRepository, agentId: string) {
-  return (await repository.list(agentId))
+  const rows = await repository.list(agentId);
+  const queue = queuedRepairIssues(rows);
+  const active = rows.some((row) => ACTIVE_REPAIR_STATUSES.includes(row.status));
+  return rows
     .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
     .slice(0, 100)
-    .map(projectRepairIssue);
+    .map((issue) => ({
+      ...projectRepairIssue(issue),
+      queuePosition:
+        issue.status === 'reported' ? queue.findIndex((row) => row.id === issue.id) + 1 : null,
+      waitingReason:
+        issue.status === 'reported'
+          ? active
+            ? 'Waiting for the current investigation or PR review to finish.'
+            : 'Waiting for the next automatic check, subject to the daily coding limit.'
+          : null,
+    }));
 }
 export async function decideRepairIssue(
   repository: SelfRepairRepository,
@@ -54,7 +72,20 @@ export async function decideRepairIssue(
     {
       lastError: '',
       ...(action === 'retry'
-        ? { notifiedStatus: undefined, runId: undefined, runUrl: undefined }
+        ? {
+            notifiedStatus: undefined,
+            runId: undefined,
+            runUrl: undefined,
+            diagnosis: undefined,
+            category: undefined,
+            targetPaths: undefined,
+            reproduction: undefined,
+            acceptance: undefined,
+            branch: undefined,
+            dispatchedAt: undefined,
+            prNumber: undefined,
+            prUrl: undefined,
+          }
         : {}),
     },
     new Date(),

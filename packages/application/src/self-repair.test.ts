@@ -1,6 +1,6 @@
 import type { RepairIssue, SelfRepairRepository } from '@assistant/persistence';
 import { expect, it, vi } from 'vitest';
-import { decideRepairIssue, projectRepairIssue } from './self-repair.js';
+import { decideRepairIssue, listRepairIssues, projectRepairIssue } from './self-repair.js';
 
 const issue: RepairIssue = {
   id: 'issue',
@@ -38,4 +38,42 @@ it('only confirms deployed fixes and rejects stale/foreign issue decisions', asy
 });
 it('does not expose untrusted executable links', () => {
   expect(projectRepairIssue(issue)).toMatchObject({ prUrl: null, runUrl: null });
+});
+
+it('retries join the back of the queue and clear the previous investigation', async () => {
+  const old = {
+    ...issue,
+    id: 'old',
+    status: 'blocked' as const,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+    data: {
+      ...issue.data,
+      diagnosis: 'Old diagnosis',
+      category: 'unknown' as const,
+      reproduction: 'Old steps',
+    },
+  };
+  const fresh = { ...issue, id: 'fresh', status: 'reported' as const, updatedAt: new Date(1000) };
+  let rows: RepairIssue[] = [old, fresh];
+  const repository = {
+    list: async () => rows,
+    update: vi.fn<SelfRepairRepository['update']>(async (row, status, patch, now) => {
+      const next = { ...row, status, data: { ...row.data, ...patch }, updatedAt: now };
+      rows = rows.map((item) => (item.id === row.id ? next : item));
+      return next;
+    }),
+  } as unknown as SelfRepairRepository;
+  await decideRepairIssue(repository, 'owner', 'old', 'retry');
+  const projected = await listRepairIssues(repository, 'owner');
+  expect(projected.find((row) => row.id === 'fresh')?.queuePosition).toBe(1);
+  expect(projected.find((row) => row.id === 'old')).toMatchObject({
+    queuePosition: 2,
+    diagnosis: '',
+    lastError: '',
+  });
+  rows.push({ ...issue, status: 'pr_open' });
+  expect(
+    (await listRepairIssues(repository, 'owner')).find((row) => row.id === 'old')?.waitingReason,
+  ).toContain('PR review');
 });

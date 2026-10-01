@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   ACTIVE_REPAIR_STATUSES,
+  queuedRepairIssues,
   type RepairIssue,
   repairFailureKey,
   repairTransition,
@@ -96,9 +97,7 @@ export class FirestoreSelfRepairRepository implements SelfRepairRepository {
         ) >= dailyLimit
       )
         return null;
-      const issue = rows
-        .filter((row) => row.status === 'reported')
-        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0];
+      const issue = queuedRepairIssues(rows)[0];
       if (!issue) return null;
       const next = repairTransition(issue, 'investigating', {}, now);
       tx.update(owner, { updatedAt: now });
