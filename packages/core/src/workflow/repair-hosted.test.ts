@@ -40,6 +40,7 @@ function harness() {
     ready: false,
     checks: false,
     failedCheck: false,
+    failedDuplicate: false,
     deleteConflict: false,
     downloadFailure: false,
     wrongTurn: false,
@@ -141,12 +142,13 @@ function harness() {
           'firestore',
           'build-smoke',
           'Build and test the iOS app',
+          ...(state.failedDuplicate ? ['verify'] : []),
         ].map((name, i) => ({
           name,
           head_sha: commit,
           status: state.checks ? 'completed' : 'in_progress',
           conclusion: state.checks
-            ? state.failedCheck && i === 1
+            ? (state.failedCheck && i === 1) || (state.failedDuplicate && i === 5)
               ? 'failure'
               : i === 4
                 ? 'skipped'
@@ -349,4 +351,16 @@ it('surfaces a failed turn and releases its sandbox without creating a PR', asyn
     patch: { hostedCleanupPending: false },
   });
   expect(h.calls.some((c) => c.url.endsWith('/git/blobs'))).toBe(false);
+});
+
+it('requires every matching CI run to pass when push and PR checks share a name', async () => {
+  const h = harness();
+  h.state.pr = true;
+  h.state.checks = true;
+  h.state.failedDuplicate = true;
+  expect(await h.worker.inspect(issue)).toMatchObject({
+    status: 'failed',
+    patch: { lastError: expect.stringContaining('verify') },
+  });
+  expect(h.state.ready).toBe(false);
 });

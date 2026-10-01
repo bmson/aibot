@@ -247,13 +247,15 @@ export function createHostedRepairWorker(input: {
       .parse(await github(`/commits/${pr.head.sha}/check-runs?filter=latest&per_page=100`));
     if (checks.total_count > 100) throw new Error('Too many checks to reconcile safely');
     const rows = requiredChecks.map((name) =>
-      checks.check_runs.find(
+      checks.check_runs.filter(
         (c) => c.name === name && c.head_sha === pr.head.sha && c.app.slug === 'github-actions',
       ),
     );
-    const failed = rows.find(
-      (c) => c?.status === 'completed' && !['success', 'skipped'].includes(c.conclusion ?? ''),
-    );
+    const failed = rows
+      .flat()
+      .find(
+        (c) => c.status === 'completed' && !['success', 'skipped'].includes(c.conclusion ?? ''),
+      );
     if (failed)
       return {
         status: 'failed' as const,
@@ -279,9 +281,13 @@ export function createHostedRepairWorker(input: {
       };
     const needsIos = files.some((f) => f.filename.startsWith('apps/ios/'));
     const passed = rows.every(
-      (c, i) =>
-        c?.status === 'completed' &&
-        (c.conclusion === 'success' || (i === 4 && !needsIos && c.conclusion === 'skipped')),
+      (group, i) =>
+        group.length > 0 &&
+        group.every(
+          (c) =>
+            c.status === 'completed' &&
+            (c.conclusion === 'success' || (i === 4 && !needsIos && c.conclusion === 'skipped')),
+        ),
     );
     if (!passed) {
       if (now().getTime() - new Date(patch.hostedPublishedAt ?? '').getTime() > 60 * 60000)
