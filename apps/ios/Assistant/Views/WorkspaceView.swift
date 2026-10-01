@@ -59,6 +59,7 @@ struct WorkspaceView: View {
 
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -97,7 +98,16 @@ struct WorkspaceView: View {
         .toolbarBackground(area == .skills ? .visible : .hidden, for: .navigationBar)
         .toolbarBackground(AssistantTheme.canvas(for: colorScheme), for: .navigationBar)
         .refreshable { await refresh() }
-        .task { await load() }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            await load()
+            while area == .improvements && !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(30)) }
+                catch { return }
+                guard !Task.isCancelled else { return }
+                await model.refreshWorkspace()
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 if area == .documents {
@@ -1768,7 +1778,7 @@ struct WorkspaceView: View {
         if area == .documents {
             if model.overview == nil { await model.refreshOverview() }
             if model.workspace == nil { await model.refreshWorkspace() }
-        } else if model.workspace == nil {
+        } else if model.workspace == nil || area == .improvements {
             await model.refreshWorkspace()
         }
     }

@@ -30,7 +30,7 @@ export interface RepairDetails {
   title: string;
   summary: string;
   diagnosis?: string;
-  category?: 'bug' | 'configuration' | 'provider' | 'answer' | 'unknown';
+  category?: 'bug' | 'feature' | 'configuration' | 'provider' | 'answer' | 'unknown';
   targetPaths?: string[];
   reproduction?: string;
   acceptance?: string;
