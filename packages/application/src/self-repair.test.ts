@@ -121,3 +121,17 @@ it('records one owner-authorized manual run and refuses active or completed work
     'Only queued',
   );
 });
+
+it('prevents a retry from forgetting an active hosted session awaiting cleanup', async () => {
+  const pending = {
+    ...issue,
+    status: 'failed' as const,
+    data: { ...issue.data, hostedCleanupPending: true, hostedSessionId: 'sess_saved' },
+  };
+  const update = vi.fn();
+  const repository = { list: async () => [pending], update } as unknown as SelfRepairRepository;
+  await expect(decideRepairIssue(repository, 'owner', pending.id, 'run_now')).rejects.toThrow(
+    'previous coding session',
+  );
+  expect(update).not.toHaveBeenCalled();
+});

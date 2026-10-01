@@ -1,7 +1,10 @@
+import { createHash } from 'node:crypto';
 import type { RepairDetails, RepairIssue, RepairStatus } from '@assistant/persistence';
 import { z } from 'zod';
 export interface RepairWorker {
-  dispatch(issue: RepairIssue): Promise<void>;
+  provider?: 'github' | 'openai_hosted';
+  dispatch(issue: RepairIssue): Promise<void> | Promise<Partial<RepairDetails>>;
+  cleanup?(issue: RepairIssue): Promise<Partial<RepairDetails>>;
   inspect(
     issue: RepairIssue,
   ): Promise<{ status: RepairStatus; patch: Partial<RepairDetails> } | null>;
@@ -9,6 +12,17 @@ export interface RepairWorker {
 }
 /** A preflight or explicit API rejection means no coding run was accepted. */
 export class RepairDispatchRejected extends Error {}
+/** Hosted retries get a fresh branch; a failed draft must never be overwritten or reused. */
+export function repairBranch(issue: RepairIssue, provider: RepairWorker['provider'] = 'github') {
+  const suffix =
+    provider === 'openai_hosted'
+      ? `-${createHash('sha256')
+          .update(issue.data.dispatchedAt ?? '')
+          .digest('hex')
+          .slice(0, 8)}`
+      : '';
+  return `codex/self-repair-${issue.id}${suffix}`;
+}
 /** Fixed GitHub origin and repository; audit contents cannot choose a network destination. */
 export function createGitHubRepairWorker(input: {
   token: string;
@@ -48,6 +62,7 @@ export function createGitHubRepairWorker(input: {
     return response.status === 204 ? null : response.json();
   }
   return {
+    provider: 'github',
     async dispatch(issue) {
       const repo = z.object({ private: z.boolean() }).parse(await api('', undefined, workerRepo));
       if (repo.private !== true)

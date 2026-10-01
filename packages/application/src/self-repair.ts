@@ -68,6 +68,10 @@ export async function decideRepairIssue(
 ) {
   const issue = (await repository.list(agentId)).find((row) => row.id === id);
   if (!issue) throw new Error('Repair issue not found');
+  if ((action === 'retry' || action === 'run_now') && issue.data.hostedCleanupPending)
+    throw new Error(
+      'The previous coding session is being stopped. Try again after the next automatic check.',
+    );
   if (
     action === 'dismiss' &&
     ['investigating', 'fixing', 'testing', 'pr_open'].includes(issue.status)
@@ -104,6 +108,13 @@ export async function decideRepairIssue(
             acceptance: undefined,
             branch: undefined,
             dispatchedAt: undefined,
+            workerProvider: undefined,
+            hostedSessionId: undefined,
+            hostedTurnId: undefined,
+            hostedSourceSha: undefined,
+            hostedCommitSha: undefined,
+            hostedPublishedAt: undefined,
+            hostedCleanupPending: undefined,
             prNumber: undefined,
             prUrl: undefined,
           }

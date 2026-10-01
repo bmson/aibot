@@ -15,6 +15,9 @@ describe('config', () => {
   it('applies defaults', () => {
     const config = loadConfig({});
     expect(config.QUEUE_DRIVER).toBe('local');
+    expect(config.SELF_REPAIR_PROVIDER).toBe('github');
+    expect(config.SELF_REPAIR_CODING_MODEL).toBe('gpt-6.1-sol');
+    expect(config.SELF_REPAIR_REASONING_EFFORT).toBe('medium');
     expect(config.AGENT_PORT).toBe(8787);
     expect(config.DATABASE_URL).toContain('postgres://');
     expect(config.POSTGRES_SOURCE_WRITES_FENCED).toBe(false);

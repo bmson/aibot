@@ -26,6 +26,7 @@ import { runDream } from '../workflow/dream.js';
 import { runAssistantHealthMonitor } from '../workflow/health-monitor.js';
 import { runSelfImprove } from '../workflow/improve.js';
 import { createGitHubRepairWorker } from '../workflow/repair-github.js';
+import { createHostedRepairWorker } from '../workflow/repair-hosted.js';
 import { runSelfMaintenance } from '../workflow/self-maintenance.js';
 import { runRepairCycle } from '../workflow/self-repair.js';
 import { runWatchSuggest } from '../workflow/watch-suggest.js';
@@ -654,7 +655,7 @@ export async function runCodeJob(
         deps.persistence?.selfRepair ?? createPostgresSelfRepairRepository(deps.db);
       const audit =
         deps.persistence?.selfRepairAudit ?? createPostgresAuditInvestigationRepository(deps.db);
-      const worker =
+      const legacyWorker =
         config.GITHUB_TOKEN && config.GITHUB_REPO
           ? createGitHubRepairWorker({
               token: config.GITHUB_TOKEN,
@@ -665,6 +666,36 @@ export async function runCodeJob(
               deploymentUrl: config.SELF_REPAIR_DEPLOYMENT_URL,
             })
           : undefined;
+      const hostedWorker =
+        config.SELF_REPAIR_OPENAI_API_KEY &&
+        config.SELF_REPAIR_GITHUB_TOKEN &&
+        config.GITHUB_TOKEN &&
+        config.GITHUB_REPO
+          ? createHostedRepairWorker({
+              apiKey: config.SELF_REPAIR_OPENAI_API_KEY,
+              githubToken: config.GITHUB_TOKEN,
+              publisherToken: config.SELF_REPAIR_GITHUB_TOKEN,
+              repo: config.GITHUB_REPO,
+              model: config.SELF_REPAIR_CODING_MODEL,
+              effort: config.SELF_REPAIR_REASONING_EFFORT,
+              allowExecutor: config.SELF_REPAIR_ALLOW_EXECUTOR,
+              deploymentUrl: config.SELF_REPAIR_DEPLOYMENT_URL,
+            })
+          : undefined;
+      const selectedWorker = config.SELF_REPAIR_PROVIDER === 'github' ? legacyWorker : hostedWorker;
+      if (!selectedWorker)
+        throw new Error(
+          'Self-repair is enabled but its selected coding provider credentials are not configured',
+        );
+      const worker = {
+        ...selectedWorker,
+        cleanup: hostedWorker?.cleanup,
+        // Reconcile each attempt through its original provider, including during rollback.
+        inspect: (issue: Parameters<typeof selectedWorker.inspect>[0]) =>
+          issue.data.workerProvider === 'openai_hosted'
+            ? (hostedWorker?.inspect(issue) ?? Promise.resolve(null))
+            : (legacyWorker?.inspect(issue) ?? Promise.resolve(null)),
+      };
       const dispatched = await runRepairCycle(
         {
           repository,
