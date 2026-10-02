@@ -667,13 +667,9 @@ export async function runCodeJob(
             })
           : undefined;
       const hostedWorker =
-        config.SELF_REPAIR_OPENAI_API_KEY &&
-        config.SELF_REPAIR_GITHUB_TOKEN &&
-        config.GITHUB_TOKEN &&
-        config.GITHUB_REPO
+        config.SELF_REPAIR_OPENAI_API_KEY && config.SELF_REPAIR_GITHUB_TOKEN && config.GITHUB_REPO
           ? createHostedRepairWorker({
               apiKey: config.SELF_REPAIR_OPENAI_API_KEY,
-              githubToken: config.GITHUB_TOKEN,
               publisherToken: config.SELF_REPAIR_GITHUB_TOKEN,
               repo: config.GITHUB_REPO,
               model: config.SELF_REPAIR_CODING_MODEL,

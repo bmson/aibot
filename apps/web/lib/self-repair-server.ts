@@ -6,7 +6,10 @@ export async function getSelfRepairOverview() {
   const config = loadConfig();
   return {
     enabled: config.SELF_REPAIR_ENABLED,
-    configured: Boolean(config.GITHUB_REPO && config.GITHUB_TOKEN),
+    configured: Boolean(
+      config.GITHUB_REPO &&
+        (config.SELF_REPAIR_PROVIDER === 'openai_hosted' || config.GITHUB_TOKEN),
+    ),
     dailyLimit: config.SELF_REPAIR_DAILY_LIMIT,
     issues: await listRepairIssues(repository, agentId, config.SELF_REPAIR_DAILY_LIMIT),
   };
@@ -19,7 +22,9 @@ export async function decideOwnerRepair(
   const config = loadConfig();
   if (
     action === 'run_now' &&
-    (!config.SELF_REPAIR_ENABLED || !config.GITHUB_REPO || !config.GITHUB_TOKEN)
+    (!config.SELF_REPAIR_ENABLED ||
+      !config.GITHUB_REPO ||
+      (config.SELF_REPAIR_PROVIDER !== 'openai_hosted' && !config.GITHUB_TOKEN))
   )
     throw new Error('Configure and enable code fixes before starting a manual run');
   return decideRepairIssue(repository, agentId, id, action);

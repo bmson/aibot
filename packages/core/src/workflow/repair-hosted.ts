@@ -49,7 +49,6 @@ class RepairRequestUncertain extends Error {}
 /** No application, publishing, or API credential is placed in the generated-code environment. */
 export function createHostedRepairWorker(input: {
   apiKey: string;
-  githubToken: string;
   publisherToken: string;
   repo: string;
   model: string;
@@ -63,7 +62,7 @@ export function createHostedRepairWorker(input: {
   const transport = input.fetch ?? fetch;
   const now = input.now ?? (() => new Date());
   const deployment = createGitHubRepairWorker({
-    token: input.githubToken,
+    token: input.publisherToken,
     repo: input.repo,
     workflow: 'self-repair.yml',
     ref: 'main',
@@ -75,7 +74,6 @@ export function createHostedRepairWorker(input: {
     path: string,
     method = 'GET',
     body?: unknown,
-    publish = false,
   ) {
     let response: Response;
     try {
@@ -87,7 +85,9 @@ export function createHostedRepairWorker(input: {
           method,
           signal: AbortSignal.timeout(30000),
           headers: {
-            authorization: `Bearer ${origin === 'openai' ? input.apiKey : publish ? input.publisherToken : input.githubToken}`,
+            // Hosted reads and writes target only the source repository. Its dedicated
+            // publisher already grants read access; the legacy Actions token is unrelated.
+            authorization: `Bearer ${origin === 'openai' ? input.apiKey : input.publisherToken}`,
             'content-type': 'application/json',
             ...(origin === 'openai'
               ? { 'OpenAI-Beta': 'agents=v1' }
@@ -106,9 +106,8 @@ export function createHostedRepairWorker(input: {
     path: string,
     method = 'GET',
     body?: unknown,
-    publish = false,
   ): Promise<unknown> {
-    const response = await request(origin, path, method, body, publish);
+    const response = await request(origin, path, method, body);
     if (!response.ok) {
       // Never store provider response bodies: they can echo a diagnostic brief or credentials.
       const error = `Self-repair ${origin} request failed (${response.status})`;
@@ -120,8 +119,8 @@ export function createHostedRepairWorker(input: {
     }
     return response.status === 204 ? null : response.json();
   }
-  const github = (path: string, method = 'GET', body?: unknown, publish = false) =>
-    json('github', `/repos/${input.repo}${path}`, method, body, publish);
+  const github = (path: string, method = 'GET', body?: unknown) =>
+    json('github', `/repos/${input.repo}${path}`, method, body);
   const attempt = (issue: RepairIssue) => `${issue.id}:${issue.data.dispatchedAt}`;
   async function findSession(issue: RepairIssue): Promise<string | undefined> {
     if (issue.data.hostedSessionId) return sessionId.parse(issue.data.hostedSessionId);
@@ -313,17 +312,11 @@ export function createHostedRepairWorker(input: {
             .optional(),
         })
         .parse(
-          await json(
-            'github',
-            '/graphql',
-            'POST',
-            {
-              query:
-                'mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }',
-              variables: { id: pr.node_id },
-            },
-            true,
-          ),
+          await json('github', '/graphql', 'POST', {
+            query:
+              'mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }',
+            variables: { id: pr.node_id },
+          }),
         );
       if (
         ready.errors?.length ||
@@ -378,18 +371,13 @@ export function createHostedRepairWorker(input: {
           : z
               .object({ sha })
               .parse(
-                await github(
-                  '/git/blobs',
-                  'POST',
-                  { content: change.content, encoding: 'base64' },
-                  true,
-                ),
+                await github('/git/blobs', 'POST', { content: change.content, encoding: 'base64' }),
               ).sha;
       tree.push({ path: change.path, mode: change.mode, type: 'blob', sha: blob });
     }
     const newTree = z
       .object({ sha })
-      .parse(await github('/git/trees', 'POST', { base_tree: base.tree.sha, tree }, true));
+      .parse(await github('/git/trees', 'POST', { base_tree: base.tree.sha, tree }));
     if (newTree.sha === base.tree.sha) throw new Error('Hosted repair produced no code change');
     // Stable author/committer timestamps make recovery produce exactly the same commit.
     const author = {
@@ -398,18 +386,13 @@ export function createHostedRepairWorker(input: {
       date: issue.data.dispatchedAt,
     };
     const commit = z.object({ sha }).parse(
-      await github(
-        '/git/commits',
-        'POST',
-        {
-          message: `Fix assistant issue ${issue.id}`,
-          tree: newTree.sha,
-          parents: [source],
-          author,
-          committer: author,
-        },
-        true,
-      ),
+      await github('/git/commits', 'POST', {
+        message: `Fix assistant issue ${issue.id}`,
+        tree: newTree.sha,
+        parents: [source],
+        author,
+        committer: author,
+      }),
     );
     const comparison = z
       .object({
@@ -434,7 +417,7 @@ export function createHostedRepairWorker(input: {
         throw new Error('Repair branch already contains another commit; manual review required');
     } else if (ref.status === 404) {
       try {
-        await github('/git/refs', 'POST', { ref: `refs/heads/${branch}`, sha: commit.sha }, true);
+        await github('/git/refs', 'POST', { ref: `refs/heads/${branch}`, sha: commit.sha });
       } catch {
         const existing = z
           .object({ object: z.object({ sha }) })
@@ -447,18 +430,13 @@ export function createHostedRepairWorker(input: {
     let pr = await findPull(issue);
     if (!pr) {
       try {
-        await github(
-          '/pulls',
-          'POST',
-          {
-            title: `Fix assistant issue ${issue.id.slice(0, 8)}`,
-            head: branch,
-            base: baseBranch,
-            draft: true,
-            body: `Implements a bounded code fix or feature for assistant issue ${issue.id}.\n\nPrepared in an OpenAI-hosted sandbox with a regression or acceptance test. This draft awaits independent repository CI, including lint, type checking, PostgreSQL, Firestore, build smoke, and applicable iOS checks. The assistant marks it ready only after those checks pass.\n\nThe owner reviews and merges. The private report and diagnosis remain in Improvements. No automatic merge or deployment.`,
-          },
-          true,
-        );
+        await github('/pulls', 'POST', {
+          title: `Fix assistant issue ${issue.id.slice(0, 8)}`,
+          head: branch,
+          base: baseBranch,
+          draft: true,
+          body: `Implements a bounded code fix or feature for assistant issue ${issue.id}.\n\nPrepared in an OpenAI-hosted sandbox with a regression or acceptance test. This draft awaits independent repository CI, including lint, type checking, PostgreSQL, Firestore, build smoke, and applicable iOS checks. The assistant marks it ready only after those checks pass.\n\nThe owner reviews and merges. The private report and diagnosis remain in Improvements. No automatic merge or deployment.`,
+        });
       } catch (err) {
         if (!(await findPull(issue))) throw err;
       }

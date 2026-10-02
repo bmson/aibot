@@ -6,7 +6,11 @@ import { decideOwnerImprovement, listOpenImprovements } from './workspace-review
 /** Owner endpoints supply only an ID; the proposal content is always loaded from the owned store. */
 export async function requestOwnerProposalCodeFix(id: string) {
   const config = loadConfig();
-  if (!config.SELF_REPAIR_ENABLED || !config.GITHUB_REPO || !config.GITHUB_TOKEN)
+  if (
+    !config.SELF_REPAIR_ENABLED ||
+    !config.GITHUB_REPO ||
+    (config.SELF_REPAIR_PROVIDER !== 'openai_hosted' && !config.GITHUB_TOKEN)
+  )
     throw new Error('Configure and enable code fixes before requesting one');
   const { repository, agentId } = await getSelfRepairService();
   const existing = (await repository.list(agentId)).find((issue) => issue.data.proposalId === id);
