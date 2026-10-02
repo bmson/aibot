@@ -39,6 +39,15 @@ function capabilityError(message: string) {
   return err;
 }
 
+function removedModelError() {
+  return Object.assign(
+    capabilityError(
+      '[SambaNova] The requested model (retired-model) is not available on SambaNova Cloud.',
+    ),
+    { statusCode: 410, isRetryable: false },
+  );
+}
+
 function makeRouter() {
   const router = new ModelRouter({} as Db, 'test-key');
   const primary = {
@@ -73,6 +82,17 @@ function stepResult() {
 }
 
 describe('isProviderCapabilityError', () => {
+  it('recognizes a removed model, including SDK retry wrappers', () => {
+    expect(isProviderCapabilityError(removedModelError())).toBe(true);
+    expect(
+      isProviderCapabilityError(Object.assign(removedModelError(), { statusCode: '410' })),
+    ).toBe(true);
+    const retryError = Object.assign(new Error('provider attempts failed'), {
+      name: 'AI_RetryError',
+      lastError: removedModelError(),
+    });
+    expect(isProviderCapabilityError(retryError)).toBe(true);
+  });
   it('detects provider request-shape rejections by name + message', () => {
     expect(
       isProviderCapabilityError(
@@ -108,7 +128,49 @@ describe('isProviderCapabilityError', () => {
 describe('ModelRouter timeout retry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stubs.generateText.mockReset();
+    stubs.generateObject.mockReset();
     stubs.reserveCost.mockResolvedValue({ ok: true, reservationId: 'reservation-1' });
+  });
+
+  it('step() switches once to the configured fallback when the primary model is removed', async () => {
+    const { router } = makeRouter();
+    stubs.generateText
+      .mockRejectedValueOnce(removedModelError())
+      .mockResolvedValueOnce(stepResult());
+    expect(await router.step('reason', { prompt: 'Check tomorrow.', tools: {} })).toMatchObject({
+      ok: true,
+      modelId: 'test/fallback',
+      degraded: true,
+    });
+    expect(stubs.generateText).toHaveBeenCalledTimes(2);
+    expect(stubs.releaseReservation).toHaveBeenCalledTimes(1);
+    expect(stubs.reserveCost).toHaveBeenCalledTimes(2);
+  });
+
+  it('step() preserves the removed-model error if the fallback also fails', async () => {
+    const { router } = makeRouter();
+    const error = removedModelError();
+    stubs.generateText
+      .mockRejectedValueOnce(error)
+      .mockRejectedValueOnce(new Error('fallback failed'));
+    await expect(router.step('reason', { prompt: 'Check tomorrow.', tools: {} })).rejects.toBe(
+      error,
+    );
+    expect(stubs.generateText).toHaveBeenCalledTimes(2);
+  });
+
+  it('generate() uses the configured fallback when the primary model is removed', async () => {
+    const { router } = makeRouter();
+    stubs.generateText
+      .mockRejectedValueOnce(removedModelError())
+      .mockResolvedValueOnce({ text: 'Complete.', finishReason: 'stop', usage: {} });
+    expect(await router.generate('reason', { prompt: 'Check tomorrow.' })).toMatchObject({
+      ok: true,
+      modelId: 'test/fallback',
+      text: 'Complete.',
+    });
+    expect(stubs.generateText).toHaveBeenCalledTimes(2);
   });
 
   it('reserves reasoning headroom when a reasoning model must call a tool', async () => {
@@ -270,7 +332,22 @@ describe('ModelRouter.object provider-capability fallback', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    stubs.generateText.mockReset();
+    stubs.generateObject.mockReset();
     stubs.reserveCost.mockResolvedValue({ ok: true, reservationId: 'reservation-1' });
+  });
+
+  it('uses the configured fallback for a removed primary model', async () => {
+    const { router } = makeRouter();
+    stubs.generateObject
+      .mockRejectedValueOnce(removedModelError())
+      .mockResolvedValueOnce({ object: { answer: 'ok' } });
+    expect(await router.object('reason', { prompt: 'go', schema })).toMatchObject({
+      ok: true,
+      modelId: 'test/fallback',
+      object: { answer: 'ok' },
+    });
+    expect(stubs.generateObject).toHaveBeenCalledTimes(2);
   });
 
   it('retries on the fallback model when a provider rejects json_schema', async () => {

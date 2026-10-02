@@ -568,8 +568,8 @@ function isModelCallTimeout(err: unknown): boolean {
 }
 
 /**
- * True when a provider rejected the *shape* of the request rather than
- * failing transiently — e.g. Novita serving deepseek-chat answers
+ * True when a provider cannot serve this model/request rather than
+ * failing transiently — e.g. a retired model returns HTTP 410, Novita serving deepseek-chat answers
  * "response format json_schema is not supported", and OpenRouter itself
  * reports an empty provider pool when routing preferences exclude everyone.
  * These never heal by retrying the same model: the cure is the role's
@@ -591,8 +591,10 @@ export function isProviderCapabilityError(err: unknown): boolean {
         statusCode === 402 ||
         statusCode === '402' ||
         /\bpayment method is required\b/i.test(candidate.message);
+      const modelRemoved = statusCode === 410 || statusCode === '410';
       if (
         paymentRequired ||
+        modelRemoved ||
         /not supported|no endpoints? (found|match)|no allowed providers/i.test(candidate.message)
       ) {
         return true;
@@ -1072,7 +1074,24 @@ export class ModelRouter {
   /** Non-streaming call with metering. Callers must handle { ok: false }. */
   async generate(role: ModelRole, opts: CallOptions): Promise<GenerateOutcome> {
     if (role === 'embed') throw new Error('generate() cannot use the embed role');
-    return this.withTimeoutRetry(opts, () => this.generateOnce(role, opts));
+    try {
+      return await this.withTimeoutRetry(opts, () => this.generateOnce(role, opts));
+    } catch (error) {
+      if (opts.forceFallback || !isProviderCapabilityError(error)) throw error;
+      try {
+        const primary = await this.route(role, { ...opts, forceFallback: false });
+        const fallback = await this.route(role, { ...opts, forceFallback: true });
+        if (!primary.ok || !fallback.ok || primary.modelId === fallback.modelId) throw error;
+        const outcome = await this.withTimeoutRetry({ ...opts, forceFallback: true }, () =>
+          this.generateOnce(role, { ...opts, forceFallback: true }),
+        );
+        if (!outcome.ok) throw error;
+        return outcome;
+      } catch {
+        // Keep the primary's permanent rejection authoritative if fallback cannot run.
+        throw error;
+      }
+    }
   }
 
   private async generateOnce(

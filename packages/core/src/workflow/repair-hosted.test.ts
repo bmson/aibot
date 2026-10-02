@@ -45,6 +45,7 @@ function harness() {
     deleteConflict: false,
     downloadFailure: false,
     wrongTurn: false,
+    invalidLegacyCredential: false,
     result: {
       baseSha: source,
       reproduced: true,
@@ -75,6 +76,14 @@ function harness() {
   const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
     calls.push({ url: u, init });
+    if (
+      state.invalidLegacyCredential &&
+      u.startsWith('https://api.github.com/') &&
+      new Headers(init?.headers).get('authorization') === 'Bearer read-token'
+    )
+      return new Response(null, { status: 401 });
+    if (u === 'https://assistant.example/api/health') return Response.json({ sha: source });
+    if (u.endsWith(`/compare/${source}...${source}`)) return Response.json({ status: 'identical' });
     if (u === 'https://api.github.com/repos/owner/repo')
       return Response.json({ private: false, default_branch: 'main' });
     if (u.endsWith('/commits/main')) return Response.json({ sha: source });
@@ -186,12 +195,12 @@ function harness() {
   });
   const worker = createHostedRepairWorker({
     apiKey: 'coding-key',
-    githubToken: 'read-token',
     publisherToken: 'publish-token',
     repo: 'owner/repo',
     model: 'gpt-6.1-sol',
     effort: 'medium',
     allowExecutor: false,
+    deploymentUrl: 'https://assistant.example',
     now: () => new Date(state.now),
     fetch: fetch as typeof globalThis.fetch,
   });
@@ -220,6 +229,20 @@ it('starts a detached hosted turn pinned to public source, without credentials o
   ])
     expect(String(create?.init?.body)).not.toContain(privateText);
   expect(h.calls.some((c) => c.url.includes('/actions/'))).toBe(false);
+});
+it('dispatches, reconciles and checks deployment when the legacy GitHub credential is invalid', async () => {
+  const h = harness();
+  h.state.invalidLegacyCredential = true;
+  expect(await h.worker.dispatch(issue)).toMatchObject({ hostedSessionId: 'sess_test' });
+  expect(await h.worker.inspect(issue)).toMatchObject({ status: 'testing' });
+  expect(await h.worker.deployed(source)).toBe(true);
+  const github = h.calls.filter((c) => c.url.startsWith('https://api.github.com/'));
+  expect(github.length).toBeGreaterThan(0);
+  expect(
+    github.every(
+      (c) => new Headers(c.init?.headers).get('authorization') === 'Bearer publish-token',
+    ),
+  ).toBe(true);
 });
 it('does not mistake an idle session for a successful turn', async () => {
   const h = harness();
