@@ -27,6 +27,7 @@ vi.mock('./workspace-reviews', () => ({
             title: 'Add a missing interaction',
             rationale: 'Synthetic missing button',
             change: { suggestion: 'Create an owned code-fix report' },
+            evidenceIds: ['00000000-0000-4000-a000-000000000001'],
           },
         ]
       : [],
@@ -77,6 +78,7 @@ it('converts an owned advisory into a durable queued report and deduplicates con
   expect(first.data).toMatchObject({
     source: 'proposal',
     proposalId: 'proposal',
+    sourceTaskId: '00000000-0000-4000-a000-000000000001',
     title: 'Add a missing interaction',
   });
   expect(first.status).toBe('reported');

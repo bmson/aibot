@@ -23,6 +23,7 @@ export async function requestOwnerProposalCodeFix(id: string) {
     source: 'proposal',
     key: proposal.id,
     proposalId: proposal.id,
+    sourceTaskId: proposal.evidenceIds?.find((evidenceId) => /^[a-f0-9-]{36}$/i.test(evidenceId)),
     title: proposal.title,
     summary: `Owner requested a code change from this improvement proposal.\n\nObserved pattern: ${proposal.rationale}\n\nRequested behavior: ${suggestion || proposal.title}`,
   });

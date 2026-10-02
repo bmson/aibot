@@ -1014,6 +1014,11 @@ struct WorkspaceView: View {
             }
             .buttonStyle(AssistantActionButtonStyle(kind: .primary, compact: true))
 
+            Button("Request code fix", systemImage: "wrench.and.screwdriver") {
+                updateImprovement(improvement, action: "request_code_fix")
+            }
+            .buttonStyle(AssistantActionButtonStyle(kind: .secondary, compact: true))
+
             Button("Dismiss", systemImage: "xmark") {
                 updateImprovement(improvement, action: "dismiss")
             }

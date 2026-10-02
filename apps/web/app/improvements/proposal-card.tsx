@@ -78,22 +78,19 @@ export function ProposalCard({
           <span className="shrink-0 text-xs text-muted">{proposal.createdLabel}</span>
         </div>
         <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-          {proposal.rationale ? (
-            <section className="min-w-0">
-              <h4 className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
-                Why this came up
-              </h4>
-              <p className="mt-1 text-sm leading-5 text-strong">{proposal.rationale}</p>
-            </section>
-          ) : null}
-          {proposal.suggestion ? (
-            <section className="min-w-0 rounded-xl bg-sunken/65 px-3 py-2.5">
-              <h4 className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
-                Proposed change
-              </h4>
-              <p className="mt-1 text-sm leading-5 text-strong">{proposal.suggestion}</p>
-            </section>
-          ) : null}
+          {[
+            ['Why this came up', proposal.rationale, 'min-w-0'],
+            ['Proposed change', proposal.suggestion, 'min-w-0 rounded-xl bg-sunken/65 px-3 py-2.5'],
+          ].map(([label, text, className]) =>
+            text ? (
+              <section key={label} className={className}>
+                <h4 className="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">
+                  {label}
+                </h4>
+                <p className="mt-1 text-sm leading-5 text-strong">{text}</p>
+              </section>
+            ) : null,
+          )}
         </div>
         <MetaLine
           segments={[
