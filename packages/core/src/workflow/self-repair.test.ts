@@ -263,7 +263,7 @@ describe('issue-to-PR flow', () => {
       expect(rows.get(issue.id)?.status).toBe('fixing');
     },
   );
-  it.each(['placeholder', 'invented paths'])(
+  it.each(['placeholder', 'invented paths', 'wildcard paths'])(
     'uses a distinct fallback for unusable %s output',
     async (kind) => {
       const { deps, object, rows, issue } = setup();
@@ -272,7 +272,12 @@ describe('issue-to-PR flow', () => {
         object: {
           category: 'bug',
           diagnosis: kind === 'placeholder' ? '...' : 'Review potential issues',
-          targetPaths: kind === 'invented paths' ? ['improvement/page', 'auto-solve/trigger'] : [],
+          targetPaths:
+            kind === 'invented paths'
+              ? ['improvement/page', 'auto-solve/trigger']
+              : kind === 'wildcard paths'
+                ? ['apps/**/components/**/Card*', 'packages/**/ui/**/card*']
+                : [],
           reproduction: kind === 'placeholder' ? '' : 'Open the review page',
           acceptance: 'Start the investigation',
         },
@@ -295,6 +300,28 @@ describe('issue-to-PR flow', () => {
     } finally {
       deadline.mockRestore();
     }
+  });
+  it('keeps the protected-path gate after retrying wildcard hints', async () => {
+    const { deps, object, rows, issue } = setup();
+    const brief = {
+      category: 'bug',
+      diagnosis: 'Review a possible UI defect',
+      reproduction: 'Open a synthetic card',
+      acceptance: 'Text should be left aligned',
+    };
+    object
+      .mockResolvedValueOnce({
+        ok: true,
+        object: { ...brief, targetPaths: ['apps/**/components/**/Card*'] },
+      } as never)
+      .mockResolvedValueOnce({
+        ok: true,
+        object: { ...brief, targetPaths: ['packages/tools/src/dispatcher.ts'] },
+      } as never);
+    await runRepairCycle(deps, 'owner', 'task', now);
+    expect(object).toHaveBeenCalledTimes(2);
+    expect(rows.get(issue.id)?.status).toBe('blocked');
+    expect(deps.worker?.dispatch).not.toHaveBeenCalled();
   });
   it('does not repeat triage when the fallback is the same model', async () => {
     const { deps, object, rows, issue } = setup();

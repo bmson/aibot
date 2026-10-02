@@ -4568,6 +4568,7 @@ struct SuggestionCard: View {
             }
             .frame(minHeight: 44, alignment: .leading)
         }
+        .multilineTextAlignment(.leading)
         .tint(AssistantTheme.inkMuted(for: colorScheme))
         .accessibilityIdentifier("assistant.suggestion.\(id).receipt")
     }
