@@ -10,6 +10,7 @@ export async function requestProposalCodeFix(id: string) {
     source: 'proposal',
     key: id,
     proposalId: id,
+    sourceTaskId: proposal.evidenceIds?.find((evidenceId) => /^[a-f0-9-]{36}$/i.test(evidenceId)),
     title: proposal.title,
     summary: [proposal.rationale, JSON.stringify(proposal.change)].join('\n'),
   });
