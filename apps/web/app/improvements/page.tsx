@@ -45,7 +45,11 @@ export default async function ImprovementsPage() {
         ) : (
           <div className={cardGridClass}>
             {proposals.map((proposal) => (
-              <ProposalCard key={proposal.id} proposal={proposal} />
+              <ProposalCard
+                key={proposal.id}
+                proposal={proposal}
+                canRequestFix={repairs.enabled && repairs.configured}
+              />
             ))}
           </div>
         )}

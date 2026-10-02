@@ -33,6 +33,9 @@ describe.skipIf(!localEmulator)(
       );
       vi.stubEnv('GCP_PROJECT', 'demo-assistant-test');
       vi.stubEnv('QUEUE_DRIVER', 'local');
+      vi.stubEnv('SELF_REPAIR_ENABLED', 'true');
+      vi.stubEnv('GITHUB_REPO', 'synthetic-owner/test-repo');
+      vi.stubEnv('GITHUB_TOKEN', 'test-only');
       auth.mobile.mockResolvedValue(true);
       ({ POST: post } = await import('../app/api/mobile/v1/improvements/[id]/route.js'));
       await store.doc('agents', agentId).set({ id: agentId, name: 'Assistant' });
@@ -113,6 +116,26 @@ describe.skipIf(!localEmulator)(
       );
     });
 
+    it('converts proposals once through the real Firestore repair store while SQL is offline', async () => {
+      const id = await seed('note');
+      const responses = await Promise.all([decide(id, 'request_fix'), decide(id, 'request_fix')]);
+      expect(responses.map((response) => response.status)).toEqual([200, 200]);
+      const bodies = await Promise.all(responses.map((response) => response.json()));
+      expect(bodies[0].repairIssueId).toBe(bodies[1].repairIssueId);
+      const repair = await store.doc('selfRepairIssues', bodies[0].repairIssueId).get();
+      expect(repair.get('agentId')).toBe(agentId);
+      expect(repair.get('status')).toBe('reported');
+      expect(repair.get('data.proposalId')).toBe(id);
+      expect(repair.get('data.manualRunRequestedAt')).toBeUndefined();
+      expect((await store.doc('improvementProposals', id).get()).get('status')).toBe('applied');
+      const repeat = await decide(id, 'request_fix');
+      expect(repeat.status).toBe(200);
+      expect((await repeat.json()).repairIssueId).toBe(bodies[0].repairIssueId);
+      const foreign = await seed('note', randomUUID());
+      expect((await decide(foreign, 'request_fix')).status).toBe(409);
+      expect((await store.doc('improvementProposals', foreign).get()).get('status')).toBe('open');
+    });
+
     it('applies model routing changes and fails closed for foreign proposals and erasure', async () => {
       await store.doc('modelRoles', 'reason').set({ role: 'reason', primaryModel: 'old/model' });
       await store.doc('models', 'new/model').set({ id: 'new/model', enabled: true });
@@ -132,6 +155,7 @@ describe.skipIf(!localEmulator)(
 
       const erasureId = await seed('note');
       await store.doc('privacyErasureJobs', agentId).set({ agentId, status: 'active' });
+      expect((await decide(erasureId, 'request_fix')).status).toBe(409);
       expect((await decide(erasureId, 'dismiss')).status).toBe(409);
       expect((await store.doc('improvementProposals', erasureId).get()).get('status')).toBe('open');
       await store.doc('privacyErasureJobs', agentId).delete();

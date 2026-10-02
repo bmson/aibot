@@ -433,3 +433,27 @@ describe('repair patch fence', () => {
     expect(repairPathBlocked('packages/core/src/workflow/self-repair.ts', true)).toBe(true);
   });
 });
+
+it('persists hosted dispatch identity and cleans up terminal sessions without redispatching', async () => {
+  const { deps, rows, issue } = setup();
+  if (!deps.worker) throw new Error('Worker fixture missing');
+  deps.worker.provider = 'openai_hosted';
+  deps.worker.dispatch = vi.fn(async () => ({
+    hostedSessionId: 'sess_saved',
+    hostedCleanupPending: true,
+  }));
+  await runRepairCycle(deps, 'owner', undefined, now);
+  expect(rows.get(issue.id)?.data).toMatchObject({
+    workerProvider: 'openai_hosted',
+    hostedSessionId: 'sess_saved',
+    hostedCleanupPending: true,
+  });
+  const saved = rows.get(issue.id);
+  if (!saved) throw new Error('Saved hosted fixture missing');
+  rows.set(issue.id, repairTransition(saved, 'failed', {}, now));
+  deps.worker.cleanup = vi.fn(async () => ({ hostedCleanupPending: false }));
+  await runRepairCycle(deps, 'owner', undefined, now);
+  expect(rows.get(issue.id)?.data.hostedCleanupPending).toBe(false);
+  expect(deps.worker.cleanup).toHaveBeenCalledOnce();
+  expect(deps.worker.dispatch).toHaveBeenCalledOnce();
+});

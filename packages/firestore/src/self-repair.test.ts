@@ -34,8 +34,27 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore repair ledger',
     ]);
     expect(claims.filter(Boolean)).toHaveLength(1);
     const claim = claims.find(Boolean)!;
-    const next = await repository.update(claim, 'fixing', { dispatchedAt: now.toISOString() }, now);
+    const next = await repository.update(
+      claim,
+      'fixing',
+      {
+        dispatchedAt: now.toISOString(),
+        workerProvider: 'openai_hosted',
+        hostedSessionId: 'sess_saved',
+        hostedTurnId: 'turn_saved',
+        hostedCleanupPending: true,
+      },
+      now,
+    );
     expect(next).not.toBeNull();
+    expect((await repository.list(agentId)).find((row) => row.id === claim.id)?.data).toMatchObject(
+      {
+        workerProvider: 'openai_hosted',
+        hostedSessionId: 'sess_saved',
+        hostedTurnId: 'turn_saved',
+        hostedCleanupPending: true,
+      },
+    );
     expect(await repository.update(claim, 'failed', {}, now)).toBeNull();
     await repository.update(next!, 'failed', {}, now);
     expect(await repository.claim(agentId, now, 1)).toBeNull();

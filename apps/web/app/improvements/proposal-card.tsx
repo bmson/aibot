@@ -1,7 +1,11 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import { applyProposalAction, dismissProposalAction } from '@/app/improvements/actions';
+import {
+  applyProposalAction,
+  dismissProposalAction,
+  requestProposalCodeFixAction,
+} from '@/app/improvements/actions';
 import {
   Badge,
   cardBodyClass,
@@ -12,7 +16,6 @@ import {
   MetaLine,
 } from '@/lib/ui';
 import { ActionButton } from '@/lib/ui-client';
-import { requestCodeFixAction } from './code-fix-action';
 
 export interface ProposalView {
   id: string;
@@ -32,14 +35,25 @@ const kindLabels: Record<string, string> = {
   note: 'Note',
 };
 
-export function ProposalCard({ proposal }: { proposal: ProposalView }) {
+export function ProposalCard({
+  proposal,
+  canRequestFix = false,
+}: {
+  proposal: ProposalView;
+  canRequestFix?: boolean;
+}) {
+  const requestFix = !proposal.applyable && canRequestFix;
+  const [error, setError] = useState('');
   const [pending, startTransition] = useTransition();
-  const [pendingAction, setPendingAction] = useState<string | null>(null);
-  const runAction = (name: string, action: () => Promise<unknown>) => {
+  const [pendingAction, setPendingAction] = useState<'apply' | 'dismiss' | null>(null);
+  const runAction = (name: 'apply' | 'dismiss', action: () => Promise<unknown>) => {
+    setError('');
     setPendingAction(name);
     startTransition(async () => {
       try {
         await action();
+      } catch {
+        setError('Could not complete this request. Please try again.');
       } finally {
         setPendingAction(null);
       }
@@ -48,6 +62,11 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
 
   return (
     <article className={`${cardShellClass} flex h-full flex-col`}>
+      {error && (
+        <p role="alert" className="px-5 pt-4 text-sm text-red-600">
+          {error}
+        </p>
+      )}
       <div className={`${cardBodyClass} flex-1`}>
         <div className={cardHeaderClass}>
           <div className="min-w-0">
@@ -81,41 +100,36 @@ export function ProposalCard({ proposal }: { proposal: ProposalView }) {
         />
       </div>
       <footer className={cardFooterClass}>
-        {[
-          {
-            name: 'apply',
-            label: proposal.applyable ? 'Approve & apply' : 'Acknowledge',
-            pendingLabel: 'Applying…',
-            title: proposal.applyable
-              ? 'Approve and enact this change'
-              : 'Acknowledge this advisory suggestion',
-            action: applyProposalAction,
-          },
-          {
-            name: 'fix',
-            label: 'Request code fix',
-            pendingLabel: 'Requesting…',
-            action: requestCodeFixAction,
-          },
-          {
-            name: 'dismiss',
-            label: 'Dismiss',
-            pendingLabel: 'Dismissing…',
-            action: dismissProposalAction,
-          },
-        ].map(({ name, label, pendingLabel, action, title }) => (
-          <ActionButton
-            key={name}
-            title={title}
-            variant={name === 'apply' ? 'primary' : 'outline'}
-            disabled={pending}
-            pending={pendingAction === name}
-            pendingLabel={pendingLabel}
-            onClick={() => runAction(name, () => action(proposal.id))}
-          >
-            {label}
-          </ActionButton>
-        ))}
+        <ActionButton
+          variant="primary"
+          disabled={pending}
+          pending={pendingAction === 'apply'}
+          pendingLabel={requestFix ? 'Queuing…' : 'Applying…'}
+          onClick={() =>
+            runAction('apply', () =>
+              requestFix
+                ? requestProposalCodeFixAction(proposal.id)
+                : applyProposalAction(proposal.id),
+            )
+          }
+          title={
+            requestFix
+              ? 'Create a code-fix report for automatic investigation'
+              : proposal.applyable
+                ? 'Approve and enact this change'
+                : 'Acknowledge this advisory suggestion'
+          }
+        >
+          {requestFix ? 'Request code fix' : proposal.applyable ? 'Approve & apply' : 'Acknowledge'}
+        </ActionButton>
+        <ActionButton
+          disabled={pending}
+          pending={pendingAction === 'dismiss'}
+          pendingLabel="Dismissing…"
+          onClick={() => runAction('dismiss', () => dismissProposalAction(proposal.id))}
+        >
+          Dismiss
+        </ActionButton>
       </footer>
     </article>
   );
