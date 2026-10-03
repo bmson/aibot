@@ -598,9 +598,64 @@ function failureDetails(evidence: ActionEvidence[]): string[] {
     );
 }
 
+/**
+ * What a person would call the step that failed. The tool's own name
+ * ("calendar.list_events") and its error text belong to the task record, not to
+ * the sentence the owner reads.
+ */
+const PLAIN_STEP: Record<ActionKind, string> = {
+  workspace: 'the document step',
+  spreadsheet: 'the spreadsheet step',
+  presentation: 'the presentation step',
+  outbound: 'sending the message',
+  email_draft: 'saving the email draft',
+  inbox_write: 'the inbox change',
+  application: 'the application',
+  calendar: 'the calendar change',
+  calendar_read: 'the calendar lookup',
+  inbox_read: 'the mailbox lookup',
+  research: 'the web lookup',
+  background: 'setting up the follow-up',
+  memory: 'saving that to memory',
+  approval: 'the approval request',
+};
+
+/**
+ * The reason a tool gave, if it is fit to repeat to a person: short, in words,
+ * with no identifiers, URLs, JSON or stack frames. A provider's whole error body
+ * is not.
+ */
+function plainCause(error: string | null | undefined): string {
+  const text = (error ?? '')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .replace(/^Error:\s*/u, '')
+    .replace(/[.\s]+$/u, '');
+  if (!text || text.length > 90) return '';
+  if (
+    /[{}<>[\]]|https?:|\bAI_\w|\w\.\w+\(|\bat \S+:\d+|^\w*Error:|did not return a successful result/u.test(
+      text,
+    )
+  )
+    return '';
+  return text;
+}
+
 export function transparentFailureResponse(evidence: ActionEvidence[]): string {
-  const failures = failureDetails(evidence);
-  const detail = failures.length ? failures.join('; ') : 'no successful tool result was returned';
+  const failed = evidence
+    .filter((item) => item.fromCurrentTask !== false && !successful(item))
+    .slice(-2);
+  const steps = [
+    ...new Set(
+      failed.map((item) => {
+        const kind = toolKind(item.toolName);
+        const step = kind ? PLAIN_STEP[kind] : 'one of the steps';
+        const cause = plainCause(item.error);
+        return `${step} didn't go through${cause ? ` (${cause})` : ''}`;
+      }),
+    ),
+  ];
+  const detail = steps.length ? steps.join(' and ') : 'none of the steps came back successful';
   return `I couldn't complete this because ${detail}. No external change was made.`;
 }
 

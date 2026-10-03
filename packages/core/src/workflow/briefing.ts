@@ -18,9 +18,11 @@ import { isUnparseableObjectError, type ModelRouter } from '../model-router/rout
 import { withSpan } from '../otel.js';
 import {
   collapseWhitespace,
+  isOwnerFacingTask,
   ownerDate,
   ownerDateTime,
   ownerEventWhen,
+  readableSender,
   truncateAtBoundary,
 } from '../owner-text.js';
 import {
@@ -480,6 +482,7 @@ function localDateTime(value: string, timeZone: string): string {
 function upcomingFrom(
   rows: ReadonlyArray<{
     fromEmail: string;
+    fromName?: string | null;
     dates: unknown;
     category: string;
     channelMessageId: string;
@@ -500,14 +503,23 @@ function upcomingFrom(
       found.push({
         iso,
         what,
-        from: row.fromEmail,
+        from: readableSender(row.fromName, row.fromEmail),
         category: row.category,
         // Stable across briefing runs, so the same date is proposed once.
         sourceRef: `${row.channelMessageId}:${index}`,
       });
     }
   }
-  return found.sort((a, b) => a.iso.localeCompare(b.iso)).slice(0, MAX_UPCOMING);
+  const seen = new Set<string>();
+  return found
+    .sort((a, b) => a.iso.localeCompare(b.iso))
+    .filter((entry) => {
+      const key = `${entry.iso}|${collapseWhitespace(entry.what).toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_UPCOMING);
 }
 
 /** The PostgreSQL reads behind the briefing: the same inputs the portable repository returns. */
@@ -672,9 +684,24 @@ export async function runBriefing(
         now,
       }),
     ]);
-    const { mail, attention, pending, goalDeltas, watchHits } = inputs;
+    const { mail, pending, goalDeltas, watchHits } = inputs;
+    // Only work the owner would recognise. A stalled scheduled job or an
+    // internal maintenance task is listed on Activity, not in their morning.
+    const attention = inputs.attention.filter((row) => isOwnerFacingTask(row.title));
 
-    const highlights = mail.filter((row) => row.importance >= 3).slice(0, MAX_HIGHLIGHTS);
+    // The same notice often arrives twice (a forwarded copy, a reminder resent);
+    // one line each is enough.
+    const seenMail = new Set<string>();
+    const highlights = mail
+      .filter((row) => row.importance >= 3)
+      .filter((row) => {
+        const key =
+          `${readableSender(row.fromName, row.fromEmail)}|${collapseWhitespace(row.subject)}`.toLowerCase();
+        if (seenMail.has(key)) return false;
+        seenMail.add(key);
+        return true;
+      })
+      .slice(0, MAX_HIGHLIGHTS);
     const upcoming = upcomingFrom(mail, now);
     const conflicts = calendar ? findConflicts(calendar.events, agent.timezone) : [];
     // Salience is judged against the owner's own addresses so an unanswered
@@ -748,7 +775,7 @@ export async function runBriefing(
       lines.push(
         `${lines.length ? '\n' : ''}Mail worth knowing about (showing ${highlights.length} of ${mail.length}):`,
         ...highlights.map((row) => {
-          const sender = collapseWhitespace(row.fromName || row.fromEmail);
+          const sender = readableSender(row.fromName, row.fromEmail);
           const subject = collapseWhitespace(row.subject);
           return `- ${sender}: "${subject}"`;
         }),
@@ -894,7 +921,10 @@ export async function runBriefing(
         mail.length > highlights.length
           ? `Mail worth reading (${highlights.length} of ${mail.length})`
           : 'Mail worth reading',
-        highlights.map((row) => ({ title: row.fromName || row.fromEmail, detail: row.subject })),
+        highlights.map((row) => ({
+          title: readableSender(row.fromName, row.fromEmail),
+          detail: row.subject,
+        })),
       ),
       listSection(
         'upcoming',

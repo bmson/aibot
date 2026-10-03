@@ -12,6 +12,7 @@ import { getRate, reconcileReservation } from '../../cost.js';
 import { type Plan, PlanSchema, type TaskState } from '../../events.js';
 import { codeJobName, runCodeJob } from '../../memory/jobs.js';
 import type { ModelRouter, ProposedToolCall } from '../../model-router/router.js';
+import { clarifyingQuestion } from '../../owner-text.js';
 import { deliveredChannels, markApprovalsNotified } from '../approvals.js';
 import {
   type ArtifactIntent,
@@ -513,10 +514,7 @@ export async function runPlanPhase(rc: RunContext): Promise<ExecuteResult | { pl
       });
     }
     if (plan?.action === 'clarify' && task.conversationId) {
-      const question =
-        plan.missingInfo.length > 0
-          ? `Before I proceed, I need to know: ${plan.missingInfo.join('; ')}`
-          : 'I need more detail before I can act on this — what exactly would you like me to do?';
+      const question = clarifyingQuestion(plan.missingInfo);
       window.push({ role: 'assistant', content: question } as ModelMessage);
       // An automatic goal session has no owner present to answer, so a
       // question is where the goal stops, not a completed run. Record it on

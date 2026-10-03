@@ -17,7 +17,13 @@ import { and, count, desc, eq, gte, isNotNull, isNull, lt, lte, or, sql } from '
 import { getAgent, postOwnerNotice } from '../chat.js';
 import { loadConfig } from '../config.js';
 import { withSpan } from '../otel.js';
-import { collapseWhitespace, ownerDateTime, truncateAtBoundary } from '../owner-text.js';
+import {
+  collapseWhitespace,
+  ownerDateTime,
+  sentenceCase,
+  shortPlace,
+  truncateAtBoundary,
+} from '../owner-text.js';
 import { listSituationPacks, type SituationPackView } from '../situations.js';
 import type { BriefingCalendarEvent, BriefingCalendarReader } from '../workflow/briefing.js';
 import type { ResponseCard } from '../workflow/response-cards.js';
@@ -234,7 +240,9 @@ export function eventLeadMoments(salient: readonly EventSalience[], now: Date): 
     // the sentence early.
     const summary = collapseWhitespace(scored.event.summary);
     const location = collapseWhitespace(scored.event.location ?? '');
-    const where = travels ? ` at ${location}` : '';
+    // The venue, not the postal address: the full address is on the card.
+    const place = shortPlace(scored.event.location ?? '');
+    const where = travels && place ? ` at ${place}` : '';
     // The headline already says where it is. Salience keeps `it is at …` as the
     // marker that decides the travel lead time above, but repeating the address
     // one clause later is how the owner ends up reading it twice.
@@ -244,8 +252,8 @@ export function eventLeadMoments(salient: readonly EventSalience[], now: Date): 
       // Keyed on the event and its start so a moved event earns a fresh nudge.
       key: `event-lead:${scored.event.eventId ?? scored.event.summary}:${scored.event.start}`,
       text:
-        `"${summary}" starts in ${inMinutes} minute${inMinutes === 1 ? '' : 's'}${where}.` +
-        (why.length > 0 ? ` ${collapseWhitespace(why.join('; '))}.` : ''),
+        `${summary} starts in ${inMinutes} minute${inMinutes === 1 ? '' : 's'}${where}.` +
+        (why.length > 0 ? ` ${sentenceCase(collapseWhitespace(why.join('; ')))}.` : ''),
       card: {
         kind: 'proactive-alert',
         id: `event-lead:${scored.event.eventId ?? scored.event.summary}:${scored.event.start}`,
@@ -435,7 +443,7 @@ function commitmentMoment(
   return {
     kind: 'commitment-due',
     key: `commitment-due:${row.id}`,
-    text: `"${title}" is due ${when}${nextAction ? ` — next: ${nextAction}` : ''}.`,
+    text: `"${title}" is due ${when}${nextAction ? ` — next: ${nextAction.replace(/[.\s]+$/u, '')}` : ''}.`,
     card: {
       kind: 'proactive-alert',
       id: `commitment-due:${row.id}`,

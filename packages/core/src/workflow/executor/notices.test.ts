@@ -1,6 +1,12 @@
 import type { TaskRow } from '@assistant/db';
-import { describe, expect, it } from 'vitest';
-import { noticeParts, taskBudgetPermissionRequest } from './notices.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  isBackgroundTask,
+  noticeParts,
+  notifyOwnerAndConversation,
+  taskBudgetPermissionRequest,
+} from './notices.js';
+import type { ExecutorDeps } from './types.js';
 
 describe('taskBudgetPermissionRequest', () => {
   it('proposes a bounded, runtime-calculated task cap and asks permission', () => {
@@ -45,5 +51,71 @@ describe('noticeParts', () => {
     expect(noticeParts('needs-attention', approval)).toBe(approval);
     const already = [{ type: 'notice', notice: 'response-contract' }];
     expect(noticeParts('parked', already)).toBe(already);
+  });
+});
+
+describe("background work stays out of the owner's chat and phone", () => {
+  const background = {
+    id: 'bg-task',
+    agentId: 'agent-1',
+    conversationId: null,
+    trust: 'assistant',
+  } as TaskRow;
+  const asked = {
+    ...background,
+    id: 'chat-task',
+    conversationId: 'chat-1',
+    trust: 'owner',
+  } as TaskRow;
+
+  function deps() {
+    const append = vi.fn(async (input: unknown) => ({ id: 'm1', ...(input as object) }));
+    const notifyOwner = vi.fn(async () => {});
+    const getOrCreate = vi.fn(async () => 'notifications-1');
+    return {
+      append,
+      notifyOwner,
+      getOrCreate,
+      deps: {
+        notifyOwner,
+        persistence: {
+          messages: { kind: 'message-repository', append },
+          notifications: { getOrCreate },
+        },
+      } as unknown as ExecutorDeps,
+    };
+  }
+
+  it('tells scheduled work from work the owner asked for', () => {
+    expect(isBackgroundTask(background)).toBe(true);
+    expect(isBackgroundTask(asked)).toBe(false);
+    expect(isBackgroundTask({ ...background, trust: 'owner' })).toBe(false);
+  });
+
+  it('logs a stalled scheduled job in Notifications and does not mirror or ping', async () => {
+    const { deps: d, append, notifyOwner, getOrCreate } = deps();
+    const result = await notifyOwnerAndConversation(d, background, 'It did not finish.');
+    expect(result).toEqual({ conversationNotified: true, ownerNotified: false });
+    expect(getOrCreate).toHaveBeenCalledWith('agent-1');
+    expect(append).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'notifications-1', taskId: 'bg-task' }),
+    );
+    expect(notifyOwner).not.toHaveBeenCalled();
+  });
+
+  it('still tells the owner about work they asked for, in their own conversation', async () => {
+    const { deps: d, append, notifyOwner } = deps();
+    const result = await notifyOwnerAndConversation(d, asked, "I couldn't finish that.");
+    expect(result).toEqual({ conversationNotified: true, ownerNotified: true });
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'chat-1' }));
+    expect(notifyOwner).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a provider outage so it renders as an interrupted response, not a question', async () => {
+    const { deps: d, append } = deps();
+    await notifyOwnerAndConversation(d, asked, "I couldn't finish that.", [], 'provider-failed');
+    const parts = JSON.stringify((append.mock.calls[0]?.[0] as { parts: unknown }).parts);
+    expect(parts).toContain('"notice":"provider-failed"');
+    expect(parts).not.toContain('"notice":"needs-attention"');
   });
 });

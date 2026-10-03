@@ -85,6 +85,25 @@ function eventTime(event: BriefingCalendarEvent, timeZone: string): string {
   return sameDay ? `${start} – ${ownerTime(event.end, timeZone)}` : start;
 }
 
+/**
+ * The owner's calendar day for an event, as a sortable key. Ordering by raw
+ * start instant is wrong for all-day events: their date is midnight UTC, which
+ * is the previous evening in California, so tomorrow's paycheck sorted ahead of
+ * tonight's practice and the brief read "Tomorrow" above "Today". Events keep
+ * their incoming order within a day (the sort is stable).
+ */
+function localDayOrder(event: BriefingCalendarEvent, timeZone: string): string {
+  const day = event.allDay
+    ? event.start.slice(0, 10)
+    : new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date(event.start));
+  return day;
+}
+
 function eventDay(event: BriefingCalendarEvent, timeZone: string, now: Date): string {
   // An all-day event is a calendar date; noon UTC keeps it on its own day.
   const value = event.allDay ? `${event.start.slice(0, 10)}T12:00:00Z` : event.start;
@@ -110,24 +129,29 @@ export function agendaSection(input: {
     type: 'agenda',
     title: 'Schedule',
     complete: input.complete,
-    items: input.events.slice(0, MAX_AGENDA).map((event) => {
-      const key = eventKey(event);
-      const location = tidy(event.location);
-      const note = notes.get(key);
-      const flag = conflicting.has(key) ? 'conflict' : note ? 'salient' : undefined;
-      return {
-        day: eventDay(event, input.timeZone, input.now),
-        time: eventTime(event, input.timeZone),
-        title: tidy(event.summary) || 'Untitled event',
-        ...(location ? { location } : {}),
-        ...(flag ? { flag } : {}),
-        ...(flag === 'conflict'
-          ? { note: 'Overlaps another event' }
-          : note
-            ? { note: truncateAtBoundary(note, DETAIL_LIMIT) }
-            : {}),
-      };
-    }),
+    items: [...input.events]
+      .sort((a, b) =>
+        localDayOrder(a, input.timeZone).localeCompare(localDayOrder(b, input.timeZone)),
+      )
+      .slice(0, MAX_AGENDA)
+      .map((event) => {
+        const key = eventKey(event);
+        const location = tidy(event.location);
+        const note = notes.get(key);
+        const flag = conflicting.has(key) ? 'conflict' : note ? 'salient' : undefined;
+        return {
+          day: eventDay(event, input.timeZone, input.now),
+          time: eventTime(event, input.timeZone),
+          title: tidy(event.summary) || 'Untitled event',
+          ...(location ? { location } : {}),
+          ...(flag ? { flag } : {}),
+          ...(flag === 'conflict'
+            ? { note: 'Overlaps another event' }
+            : note
+              ? { note: truncateAtBoundary(note, DETAIL_LIMIT) }
+              : {}),
+        };
+      }),
   };
 }
 

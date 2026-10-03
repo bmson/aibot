@@ -149,3 +149,171 @@ export function ownerEventWhen(
   }
   return `${ownerDateTime(event.start, timeZone, now)} → ${ownerDateTime(event.end, timeZone, now)}`;
 }
+
+/**
+ * A short, human line for an approval card in the chat.
+ *
+ * The stored approval summary is written for review, not for conversation: a
+ * call carries its whole brief ("… · May agree to: … · Never: … · May share: …")
+ * and a fetch carries a raw URL. Showing that in the transcript turns a
+ * one-line question — "Okay to call you?" — into a page of fine print. The full
+ * text stays on the approval row and on the Approvals page, where the owner goes
+ * to check what exactly they are agreeing to; this is the line the chat shows.
+ */
+export function approvalHeadline(summary: string, max = 110): string {
+  const text = collapseWhitespace(summary.replace(/\*\*|`/gu, ''));
+  // Everything after the first " · " is guardrails and fine print.
+  const lead = (text.split(' · ')[0] ?? text).trim();
+
+  const call = /^Call (.+?) for up to (\d+) min\b/iu.exec(lead);
+  if (call) {
+    const who = (call[1] ?? '').replace(/\s*\(\+?[\d\s().-]{7,}\)\s*$/u, '').trim();
+    const minutes = Number(call[2]);
+    return `Call ${who} for up to ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+  }
+
+  const page = /^(?:Fetch the public web page|Open)\s+[“"]?(https?:\/\/[^\s”"]+)[”"]?$/iu.exec(
+    lead,
+  );
+  if (page)
+    return `Open ${truncateAtBoundary((page[1] ?? '').replace(/^https?:\/\/(?:www\.)?/iu, ''), 80)}`;
+
+  return sentenceCase(truncateAtBoundary(lead || text, max));
+}
+
+/**
+ * What the owner reads in place of an approval card when only text can be shown.
+ * One thing is a question; several are a short list. No codes, no instructions
+ * about where to click — the card carries the buttons.
+ */
+export function approvalPrompt(headlines: readonly string[]): string {
+  const lines = headlines.map((line) => line.trim()).filter(Boolean);
+  if (lines.length === 0) return 'I need your okay on something.';
+  if (lines.length === 1) return `${lines[0]} — okay to go ahead?`;
+  return `A few things need your okay:\n${lines.map((line) => `- ${line}`).join('\n')}`;
+}
+
+export type FailureCause = 'provider' | 'billing' | 'internal';
+
+/**
+ * Sort a raw error into something worth telling a person. The owner does not
+ * need `AI_RetryError: Failed after 3 attempts` or a provider's JSON body; they
+ * need to know whether it is worth trying again, and whether it is theirs to fix.
+ */
+export function classifyFailure(error: unknown): FailureCause {
+  const text = String(error).toLowerCase();
+  if (/payment method|credit|billing|quota|insufficient|exhausted/u.test(text)) return 'billing';
+  if (
+    /rate.?limit|overload|temporar|timed? ?out|timeout|(?:code|status|http)\W{0,3}5\d\d|bad gateway|upstream|not available|ai_(?:apicall|retry)|api_?call|provider|unavailable/u.test(
+      text,
+    )
+  )
+    return 'provider';
+  return 'internal';
+}
+
+/**
+ * The one line a person gets when work they asked for could not be finished.
+ * First person, no error text, no page names — the raw error stays on the task,
+ * where Activity shows it to anyone who wants it.
+ */
+export function failureNotice(error: unknown): string {
+  switch (classifyFailure(error)) {
+    case 'provider':
+      return "I couldn't finish that — one of my AI providers is having trouble right now. Want me to try again in a bit?";
+    case 'billing':
+      return "I couldn't finish that — one of my AI providers needs attention on the billing side. It's logged in Activity.";
+    default:
+      return "I couldn't finish that — I hit a snag on my side. It's in Activity if you want me to retry.";
+  }
+}
+
+/**
+ * A task's name as a person would say it, or nothing. Task titles for scheduled
+ * work are the first 80 characters of the instruction the model was given —
+ * "Prepare the owner's morning brief. Check: (1) today's events on your calen…" —
+ * which reads as a leaked prompt the moment it is quoted back.
+ */
+export function ownerTaskLabel(title: string | null | undefined): string {
+  const text = collapseWhitespace(title ?? '');
+  if (!text || text.endsWith('…') || text.length > 60) return '';
+  if (/\b(?:the owner|owner's|check:|\(\d\))/iu.test(text)) return '';
+  return `“${text}”`;
+}
+
+/**
+ * Where something is, the way a person would say it in passing: the venue, not
+ * the postal address. A calendar location is usually "Venue\nStreet, City, ZIP,
+ * Country"; "starts in 30 minutes at Crocker Amazon 1669 Geneva Avenue, San
+ * Francisco, CA 94134" reads like a form, and the full address is on the card.
+ */
+export function shortPlace(location: string): string {
+  const lines = location
+    .split(/[\r\n]+/u)
+    .map(collapseWhitespace)
+    .filter(Boolean);
+  const first = lines[0] ?? '';
+  if (!first) return '';
+  // Several lines: the first is the venue. One line: everything before the
+  // first comma ("Laugavegur 12, Reykjavik" -> "Laugavegur 12").
+  const lead = lines.length > 1 ? first : (first.split(',')[0]?.trim() ?? first);
+  return truncateAtBoundary(lead, 60);
+}
+
+/** Start a sentence with a capital without touching the rest of it. */
+export function sentenceCase(text: string): string {
+  return text.replace(/^\p{Ll}/u, (letter) => letter.toLocaleUpperCase());
+}
+
+/**
+ * Is this the sort of task the owner would recognise? Scheduled automations are
+ * titled with the opening words of the instruction they were given, and the
+ * assistant's own maintenance jobs carry their internal names. Neither belongs
+ * in a list the owner reads — when one of them stalls, that is the assistant's
+ * housekeeping and the Activity page's business, not something to act on.
+ */
+export function isOwnerFacingTask(title: string | null | undefined): boolean {
+  const text = collapseWhitespace(title ?? '');
+  if (/^self[- .](?:repair|improve|maintain)/iu.test(text)) return false;
+  return ownerTaskLabel(text) !== '';
+}
+
+/**
+ * A sender as a person would name them. A display name wins. A bare address
+ * falls back to the part that means something: the tag after a `+` and any
+ * machine-generated token are dropped, and a do-not-reply mailbox is named for
+ * its domain ("donotreply+701544cc-…@parentsquare.com" is just "Parentsquare").
+ */
+export function readableSender(name: string | null | undefined, email: string): string {
+  const display = collapseWhitespace(name ?? '');
+  if (display) return display;
+  const address = collapseWhitespace(email);
+  const [rawLocal = '', domain = ''] = address.split('@');
+  const local = rawLocal.split('+')[0] ?? rawLocal;
+  const brand = domain.split('.').slice(-2, -1)[0] ?? '';
+  const automated =
+    /^(?:no[-_.]?reply|do[-_.]?not[-_.]?reply|notifications?|mailer|info|hello|team|support)$/iu.test(
+      local,
+    );
+  if ((automated || !local) && brand) return brand.charAt(0).toLocaleUpperCase() + brand.slice(1);
+  return local || address;
+}
+
+/**
+ * The question the owner is asked when work cannot start without them. The
+ * planner lists what is missing; this words it the way a person would text it —
+ * one question as a question, several as a short list — instead of
+ * "Before I proceed, I need to know: A; B; C", which reads as a form being
+ * rejected.
+ */
+export function clarifyingQuestion(missing: readonly string[]): string {
+  const items = missing.map((item) => collapseWhitespace(item)).filter(Boolean);
+  const ask = (item: string) => sentenceCase(item);
+  if (items.length === 0)
+    return 'I need a bit more detail before I can do this — what exactly would you like me to do?';
+  if (items.length === 1) {
+    const only = ask(items[0] ?? '');
+    return only.endsWith('?') ? `Quick question: ${only}` : `I need one thing from you: ${only}`;
+  }
+  return `A few quick questions:\n${items.map((item) => `- ${ask(item)}`).join('\n')}`;
+}

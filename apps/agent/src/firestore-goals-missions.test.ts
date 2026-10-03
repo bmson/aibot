@@ -314,12 +314,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)(
       expect(await executeTask(deps, session.id)).toMatchObject({ outcome: 'needs_attention' });
       const blocked = await store.doc('goals', goalId).get();
       expect(blocked.get('nextAction')).toBe(
-        'Waiting on the owner: Before I proceed, I need to know: the venue budget',
+        'Waiting on the owner: I need one thing from you: The venue budget',
       );
       expect(blocked.get('progress')).toBe('Shortlisted three venues.');
       expect((await readTask(session.id)).status).toBe('needs_attention');
       expect((await messagesIn(workChat)).map((row) => row.text)).toContain(
-        "This goal's automatic session is blocked until you answer: Before I proceed, I need to know: the venue budget",
+        "This goal's automatic session is blocked until you answer: I need one thing from you: The venue budget",
       );
     });
 

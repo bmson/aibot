@@ -2,6 +2,7 @@ import { type Db, type TaskRow, tasks } from '@assistant/db';
 import type { MaintenanceRepository, TaskRepository } from '@assistant/persistence';
 import { and, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { getOrCreateNotificationsConversation, persistMessage } from '../chat.js';
+import { ownerTaskLabel } from '../owner-text.js';
 import { markAttentionNotified } from './machine.js';
 
 /** Best-effort out-of-band push (SMS today; a no-op when unconfigured). */
@@ -11,14 +12,18 @@ export type OwnerPush = (input: {
   text: string;
 }) => Promise<void>;
 
-/** The owner-facing line for a task that is waiting on them, built from its own progress. */
+/**
+ * The owner-facing line for a task that is waiting on them, built from its own
+ * progress. A task's title is often the first words of the instruction it was
+ * given, so it is only quoted when it reads like a name.
+ */
 function attentionText(task: Pick<TaskRow, 'status' | 'title' | 'progress'>): string {
-  const label = task.title ? ` — "${task.title}"` : '';
+  const label = ownerTaskLabel(task.title);
   const detail = task.progress?.trim() ? ` ${task.progress.trim()}` : '';
   if (task.status === 'waiting_event') {
-    return `A mission is paused and waiting on you${label}.${detail} Wake it from the Activity page when you're ready.`;
+    return `${label ? `${label} is` : 'A mission is'} paused and waiting on you.${detail} You can wake it from Activity when you're ready.`;
   }
-  return `A task stopped and needs you${label}.${detail} Open it on the Activity page to retry, or tell me what to do.`;
+  return `${label ? `I got stuck on ${label}` : 'I got stuck on something'} and need you.${detail} Retry it from Activity, or tell me what to do.`;
 }
 
 /**
@@ -82,7 +87,8 @@ export async function renotifyStalledAttention(
         });
         notified = true;
       }
-      if (notifyOwner) {
+      // Background work reports to the log, not to the owner's chat or phone.
+      if (notifyOwner && !(task.trust === 'assistant' && !task.conversationId)) {
         notified =
           (await notifyOwner({ taskId: task.id, conversationId: task.conversationId, text })
             .then(() => true)
@@ -127,7 +133,8 @@ async function renotifyPortable(
           { type: 'notice', notice: 'needs-attention' },
         ],
       });
-      if (notifyOwner) {
+      // Background work reports to the log, not to the owner's chat or phone.
+      if (notifyOwner && !(task.trust === 'assistant' && !task.conversationId)) {
         notified =
           (await notifyOwner({ taskId: task.id, conversationId: task.conversationId, text })
             .then(() => true)

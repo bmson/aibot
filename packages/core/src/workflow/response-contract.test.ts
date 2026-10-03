@@ -536,7 +536,24 @@ describe('response execution contract', () => {
       },
     ]);
     expect(result.blocked).toBe(true);
-    expect(result.text).toContain('gmail.send');
+    // Said in the owner's words: the step that failed, not the tool's name.
+    expect(result.text).toContain("sending the message didn't go through");
+    expect(result.text).not.toContain('gmail.send');
+  });
+
+  it('keeps a short human cause but never repeats a provider body, a URL or a tool name', () => {
+    const failing = (error: string) =>
+      enforceResponseContract('I sent the text.', [
+        { toolName: 'sms.send', status: 'failed', result: null, error },
+      ]).text;
+    expect(failing('SMS provider rejected the request.')).toContain(
+      "sending the message didn't go through (SMS provider rejected the request)",
+    );
+    const noisy = failing(
+      'Upstream error from DeepInfra: {"error":{"message":"The request was rejected as invalid."}} https://x.test',
+    );
+    expect(noisy).toContain("sending the message didn't go through.");
+    expect(noisy).not.toMatch(/DeepInfra|\{|https?:|sms\.send/u);
   });
 
   it('blocks a claimed saved Gmail draft without a create-draft result', () => {

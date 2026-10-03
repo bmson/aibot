@@ -2,7 +2,7 @@ import { suggestionExpiresAt } from '@assistant/core';
 import { approvalRule } from '@assistant/core/approval-rule';
 import { decodeMessageCursor, encodeMessageCursor } from '@assistant/core/chat';
 import { compactChatMessageParts, stripBackgroundNoticeEcho } from '@assistant/core/chat-card';
-import { truncateAtBoundary } from '@assistant/core/owner-text';
+import { approvalHeadline, truncateAtBoundary } from '@assistant/core/owner-text';
 import {
   createPostgresApplicationChatPersistence,
   createPostgresGeneratedCardRepository,
@@ -519,7 +519,9 @@ export async function hydrateChatApprovals(
         if (rows.length === 0) return part;
         const outcomes = rows.map((row) => ({
           id: row.id,
-          summary: row.summary,
+          // The chat shows what is being asked in a few words; the full text is
+          // on the Approvals page.
+          summary: approvalHeadline(row.summary),
           status: settled(row),
         }));
         return {

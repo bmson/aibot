@@ -102,7 +102,7 @@ describe('eventLeadMoments', () => {
     const text = eventLeadMoments([travelling], NOW)[0]?.text ?? '';
     expect(text.match(/Laugavegur 12/g)).toHaveLength(1);
     expect(text).not.toContain('it is at');
-    expect(text).toContain('it falls outside your usual hours');
+    expect(text).toContain('It falls outside your usual hours.');
   });
 
   it('leaves no dangling full stop when the place was the only reason', () => {
@@ -110,7 +110,7 @@ describe('eventLeadMoments', () => {
       'it is at Laugavegur 12',
     ]);
     expect(eventLeadMoments([travelling], NOW)[0]?.text).toBe(
-      '"Dentist" starts in 35 minutes at Laugavegur 12.',
+      'Dentist starts in 35 minutes at Laugavegur 12.',
     );
   });
 

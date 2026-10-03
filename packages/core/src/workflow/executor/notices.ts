@@ -1,4 +1,9 @@
-import { createPostgresGoalRuntimeRepository, type Db, type TaskRow } from '@assistant/db';
+import {
+  createPostgresGoalRuntimeRepository,
+  createPostgresNotificationsConversationRepository,
+  type Db,
+  type TaskRow,
+} from '@assistant/db';
 import type { MessageRepository } from '@assistant/persistence';
 import { persistMessage } from '../../chat.js';
 import { compactChatMessageParts } from '../../chat-card.js';
@@ -54,7 +59,7 @@ export async function notifyOwnerOfDeliveredAnswer(
  * stopped and cannot continue without you". Both are things the owner has to
  * read and act on, so neither should look like conversation.
  */
-export type NoticeKind = 'parked' | 'needs-attention';
+export type NoticeKind = 'parked' | 'needs-attention' | 'provider-failed';
 
 /**
  * Add the structured marker that makes the chat render a notice as a card
@@ -131,6 +136,48 @@ export async function postConversationNotice(
 }
 
 /**
+ * Work with no conversation and the assistant's own trust: started by a
+ * schedule or a job rather than by anything the owner said.
+ */
+export function isBackgroundTask(task: Pick<TaskRow, 'conversationId' | 'trust'>): boolean {
+  return !task.conversationId && task.trust === 'assistant';
+}
+
+/**
+ * Log a notice where background work reports — the Notifications conversation —
+ * without mirroring it into the owner's chat or pinging their phone.
+ */
+export async function postBackgroundNotice(
+  deps: ExecutorDeps,
+  task: TaskRow,
+  text: string,
+  extraParts: unknown[] = [],
+  kind: NoticeKind = 'needs-attention',
+): Promise<boolean> {
+  try {
+    const conversationId = await (
+      deps.persistence?.notifications ?? createPostgresNotificationsConversationRepository(deps.db)
+    ).getOrCreate(task.agentId);
+    await persistMessage(deps.persistence?.messages ?? deps.db, {
+      conversationId,
+      taskId: task.id,
+      role: 'assistant',
+      origin: 'assistant',
+      parts: compactChatMessageParts(
+        text,
+        [{ type: 'text', text }, ...noticeParts(kind, extraParts)],
+        task.id,
+      ),
+      text,
+    });
+    return true;
+  } catch (err) {
+    console.error('background notice failed', err);
+    return false;
+  }
+}
+
+/**
  * Post the dashboard notice AND push it to the owner's channel for events that
  * would otherwise only be visible by opening the dashboard (permanent failure,
  * budget stall). Owner ping is best-effort: a delivery failure must never mask
@@ -141,7 +188,19 @@ export async function notifyOwnerAndConversation(
   task: TaskRow,
   text: string,
   extraParts: unknown[] = [],
+  kind: NoticeKind = 'needs-attention',
 ): Promise<{ conversationNotified: boolean; ownerNotified: boolean }> {
+  // Work the assistant started on its own — a scheduled brief, a nightly job —
+  // has no thread of its own and nobody waiting on it. When it stalls, that is
+  // a line in the Notifications log and a row in Activity, not a message in the
+  // owner's conversation and not a buzz on their phone. They did not ask for it,
+  // so its trouble is not theirs to be interrupted by.
+  if (isBackgroundTask(task)) {
+    return {
+      conversationNotified: await postBackgroundNotice(deps, task, text, extraParts, kind),
+      ownerNotified: false,
+    };
+  }
   // Every caller of this is an event the owner has to resolve — a permanent
   // failure, a budget stall, a blocked goal — so the chat gets the marker that
   // renders it as a waiting-on-you card instead of another assistant reply.
@@ -149,7 +208,7 @@ export async function notifyOwnerAndConversation(
     deps.persistence?.messages ?? deps.db,
     task,
     text,
-    noticeParts('needs-attention', extraParts),
+    noticeParts(kind, extraParts),
   );
   let ownerNotified = false;
   if (deps.notifyOwner) {
@@ -176,12 +235,14 @@ export async function notifyAttention(
   task: TaskRow,
   text: string,
   extraParts: unknown[] = [],
+  kind: NoticeKind = 'needs-attention',
 ): Promise<void> {
   const { conversationNotified, ownerNotified } = await notifyOwnerAndConversation(
     deps,
     task,
     text,
     extraParts,
+    kind,
   );
   if (conversationNotified || ownerNotified) {
     await markAttentionNotified(deps.persistence?.tasks ?? deps.db, task.id).catch((err) =>

@@ -23,7 +23,7 @@ import { detectPersonalReadRequest, type PersonalReadRequest } from './read-inte
  * v9: self-contained duration/interview-preparation questions stay tool-free.
  */
 // v10: identify exact owner-requested outcome spans for durable follow-through.
-export const PLANNER_VERSION = 10;
+export const PLANNER_VERSION = 11;
 
 /**
  * Prompts that are self-contained conceptual questions must stay inside the
@@ -124,7 +124,7 @@ export function plannerSystem(agent: AgentRow, task: TaskRow, tainted: boolean):
     "- 'workflow': multi-step work executable now with the available tools",
     "- 'mission': long-horizon work spanning days/weeks (watching, waiting, recurring checks)",
     "- 'schedule': a one-off or recurring future action",
-    "- 'clarify': you cannot act without more information from the owner — list missingInfo",
+    '- \'clarify\': you cannot act without more information from the owner — list missingInfo. Write each missingInfo item as one short question addressed to the owner in the second person ("What dates work for you?", never "Owner\'s availability"), the way a person would ask it in a text. Ask only what you truly cannot find yourself.',
     'Never ask for something the owner already answered earlier in the context, and never re-ask a question you already asked. Re-read the conversation for the answer before choosing clarify.',
     "Prefer acting on a reasonable default for reversible, internal choices. A missing fact is not automatically a reason to question the owner: choose 'workflow' when memory, contacts, Gmail, calendars, workspace files, or the public web can resolve it. Search those sources first. Choose 'clarify' only when no available source can determine the fact unambiguously (for example, a recipient email address cannot be resolved, the owner never supplied the desired time for a new meeting, or two contacts remain equally plausible). The executor must never guess an unresolved recipient, identity, date/time, or link.",
     "A request to LOOK UP the owner's schedule, an appointment/interview, or email is different: the missing date, time, provider, calendar, or account is the fact to search for, not information to request from the owner. Choose 'workflow', search the assistant's configured Gmail plus every calendar it can read, and report only successful tool results. Never ask which calendar, Google/Outlook provider, inbox, or account to use. No match is a valid factual result.",

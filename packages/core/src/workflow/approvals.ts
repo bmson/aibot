@@ -16,6 +16,7 @@ import type {
   ResolveApprovalResult,
 } from '@assistant/persistence';
 import { persistMessage } from '../chat.js';
+import { approvalHeadline, approvalPrompt } from '../owner-text.js';
 import { getQueueNotifier } from '../queue.js';
 
 export type {
@@ -153,11 +154,7 @@ export async function renotifyStalledApprovals(
         );
       }
       if (task.conversationId) {
-        const text = [
-          'This needs your approval before I act:',
-          ...notices.map((approval) => `- **[${approval.shortCode}]** ${approval.summary}`),
-          "Approve or deny it on the Approvals page — I'll pick up from there.",
-        ].join('\n');
+        const text = approvalPrompt(notices.map((approval) => approvalHeadline(approval.summary)));
         await persistMessage(messages, {
           conversationId: task.conversationId,
           taskId: task.id,
@@ -169,7 +166,7 @@ export async function renotifyStalledApprovals(
             type: 'approval',
             approvalId: approval.id,
             shortCode: approval.shortCode,
-            summary: approval.summary,
+            summary: approvalHeadline(approval.summary),
           })),
           text,
         });

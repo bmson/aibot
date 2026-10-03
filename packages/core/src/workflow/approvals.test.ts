@@ -132,7 +132,9 @@ describe('renotifyStalledApprovals (integration)', () => {
       .from(messages)
       .where(eq(messages.conversationId, fixture.conversationId));
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.text).toContain(fixture.shortCode);
+    // The chat reads a short question; the code rides on the card part for the buttons.
+    expect(rows[0]?.text).toContain('okay to go ahead?');
+    expect(JSON.stringify(rows[0]?.parts)).toContain(fixture.shortCode);
     expect(JSON.stringify(rows[0]?.parts)).toContain(fixture.approvalId);
 
     // Stamped — the next sweep must not spam the owner again.
@@ -191,7 +193,9 @@ describe('renotifyStalledApprovals (integration)', () => {
       .from(messages)
       .where(eq(messages.conversationId, fixture.conversationId));
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.text).toContain(fixture.shortCode);
+    // The chat reads a short question; the code rides on the card part for the buttons.
+    expect(rows[0]?.text).toContain('okay to go ahead?');
+    expect(JSON.stringify(rows[0]?.parts)).toContain(fixture.shortCode);
     expect(JSON.stringify(rows[0]?.parts)).toContain(fixture.approvalId);
 
     // Both legs stamped, so the next sweep leaves it alone — one card, not a

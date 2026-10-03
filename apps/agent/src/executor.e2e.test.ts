@@ -436,8 +436,10 @@ describe('executor end-to-end (integration, scripted model)', () => {
       .orderBy(messages.createdAt);
     const last = thread.at(-1);
     expect(last?.role).toBe('assistant');
-    expect(last?.text).toContain('approval');
-    expect(last?.text).toContain(approval?.shortCode ?? '@@missing@@');
+    // One short question; the code and buttons ride on the approval card part.
+    expect(last?.text).toContain('okay to go ahead?');
+    expect(last?.text).not.toContain('This needs your approval');
+    expect(JSON.stringify(last?.parts)).toContain(approval?.shortCode ?? '@@missing@@');
   });
 
   it('turns a model-invented approval notice into a real approval record', async (ctx) => {

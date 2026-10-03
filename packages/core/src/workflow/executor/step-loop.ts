@@ -14,6 +14,7 @@ import { recallRelevantContext, recentWindowStart } from '../../memory/recall.js
 import { recordRecallMetric } from '../../memory/recall-metrics.js';
 import { bumpSkillUse, recallSkills, renderSkillsBlock } from '../../memory/skills.js';
 import type { StepCallOutcome } from '../../model-router/router.js';
+import { approvalHeadline, approvalPrompt } from '../../owner-text.js';
 import { isSituationRequest } from '../../situations-schema.js';
 import { deliveredChannels, markApprovalsNotified } from '../approvals.js';
 import {
@@ -1274,19 +1275,18 @@ export async function runStepLoop(rc: RunContext, plan: Plan | null): Promise<Ex
         // first left the chat poller able to observe "waiting for approval"
         // for seconds while the card naming what was waiting did not exist
         // yet — it stopped polling and the card only appeared on a reload.
+        // The card and the line of prose say it in a few words; the full
+        // summary stays on the approval row and the Approvals page, where the
+        // owner checks the fine print (a call's whole brief, a raw URL).
         const conversationNotified = await postConversationNotice(
           deps.persistence?.messages ?? db,
           task,
-          [
-            'This needs your approval before I act:',
-            ...approvalNotices.map((n) => `- **[${n.shortCode}]** ${n.summary}`),
-            "Approve or deny it on the Approvals page — I'll pick up from there.",
-          ].join('\n'),
+          approvalPrompt(approvalNotices.map((n) => approvalHeadline(n.summary))),
           approvalNotices.map((notice) => ({
             type: 'approval',
             approvalId: notice.approvalId,
             shortCode: notice.shortCode,
-            summary: notice.summary,
+            summary: approvalHeadline(notice.summary),
           })),
         );
         let ownerNotified = false;

@@ -712,7 +712,11 @@ export async function runCodeJob(
               ? await deps.persistence.notifications.getOrCreate(task.agentId)
               : await getOrCreateNotificationsConversation(deps.db, task.agentId);
             const messages = deps.persistence?.messages ?? createPostgresMessageRepository(deps.db);
-            const saved = await messages.append({
+            // Repair progress is a log, not a conversation: it lives in
+            // Notifications and on the Improvements page. It is deliberately
+            // not mirrored into the owner's chat or sent to their phone — a
+            // single failing fix once produced a message every few minutes.
+            await messages.append({
               conversationId,
               taskId: task.id,
               role: 'assistant',
@@ -721,7 +725,6 @@ export async function runCodeJob(
               text,
               channelMessageId: `self-repair:${issue.id}:${issue.status}:${issue.data.history.at(-1)?.at ?? issue.updatedAt.toISOString()}`,
             });
-            if (saved) await pingOwner(deps.notifyOwner, { taskId: task.id, conversationId, text });
           },
         },
         task.agentId,
