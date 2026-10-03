@@ -270,7 +270,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Firestore maintenance swe
     const texts = (await store.collection('messages').get()).docs.map((doc) => doc.get('text'));
     expect(texts).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('A task stopped and needs you — "Nightly import".'),
+        expect.stringContaining('I got stuck on “Nightly import” and need you.'),
         expect.stringContaining('Budget: 85% of the daily cap used'),
       ]),
     );

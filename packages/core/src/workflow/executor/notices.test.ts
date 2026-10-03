@@ -114,7 +114,8 @@ describe("background work stays out of the owner's chat and phone", () => {
   it('marks a provider outage so it renders as an interrupted response, not a question', async () => {
     const { deps: d, append } = deps();
     await notifyOwnerAndConversation(d, asked, "I couldn't finish that.", [], 'provider-failed');
-    const parts = JSON.stringify((append.mock.calls[0]?.[0] as { parts: unknown }).parts);
+    const [call] = append.mock.calls;
+    const parts = JSON.stringify((call?.[0] as { parts?: unknown } | undefined)?.parts);
     expect(parts).toContain('"notice":"provider-failed"');
     expect(parts).not.toContain('"notice":"needs-attention"');
   });

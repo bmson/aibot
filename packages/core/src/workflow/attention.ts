@@ -2,7 +2,7 @@ import { type Db, type TaskRow, tasks } from '@assistant/db';
 import type { MaintenanceRepository, TaskRepository } from '@assistant/persistence';
 import { and, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { getOrCreateNotificationsConversation, persistMessage } from '../chat.js';
-import { ownerTaskLabel } from '../owner-text.js';
+import { ownerTaskLabel, sentenceCase } from '../owner-text.js';
 import { markAttentionNotified } from './machine.js';
 
 /** Best-effort out-of-band push (SMS today; a no-op when unconfigured). */
@@ -19,7 +19,10 @@ export type OwnerPush = (input: {
  */
 function attentionText(task: Pick<TaskRow, 'status' | 'title' | 'progress'>): string {
   const label = ownerTaskLabel(task.title);
-  const detail = task.progress?.trim() ? ` ${task.progress.trim()}` : '';
+  // Progress is the task's own last line, often without a full stop; end it
+  // like a sentence so the next one does not run on from it.
+  const note = task.progress?.trim().replace(/[.!?\s]+$/u, '');
+  const detail = note ? ` ${sentenceCase(note)}.` : '';
   if (task.status === 'waiting_event') {
     return `${label ? `${label} is` : 'A mission is'} paused and waiting on you.${detail} You can wake it from Activity when you're ready.`;
   }
