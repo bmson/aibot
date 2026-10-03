@@ -1801,6 +1801,61 @@ final class APIModelsTests: XCTestCase {
         XCTAssertEqual(content.relevanceScore, 0.65)
     }
 
+    /// The race behind "the Island stays after I approve": a present suspended
+    /// mid-way while the dismiss for the decision ran to completion, then
+    /// finished and put the Island back.
+    @MainActor
+    func testQueuedDismissIsTheLastWordOverAnEarlierPresent() async {
+        var visible = false
+        var order: [String] = []
+        let queue = LatestWinsQueue()
+        async let present: Void = queue.run(supersedable: true) {
+            try? await Task.sleep(for: .milliseconds(60))
+            visible = true
+            order.append("present")
+        }
+        try? await Task.sleep(for: .milliseconds(10))
+        async let dismiss: Void = queue.run(supersedable: false) {
+            visible = false
+            order.append("dismiss")
+        }
+        _ = await (present, dismiss)
+        XCTAssertFalse(visible)
+        XCTAssertEqual(order.last, "dismiss")
+    }
+
+    @MainActor
+    func testQueueRunsOneAtATimeAndKeepsOnlyTheNewestWaitingState() async {
+        var order: [String] = []
+        let queue = LatestWinsQueue()
+        async let busy: Void = queue.run(supersedable: false) {
+            order.append("busy-start")
+            try? await Task.sleep(for: .milliseconds(60))
+            order.append("busy-end")
+        }
+        try? await Task.sleep(for: .milliseconds(10))
+        async let first: Void = queue.run(supersedable: true) { order.append("first") }
+        async let second: Void = queue.run(supersedable: true) { order.append("second") }
+        _ = await (busy, first, second)
+        XCTAssertEqual(order, ["busy-start", "busy-end", "second"])
+    }
+
+    /// Every refresh path reconciles the Island, and each push used to carry a
+    /// fresh timestamp, so an unchanged approval still cost an ActivityKit
+    /// update. What the owner can see is what decides whether to push.
+    func testLiveActivityPushesOnlyWhatTheOwnerCanSeeChange() {
+        let early = LiveActivityManager.content(
+            thought: .needsYou, detail: "Send the note", pendingCount: 2, now: Date(timeIntervalSince1970: 0))
+        let later = LiveActivityManager.content(
+            thought: .needsYou, detail: "Send a different note", pendingCount: 2, now: Date(timeIntervalSince1970: 90))
+        XCTAssertNotEqual(early.state, later.state, "The timestamp always differs")
+        XCTAssertEqual(LiveActivityManager.shown(for: early), LiveActivityManager.shown(for: later))
+
+        let fewer = LiveActivityManager.content(
+            thought: .needsYou, detail: "Send the note", pendingCount: 1, now: Date(timeIntervalSince1970: 90))
+        XCTAssertNotEqual(LiveActivityManager.shown(for: early), LiveActivityManager.shown(for: fewer))
+    }
+
     func testOnlyOwnerDecisionsAreEligibleForTheSystemIsland() {
         XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .thinking, pendingCount: 0))
         XCTAssertFalse(LiveActivityManager.shouldPresentSystemActivity(for: .backgroundWork, pendingCount: 0))

@@ -29,6 +29,7 @@ import {
   getFirestoreInstallationStore,
   getWorkspace,
   getWorkspaceSettings,
+  MOBILE_BILLING_REFRESH_BUDGET_MS,
 } from './server';
 
 /** Compose the existing native workspace contract entirely from customer-owned stores. */
@@ -52,6 +53,7 @@ export async function getFirestoreMobileWorkspace(readinessSource: AgentReadines
     imports,
     capabilities,
     billing,
+    repairs,
   ] = await Promise.all([
     chat.listChatHistory(false),
     chat.listChatHistory(true),
@@ -68,7 +70,8 @@ export async function getFirestoreMobileWorkspace(readinessSource: AgentReadines
       assistantModuleMetas,
       config.ASSISTANT_MODULES,
     ),
-    getBillingOverview(),
+    getBillingOverview({ refreshBudgetMs: MOBILE_BILLING_REFRESH_BUDGET_MS }),
+    getSelfRepairOverview(),
   ]);
 
   const conversations = (history: typeof currentChats) =>
@@ -86,7 +89,7 @@ export async function getFirestoreMobileWorkspace(readinessSource: AgentReadines
 
   return {
     generatedAt: new Date().toISOString(),
-    repairs: await getSelfRepairOverview(),
+    repairs,
     chats: { current: conversations(currentChats), archived: conversations(archivedChats) },
     memory: projectMobileWorkspaceMemory(profile),
     skills,

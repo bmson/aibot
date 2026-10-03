@@ -174,6 +174,13 @@ final class AppModel: ObservableObject {
     /// An in-flight poll may predate a successful POST. Terminal decisions
     /// cannot be undone by that older snapshot; reset on server/account change.
     private var acceptedApprovalDecisions: [String: String] = [:]
+    /// Decisions whose request is still in flight. The card has already left
+    /// the local inbox; an overview read that started before the tap must not
+    /// bring it back — nor, with it, the Island.
+    private var approvalsBeingDecided: Set<String> = []
+    /// The re-read that follows a decision. It runs behind the control rather
+    /// than in front of it: the server has already said yes.
+    private var approvalReconciliation: Task<Void, Never>?
     /// The same guard for suggestion cards, set once an answer is confirmed. An
     /// accept or dismiss is final and stays; a snooze is protected until its
     /// deadline, so an older poll cannot make Later immediately reappear.
@@ -443,7 +450,7 @@ final class AppModel: ObservableObject {
             defaults.set(true, forKey: configuredKey)
 
             do {
-                overview = try await client.overview()
+                overview = withLocalApprovalDecisions(try await client.overview())
                 clearRecoveredError(from: .overview)
             } catch {
                 // Non-fatal: the app is connected and usable, the dashboard
@@ -545,6 +552,8 @@ final class AppModel: ObservableObject {
             defaults.set(normalized, forKey: serverKey)
             client = APIClient(configuration: configuration)
             acceptedApprovalDecisions.removeAll()
+            approvalsBeingDecided.removeAll()
+            approvalReconciliation?.cancel()
             suggestionAnswers.removeAll()
             cardRefreshMarkers.removeAll()
             await connect()
@@ -595,7 +604,7 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            overview = try await client.overview()
+            overview = withLocalApprovalDecisions(try await client.overview())
             clearRecoveredError(from: .overview)
         } catch {
             if reportFailure {
@@ -663,7 +672,7 @@ final class AppModel: ObservableObject {
     func refreshOverview(reportFailure: Bool = true) async {
         guard let client else { return }
         do {
-            overview = try await client.overview()
+            overview = withLocalApprovalDecisions(try await client.overview())
             clearRecoveredError(from: .overview)
             await reconcileBaselineActivity()
             await syncNotificationBadge()
@@ -983,8 +992,26 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Requests currently out for the workspace projection, so a prefetch never
+    /// duplicates the read a screen has just started.
+    private var workspaceRequestsInFlight = 0
+
+    /// Warm the workspace once the conversation is up. Memory, Settings, Costs,
+    /// Skills and the rest all draw on this one large projection, and the first
+    /// screen to open used to start it cold: the owner tapped, then waited for
+    /// the heaviest read the app makes. A short delay keeps it behind the
+    /// launch-critical requests; a screen that opens first simply wins.
+    func prefetchSecondaryScreens() async {
+        guard workspace == nil, workspaceRequestsInFlight == 0 else { return }
+        try? await Task.sleep(for: .seconds(1.5))
+        guard !Task.isCancelled, workspace == nil, workspaceRequestsInFlight == 0 else { return }
+        await refreshWorkspace(reportFailure: false)
+    }
+
     func refreshWorkspace(reportFailure: Bool = true) async {
         guard let client else { return }
+        workspaceRequestsInFlight += 1
+        defer { workspaceRequestsInFlight -= 1 }
         do {
             let loaded = try await client.workspace()
             workspace = loaded
@@ -1886,64 +1913,131 @@ final class AppModel: ObservableObject {
         await decideApproval(id: item.id, decision: decision)
     }
 
-    /// Keep the approval inbox responsive as soon as the server accepts a
-    /// decision. The original snapshot is restored on failure, so a tap never
-    /// makes an approval silently disappear.
-    private func optimisticallyResolveApproval(id: String) -> OverviewResponse? {
+    /// Take a decided approval out of the local inbox on the tap, ahead of the
+    /// server's answer. Returns the item and where it sat so a failure can put
+    /// it back exactly there.
+    private func optimisticallyResolveApproval(id: String) -> (item: PendingApproval, index: Int)? {
         guard let current = overview,
-              current.approvals.pending.contains(where: { $0.id == id }) else { return nil }
-        overview = OverviewResponse(
+              let index = current.approvals.pending.firstIndex(where: { $0.id == id }) else { return nil }
+        let item = current.approvals.pending[index]
+        overview = overviewReplacingPending(
+            current.approvals.pending.filter { $0.id != id },
+            in: current
+        )
+        return (item, index)
+    }
+
+    private func overviewReplacingPending(_ pending: [PendingApproval], in current: OverviewResponse) -> OverviewResponse {
+        OverviewResponse(
             generatedAt: current.generatedAt,
             activity: current.activity,
             goals: current.goals,
-            approvals: ApprovalInbox(
-                pending: current.approvals.pending.filter { $0.id != id },
-                resolved: current.approvals.resolved
-            ),
+            approvals: ApprovalInbox(pending: pending, resolved: current.approvals.resolved),
             documents: current.documents
         )
-        return current
+    }
+
+    /// Lay what was decided on this device over a read that may predate it.
+    /// An overview request that left before the tap comes back still listing
+    /// the approval; applied as-is it resurrects the card, and
+    /// `reconcileBaselineActivity` then raises the Island for a decision the
+    /// owner already made.
+    private func withLocalApprovalDecisions(_ response: OverviewResponse) -> OverviewResponse {
+        guard !approvalsBeingDecided.isEmpty || !acceptedApprovalDecisions.isEmpty,
+              response.approvals.pending.contains(where: {
+                  approvalsBeingDecided.contains($0.id) || acceptedApprovalDecisions[$0.id] != nil
+              }) else { return response }
+        return overviewReplacingPending(
+            response.approvals.pending.filter {
+                !approvalsBeingDecided.contains($0.id) && acceptedApprovalDecisions[$0.id] == nil
+            },
+            in: response
+        )
+    }
+
+    private func restorePendingApproval(_ removed: (item: PendingApproval, index: Int)) {
+        guard let current = overview,
+              !current.approvals.pending.contains(where: { $0.id == removed.item.id }) else { return }
+        var pending = current.approvals.pending
+        pending.insert(removed.item, at: min(removed.index, pending.count))
+        overview = overviewReplacingPending(pending, in: current)
     }
 
     private func setDecisionStatus(id: String, status: String) {
         acceptedApprovalDecisions[id] = status
-        for messageIndex in messages.indices {
-            for partIndex in messages[messageIndex].parts.indices {
-                messages[messageIndex].parts[partIndex].applyApprovalDecision(id: id, status: status)
+        // One pass, one write. This used to mutate `messages[i].parts[j]` in
+        // place for every part of every message, and each of those writes
+        // told every observer of the model that something changed — hundreds
+        // of invalidations of the transcript for a single tap.
+        var updated = messages
+        var changed = false
+        for index in updated.indices {
+            let next = updated[index].applyingApprovalDecisions([id: status])
+            if next != updated[index] {
+                updated[index] = next
+                changed = true
             }
         }
+        if changed { messages = updated }
     }
 
     private func performApprovalMutation(
         id: String,
         status: String,
+        refreshingWorkspace: Bool = false,
         operation: () async throws -> ApprovalResult
     ) async -> Bool {
         errorMessage = nil
-        let previousOverview = optimisticallyResolveApproval(id: id)
-        // The optimistic resolve already emptied the local inbox, but the
-        // Island and the badge were only told once the authoritative re-read
-        // came back. For the whole round-trip the decision was made, the card
-        // was gone from the app, and the system surface was still asking for
-        // it. Take them down on the same frame as the card.
-        await syncApprovalSurfaces()
+        approvalsBeingDecided.insert(id)
+        let removed = optimisticallyResolveApproval(id: id)
+        // The card leaves the app on this frame, so the Island and the badge
+        // leave with it — but the request does not wait for them. Ending an
+        // activity is a round-trip to the system, and it used to sit in front
+        // of the POST, which made every tap feel as slow as the Island is.
+        // The manager serialises its own work, so firing it here is safe.
+        Task { [weak self] in await self?.syncApprovalSurfaces() }
         do {
             let result = try await operation()
             guard result.ok else { throw APIError.server(status: 409, message: "The approval decision was not accepted.") }
             setDecisionStatus(id: id, status: status)
-            // The server approval row is authoritative. Re-read the inbox
-            // before returning so Chat and Approvals converge in the same
-            // turn, rather than briefly showing an optimistic "all clear"
-            // that can be replaced by a stale pending card later.
-            await refreshOverview(reportFailure: false)
-            await refreshDecisionMessages()
+            approvalsBeingDecided.remove(id)
+            // The server has accepted the decision, so the control is done.
+            // The inbox and the chat's decision cards converge from here in
+            // the background; they used to be awaited, which held every
+            // button on the screen disabled for two more round-trips.
+            scheduleApprovalReconciliation(refreshingWorkspace: refreshingWorkspace)
             return true
         } catch {
-            if let previousOverview { overview = previousOverview }
-            await syncApprovalSurfaces()
+            approvalsBeingDecided.remove(id)
+            if let removed { restorePendingApproval(removed) }
+            Task { [weak self] in await self?.syncApprovalSurfaces() }
             reportError(error)
             return false
         }
+    }
+
+    private func scheduleApprovalReconciliation(refreshingWorkspace: Bool = false) {
+        // Chained, not replaced: two quick decisions each get their re-read, and
+        // a standing approval's Settings refresh is never cancelled by the next tap.
+        let previous = approvalReconciliation
+        approvalReconciliation = Task { [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled else { return }
+            async let inbox: Void = self.refreshOverview(reportFailure: false)
+            async let decisions: Void = self.refreshDecisionMessages()
+            // A standing approval adds a rule to Settings. That is the heaviest
+            // read the app makes and nothing on the approval screen waits on it.
+            async let workspace: Void = refreshingWorkspace
+                ? self.refreshWorkspace(reportFailure: false)
+                : ()
+            _ = await (inbox, decisions, workspace)
+        }
+    }
+
+    /// Wait for the re-read a decision started. Tests use this; the app never
+    /// needs to, which is the point.
+    func settleApprovalReconciliation() async {
+        await approvalReconciliation?.value
     }
 
     /// Point the system approval surfaces at the local inbox as it stands now.
@@ -1983,11 +2077,9 @@ final class AppModel: ObservableObject {
 
     func approveAndRemember(id: String) async -> Bool {
         guard let client else { return false }
-        let succeeded = await performApprovalMutation(id: id, status: "approved") {
+        return await performApprovalMutation(id: id, status: "approved", refreshingWorkspace: true) {
             try await client.approveAndRemember(id: id)
         }
-        if succeeded { await refreshWorkspace(reportFailure: false) }
-        return succeeded
     }
 
     func editAndApprove(_ item: PendingApproval, payload: JSONValue) async -> Bool {
@@ -2439,10 +2531,20 @@ final class AppModel: ObservableObject {
                     let changed = !updates.messages.isEmpty || !updates.refreshed.isEmpty ||
                         !(updates.superseded?.isEmpty ?? true)
                     let assistantBefore = self.messages.filter { $0.role == .assistant }.count
+                    let decisionsBefore = self.openDecisionSignature
                     self.merge(updates.messages)
                     self.merge(updates.refreshed)
                     self.removeSuperseded(updates.superseded)
                     if let cursor = updates.nextCursor { self.cursor = cursor }
+                    // The Island, the badge and the Approvals list all read the
+                    // overview, and nothing but a foreground or a local tap ever
+                    // refreshed it. A decision parked or settled elsewhere — the
+                    // web, an SMS reply, an expiry — reached the chat here and
+                    // stopped, so the phone kept asking for something already
+                    // answered until the app was next reopened.
+                    if self.openDecisionSignature != decisionsBefore {
+                        Task { [weak self] in await self?.refreshOverview(reportFailure: false) }
+                    }
                     let assistantAfter = self.messages.filter { $0.role == .assistant }.count
                     if assistantAfter > assistantBefore,
                        self.messages.contains(where: { $0.role == .assistant && !$0.text.isEmpty }) {
@@ -2464,6 +2566,16 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Which messages still hold an open decision, and how many each. A change
+    /// between two reads means the inbox changed under the phone.
+    private var openDecisionSignature: [String: Int] {
+        var open: [String: Int] = [:]
+        for message in messages where message.hasPendingDecision {
+            open[message.id] = message.approvalSummary?.pendingCount ?? 1
+        }
+        return open
     }
 
     /// Decision state lives in approvals/tasks rather than in the persisted

@@ -163,6 +163,10 @@ struct RootView: View {
             model.scenePhaseDidChange(scenePhase)
             if model.hasSavedConnection && model.bootstrap == nil { await model.connect() }
         }
+        .task(id: model.bootstrap != nil) {
+            guard model.bootstrap != nil else { return }
+            await model.prefetchSecondaryScreens()
+        }
         .onChange(of: scenePhase) { _, phase in
             model.scenePhaseDidChange(phase)
             if phase == .active, model.bootstrap != nil {

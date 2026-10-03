@@ -9,6 +9,8 @@ final class StubURLProtocol: URLProtocol {
     enum Outcome {
         case failure(URLError)
         case success(status: Int, body: Data)
+        /// Answers after `delay`, to stand in for a slow endpoint.
+        case delayed(after: TimeInterval, status: Int, body: Data)
         case stream(body: Data)
     }
 
@@ -72,7 +74,21 @@ final class StubURLProtocol: URLProtocol {
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func stopLoading() {}
+    private let stopped = NSLock()
+    private var isStopped = false
+    override func stopLoading() { stopped.withLock { isStopped = true } }
+
+    private func respond(status: Int, body: Data) {
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: status,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["content-type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
 
     override func startLoading() {
         let method = request.httpMethod ?? "GET"
@@ -87,15 +103,12 @@ final class StubURLProtocol: URLProtocol {
             client?.urlProtocol(self, didLoad: body)
             // Remain open so the test can deliver later tokens while sending.
         case let .success(status, body):
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: status,
-                httpVersion: "HTTP/1.1",
-                headerFields: ["content-type": "application/json"]
-            )!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: body)
-            client?.urlProtocolDidFinishLoading(self)
+            respond(status: status, body: body)
+        case let .delayed(delay, status, body):
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [self] in
+                guard !stopped.withLock({ isStopped }) else { return }
+                respond(status: status, body: body)
+            }
         }
     }
 }
@@ -1161,6 +1174,7 @@ final class APIClientRetryTests: XCTestCase {
             XCTAssertTrue(accepted)
             XCTAssertEqual(model.messages[0].approvalSummary?.pendingCount, 0)
             XCTAssertEqual(model.messages[0].approvalSummary?.outcomes.first?.status, decision)
+            await model.settleApprovalReconciliation()
             XCTAssertEqual(StubURLProtocol.attempts, ["POST", "GET"])
         }
     }
@@ -1182,6 +1196,103 @@ final class APIClientRetryTests: XCTestCase {
             XCTAssertNotNil(model.errorMessage)
             XCTAssertEqual(StubURLProtocol.attempts, ["POST"])
         }
+    }
+
+    private func pendingApproval(id: String = "a1", summary: String = "Send the note") -> PendingApproval {
+        PendingApproval(
+            approval: ApprovalRecord(
+                id: id, taskId: "t-\(id)", shortCode: "A1", summary: summary, payload: .object([:]),
+                resolutionPayload: nil, status: "pending", requestedAt: "2026-10-02T10:00:00Z",
+                resolvedAt: nil, resolvedVia: nil, expiresAt: "2026-10-03T10:00:00Z"),
+            taskType: "chat_turn", taskTrust: "owner", toolName: "gmail.send", decision: .null)
+    }
+
+    private func overviewBody(pending: [PendingApproval]) throws -> Data {
+        try JSONEncoder().encode(OverviewResponse(
+            generatedAt: "2026-10-02",
+            activity: ActivityList(items: [], archivedCount: 0),
+            goals: GoalsDashboard(items: [], archivedCount: 0),
+            approvals: ApprovalInbox(pending: pending, resolved: []),
+            documents: DocumentsOverview(documents: [], stats: DocumentStats(total: 0, ready: 0, pending: 0, chunks: 0),
+                primaryConversationId: "test")))
+    }
+
+    /// The control is done when the server says yes. The inbox, the chat's
+    /// decision cards and (for a standing approval) Settings catch up behind
+    /// it — they used to be awaited in front of the owner, which held every
+    /// button disabled for two more round-trips.
+    @MainActor
+    func testApprovalReturnsAsSoonAsTheServerAcceptsIt() async throws {
+        let slow = try overviewBody(pending: [])
+        StubURLProtocol.prime([
+            .success(status: 200, body: Data(#"{"ok":true,"taskId":"t1","toolCallId":"tc1","approvalId":"a1"}"#.utf8)),
+            .delayed(after: 1.5, status: 200, body: slow)
+        ])
+        let model = AppModel(apiClient: makeClient())
+        let started = ContinuousClock.now
+        let accepted = await model.decideApproval(id: "a1", decision: "approved")
+        let elapsed = ContinuousClock.now - started
+
+        XCTAssertTrue(accepted)
+        XCTAssertLessThan(elapsed, .milliseconds(750), "The decision waited on the inbox re-read")
+        await model.settleApprovalReconciliation()
+        XCTAssertEqual(StubURLProtocol.attempts, ["POST", "GET"], "The re-read still happens, just not in front of the control")
+    }
+
+    @MainActor
+    func testStandingApprovalDoesNotWaitOnTheWorkspaceRead() async throws {
+        StubURLProtocol.prime([
+            .success(status: 200, body: Data(#"{"ok":true,"taskId":"t1","toolCallId":"tc1","approvalId":"a1"}"#.utf8)),
+            .delayed(after: 1.5, status: 401, body: Data()),
+            .delayed(after: 1.5, status: 401, body: Data())
+        ])
+        let model = AppModel(apiClient: makeClient())
+        let started = ContinuousClock.now
+        let accepted = await model.approveAndRemember(id: "a1")
+        let elapsed = ContinuousClock.now - started
+
+        XCTAssertTrue(accepted)
+        XCTAssertLessThan(elapsed, .milliseconds(750))
+        await model.settleApprovalReconciliation()
+        XCTAssertEqual(StubURLProtocol.attempts.first, "POST")
+        XCTAssertTrue(StubURLProtocol.urls.contains { $0.path.hasSuffix("/workspace") })
+    }
+
+    /// An overview request that left before the tap comes back still listing
+    /// the approval. Applied as it arrived it put the card back, and with it
+    /// the Island the owner had just dismissed.
+    @MainActor
+    func testOverviewReadFromBeforeTheTapCannotResurrectADecidedApproval() async throws {
+        let stale = try overviewBody(pending: [pendingApproval()])
+        StubURLProtocol.prime([.success(status: 200, body: stale)])
+        let model = AppModel(apiClient: makeClient())
+        await model.refreshOverview()
+        XCTAssertEqual(model.pendingApprovalCount, 1)
+
+        StubURLProtocol.prime([
+            .success(status: 200, body: Data(#"{"ok":true,"taskId":"t1","toolCallId":"tc1","approvalId":"a1"}"#.utf8)),
+            .success(status: 200, body: stale)
+        ])
+        let accepted = await model.decideApproval(id: "a1", decision: "approved")
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(model.pendingApprovalCount, 0, "The card leaves on the tap")
+        await model.settleApprovalReconciliation()
+        XCTAssertEqual(model.pendingApprovalCount, 0, "A read that predates the decision must not bring it back")
+    }
+
+    @MainActor
+    func testRejectedDecisionPutsTheApprovalBackWhereItWas() async throws {
+        let first = pendingApproval(id: "a1", summary: "First")
+        let second = pendingApproval(id: "a2", summary: "Second")
+        StubURLProtocol.prime([.success(status: 200, body: try overviewBody(pending: [first, second]))])
+        let model = AppModel(apiClient: makeClient())
+        await model.refreshOverview()
+
+        StubURLProtocol.prime([.failure(URLError(.timedOut))])
+        let accepted = await model.decideApproval(id: "a1", decision: "approved")
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(model.overview?.approvals.pending.map(\.id), ["a1", "a2"])
+        XCTAssertNotNil(model.errorMessage)
     }
 
     private func suggestionMessage(id: String = "suggestion-message", status: String? = nil) -> ChatMessage {

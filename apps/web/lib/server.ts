@@ -191,10 +191,19 @@ export function getModelProviderPorts(): ModelProviderPorts {
 }
 
 /** Shared by the web Costs page and native workspace, with durable hourly snapshots. */
-export function getBillingOverview() {
+/**
+ * A cache miss refreshes from OpenRouter and BigQuery, which can take ten
+ * seconds. The phone's workspace payload feeds every secondary screen, so none
+ * of them may wait on that: past this budget the last snapshot is served and
+ * the refresh finishes into the cache for the next read.
+ */
+export const MOBILE_BILLING_REFRESH_BUDGET_MS = 2_000;
+
+export function getBillingOverview(options: { refreshBudgetMs?: number } = {}) {
   const config = loadConfig();
   return getProviderBilling({
     config,
+    ...(options.refreshBudgetMs === undefined ? {} : { refreshBudgetMs: options.refreshBudgetMs }),
     models: getModelProviderPorts(),
     cache:
       config.PERSISTENCE_DRIVER === 'firestore'

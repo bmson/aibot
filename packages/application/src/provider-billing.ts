@@ -85,6 +85,14 @@ export interface BillingPorts {
   fetch?: typeof fetch;
   accessToken?: () => Promise<string>;
   now?: () => Date;
+  /**
+   * How long a caller will wait on a provider refresh before settling for the
+   * last snapshot. A cached report is served at once; this bounds the miss.
+   * The refresh itself keeps running and lands in the cache for the next read,
+   * so a slow provider costs one stale answer instead of a stalled screen.
+   * Unset waits for the provider, which is what a background job wants.
+   */
+  refreshBudgetMs?: number;
 }
 
 const HOUR = 3_600_000;
@@ -151,7 +159,23 @@ async function cached(
     requests.set(ports.cache, pendingForStore);
   }
   const existing = pendingForStore.get(key);
-  if (existing) return existing;
+  // Reports from the snapshot already in hand, for a caller that will not wait.
+  const whileRefreshing = (): ProviderBilling => {
+    const previous =
+      saved?.report?.period === base.period && saved.report.fetchedAt ? saved.report : null;
+    return previous
+      ? {
+          ...previous,
+          status: 'stale',
+          message: 'Refreshing from the provider. Showing the last snapshot.',
+        }
+      : {
+          ...base,
+          status: 'unavailable',
+          message: 'Provider data is still loading. Check again in a moment.',
+        };
+  };
+  if (existing) return withinBudget(existing, ports.refreshBudgetMs, whileRefreshing);
   const run = async () => {
     let report: ProviderBilling;
     try {
@@ -188,7 +212,29 @@ async function cached(
   };
   const pending = run().finally(() => pendingForStore.delete(key));
   pendingForStore.set(key, pending);
-  return pending;
+  return withinBudget(pending, ports.refreshBudgetMs, whileRefreshing);
+}
+
+/** Resolve with `fallback()` if `pending` takes longer than `budgetMs`; never rejects on its behalf. */
+function withinBudget(
+  pending: Promise<ProviderBilling>,
+  budgetMs: number | undefined,
+  fallback: () => ProviderBilling,
+): Promise<ProviderBilling> {
+  if (budgetMs === undefined || !Number.isFinite(budgetMs) || budgetMs < 0) return pending;
+  return new Promise<ProviderBilling>((resolve, reject) => {
+    const timer = setTimeout(() => resolve(fallback()), budgetMs);
+    pending.then(
+      (report) => {
+        clearTimeout(timer);
+        resolve(report);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function json(request: typeof fetch, url: string, init: RequestInit = {}): Promise<unknown> {

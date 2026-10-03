@@ -189,6 +189,44 @@ describe('provider billing without guessed totals', () => {
     expect(nextMonth[0]?.lines).toEqual([]);
   });
 
+  it('serves the last snapshot instead of waiting out a slow provider refresh', async () => {
+    const p = ports();
+    const request = vi.fn(async () => response({ jobComplete: true, rows: [row()] }));
+    p.fetch = request;
+    expect((await getProviderBilling(p))[0]?.status).toBe('reported');
+
+    // The hour is up and BigQuery is slow: the caller gets last hour's numbers
+    // inside its budget, not whenever the query finishes.
+    p.now = () => new Date(now.getTime() + 3_600_001);
+    let finish: (value: Response) => void = () => {};
+    request.mockImplementation(() => new Promise<Response>((resolve) => (finish = resolve)));
+    p.refreshBudgetMs = 20;
+    const started = Date.now();
+    const meanwhile = await getProviderBilling(p);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(meanwhile[0]?.status).toBe('stale');
+    expect(meanwhile[0]?.lines[0]?.net).toBe(7);
+    expect(meanwhile[0]?.message).toContain('Refreshing');
+
+    // The refresh was not abandoned: it lands in the cache for the next read.
+    finish(response({ jobComplete: true, rows: [row('USD', '20', '-3', '17')] }));
+    await vi.waitFor(async () => {
+      p.refreshBudgetMs = undefined;
+      expect((await getProviderBilling(p))[0]?.lines[0]?.net).toBe(17);
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('says it is still loading when there is no snapshot to fall back on', async () => {
+    const p = ports();
+    p.fetch = vi.fn(() => new Promise<Response>(() => {}));
+    p.refreshBudgetMs = 20;
+    const [google] = await getProviderBilling(p);
+    expect(google?.status).toBe('unavailable');
+    expect(google?.lines).toEqual([]);
+    expect(google?.message).toContain('still loading');
+  });
+
   it('isolates billing scopes and surfaces newly connected providers without invented prices', async () => {
     const p = ports();
     p.config.GCP_BILLING_EXPORT_TABLE = '';

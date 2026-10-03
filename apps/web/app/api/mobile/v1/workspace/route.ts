@@ -10,7 +10,13 @@ import { getAgentReadinessSource } from '@/lib/agent-readiness-source';
 import { capabilityStatus, getCapabilityDiagnostics } from '@/lib/capabilities';
 import { getFirestoreMobileWorkspace } from '@/lib/firestore-mobile-workspace';
 import { getSelfRepairOverview } from '@/lib/self-repair-server';
-import { getApplication, getBillingOverview, getDb, getWorkspaceSettings } from '@/lib/server';
+import {
+  getApplication,
+  getBillingOverview,
+  getDb,
+  getWorkspaceSettings,
+  MOBILE_BILLING_REFRESH_BUDGET_MS,
+} from '@/lib/server';
 import { isMobileAuthed, mobileJson, mobileUnauthorized } from '@/mobile-auth';
 
 export const dynamic = 'force-dynamic';
@@ -51,7 +57,7 @@ export async function GET(request: Request): Promise<Response> {
     application.listAnomalies(),
     application.listImprovementProposals(),
     application.getImports(),
-    getBillingOverview(),
+    getBillingOverview({ refreshBudgetMs: MOBILE_BILLING_REFRESH_BUDGET_MS }),
   ]);
   const diagnosticsByModule = new Map(
     capabilityDiagnostics.diagnostics.map((diagnostic) => [diagnostic.module, diagnostic]),
