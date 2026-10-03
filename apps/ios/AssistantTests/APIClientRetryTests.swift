@@ -455,7 +455,7 @@ final class APIClientRetryTests: XCTestCase {
                         .navigationTitle("Edit details")
                     }
                 }
-                .environmentObject(model).environment(\.colorScheme, scheme)
+                .environment(model).environment(\.colorScheme, scheme)
                 .environment(\.dynamicTypeSize, size)
                 window.rootViewController = UIHostingController(rootView: content)
                 window.isHidden = false
@@ -515,7 +515,7 @@ final class APIClientRetryTests: XCTestCase {
             window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
             window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
             window.rootViewController = UIHostingController(rootView:
-                NavigationStack { MemoryView() }.environmentObject(model)
+                NavigationStack { MemoryView() }.environment(model)
                     .environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, size))
             window.isHidden = false
             defer { window.isHidden = true; window.rootViewController = nil }
@@ -803,7 +803,7 @@ final class APIClientRetryTests: XCTestCase {
             window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
             window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
             window.rootViewController = UIHostingController(rootView:
-                NavigationStack { RelationshipGraphScreen() }.environmentObject(model)
+                NavigationStack { RelationshipGraphScreen() }.environment(model)
                     .environment(\.colorScheme, scheme).environment(\.dynamicTypeSize, size))
             window.isHidden = false
             defer { window.isHidden = true; window.rootViewController = nil }
@@ -833,7 +833,7 @@ final class APIClientRetryTests: XCTestCase {
             window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
             window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
             window.rootViewController = UIHostingController(rootView:
-                NavigationStack { RelationshipGraphScreen(entityID: "node-2") }.environmentObject(model)
+                NavigationStack { RelationshipGraphScreen(entityID: "node-2") }.environment(model)
                     .environment(\.colorScheme, scheme))
             window.isHidden = false
             defer { window.isHidden = true; window.rootViewController = nil }
@@ -866,7 +866,7 @@ final class APIClientRetryTests: XCTestCase {
                 let window = UIWindow(windowScene: scene)
                 window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
                 window.overrideUserInterfaceStyle = scheme == .light ? .light : .dark
-                window.rootViewController = UIHostingController(rootView: NavigationStack { content }.environmentObject(model).environment(\.colorScheme, scheme))
+                window.rootViewController = UIHostingController(rootView: NavigationStack { content }.environment(model).environment(\.colorScheme, scheme))
                 window.isHidden = false
                 defer { window.isHidden = true; window.rootViewController = nil }
                 try await Task.sleep(for: .milliseconds(350))
@@ -896,7 +896,7 @@ final class APIClientRetryTests: XCTestCase {
             window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
             window.overrideUserInterfaceStyle = .light
             window.rootViewController = UIHostingController(rootView:
-                NavigationStack { PeopleView() }.environmentObject(model)
+                NavigationStack { PeopleView() }.environment(model)
                     .environment(\.colorScheme, .light).environment(\.dynamicTypeSize, size))
             window.isHidden = false
             defer { window.isHidden = true; window.rootViewController = nil }
@@ -934,7 +934,7 @@ final class APIClientRetryTests: XCTestCase {
                         } else {
                             ScrollView { PersonConnectionOutline(personId: card.id, ancestors: [card.id]).padding(16) }.navigationTitle("Connections")
                         }
-                    }.environmentObject(model).environment(\.colorScheme, scheme))
+                    }.environment(model).environment(\.colorScheme, scheme))
                 window.isHidden = false
                 defer { window.isHidden = true; window.rootViewController = nil }
                 try await Task.sleep(for: .milliseconds(350))
@@ -1004,7 +1004,7 @@ final class APIClientRetryTests: XCTestCase {
                 let content = NavigationStack {
                     GoalEditor(goal: editing ? goal : nil)
                 }
-                .environmentObject(AppModel(apiClient: makeClient()))
+                .environment(AppModel(apiClient: makeClient()))
                 .environment(\.colorScheme, scheme)
                 window.rootViewController = UIHostingController(rootView: content)
                 window.isHidden = false
@@ -1073,7 +1073,7 @@ final class APIClientRetryTests: XCTestCase {
                         SituationPacksView()
                     }
                 }
-                .environmentObject(model)
+                .environment(model)
                 .environment(\.colorScheme, scheme)
                 window.rootViewController = UIHostingController(rootView: content)
                 window.isHidden = false
@@ -1465,14 +1465,18 @@ final class APIClientRetryTests: XCTestCase {
             let original = model.errorMessage
             let notice = model.errorNotice
             for read in 0..<4 {
-                StubURLProtocol.prime([.failure(URLError(.cancelled))])
+                // `refreshAll` sends the bootstrap and the overview together, so
+                // both are cancelled; every other read sends one request.
+                let requests = read == 0 ? 2 : 1
+                StubURLProtocol.prime(Array(repeating: .failure(URLError(.cancelled)), count: requests))
                 switch read {
                 case 0: await model.refreshAll()
                 case 1: await model.refreshOverview()
                 case 2: await model.refreshWorkspace()
                 default: _ = await model.knowledge()
                 }
-                XCTAssertEqual(StubURLProtocol.attempts, ["GET"], "Cancellation must not trigger a transport retry")
+                XCTAssertEqual(StubURLProtocol.attempts, Array(repeating: "GET", count: requests),
+                    "Cancellation must not trigger a transport retry")
                 XCTAssertEqual(model.errorMessage, original)
                 XCTAssertEqual(model.errorNotice, notice)
                 XCTAssertEqual(model.errorRetry != nil, hasExistingError)
@@ -1482,7 +1486,8 @@ final class APIClientRetryTests: XCTestCase {
 
     @MainActor
     func testCancelledConnectionDoesNotOpenPairingOrOfferRetry() async {
-        StubURLProtocol.prime([.failure(URLError(.cancelled))])
+        // The bootstrap and the overview leave together, so both are cancelled.
+        StubURLProtocol.prime([.failure(URLError(.cancelled)), .failure(URLError(.cancelled))])
         let model = AppModel(apiClient: makeClient())
         await model.connect()
         XCTAssertFalse(model.showingConnection)
@@ -1632,7 +1637,7 @@ final class APIClientRetryTests: XCTestCase {
         window.rootViewController = UIHostingController(rootView:
             ChatView(safeAreaTopInset: 62, safeAreaBottomInset: 34,
                 safeAreaLeadingInset: 0, safeAreaTrailingInset: 0)
-                .environmentObject(model))
+                .environment(model))
         window.makeKeyAndVisible()
         defer {
             model.cancelSend()

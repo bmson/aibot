@@ -3,7 +3,7 @@ import SwiftUI
 /// Phone calls the assistant placed, and — while one is live — the question it
 /// is waiting on you for and a way to hang up.
 struct CallsView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
     @State private var calls: [PhoneCall]?
 
@@ -51,7 +51,7 @@ struct CallsView: View {
 }
 
 private struct CallDetailView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
     let callID: String
     @State private var call: PhoneCall?

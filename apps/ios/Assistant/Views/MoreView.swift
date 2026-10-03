@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct MoreView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
@@ -514,7 +514,7 @@ struct MoreView: View {
 }
 
 private struct RemindersView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
     @State private var removalInFlight: String?
 
@@ -592,7 +592,7 @@ private struct RemindersView: View {
 }
 
 private struct AgentSettingsEditor: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var timezone: String
     @State private var locale: String
@@ -649,7 +649,7 @@ private struct AgentSettingsEditor: View {
 /// separate from tool use: a server can describe its tools here, but every
 /// later invocation still becomes a normal approval-backed agent action.
 private struct MCPConnectionsView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
